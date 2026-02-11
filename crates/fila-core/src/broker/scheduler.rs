@@ -1,12 +1,19 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use crate::broker::command::SchedulerCommand;
+use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::config::SchedulerConfig;
-use crate::storage::Storage;
+use crate::storage::{Storage, WriteBatchOp};
+
+/// A registered consumer waiting for messages.
+struct ConsumerEntry {
+    queue_id: String,
+    tx: tokio::sync::mpsc::Sender<ReadyMessage>,
+}
 
 /// Single-threaded scheduler core. Owns all mutable scheduler state and
 /// processes commands from IO threads via a crossbeam channel.
@@ -15,6 +22,7 @@ pub struct Scheduler {
     inbound: Receiver<SchedulerCommand>,
     idle_timeout: Duration,
     running: bool,
+    consumers: HashMap<String, ConsumerEntry>,
 }
 
 impl Scheduler {
@@ -28,6 +36,7 @@ impl Scheduler {
             inbound,
             idle_timeout: Duration::from_millis(config.idle_timeout_ms),
             running: true,
+            consumers: HashMap::new(),
         }
     }
 
@@ -75,8 +84,11 @@ impl Scheduler {
         match cmd {
             SchedulerCommand::Enqueue { message, reply } => {
                 debug!(queue_id = %message.queue_id, msg_id = %message.id, "enqueue command received");
+                let queue_id = message.queue_id.clone();
                 let result = self.handle_enqueue(message);
                 let _ = reply.send(result);
+                // Try to deliver the newly enqueued message to a waiting consumer
+                self.try_deliver_pending(&queue_id);
             }
             SchedulerCommand::Ack {
                 queue_id,
@@ -100,14 +112,21 @@ impl Scheduler {
             SchedulerCommand::RegisterConsumer {
                 queue_id,
                 consumer_id,
-                ..
+                tx,
             } => {
                 info!(%queue_id, %consumer_id, "consumer registered");
-                // Stub: will be implemented in story 1.7
+                self.consumers.insert(
+                    consumer_id,
+                    ConsumerEntry {
+                        queue_id: queue_id.clone(),
+                        tx,
+                    },
+                );
+                self.try_deliver_pending(&queue_id);
             }
             SchedulerCommand::UnregisterConsumer { consumer_id } => {
                 info!(%consumer_id, "consumer unregistered");
-                // Stub: will be implemented in story 1.7
+                self.consumers.remove(&consumer_id);
             }
             SchedulerCommand::CreateQueue {
                 name,
@@ -184,6 +203,89 @@ impl Scheduler {
         }
         self.storage.delete_queue(queue_id)?;
         Ok(())
+    }
+
+    /// Scan the queue for pending (unleased) messages and deliver them to
+    /// registered consumers. Creates lease + lease_expiry entries for each
+    /// delivered message.
+    fn try_deliver_pending(&self, queue_id: &str) {
+        let queue_consumers: Vec<(&String, &ConsumerEntry)> = self
+            .consumers
+            .iter()
+            .filter(|(_, e)| e.queue_id == queue_id)
+            .collect();
+
+        if queue_consumers.is_empty() {
+            return;
+        }
+
+        let visibility_timeout_ms = self
+            .storage
+            .get_queue(queue_id)
+            .ok()
+            .flatten()
+            .map(|c| c.visibility_timeout_ms)
+            .unwrap_or(30_000);
+
+        let prefix = crate::storage::keys::message_prefix(queue_id);
+        let messages = match self.storage.list_messages(&prefix) {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                warn!(%queue_id, error = %e, "failed to list messages for delivery");
+                return;
+            }
+        };
+
+        let mut consumer_idx = 0;
+
+        for (_key, msg) in messages {
+            // Skip messages that already have a lease
+            let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
+            if self.storage.get_lease(&lease_key).ok().flatten().is_some() {
+                continue;
+            }
+
+            // Try consumers in round-robin until one accepts
+            let mut attempts = 0;
+            while attempts < queue_consumers.len() {
+                let (cid, entry) = queue_consumers[consumer_idx % queue_consumers.len()];
+                consumer_idx += 1;
+                attempts += 1;
+
+                let ready = ReadyMessage {
+                    msg_id: msg.id,
+                    queue_id: msg.queue_id.clone(),
+                    headers: msg.headers.clone(),
+                    payload: msg.payload.clone(),
+                    fairness_key: msg.fairness_key.clone(),
+                    attempt_count: msg.attempt_count,
+                };
+
+                if entry.tx.try_send(ready).is_ok() {
+                    // Create lease and expiry entries atomically
+                    let now_ns = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as u64;
+                    let expiry_ns = now_ns + visibility_timeout_ms * 1_000_000;
+
+                    let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
+                    let expiry_key =
+                        crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
+
+                    if let Err(e) = self.storage.write_batch(vec![
+                        WriteBatchOp::PutLease {
+                            key: lease_key,
+                            value: lease_val,
+                        },
+                        WriteBatchOp::PutLeaseExpiry { key: expiry_key },
+                    ]) {
+                        warn!(msg_id = %msg.id, error = %e, "failed to write lease");
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     /// Access the storage layer (used by tests).
@@ -551,5 +653,266 @@ mod tests {
         let prefix = crate::storage::keys::message_prefix("bulk-queue");
         let stored = scheduler.storage().list_messages(&prefix).unwrap();
         assert_eq!(stored.len(), 100, "all 100 messages should be persisted");
+    }
+
+    #[test]
+    fn consumer_receives_enqueued_messages() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "lease-queue");
+
+        // Register a consumer
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "lease-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue a message — should be delivered to the consumer
+        let msg = test_message("lease-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Consumer should have received the message
+        let ready = consumer_rx.try_recv().unwrap();
+        assert_eq!(ready.msg_id, msg_id);
+        assert_eq!(ready.queue_id, "lease-queue");
+        assert_eq!(ready.payload, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn consumer_receives_pending_messages_on_register() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "pending-queue");
+
+        // Enqueue messages first (no consumer yet)
+        let mut msg_ids = Vec::new();
+        for i in 0u64..5 {
+            let mut msg = test_message("pending-queue");
+            msg.enqueued_at = i;
+            msg_ids.push(msg.id);
+            let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        // Now register a consumer — should receive all pending messages
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "pending-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // All 5 messages should be delivered
+        let mut received_ids = Vec::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            received_ids.push(ready.msg_id);
+        }
+        assert_eq!(
+            received_ids.len(),
+            5,
+            "all pending messages should be delivered"
+        );
+        assert_eq!(received_ids, msg_ids, "messages delivered in FIFO order");
+    }
+
+    #[test]
+    fn lease_creates_entries_in_storage() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "lease-cf-queue");
+
+        // Register consumer first
+        let (consumer_tx, _consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "lease-cf-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue a message
+        let msg = test_message("lease-cf-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Verify a lease was created
+        let lease_key = crate::storage::keys::lease_key("lease-cf-queue", &msg_id);
+        let lease = scheduler.storage().get_lease(&lease_key).unwrap();
+        assert!(lease.is_some(), "lease entry should exist after delivery");
+    }
+
+    #[test]
+    fn multiple_consumers_get_different_messages() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "multi-queue");
+
+        // Register two consumers
+        let (c1_tx, mut c1_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "multi-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: c1_tx,
+        })
+        .unwrap();
+
+        let (c2_tx, mut c2_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "multi-queue".to_string(),
+            consumer_id: "c2".to_string(),
+            tx: c2_tx,
+        })
+        .unwrap();
+
+        // Enqueue 4 messages
+        let mut msg_ids = Vec::new();
+        for i in 0u64..4 {
+            let mut msg = test_message("multi-queue");
+            msg.enqueued_at = i;
+            msg_ids.push(msg.id);
+            let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Collect messages from both consumers
+        let mut c1_msgs = Vec::new();
+        while let Ok(ready) = c1_rx.try_recv() {
+            c1_msgs.push(ready.msg_id);
+        }
+        let mut c2_msgs = Vec::new();
+        while let Ok(ready) = c2_rx.try_recv() {
+            c2_msgs.push(ready.msg_id);
+        }
+
+        // Both consumers should have received messages
+        let total = c1_msgs.len() + c2_msgs.len();
+        assert_eq!(
+            total, 4,
+            "all 4 messages should be delivered across consumers"
+        );
+
+        // No message should be delivered to both consumers
+        let mut all_ids: Vec<_> = c1_msgs.iter().chain(c2_msgs.iter()).copied().collect();
+        all_ids.sort();
+        all_ids.dedup();
+        assert_eq!(
+            all_ids.len(),
+            4,
+            "each message delivered to exactly one consumer"
+        );
+    }
+
+    #[test]
+    fn unregister_consumer_stops_delivery() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "unreg-queue");
+
+        // Register then immediately unregister
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "unreg-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+        tx.send(SchedulerCommand::UnregisterConsumer {
+            consumer_id: "c1".to_string(),
+        })
+        .unwrap();
+
+        // Enqueue a message after unregistration
+        let msg = test_message("unreg-queue");
+        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Consumer should NOT have received any messages
+        assert!(
+            consumer_rx.try_recv().is_err(),
+            "unregistered consumer should not receive messages"
+        );
+    }
+
+    #[test]
+    fn enqueue_10_messages_lease_receives_all() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "ten-queue");
+
+        // Register consumer
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "ten-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue 10 messages
+        let mut msg_ids = Vec::new();
+        for i in 0u64..10 {
+            let mut msg = test_message("ten-queue");
+            msg.enqueued_at = i;
+            msg_ids.push(msg.id);
+            let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // All 10 messages should be delivered
+        let mut received = Vec::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            received.push(ready.msg_id);
+        }
+        assert_eq!(received.len(), 10, "all 10 messages should be received");
+        assert_eq!(received, msg_ids, "messages received in FIFO order");
     }
 }
