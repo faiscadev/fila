@@ -118,6 +118,29 @@ pub fn parse_expiry_from_lease_value(value: &[u8]) -> Option<u64> {
     Some(u64::from_be_bytes(bytes))
 }
 
+/// Parse a lease_expiry key to extract (queue_id, msg_id).
+///
+/// Key format: `{expiry_ts_ns(8B)}:{queue_id_len(2B)}{queue_id}:{msg_id(16B)}`
+pub fn parse_lease_expiry_key(key: &[u8]) -> Option<(String, uuid::Uuid)> {
+    // Minimum: 8 (ts) + 1 (:) + 2 (len) + 0 (queue_id) + 1 (:) + 16 (uuid) = 28
+    if key.len() < 28 {
+        return None;
+    }
+    // Skip 8 bytes timestamp + 1 byte separator
+    let rest = &key[9..];
+    let queue_id_len = u16::from_be_bytes(rest[0..2].try_into().ok()?) as usize;
+    if rest.len() < 2 + queue_id_len + 1 + 16 {
+        return None;
+    }
+    let queue_id = std::str::from_utf8(&rest[2..2 + queue_id_len])
+        .ok()?
+        .to_string();
+    // Skip separator
+    let uuid_start = 2 + queue_id_len + 1;
+    let uuid_bytes: [u8; 16] = rest[uuid_start..uuid_start + 16].try_into().ok()?;
+    Some((queue_id, uuid::Uuid::from_bytes(uuid_bytes)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

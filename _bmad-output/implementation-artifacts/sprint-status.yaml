@@ -49,8 +49,8 @@ development_status:
   1-5-grpc-server-queue-management: done
   1-6-message-enqueue: done
   1-7-consumer-lease-message-delivery: done
-  1-8-message-acknowledgment: in-progress
-  1-9-crash-recovery-graceful-shutdown: backlog
+  1-8-message-acknowledgment: done
+  1-9-crash-recovery-graceful-shutdown: in-progress
   epic-1-retrospective: optional
 
   # Epic 2: Fair Scheduling & Message Reliability

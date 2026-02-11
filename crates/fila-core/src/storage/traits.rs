@@ -81,4 +81,9 @@ pub trait Storage: Send + Sync {
 
     /// Atomically apply a batch of write operations across column families.
     fn write_batch(&self, ops: Vec<WriteBatchOp>) -> StorageResult<()>;
+
+    // --- Lifecycle ---
+
+    /// Flush the WAL to ensure all writes are durable.
+    fn flush(&self) -> StorageResult<()>;
 }

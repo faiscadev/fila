@@ -49,6 +49,7 @@ impl Scheduler {
     /// a `Shutdown` command is received or the inbound channel is disconnected.
     pub fn run(&mut self) {
         info!("scheduler started");
+        self.recover();
 
         while self.running {
             // Phase 1: Drain all buffered commands (non-blocking)
@@ -80,6 +81,11 @@ impl Scheduler {
                     }
                 }
             }
+        }
+
+        // Flush the WAL to ensure all writes are durable before exit
+        if let Err(e) = self.storage.flush() {
+            warn!(error = %e, "failed to flush WAL during shutdown");
         }
 
         info!("scheduler stopped");
@@ -379,6 +385,65 @@ impl Scheduler {
                     }
                 }
             }
+        }
+    }
+
+    /// Recover state after a crash or restart.
+    ///
+    /// RocksDB persists all data to disk, so queue definitions, messages, and
+    /// leases survive restarts. The only recovery work needed is reclaiming
+    /// leases that expired while the broker was down — deleting their lease
+    /// and lease_expiry entries so the underlying messages re-enter the ready pool.
+    fn recover(&self) {
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        // Build an upper-bound key for the current timestamp. The lease_expiry
+        // key starts with an 8-byte BE timestamp followed by `:` (0x3A). Using
+        // 0xFF after the timestamp ensures we sort after any real key at now_ns.
+        let mut up_to = Vec::with_capacity(40);
+        up_to.extend_from_slice(&now_ns.to_be_bytes());
+        up_to.extend_from_slice(&[0xFF; 32]);
+
+        let expired_keys = match self.storage.list_expired_leases(&up_to) {
+            Ok(keys) => keys,
+            Err(e) => {
+                warn!(error = %e, "failed to scan expired leases during recovery");
+                return;
+            }
+        };
+
+        let mut reclaimed = 0u64;
+        for expiry_key in &expired_keys {
+            let Some((queue_id, msg_id)) = crate::storage::keys::parse_lease_expiry_key(expiry_key)
+            else {
+                warn!("corrupt lease_expiry key during recovery, skipping");
+                continue;
+            };
+
+            let lease_key = crate::storage::keys::lease_key(&queue_id, &msg_id);
+            if let Err(e) = self.storage.write_batch(vec![
+                WriteBatchOp::DeleteLease { key: lease_key },
+                WriteBatchOp::DeleteLeaseExpiry {
+                    key: expiry_key.clone(),
+                },
+            ]) {
+                warn!(error = %e, %queue_id, %msg_id, "failed to reclaim expired lease");
+                continue;
+            }
+            reclaimed += 1;
+        }
+
+        if reclaimed > 0 {
+            info!(reclaimed, "reclaimed expired leases during recovery");
+        }
+
+        // Log recovery summary
+        match self.storage.list_queues() {
+            Ok(queues) => info!(queue_count = queues.len(), "recovery complete"),
+            Err(e) => warn!(error = %e, "failed to list queues during recovery summary"),
         }
     }
 
@@ -1343,6 +1408,204 @@ mod tests {
             matches!(err, crate::error::AckError::MessageNotFound(_)),
             "expected MessageNotFound, got {err:?}"
         );
+    }
+
+    // --- Recovery tests ---
+
+    /// Helper: create a scheduler sharing an existing storage (for restart tests).
+    fn test_setup_with_storage(
+        storage: Arc<dyn Storage>,
+    ) -> (crossbeam_channel::Sender<SchedulerCommand>, Scheduler) {
+        let config = SchedulerConfig {
+            command_channel_capacity: 256,
+            idle_timeout_ms: 10,
+        };
+        let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
+        let scheduler = Scheduler::new(storage, rx, &config);
+        (tx, scheduler)
+    }
+
+    #[test]
+    fn recovery_preserves_messages_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+
+        // Phase 1: enqueue messages, then shut down the scheduler
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+        send_create_queue(&tx, "recover-queue");
+
+        let mut msg_ids = Vec::new();
+        for i in 0u64..5 {
+            let mut msg = test_message("recover-queue");
+            msg.enqueued_at = i;
+            msg_ids.push(msg.id);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+        drop(tx);
+
+        // Phase 2: create a brand-new scheduler on the same storage
+        let (tx2, mut scheduler2) = test_setup_with_storage(Arc::clone(&storage));
+
+        // Register consumer — should receive all 5 messages (they had no leases)
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx2.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "recover-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+        tx2.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler2.run();
+
+        let mut received = Vec::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            received.push(ready.msg_id);
+        }
+        assert_eq!(received.len(), 5, "all 5 messages should survive restart");
+        assert_eq!(received, msg_ids, "messages in correct FIFO order");
+    }
+
+    #[test]
+    fn recovery_reclaims_expired_leases() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+
+        // Phase 1: set up a queue, enqueue a message, and manually create an
+        // expired lease (simulating a crash while a message was in-flight)
+        let config = crate::queue::QueueConfig::new("reclaim-queue".to_string());
+        storage.put_queue("reclaim-queue", &config).unwrap();
+
+        let msg = test_message("reclaim-queue");
+        let msg_id = msg.id;
+        let msg_key = crate::storage::keys::message_key(
+            "reclaim-queue",
+            &msg.fairness_key,
+            msg.enqueued_at,
+            &msg_id,
+        );
+        storage.put_message(&msg_key, &msg).unwrap();
+
+        // Create a lease with an expiry in the past (1 nanosecond)
+        let lease_key = crate::storage::keys::lease_key("reclaim-queue", &msg_id);
+        let lease_val = crate::storage::keys::lease_value("old-consumer", 1);
+        let expiry_key = crate::storage::keys::lease_expiry_key(1, "reclaim-queue", &msg_id);
+        storage
+            .write_batch(vec![
+                WriteBatchOp::PutLease {
+                    key: lease_key.clone(),
+                    value: lease_val,
+                },
+                WriteBatchOp::PutLeaseExpiry {
+                    key: expiry_key.clone(),
+                },
+            ])
+            .unwrap();
+
+        // Verify the lease exists before recovery
+        assert!(storage.get_lease(&lease_key).unwrap().is_some());
+
+        // Phase 2: start a new scheduler — recovery should reclaim the expired lease
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+
+        // Register consumer — the message should be delivered since the expired
+        // lease was reclaimed during recovery
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "reclaim-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // The message should have been delivered to the consumer — this proves
+        // the expired lease was reclaimed during recovery, since try_deliver_pending
+        // skips messages that have an active lease.
+        let ready = consumer_rx
+            .try_recv()
+            .expect("consumer should receive the reclaimed message");
+        assert_eq!(ready.msg_id, msg_id);
+
+        // The old lease_expiry entry should be gone (recovery deleted it)
+        let old_up_to =
+            crate::storage::keys::lease_expiry_key(2, "reclaim-queue", &uuid::Uuid::max());
+        let old_expired = storage.list_expired_leases(&old_up_to).unwrap();
+        assert!(
+            old_expired.is_empty(),
+            "expired lease_expiry entry at ts=1 should be removed by recovery"
+        );
+    }
+
+    #[test]
+    fn recovery_preserves_queue_definitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+
+        // Phase 1: create queues, shut down
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+        for name in &["q1", "q2", "q3"] {
+            send_create_queue(&tx, name);
+        }
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+        drop(tx);
+
+        // Phase 2: reopen — queues should still be there
+        let queues = storage.list_queues().unwrap();
+        assert_eq!(
+            queues.len(),
+            3,
+            "all 3 queue definitions should survive restart"
+        );
+
+        let names: Vec<&str> = queues.iter().map(|q| q.name.as_str()).collect();
+        assert!(names.contains(&"q1"));
+        assert!(names.contains(&"q2"));
+        assert!(names.contains(&"q3"));
+    }
+
+    #[test]
+    fn shutdown_flushes_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let msg_id;
+
+        // Phase 1: enqueue a message and shut down gracefully (which flushes WAL)
+        {
+            let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+            let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+            send_create_queue(&tx, "flush-queue");
+
+            let msg = test_message("flush-queue");
+            msg_id = msg.id;
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+            tx.send(SchedulerCommand::Shutdown).unwrap();
+            scheduler.run();
+            // storage + scheduler dropped here, releasing RocksDB lock
+        }
+
+        // Phase 2: reopen the database and verify data survived
+        let storage2: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let prefix = crate::storage::keys::message_prefix("flush-queue");
+        let messages = storage2.list_messages(&prefix).unwrap();
+        assert_eq!(
+            messages.len(),
+            1,
+            "message should survive WAL flush + reopen"
+        );
+        assert_eq!(messages[0].1.id, msg_id);
     }
 
     #[test]
