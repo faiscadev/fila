@@ -23,9 +23,10 @@ tonic-prost-build = "0.14"
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "1"
 clap = { version = "4", features = ["derive"] }
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v7", "serde"] }
 bytes = "1"
 crossbeam-channel = "0.5"
 tracing = "0.1"
