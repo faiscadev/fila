@@ -23,6 +23,9 @@ pub struct Scheduler {
     idle_timeout: Duration,
     running: bool,
     consumers: HashMap<String, ConsumerEntry>,
+    /// Round-robin index for delivering messages to consumers. Persists across
+    /// calls to `try_deliver_pending` so messages are distributed fairly.
+    consumer_rr_idx: usize,
 }
 
 impl Scheduler {
@@ -37,6 +40,7 @@ impl Scheduler {
             idle_timeout: Duration::from_millis(config.idle_timeout_ms),
             running: true,
             consumers: HashMap::new(),
+            consumer_rr_idx: 0,
         }
     }
 
@@ -208,7 +212,7 @@ impl Scheduler {
     /// Scan the queue for pending (unleased) messages and deliver them to
     /// registered consumers. Creates lease + lease_expiry entries for each
     /// delivered message.
-    fn try_deliver_pending(&self, queue_id: &str) {
+    fn try_deliver_pending(&mut self, queue_id: &str) {
         let queue_consumers: Vec<(&String, &ConsumerEntry)> = self
             .consumers
             .iter()
@@ -236,8 +240,6 @@ impl Scheduler {
             }
         };
 
-        let mut consumer_idx = 0;
-
         for (_key, msg) in messages {
             // Skip messages that already have a lease
             let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
@@ -245,11 +247,11 @@ impl Scheduler {
                 continue;
             }
 
-            // Try consumers in round-robin until one accepts
+            // Try consumers in round-robin until one accepts (index persists across calls)
             let mut attempts = 0;
             while attempts < queue_consumers.len() {
-                let (cid, entry) = queue_consumers[consumer_idx % queue_consumers.len()];
-                consumer_idx += 1;
+                let (cid, entry) = queue_consumers[self.consumer_rr_idx % queue_consumers.len()];
+                self.consumer_rr_idx = self.consumer_rr_idx.wrapping_add(1);
                 attempts += 1;
 
                 let ready = ReadyMessage {
@@ -258,6 +260,8 @@ impl Scheduler {
                     headers: msg.headers.clone(),
                     payload: msg.payload.clone(),
                     fairness_key: msg.fairness_key.clone(),
+                    weight: msg.weight,
+                    throttle_keys: msg.throttle_keys.clone(),
                     attempt_count: msg.attempt_count,
                 };
 

@@ -31,8 +31,8 @@ fn ready_to_proto(ready: ReadyMessage) -> fila_proto::Message {
         payload: ready.payload,
         metadata: Some(fila_proto::MessageMetadata {
             fairness_key: ready.fairness_key,
-            weight: 0,
-            throttle_keys: vec![],
+            weight: ready.weight,
+            throttle_keys: ready.throttle_keys,
             attempt_count: ready.attempt_count,
             queue_id: ready.queue_id,
         }),
