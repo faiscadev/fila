@@ -11,6 +11,9 @@ pub enum StorageError {
 
     #[error("column family not found: {0}")]
     ColumnFamilyNotFound(&'static str),
+
+    #[error("corrupt data: {0}")]
+    CorruptData(String),
 }
 
 impl From<rocksdb::Error> for StorageError {
