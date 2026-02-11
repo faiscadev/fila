@@ -178,12 +178,12 @@ impl FilaService for HotPathService {
                 msg_id,
                 reply: reply_tx,
             })
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(IntoStatus::into_status)?;
 
         reply_rx
             .await
             .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(fila_error_to_status)?;
+            .map_err(IntoStatus::into_status)?;
 
         Ok(Response::new(AckResponse {}))
     }

@@ -1,4 +1,4 @@
-use fila_core::{BrokerError, CreateQueueError, DeleteQueueError, EnqueueError};
+use fila_core::{AckError, BrokerError, CreateQueueError, DeleteQueueError, EnqueueError};
 use tonic::Status;
 
 pub trait IntoStatus {
@@ -10,6 +10,15 @@ impl IntoStatus for EnqueueError {
         match self {
             EnqueueError::QueueNotFound(msg) => Status::not_found(msg),
             EnqueueError::Storage(e) => Status::internal(e.to_string()),
+        }
+    }
+}
+
+impl IntoStatus for AckError {
+    fn into_status(self) -> Status {
+        match self {
+            AckError::MessageNotFound(msg) => Status::not_found(msg),
+            AckError::Storage(e) => Status::internal(e.to_string()),
         }
     }
 }

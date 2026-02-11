@@ -210,11 +210,15 @@ impl Scheduler {
         Ok(())
     }
 
-    fn handle_ack(&self, queue_id: &str, msg_id: &uuid::Uuid) -> crate::error::Result<()> {
+    fn handle_ack(
+        &self,
+        queue_id: &str,
+        msg_id: &uuid::Uuid,
+    ) -> Result<(), crate::error::AckError> {
         // Look up the lease — if it doesn't exist, the message is unknown or already acked
         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
         let lease_value = self.storage.get_lease(&lease_key)?.ok_or_else(|| {
-            crate::error::FilaError::MessageNotFound(format!(
+            crate::error::AckError::MessageNotFound(format!(
                 "no lease for message {msg_id} in queue {queue_id}"
             ))
         })?;
@@ -222,11 +226,9 @@ impl Scheduler {
         // Parse expiry timestamp from lease value to construct the lease_expiry key
         let expiry_ns = crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
             .ok_or_else(|| {
-                crate::error::FilaError::Storage(
-                    crate::error::StorageError::Serialization(
-                        "corrupt lease value: cannot parse expiry".to_string(),
-                    ),
-                )
+                crate::error::AckError::Storage(crate::error::StorageError::Serialization(
+                    "corrupt lease value: cannot parse expiry".to_string(),
+                ))
             })?;
         let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, msg_id);
 
@@ -522,7 +524,7 @@ mod tests {
 
         // Ack without a lease should fail
         let err = reply_rx.try_recv().unwrap().unwrap_err();
-        assert!(matches!(err, crate::error::FilaError::MessageNotFound(_)));
+        assert!(matches!(err, crate::error::AckError::MessageNotFound(_)));
     }
 
     #[test]
@@ -1334,7 +1336,7 @@ mod tests {
 
         let err = ack_rx.try_recv().unwrap().unwrap_err();
         assert!(
-            matches!(err, crate::error::FilaError::MessageNotFound(_)),
+            matches!(err, crate::error::AckError::MessageNotFound(_)),
             "expected MessageNotFound, got {err:?}"
         );
     }
@@ -1394,7 +1396,7 @@ mod tests {
         // Second ack should return NOT_FOUND
         let err = ack2_rx.try_recv().unwrap().unwrap_err();
         assert!(
-            matches!(err, crate::error::FilaError::MessageNotFound(_)),
+            matches!(err, crate::error::AckError::MessageNotFound(_)),
             "second ack should return MessageNotFound, got {err:?}"
         );
     }
