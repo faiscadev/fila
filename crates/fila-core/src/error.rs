@@ -22,27 +22,4 @@ impl From<serde_json::Error> for StorageError {
     }
 }
 
-/// Application-level errors for domain and broker logic.
-#[derive(Debug, thiserror::Error)]
-pub enum FilaError {
-    #[error("queue not found: {0}")]
-    QueueNotFound(String),
-
-    #[error("message not found: {0}")]
-    MessageNotFound(String),
-
-    #[error("queue already exists: {0}")]
-    QueueAlreadyExists(String),
-
-    #[error("invalid configuration: {0}")]
-    InvalidConfig(String),
-
-    #[error("lua script error: {0}")]
-    LuaError(String),
-
-    #[error(transparent)]
-    Storage(#[from] StorageError),
-}
-
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
-pub type Result<T> = std::result::Result<T, FilaError>;
