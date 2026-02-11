@@ -13,7 +13,7 @@ fn encode_u64(val: u64) -> [u8; 8] {
 
 /// Encode a variable-length string with a 2-byte big-endian length prefix.
 fn encode_string(s: &str) -> Vec<u8> {
-    let len = s.len() as u16;
+    let len = u16::try_from(s.len()).expect("key string exceeds 64 KiB");
     let mut buf = Vec::with_capacity(2 + s.len());
     buf.extend_from_slice(&len.to_be_bytes());
     buf.extend_from_slice(s.as_bytes());
