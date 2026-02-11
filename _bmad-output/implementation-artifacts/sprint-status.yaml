@@ -44,7 +44,7 @@ development_status:
   epic-1: in-progress
   1-1-cargo-workspace-protobuf-definitions: done
   1-2-ci-cd-pipeline: done
-  1-3-core-domain-types-storage-layer: backlog
+  1-3-core-domain-types-storage-layer: in-progress
   1-4-broker-core-scheduler-loop: backlog
   1-5-grpc-server-queue-management: backlog
   1-6-message-enqueue: backlog
