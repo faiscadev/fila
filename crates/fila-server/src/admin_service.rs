@@ -29,7 +29,11 @@ fn fila_error_to_status(err: FilaError) -> Status {
         FilaError::InvalidConfig(msg) => Status::invalid_argument(msg),
         FilaError::MessageNotFound(msg) => Status::not_found(msg),
         FilaError::LuaError(msg) => Status::internal(msg),
-        FilaError::StorageError(msg) => Status::internal(msg),
+        FilaError::SchedulerSpawn(msg) => Status::internal(msg),
+        FilaError::ChannelFull => Status::resource_exhausted("scheduler overloaded"),
+        FilaError::ChannelDisconnected => Status::unavailable("scheduler unavailable"),
+        FilaError::SchedulerPanicked => Status::internal("scheduler panicked"),
+        FilaError::Storage(e) => Status::internal(e.to_string()),
     }
 }
 
