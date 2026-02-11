@@ -43,22 +43,27 @@ impl RocksDbStorage {
         let db = DB::open_cf_descriptors(&db_opts, path, cf_descriptors)?;
         Ok(Self { db })
     }
+
+    fn cf(
+        &self,
+        name: &'static str,
+    ) -> StorageResult<std::sync::Arc<rocksdb::BoundColumnFamily<'_>>> {
+        self.db
+            .cf_handle(name)
+            .ok_or(StorageError::ColumnFamilyNotFound(name))
+    }
 }
 
 impl Storage for RocksDbStorage {
     fn put_message(&self, key: &[u8], message: &Message) -> StorageResult<()> {
-        let cf = self.db.cf_handle(CF_MESSAGES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_MESSAGES}"))
-        })?;
+        let cf = self.cf(CF_MESSAGES)?;
         let value = serde_json::to_vec(message)?;
         self.db.put_cf(&cf, key, &value)?;
         Ok(())
     }
 
     fn get_message(&self, key: &[u8]) -> StorageResult<Option<Message>> {
-        let cf = self.db.cf_handle(CF_MESSAGES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_MESSAGES}"))
-        })?;
+        let cf = self.cf(CF_MESSAGES)?;
         match self.db.get_cf(&cf, key)? {
             Some(value) => Ok(Some(serde_json::from_slice(&value)?)),
             None => Ok(None),
@@ -66,17 +71,13 @@ impl Storage for RocksDbStorage {
     }
 
     fn delete_message(&self, key: &[u8]) -> StorageResult<()> {
-        let cf = self.db.cf_handle(CF_MESSAGES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_MESSAGES}"))
-        })?;
+        let cf = self.cf(CF_MESSAGES)?;
         self.db.delete_cf(&cf, key)?;
         Ok(())
     }
 
     fn list_messages(&self, prefix: &[u8]) -> StorageResult<Vec<(Vec<u8>, Message)>> {
-        let cf = self.db.cf_handle(CF_MESSAGES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_MESSAGES}"))
-        })?;
+        let cf = self.cf(CF_MESSAGES)?;
         let iter = self
             .db
             .iterator_cf(&cf, IteratorMode::From(prefix, rocksdb::Direction::Forward));
@@ -93,32 +94,24 @@ impl Storage for RocksDbStorage {
     }
 
     fn put_lease(&self, key: &[u8], value: &[u8]) -> StorageResult<()> {
-        let cf = self.db.cf_handle(CF_LEASES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_LEASES}"))
-        })?;
+        let cf = self.cf(CF_LEASES)?;
         self.db.put_cf(&cf, key, value)?;
         Ok(())
     }
 
     fn get_lease(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
-        let cf = self.db.cf_handle(CF_LEASES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_LEASES}"))
-        })?;
+        let cf = self.cf(CF_LEASES)?;
         Ok(self.db.get_cf(&cf, key)?.map(|v| v.to_vec()))
     }
 
     fn delete_lease(&self, key: &[u8]) -> StorageResult<()> {
-        let cf = self.db.cf_handle(CF_LEASES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_LEASES}"))
-        })?;
+        let cf = self.cf(CF_LEASES)?;
         self.db.delete_cf(&cf, key)?;
         Ok(())
     }
 
     fn list_expired_leases(&self, up_to_key: &[u8]) -> StorageResult<Vec<Vec<u8>>> {
-        let cf = self.db.cf_handle(CF_LEASE_EXPIRY).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_LEASE_EXPIRY}"))
-        })?;
+        let cf = self.cf(CF_LEASE_EXPIRY)?;
         let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         let mut results = Vec::new();
         for item in iter {
@@ -132,18 +125,14 @@ impl Storage for RocksDbStorage {
     }
 
     fn put_queue(&self, queue_id: &str, config: &QueueConfig) -> StorageResult<()> {
-        let cf = self.db.cf_handle(CF_QUEUES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_QUEUES}"))
-        })?;
+        let cf = self.cf(CF_QUEUES)?;
         let value = serde_json::to_vec(config)?;
         self.db.put_cf(&cf, queue_id.as_bytes(), &value)?;
         Ok(())
     }
 
     fn get_queue(&self, queue_id: &str) -> StorageResult<Option<QueueConfig>> {
-        let cf = self.db.cf_handle(CF_QUEUES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_QUEUES}"))
-        })?;
+        let cf = self.cf(CF_QUEUES)?;
         match self.db.get_cf(&cf, queue_id.as_bytes())? {
             Some(value) => Ok(Some(serde_json::from_slice(&value)?)),
             None => Ok(None),
@@ -151,17 +140,13 @@ impl Storage for RocksDbStorage {
     }
 
     fn delete_queue(&self, queue_id: &str) -> StorageResult<()> {
-        let cf = self.db.cf_handle(CF_QUEUES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_QUEUES}"))
-        })?;
+        let cf = self.cf(CF_QUEUES)?;
         self.db.delete_cf(&cf, queue_id.as_bytes())?;
         Ok(())
     }
 
     fn list_queues(&self) -> StorageResult<Vec<QueueConfig>> {
-        let cf = self.db.cf_handle(CF_QUEUES).ok_or_else(|| {
-            StorageError::RocksDb(format!("column family not found: {CF_QUEUES}"))
-        })?;
+        let cf = self.cf(CF_QUEUES)?;
         let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         let mut results = Vec::new();
         for item in iter {
@@ -173,27 +158,18 @@ impl Storage for RocksDbStorage {
     }
 
     fn put_state(&self, key: &str, value: &[u8]) -> StorageResult<()> {
-        let cf = self
-            .db
-            .cf_handle(CF_STATE)
-            .ok_or_else(|| StorageError::RocksDb(format!("column family not found: {CF_STATE}")))?;
+        let cf = self.cf(CF_STATE)?;
         self.db.put_cf(&cf, key.as_bytes(), value)?;
         Ok(())
     }
 
     fn get_state(&self, key: &str) -> StorageResult<Option<Vec<u8>>> {
-        let cf = self
-            .db
-            .cf_handle(CF_STATE)
-            .ok_or_else(|| StorageError::RocksDb(format!("column family not found: {CF_STATE}")))?;
+        let cf = self.cf(CF_STATE)?;
         Ok(self.db.get_cf(&cf, key.as_bytes())?.map(|v| v.to_vec()))
     }
 
     fn delete_state(&self, key: &str) -> StorageResult<()> {
-        let cf = self
-            .db
-            .cf_handle(CF_STATE)
-            .ok_or_else(|| StorageError::RocksDb(format!("column family not found: {CF_STATE}")))?;
+        let cf = self.cf(CF_STATE)?;
         self.db.delete_cf(&cf, key.as_bytes())?;
         Ok(())
     }
@@ -204,64 +180,34 @@ impl Storage for RocksDbStorage {
         for op in ops {
             match op {
                 WriteBatchOp::PutMessage { key, value } => {
-                    let cf = self.db.cf_handle(CF_MESSAGES).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_MESSAGES}"))
-                    })?;
-                    batch.put_cf(&cf, &key, &value);
+                    batch.put_cf(&self.cf(CF_MESSAGES)?, &key, &value);
                 }
                 WriteBatchOp::DeleteMessage { key } => {
-                    let cf = self.db.cf_handle(CF_MESSAGES).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_MESSAGES}"))
-                    })?;
-                    batch.delete_cf(&cf, &key);
+                    batch.delete_cf(&self.cf(CF_MESSAGES)?, &key);
                 }
                 WriteBatchOp::PutLease { key, value } => {
-                    let cf = self.db.cf_handle(CF_LEASES).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_LEASES}"))
-                    })?;
-                    batch.put_cf(&cf, &key, &value);
+                    batch.put_cf(&self.cf(CF_LEASES)?, &key, &value);
                 }
                 WriteBatchOp::DeleteLease { key } => {
-                    let cf = self.db.cf_handle(CF_LEASES).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_LEASES}"))
-                    })?;
-                    batch.delete_cf(&cf, &key);
+                    batch.delete_cf(&self.cf(CF_LEASES)?, &key);
                 }
                 WriteBatchOp::PutLeaseExpiry { key } => {
-                    let cf = self.db.cf_handle(CF_LEASE_EXPIRY).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_LEASE_EXPIRY}"))
-                    })?;
-                    batch.put_cf(&cf, &key, b"");
+                    batch.put_cf(&self.cf(CF_LEASE_EXPIRY)?, &key, b"");
                 }
                 WriteBatchOp::DeleteLeaseExpiry { key } => {
-                    let cf = self.db.cf_handle(CF_LEASE_EXPIRY).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_LEASE_EXPIRY}"))
-                    })?;
-                    batch.delete_cf(&cf, &key);
+                    batch.delete_cf(&self.cf(CF_LEASE_EXPIRY)?, &key);
                 }
                 WriteBatchOp::PutQueue { key, value } => {
-                    let cf = self.db.cf_handle(CF_QUEUES).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_QUEUES}"))
-                    })?;
-                    batch.put_cf(&cf, &key, &value);
+                    batch.put_cf(&self.cf(CF_QUEUES)?, &key, &value);
                 }
                 WriteBatchOp::DeleteQueue { key } => {
-                    let cf = self.db.cf_handle(CF_QUEUES).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_QUEUES}"))
-                    })?;
-                    batch.delete_cf(&cf, &key);
+                    batch.delete_cf(&self.cf(CF_QUEUES)?, &key);
                 }
                 WriteBatchOp::PutState { key, value } => {
-                    let cf = self.db.cf_handle(CF_STATE).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_STATE}"))
-                    })?;
-                    batch.put_cf(&cf, &key, &value);
+                    batch.put_cf(&self.cf(CF_STATE)?, &key, &value);
                 }
                 WriteBatchOp::DeleteState { key } => {
-                    let cf = self.db.cf_handle(CF_STATE).ok_or_else(|| {
-                        StorageError::RocksDb(format!("column family not found: {CF_STATE}"))
-                    })?;
-                    batch.delete_cf(&cf, &key);
+                    batch.delete_cf(&self.cf(CF_STATE)?, &key);
                 }
             }
         }
