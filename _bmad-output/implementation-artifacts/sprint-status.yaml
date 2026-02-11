@@ -41,7 +41,7 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # Epic 1: Foundation & End-to-End Messaging
-  epic-1: in-progress
+  epic-1: done
   1-1-cargo-workspace-protobuf-definitions: done
   1-2-ci-cd-pipeline: done
   1-3-core-domain-types-storage-layer: done
@@ -50,7 +50,7 @@ development_status:
   1-6-message-enqueue: done
   1-7-consumer-lease-message-delivery: done
   1-8-message-acknowledgment: done
-  1-9-crash-recovery-graceful-shutdown: in-progress
+  1-9-crash-recovery-graceful-shutdown: done
   epic-1-retrospective: optional
 
   # Epic 2: Fair Scheduling & Message Reliability
