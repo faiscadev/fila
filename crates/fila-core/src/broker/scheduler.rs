@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::config::SchedulerConfig;
@@ -235,7 +235,7 @@ impl Scheduler {
         let messages = match self.storage.list_messages(&prefix) {
             Ok(msgs) => msgs,
             Err(e) => {
-                warn!(%queue_id, error = %e, "failed to list messages for delivery");
+                error!(%queue_id, error = %e, "failed to list messages for delivery");
                 return;
             }
         };
@@ -254,6 +254,33 @@ impl Scheduler {
                 self.consumer_rr_idx = self.consumer_rr_idx.wrapping_add(1);
                 attempts += 1;
 
+                // Write lease BEFORE sending to consumer. If the send
+                // fails the lease expires naturally and the message
+                // becomes available again. The reverse (send-then-lease)
+                // risks delivering without a lease, causing duplicates.
+                let now_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                let expiry_ns = now_ns + visibility_timeout_ms * 1_000_000;
+
+                let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
+                let expiry_key =
+                    crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
+
+                if let Err(e) = self.storage.write_batch(vec![
+                    WriteBatchOp::PutLease {
+                        key: lease_key.clone(),
+                        value: lease_val,
+                    },
+                    WriteBatchOp::PutLeaseExpiry {
+                        key: expiry_key.clone(),
+                    },
+                ]) {
+                    error!(msg_id = %msg.id, error = %e, "failed to write lease");
+                    break;
+                }
+
                 let ready = ReadyMessage {
                     msg_id: msg.id,
                     queue_id: msg.queue_id.clone(),
@@ -265,28 +292,28 @@ impl Scheduler {
                     attempt_count: msg.attempt_count,
                 };
 
-                if entry.tx.try_send(ready).is_ok() {
-                    // Create lease and expiry entries atomically
-                    let now_ns = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos() as u64;
-                    let expiry_ns = now_ns + visibility_timeout_ms * 1_000_000;
-
-                    let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
-                    let expiry_key =
-                        crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
-
-                    if let Err(e) = self.storage.write_batch(vec![
-                        WriteBatchOp::PutLease {
-                            key: lease_key,
-                            value: lease_val,
-                        },
-                        WriteBatchOp::PutLeaseExpiry { key: expiry_key },
-                    ]) {
-                        warn!(msg_id = %msg.id, error = %e, "failed to write lease");
+                match entry.tx.try_send(ready) {
+                    Ok(()) => break,
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        // Consumer channel full — roll back lease and try next consumer
+                        warn!(%cid, msg_id = %msg.id, "consumer channel full, trying next");
+                        let _ = self.storage.write_batch(vec![
+                            WriteBatchOp::DeleteLease {
+                                key: lease_key.clone(),
+                            },
+                            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                        ]);
                     }
-                    break;
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        // Consumer disconnected — roll back lease, will be cleaned up
+                        warn!(%cid, msg_id = %msg.id, "consumer channel closed, trying next");
+                        let _ = self.storage.write_batch(vec![
+                            WriteBatchOp::DeleteLease {
+                                key: lease_key.clone(),
+                            },
+                            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                        ]);
+                    }
                 }
             }
         }
