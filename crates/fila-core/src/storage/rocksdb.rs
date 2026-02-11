@@ -215,6 +215,13 @@ impl Storage for RocksDbStorage {
         self.db.write(batch)?;
         Ok(())
     }
+
+    fn flush(&self) -> StorageResult<()> {
+        self.db
+            .flush_wal(true)
+            .map_err(|e| StorageError::RocksDb(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
