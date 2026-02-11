@@ -8,6 +8,9 @@ pub enum StorageError {
 
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    #[error("column family not found: {0}")]
+    ColumnFamilyNotFound(&'static str),
 }
 
 impl From<rocksdb::Error> for StorageError {
