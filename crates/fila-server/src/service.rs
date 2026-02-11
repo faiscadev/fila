@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use fila_core::{Broker, Message, SchedulerCommand};
+use fila_core::{Broker, Message, ReadyMessage, SchedulerCommand};
 use fila_proto::fila_service_server::FilaService;
 use fila_proto::{
     AckRequest, AckResponse, EnqueueRequest, EnqueueResponse, LeaseRequest, LeaseResponse,
     NackRequest, NackResponse,
 };
 use tonic::{Request, Response, Status};
-use tracing::instrument;
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use crate::error::IntoStatus;
@@ -23,6 +23,22 @@ impl HotPathService {
     }
 }
 
+/// Convert a ReadyMessage to a protobuf Message for the LeaseResponse.
+fn ready_to_proto(ready: ReadyMessage) -> fila_proto::Message {
+    fila_proto::Message {
+        id: ready.msg_id.to_string(),
+        headers: ready.headers,
+        payload: ready.payload,
+        metadata: Some(fila_proto::MessageMetadata {
+            fairness_key: ready.fairness_key,
+            weight: 0,
+            throttle_keys: vec![],
+            attempt_count: ready.attempt_count,
+            queue_id: ready.queue_id,
+        }),
+        timestamps: None,
+    }
+}
 #[tonic::async_trait]
 impl FilaService for HotPathService {
     #[instrument(skip(self))]
@@ -74,11 +90,69 @@ impl FilaService for HotPathService {
 
     type LeaseStream = tokio_stream::wrappers::ReceiverStream<Result<LeaseResponse, Status>>;
 
+    #[instrument(skip(self))]
     async fn lease(
         &self,
-        _request: Request<LeaseRequest>,
+        request: Request<LeaseRequest>,
     ) -> Result<Response<Self::LeaseStream>, Status> {
-        Err(Status::unimplemented("Lease not yet implemented"))
+        let req = request.into_inner();
+
+        if req.queue.is_empty() {
+            return Err(Status::invalid_argument("queue name must not be empty"));
+        }
+
+        let consumer_id = Uuid::now_v7().to_string();
+
+        // Channel from scheduler (ReadyMessage) to converter task
+        let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel::<ReadyMessage>(64);
+
+        // Channel from converter task to gRPC stream
+        let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(64);
+
+        // Register consumer with the scheduler
+        self.broker
+            .send_command(SchedulerCommand::RegisterConsumer {
+                queue_id: req.queue.clone(),
+                consumer_id: consumer_id.clone(),
+                tx: ready_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        debug!(%consumer_id, queue = %req.queue, "lease stream opened");
+
+        // Spawn a converter task that bridges ReadyMessage -> LeaseResponse
+        // and handles cleanup on disconnect
+        let broker = Arc::clone(&self.broker);
+        let cid = consumer_id.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    msg = ready_rx.recv() => {
+                        match msg {
+                            Some(ready) => {
+                                let response = LeaseResponse {
+                                    message: Some(ready_to_proto(ready)),
+                                };
+                                if stream_tx.send(Ok(response)).await.is_err() {
+                                    break; // gRPC stream closed
+                                }
+                            }
+                            None => break, // Scheduler dropped our sender
+                        }
+                    }
+                    _ = stream_tx.closed() => {
+                        break; // Client disconnected
+                    }
+                }
+            }
+            // Unregister consumer when the stream ends
+            debug!(consumer_id = %cid, "lease stream closed, unregistering consumer");
+            let _ = broker.send_command(SchedulerCommand::UnregisterConsumer { consumer_id: cid });
+        });
+
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            stream_rx,
+        )))
     }
 
     async fn ack(&self, _request: Request<AckRequest>) -> Result<Response<AckResponse>, Status> {

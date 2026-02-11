@@ -38,7 +38,7 @@ pub enum SchedulerCommand {
     RegisterConsumer {
         queue_id: String,
         consumer_id: String,
-        tx: crossbeam_channel::Sender<ReadyMessage>,
+        tx: tokio::sync::mpsc::Sender<ReadyMessage>,
     },
     UnregisterConsumer {
         consumer_id: String,
