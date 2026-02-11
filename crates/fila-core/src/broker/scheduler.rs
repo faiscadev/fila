@@ -109,11 +109,47 @@ impl Scheduler {
                 info!(%consumer_id, "consumer unregistered");
                 // Stub: will be implemented in story 1.7
             }
+            SchedulerCommand::CreateQueue {
+                name,
+                config,
+                reply,
+            } => {
+                info!(%name, "create queue command received");
+                let result = self.handle_create_queue(name, config);
+                let _ = reply.send(result);
+            }
+            SchedulerCommand::DeleteQueue { queue_id, reply } => {
+                info!(%queue_id, "delete queue command received");
+                let result = self.handle_delete_queue(&queue_id);
+                let _ = reply.send(result);
+            }
             SchedulerCommand::Shutdown => {
                 info!("shutdown command received, draining remaining commands");
                 self.running = false;
             }
         }
+    }
+
+    fn handle_create_queue(
+        &self,
+        name: String,
+        config: crate::queue::QueueConfig,
+    ) -> crate::error::Result<String> {
+        // Check if queue already exists
+        if self.storage.get_queue(&name)?.is_some() {
+            return Err(crate::error::FilaError::QueueAlreadyExists(name));
+        }
+        self.storage.put_queue(&name, &config)?;
+        Ok(name)
+    }
+
+    fn handle_delete_queue(&self, queue_id: &str) -> crate::error::Result<()> {
+        // Check if queue exists
+        if self.storage.get_queue(queue_id)?.is_none() {
+            return Err(crate::error::FilaError::QueueNotFound(queue_id.to_string()));
+        }
+        self.storage.delete_queue(queue_id)?;
+        Ok(())
     }
 
     /// Access the storage layer (used by tests and future scheduler logic).
@@ -257,5 +293,107 @@ mod tests {
         // Scheduler should detect disconnection and stop
         scheduler.run();
         // If we get here, it handled disconnection correctly
+    }
+
+    #[test]
+    fn create_queue_success() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
+        let config = crate::queue::QueueConfig::new("test-queue".to_string());
+
+        tx.send(SchedulerCommand::CreateQueue {
+            name: "test-queue".to_string(),
+            config,
+            reply: reply_tx,
+        })
+        .unwrap();
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+
+        scheduler.run();
+
+        let result = reply_rx.try_recv().unwrap().unwrap();
+        assert_eq!(result, "test-queue");
+    }
+
+    #[test]
+    fn create_queue_already_exists() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create queue first time
+        let (reply_tx1, mut reply_rx1) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::CreateQueue {
+            name: "dup-queue".to_string(),
+            config: crate::queue::QueueConfig::new("dup-queue".to_string()),
+            reply: reply_tx1,
+        })
+        .unwrap();
+
+        // Try to create same queue again
+        let (reply_tx2, mut reply_rx2) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::CreateQueue {
+            name: "dup-queue".to_string(),
+            config: crate::queue::QueueConfig::new("dup-queue".to_string()),
+            reply: reply_tx2,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(reply_rx1.try_recv().unwrap().is_ok());
+        let err = reply_rx2.try_recv().unwrap().unwrap_err();
+        assert!(
+            matches!(err, crate::error::FilaError::QueueAlreadyExists(_)),
+            "expected QueueAlreadyExists, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn delete_queue_success() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create then delete
+        let (create_tx, mut create_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::CreateQueue {
+            name: "del-queue".to_string(),
+            config: crate::queue::QueueConfig::new("del-queue".to_string()),
+            reply: create_tx,
+        })
+        .unwrap();
+
+        let (del_tx, mut del_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::DeleteQueue {
+            queue_id: "del-queue".to_string(),
+            reply: del_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(create_rx.try_recv().unwrap().is_ok());
+        assert!(del_rx.try_recv().unwrap().is_ok());
+    }
+
+    #[test]
+    fn delete_queue_not_found() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::DeleteQueue {
+            queue_id: "nonexistent".to_string(),
+            reply: reply_tx,
+        })
+        .unwrap();
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+
+        scheduler.run();
+
+        let err = reply_rx.try_recv().unwrap().unwrap_err();
+        assert!(
+            matches!(err, crate::error::FilaError::QueueNotFound(_)),
+            "expected QueueNotFound, got {err:?}"
+        );
     }
 }
