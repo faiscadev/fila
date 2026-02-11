@@ -133,12 +133,14 @@ impl Scheduler {
     fn handle_create_queue(
         &self,
         name: String,
-        config: crate::queue::QueueConfig,
+        mut config: crate::queue::QueueConfig,
     ) -> crate::error::Result<String> {
         // Check if queue already exists
         if self.storage.get_queue(&name)?.is_some() {
             return Err(crate::error::FilaError::QueueAlreadyExists(name));
         }
+        // Ensure config name matches the requested queue name
+        config.name = name.clone();
         self.storage.put_queue(&name, &config)?;
         Ok(name)
     }
