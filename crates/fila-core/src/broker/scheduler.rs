@@ -222,8 +222,10 @@ impl Scheduler {
         // Parse expiry timestamp from lease value to construct the lease_expiry key
         let expiry_ns = crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
             .ok_or_else(|| {
-                crate::error::FilaError::StorageError(
-                    "corrupt lease value: cannot parse expiry".to_string(),
+                crate::error::FilaError::Storage(
+                    crate::error::StorageError::Serialization(
+                        "corrupt lease value: cannot parse expiry".to_string(),
+                    ),
                 )
             })?;
         let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, msg_id);
