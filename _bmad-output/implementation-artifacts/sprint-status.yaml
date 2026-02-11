@@ -41,8 +41,8 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # Epic 1: Foundation & End-to-End Messaging
-  epic-1: backlog
-  1-1-cargo-workspace-protobuf-definitions: backlog
+  epic-1: in-progress
+  1-1-cargo-workspace-protobuf-definitions: done
   1-2-ci-cd-pipeline: backlog
   1-3-core-domain-types-storage-layer: backlog
   1-4-broker-core-scheduler-loop: backlog

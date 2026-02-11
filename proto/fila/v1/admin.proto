@@ -1,0 +1,67 @@
+syntax = "proto3";
+package fila.v1;
+
+// Admin RPCs for operators and the CLI.
+service FilaAdmin {
+  rpc CreateQueue(CreateQueueRequest) returns (CreateQueueResponse);
+  rpc DeleteQueue(DeleteQueueRequest) returns (DeleteQueueResponse);
+  rpc SetConfig(SetConfigRequest) returns (SetConfigResponse);
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+  rpc Redrive(RedriveRequest) returns (RedriveResponse);
+}
+
+message CreateQueueRequest {
+  string name = 1;
+  QueueConfig config = 2;
+}
+
+message QueueConfig {
+  string on_enqueue_script = 1;
+  string on_failure_script = 2;
+  uint64 visibility_timeout_ms = 3;
+}
+
+message CreateQueueResponse {
+  string queue_id = 1;
+}
+
+message DeleteQueueRequest {
+  string queue = 1;
+}
+
+message DeleteQueueResponse {}
+
+message SetConfigRequest {
+  string key = 1;
+  string value = 2;
+}
+
+message SetConfigResponse {}
+
+message GetConfigRequest {
+  string key = 1;
+}
+
+message GetConfigResponse {
+  string value = 1;
+}
+
+message GetStatsRequest {
+  string queue = 1;
+}
+
+message GetStatsResponse {
+  uint64 depth = 1;
+  uint64 in_flight = 2;
+  uint64 active_fairness_keys = 3;
+}
+
+message RedriveRequest {
+  string dlq_queue = 1;
+  uint64 count = 2;
+}
+
+message RedriveResponse {
+  uint64 redriven = 1;
+}

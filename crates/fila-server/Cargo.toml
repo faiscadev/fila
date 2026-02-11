@@ -1,0 +1,12 @@
+[package]
+name = "fila-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "gRPC server binary for Fila"
+
+[dependencies]
+fila-proto.workspace = true
+fila-core.workspace = true
