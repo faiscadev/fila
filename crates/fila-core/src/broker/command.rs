@@ -12,6 +12,8 @@ pub struct ReadyMessage {
     pub headers: HashMap<String, String>,
     pub payload: Vec<u8>,
     pub fairness_key: String,
+    pub weight: u32,
+    pub throttle_keys: Vec<String>,
     pub attempt_count: u32,
 }
 
