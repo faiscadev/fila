@@ -1,6 +1,6 @@
 # Story 1.9: Crash Recovery & Graceful Shutdown
 
-Status: in-progress
+Status: done
 
 ## Story
 
