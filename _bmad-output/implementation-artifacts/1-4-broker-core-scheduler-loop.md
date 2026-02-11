@@ -12,7 +12,7 @@ So that all state mutations happen on a dedicated thread without lock contention
 
 1. A `Broker` struct spawns a dedicated `std::thread` for the scheduler core
 2. `crossbeam-channel` bounded channels connect IO threads (inbound) to the scheduler (outbound)
-3. A `SchedulerCommand` enum defines all commands: `Enqueue`, `Ack`, `Nack`, `RegisterConsumer`, `UnregisterConsumer`, `Admin`
+3. A `SchedulerCommand` enum defines all commands: `Enqueue`, `Ack`, `Nack`, `RegisterConsumer`, `UnregisterConsumer`, `Shutdown`
 4. Each command variant includes a `oneshot::Sender` for request-response patterns (where applicable)
 5. The scheduler core runs a tight event loop: drain inbound commands (non-blocking `try_recv`), then park with timeout if idle
 6. The scheduler loop contains no async code and never blocks on IO
