@@ -37,28 +37,31 @@ impl FilaAdmin for AdminService {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
 
+        let proto_config = req.config.unwrap_or_default();
+
+        let visibility_timeout_ms = match proto_config.visibility_timeout_ms {
+            0 => QueueConfig::DEFAULT_VISIBILITY_TIMEOUT_MS, // proto3: 0 means unset
+            v if v < 1_000 => {
+                return Err(Status::invalid_argument(
+                    "visibility_timeout_ms must be at least 1000 (1 second)",
+                ));
+            }
+            v => v,
+        };
+
         let config = QueueConfig {
             name: req.name.clone(),
-            on_enqueue_script: req.config.as_ref().and_then(|c| {
-                if c.on_enqueue_script.is_empty() {
-                    None
-                } else {
-                    Some(c.on_enqueue_script.clone())
-                }
-            }),
-            on_failure_script: req.config.as_ref().and_then(|c| {
-                if c.on_failure_script.is_empty() {
-                    None
-                } else {
-                    Some(c.on_failure_script.clone())
-                }
-            }),
-            visibility_timeout_ms: req
-                .config
-                .as_ref()
-                .map(|c| c.visibility_timeout_ms)
-                .filter(|&v| v > 0)
-                .unwrap_or(QueueConfig::DEFAULT_VISIBILITY_TIMEOUT_MS),
+            on_enqueue_script: if proto_config.on_enqueue_script.is_empty() {
+                None
+            } else {
+                Some(proto_config.on_enqueue_script)
+            },
+            on_failure_script: if proto_config.on_failure_script.is_empty() {
+                None
+            } else {
+                Some(proto_config.on_failure_script)
+            },
+            visibility_timeout_ms,
             dlq_queue_id: None,
         };
 
@@ -132,5 +135,68 @@ impl FilaAdmin for AdminService {
         _request: Request<RedriveRequest>,
     ) -> Result<Response<RedriveResponse>, Status> {
         Err(Status::unimplemented("Redrive not yet implemented"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fila_core::{Broker, BrokerConfig, RocksDbStorage};
+    use fila_proto::QueueConfig as ProtoQueueConfig;
+
+    fn test_admin_service() -> (AdminService, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let broker = Arc::new(Broker::new(BrokerConfig::default(), storage).unwrap());
+        (AdminService::new(broker), dir)
+    }
+
+    #[tokio::test]
+    async fn create_queue_rejects_invalid_visibility_timeout() {
+        let (svc, _dir) = test_admin_service();
+
+        let request = Request::new(CreateQueueRequest {
+            name: "test-queue".to_string(),
+            config: Some(ProtoQueueConfig {
+                visibility_timeout_ms: 500, // too low
+                ..Default::default()
+            }),
+        });
+
+        let err = svc.create_queue(request).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("visibility_timeout_ms"));
+    }
+
+    #[tokio::test]
+    async fn create_queue_uses_default_when_timeout_is_zero() {
+        let (svc, _dir) = test_admin_service();
+
+        let request = Request::new(CreateQueueRequest {
+            name: "test-queue".to_string(),
+            config: Some(ProtoQueueConfig {
+                visibility_timeout_ms: 0, // proto3 unset
+                ..Default::default()
+            }),
+        });
+
+        let resp = svc.create_queue(request).await.unwrap();
+        assert_eq!(resp.into_inner().queue_id, "test-queue");
+    }
+
+    #[tokio::test]
+    async fn create_queue_accepts_valid_visibility_timeout() {
+        let (svc, _dir) = test_admin_service();
+
+        let request = Request::new(CreateQueueRequest {
+            name: "test-queue".to_string(),
+            config: Some(ProtoQueueConfig {
+                visibility_timeout_ms: 60_000,
+                ..Default::default()
+            }),
+        });
+
+        let resp = svc.create_queue(request).await.unwrap();
+        assert_eq!(resp.into_inner().queue_id, "test-queue");
     }
 }
