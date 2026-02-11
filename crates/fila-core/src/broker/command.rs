@@ -43,5 +43,14 @@ pub enum SchedulerCommand {
     UnregisterConsumer {
         consumer_id: String,
     },
+    CreateQueue {
+        name: String,
+        config: crate::queue::QueueConfig,
+        reply: tokio::sync::oneshot::Sender<Result<String>>,
+    },
+    DeleteQueue {
+        queue_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
     Shutdown,
 }
