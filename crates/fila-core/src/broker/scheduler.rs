@@ -186,8 +186,8 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Access the storage layer (used by tests and future scheduler logic).
-    #[allow(dead_code)]
+    /// Access the storage layer (used by tests).
+    #[cfg(test)]
     pub fn storage(&self) -> &dyn Storage {
         self.storage.as_ref()
     }
