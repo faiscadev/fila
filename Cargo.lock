@@ -254,10 +254,12 @@ dependencies = [
  "fila-core",
  "fila-proto",
  "tokio",
+ "tokio-stream",
  "toml",
  "tonic",
  "tonic-prost",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

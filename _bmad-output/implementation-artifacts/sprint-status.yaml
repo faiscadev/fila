@@ -46,8 +46,8 @@ development_status:
   1-2-ci-cd-pipeline: done
   1-3-core-domain-types-storage-layer: done
   1-4-broker-core-scheduler-loop: done
-  1-5-grpc-server-queue-management: in-progress
-  1-6-message-enqueue: backlog
+  1-5-grpc-server-queue-management: done
+  1-6-message-enqueue: in-progress
   1-7-consumer-lease-message-delivery: backlog
   1-8-message-acknowledgment: backlog
   1-9-crash-recovery-graceful-shutdown: backlog

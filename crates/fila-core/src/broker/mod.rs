@@ -122,6 +122,17 @@ mod tests {
     fn broker_processes_enqueue_command() {
         let (broker, _dir) = test_broker();
 
+        // Create the queue first
+        let (create_tx, create_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::CreateQueue {
+                name: "test-queue".to_string(),
+                config: crate::queue::QueueConfig::new("test-queue".to_string()),
+                reply: create_tx,
+            })
+            .unwrap();
+        create_rx.blocking_recv().unwrap().unwrap();
+
         let msg = Message {
             id: Uuid::now_v7(),
             queue_id: "test-queue".to_string(),

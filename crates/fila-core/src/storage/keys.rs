@@ -48,6 +48,7 @@ pub fn message_key(
 }
 
 /// Build a prefix for iterating all messages in a queue.
+#[allow(dead_code)]
 pub fn message_prefix(queue_id: &str) -> Vec<u8> {
     let mut prefix = Vec::with_capacity(32);
     prefix.extend_from_slice(&encode_string(queue_id));
@@ -56,6 +57,7 @@ pub fn message_prefix(queue_id: &str) -> Vec<u8> {
 }
 
 /// Build a prefix for iterating messages with a specific fairness key in a queue.
+#[allow(dead_code)]
 pub fn message_prefix_with_key(queue_id: &str, fairness_key: &str) -> Vec<u8> {
     let mut prefix = Vec::with_capacity(48);
     prefix.extend_from_slice(&encode_string(queue_id));
@@ -66,6 +68,7 @@ pub fn message_prefix_with_key(queue_id: &str, fairness_key: &str) -> Vec<u8> {
 }
 
 /// Build a lease key: `{queue_id}:{msg_id}`
+#[allow(dead_code)]
 pub fn lease_key(queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
     let mut key = Vec::with_capacity(32);
     key.extend_from_slice(&encode_string(queue_id));
@@ -77,6 +80,7 @@ pub fn lease_key(queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
 /// Build a lease expiry key: `{expiry_ts_ns}:{queue_id}:{msg_id}`
 ///
 /// Timestamp-first layout enables efficient "scan from earliest expiry" iteration.
+#[allow(dead_code)]
 pub fn lease_expiry_key(expiry_ts_ns: u64, queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
     let mut key = Vec::with_capacity(40);
     key.extend_from_slice(&encode_u64(expiry_ts_ns));
@@ -88,6 +92,7 @@ pub fn lease_expiry_key(expiry_ts_ns: u64, queue_id: &str, msg_id: &uuid::Uuid) 
 }
 
 /// Encode a lease value: `{consumer_id}:{expiry_ts_ns}`
+#[allow(dead_code)]
 pub fn lease_value(consumer_id: &str, expiry_ts_ns: u64) -> Vec<u8> {
     let mut val = Vec::with_capacity(32);
     val.extend_from_slice(&encode_string(consumer_id));

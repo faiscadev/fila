@@ -1,15 +1,18 @@
 mod admin_service;
 mod error;
+mod service;
 
 use std::path::Path;
 use std::sync::Arc;
 
 use fila_core::{Broker, BrokerConfig, RocksDbStorage};
 use fila_proto::fila_admin_server::FilaAdminServer;
+use fila_proto::fila_service_server::FilaServiceServer;
 use tonic::transport::Server;
 use tracing::info;
 
 use admin_service::AdminService;
+use service::HotPathService;
 
 fn load_config() -> BrokerConfig {
     let paths = ["fila.toml", "/etc/fila/fila.toml"];
@@ -52,12 +55,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let broker = Arc::new(Broker::new(config, storage)?);
 
     let admin_service = AdminService::new(Arc::clone(&broker));
+    let hot_path_service = HotPathService::new(Arc::clone(&broker));
 
     let addr = listen_addr.parse()?;
     info!(%addr, "starting gRPC server");
 
     Server::builder()
         .add_service(FilaAdminServer::new(admin_service))
+        .add_service(FilaServiceServer::new(hot_path_service))
         .serve_with_shutdown(addr, shutdown_signal())
         .await?;
 

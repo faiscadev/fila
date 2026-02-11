@@ -1,5 +1,4 @@
-#[allow(dead_code)]
-mod keys;
+pub(crate) mod keys;
 mod rocksdb;
 mod traits;
 
