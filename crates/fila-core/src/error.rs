@@ -56,6 +56,24 @@ pub enum NackError {
     Storage(#[from] StorageError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CreateQueueError {
+    #[error("queue already exists: {0}")]
+    QueueAlreadyExists(String),
+
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteQueueError {
+    #[error("queue not found: {0}")]
+    QueueNotFound(String),
+
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
+
 // --- Broker lifecycle/channel errors ---
 
 #[derive(Debug, thiserror::Error)]

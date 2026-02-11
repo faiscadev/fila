@@ -134,10 +134,10 @@ impl Scheduler {
         &self,
         name: String,
         mut config: crate::queue::QueueConfig,
-    ) -> crate::error::Result<String> {
+    ) -> Result<String, crate::error::CreateQueueError> {
         // Check if queue already exists
         if self.storage.get_queue(&name)?.is_some() {
-            return Err(crate::error::FilaError::QueueAlreadyExists(name));
+            return Err(crate::error::CreateQueueError::QueueAlreadyExists(name));
         }
         // Ensure config name matches the requested queue name
         config.name = name.clone();
@@ -145,10 +145,12 @@ impl Scheduler {
         Ok(name)
     }
 
-    fn handle_delete_queue(&self, queue_id: &str) -> crate::error::Result<()> {
+    fn handle_delete_queue(&self, queue_id: &str) -> Result<(), crate::error::DeleteQueueError> {
         // Check if queue exists
         if self.storage.get_queue(queue_id)?.is_none() {
-            return Err(crate::error::FilaError::QueueNotFound(queue_id.to_string()));
+            return Err(crate::error::DeleteQueueError::QueueNotFound(
+                queue_id.to_string(),
+            ));
         }
         self.storage.delete_queue(queue_id)?;
         Ok(())
@@ -346,7 +348,7 @@ mod tests {
         assert!(reply_rx1.try_recv().unwrap().is_ok());
         let err = reply_rx2.try_recv().unwrap().unwrap_err();
         assert!(
-            matches!(err, crate::error::FilaError::QueueAlreadyExists(_)),
+            matches!(err, crate::error::CreateQueueError::QueueAlreadyExists(_)),
             "expected QueueAlreadyExists, got {err:?}"
         );
     }
@@ -394,7 +396,7 @@ mod tests {
 
         let err = reply_rx.try_recv().unwrap().unwrap_err();
         assert!(
-            matches!(err, crate::error::FilaError::QueueNotFound(_)),
+            matches!(err, crate::error::DeleteQueueError::QueueNotFound(_)),
             "expected QueueNotFound, got {err:?}"
         );
     }

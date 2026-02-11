@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use fila_core::{Broker, FilaError, QueueConfig, SchedulerCommand};
+use fila_core::{Broker, QueueConfig, SchedulerCommand};
 use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
     CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
@@ -9,6 +9,8 @@ use fila_proto::{
 };
 use tonic::{Request, Response, Status};
 use tracing::instrument;
+
+use crate::error::IntoStatus;
 
 /// gRPC admin service implementation. Wraps a Broker to send commands
 /// to the scheduler thread.
@@ -19,21 +21,6 @@ pub struct AdminService {
 impl AdminService {
     pub fn new(broker: Arc<Broker>) -> Self {
         Self { broker }
-    }
-}
-
-fn fila_error_to_status(err: FilaError) -> Status {
-    match err {
-        FilaError::QueueNotFound(msg) => Status::not_found(msg),
-        FilaError::QueueAlreadyExists(msg) => Status::already_exists(msg),
-        FilaError::InvalidConfig(msg) => Status::invalid_argument(msg),
-        FilaError::MessageNotFound(msg) => Status::not_found(msg),
-        FilaError::LuaError(msg) => Status::internal(msg),
-        FilaError::SchedulerSpawn(msg) => Status::internal(msg),
-        FilaError::ChannelFull => Status::resource_exhausted("scheduler overloaded"),
-        FilaError::ChannelDisconnected => Status::unavailable("scheduler unavailable"),
-        FilaError::SchedulerPanicked => Status::internal("scheduler panicked"),
-        FilaError::Storage(e) => Status::internal(e.to_string()),
     }
 }
 
@@ -82,12 +69,12 @@ impl FilaAdmin for AdminService {
                 config,
                 reply: reply_tx,
             })
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(IntoStatus::into_status)?;
 
         let queue_id = reply_rx
             .await
             .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(fila_error_to_status)?;
+            .map_err(IntoStatus::into_status)?;
 
         Ok(Response::new(CreateQueueResponse { queue_id }))
     }
@@ -109,12 +96,12 @@ impl FilaAdmin for AdminService {
                 queue_id: req.queue,
                 reply: reply_tx,
             })
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(IntoStatus::into_status)?;
 
         reply_rx
             .await
             .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(fila_error_to_status)?;
+            .map_err(IntoStatus::into_status)?;
 
         Ok(Response::new(DeleteQueueResponse {}))
     }

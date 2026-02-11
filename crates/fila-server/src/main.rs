@@ -1,4 +1,5 @@
 mod admin_service;
+mod error;
 
 use std::path::Path;
 use std::sync::Arc;
