@@ -1,0 +1,28 @@
+syntax = "proto3";
+package fila.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Core message envelope persisted in the broker.
+message Message {
+  string id = 1;
+  map<string, string> headers = 2;
+  bytes payload = 3;
+  MessageMetadata metadata = 4;
+  MessageTimestamps timestamps = 5;
+}
+
+// Broker-assigned scheduling metadata.
+message MessageMetadata {
+  string fairness_key = 1;
+  uint32 weight = 2;
+  repeated string throttle_keys = 3;
+  uint32 attempt_count = 4;
+  string queue_id = 5;
+}
+
+// Lifecycle timestamps attached to every message.
+message MessageTimestamps {
+  google.protobuf.Timestamp enqueued_at = 1;
+  google.protobuf.Timestamp leased_at = 2;
+}

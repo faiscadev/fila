@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "crates/fila-proto",
+    "crates/fila-core",
+    "crates/fila-server",
+    "crates/fila-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/faisca/fila"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# gRPC + Protobuf (versions must match)
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tonic-prost-build = "0.14"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+
+# Error handling
+thiserror = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# IDs
+uuid = { version = "1", features = ["v7"] }
+
+# Byte buffers
+bytes = "1"
+
+# Lock-free channels
+crossbeam-channel = "0.5"
+
+# Observability
+tracing = "0.1"
+
+# Storage
+rocksdb = "0.24"
+
+# Internal crates
+fila-proto = { path = "crates/fila-proto" }
+fila-core = { path = "crates/fila-core" }
