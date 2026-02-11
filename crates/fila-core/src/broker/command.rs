@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::error::{AckError, EnqueueError, NackError};
+use crate::error::{AckError, CreateQueueError, DeleteQueueError, EnqueueError, NackError};
 
 /// A message ready for delivery to a consumer.
 #[derive(Debug, Clone)]
@@ -46,11 +46,11 @@ pub enum SchedulerCommand {
     CreateQueue {
         name: String,
         config: crate::queue::QueueConfig,
-        reply: tokio::sync::oneshot::Sender<Result<String>>,
+        reply: tokio::sync::oneshot::Sender<Result<String, CreateQueueError>>,
     },
     DeleteQueue {
         queue_id: String,
-        reply: tokio::sync::oneshot::Sender<Result<()>>,
+        reply: tokio::sync::oneshot::Sender<Result<(), DeleteQueueError>>,
     },
     Shutdown,
 }
