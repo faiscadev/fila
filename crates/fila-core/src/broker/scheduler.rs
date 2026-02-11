@@ -135,18 +135,25 @@ impl Scheduler {
         name: String,
         mut config: crate::queue::QueueConfig,
     ) -> Result<String, crate::error::CreateQueueError> {
-        // Check if queue already exists
+        // Check-then-put is safe: the scheduler is single-threaded, so no
+        // concurrent command can create the same queue between the check and
+        // the put. RocksDB put is an upsert, so the explicit check is the
+        // only way to enforce uniqueness.
+        // TODO(cluster): replace with atomic put-if-absent or distributed lock
+        // when moving to a multi-node scheduler.
         if self.storage.get_queue(&name)?.is_some() {
             return Err(crate::error::CreateQueueError::QueueAlreadyExists(name));
         }
-        // Ensure config name matches the requested queue name
         config.name = name.clone();
         self.storage.put_queue(&name, &config)?;
         Ok(name)
     }
 
     fn handle_delete_queue(&self, queue_id: &str) -> Result<(), crate::error::DeleteQueueError> {
-        // Check if queue exists
+        // Check-then-delete is safe: same single-threaded guarantee as above.
+        // RocksDB delete is a no-op on missing keys, so the explicit check is
+        // the only way to return a meaningful NotFound error.
+        // TODO(cluster): same as handle_create_queue — needs atomic operation.
         if self.storage.get_queue(queue_id)?.is_none() {
             return Err(crate::error::DeleteQueueError::QueueNotFound(
                 queue_id.to_string(),
