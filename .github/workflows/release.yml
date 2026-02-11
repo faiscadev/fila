@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: taiki-e/install-action@cargo-nextest
+      - run: cargo fmt --check
+      - run: cargo clippy -- -D warnings
+      - run: cargo nextest run
+      - run: cargo bench
+        continue-on-error: true
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: check
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            use-cross: false
+          - name: linux-arm64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use-cross: true
+          - name: darwin-amd64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            use-cross: false
+          - name: darwin-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            use-cross: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cross
+        if: matrix.use-cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build
+        run: |
+          BUILD_CMD="cargo"
+          if [ "${{ matrix.use-cross }}" = "true" ]; then
+            BUILD_CMD="cross"
+          fi
+          $BUILD_CMD build --release --locked --target ${{ matrix.target }} --bin fila-server --bin fila
+
+      - name: Package
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          DIR="fila-${TAG}-${{ matrix.name }}"
+          mkdir -p "${DIR}"
+          cp "target/${{ matrix.target }}/release/fila-server" "${DIR}/"
+          cp "target/${{ matrix.target }}/release/fila" "${DIR}/"
+          cp LICENSE "${DIR}/"
+          tar czf "${DIR}.tar.gz" "${DIR}"
+          shasum -a 256 "${DIR}.tar.gz" > "${DIR}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: fila-*.tar.gz*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*
+
+  docker:
+    name: Docker
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
