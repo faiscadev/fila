@@ -97,6 +97,16 @@ pub fn lease_value(consumer_id: &str, expiry_ts_ns: u64) -> Vec<u8> {
     val
 }
 
+/// Extract the expiry timestamp from a lease value.
+/// The expiry is stored as the last 8 bytes (big-endian u64).
+pub fn parse_expiry_from_lease_value(value: &[u8]) -> Option<u64> {
+    if value.len() < 8 {
+        return None;
+    }
+    let bytes: [u8; 8] = value[value.len() - 8..].try_into().ok()?;
+    Some(u64::from_be_bytes(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

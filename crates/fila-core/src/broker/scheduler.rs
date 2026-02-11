@@ -101,8 +101,8 @@ impl Scheduler {
                 reply,
             } => {
                 debug!(%queue_id, %msg_id, "ack command received");
-                // Stub: will be implemented in story 1.8
-                let _ = reply.send(Ok(()));
+                let result = self.handle_ack(&queue_id, &msg_id);
+                let _ = reply.send(result);
             }
             SchedulerCommand::Nack {
                 queue_id,
@@ -208,6 +208,52 @@ impl Scheduler {
         }
         self.storage.delete_queue(queue_id)?;
         Ok(())
+    }
+
+    fn handle_ack(&self, queue_id: &str, msg_id: &uuid::Uuid) -> crate::error::Result<()> {
+        // Look up the lease — if it doesn't exist, the message is unknown or already acked
+        let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+        let lease_value = self.storage.get_lease(&lease_key)?.ok_or_else(|| {
+            crate::error::FilaError::MessageNotFound(format!(
+                "no lease for message {msg_id} in queue {queue_id}"
+            ))
+        })?;
+
+        // Parse expiry timestamp from lease value to construct the lease_expiry key
+        let expiry_ns = crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
+            .ok_or_else(|| {
+                crate::error::FilaError::StorageError(
+                    "corrupt lease value: cannot parse expiry".to_string(),
+                )
+            })?;
+        let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, msg_id);
+
+        // Find the message key by scanning the queue's messages
+        let msg_key = self.find_message_key(queue_id, msg_id);
+
+        // Atomically delete the message, lease, and lease expiry
+        let mut ops = vec![
+            WriteBatchOp::DeleteLease { key: lease_key },
+            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+        ];
+        if let Some(key) = msg_key {
+            ops.push(WriteBatchOp::DeleteMessage { key });
+        }
+
+        self.storage.write_batch(ops)?;
+        Ok(())
+    }
+
+    /// Find the full message key in the messages CF by scanning the queue prefix.
+    fn find_message_key(&self, queue_id: &str, msg_id: &uuid::Uuid) -> Option<Vec<u8>> {
+        let prefix = crate::storage::keys::message_prefix(queue_id);
+        let messages = self.storage.list_messages(&prefix).ok()?;
+        for (key, msg) in messages {
+            if msg.id == *msg_id {
+                return Some(key);
+            }
+        }
+        None
     }
 
     /// Scan the queue for pending (unleased) messages and deliver them to
@@ -456,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn ack_reply_received() {
+    fn ack_without_lease_returns_error() {
         let (tx, mut scheduler, _dir) = test_setup();
 
         let msg_id = Uuid::now_v7();
@@ -472,7 +518,9 @@ mod tests {
 
         scheduler.run();
 
-        assert!(reply_rx.try_recv().unwrap().is_ok());
+        // Ack without a lease should fail
+        let err = reply_rx.try_recv().unwrap().unwrap_err();
+        assert!(matches!(err, crate::error::FilaError::MessageNotFound(_)));
     }
 
     #[test]
@@ -1202,6 +1250,150 @@ mod tests {
             messages.len(),
             3,
             "all 3 messages should still be in storage"
+        );
+    }
+
+    #[test]
+    fn ack_removes_message_lease_and_expiry() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "ack-queue");
+
+        // Register consumer to get a lease
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "ack-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue a message (will be delivered and leased)
+        let msg = test_message("ack-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _enq_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // Ack the message
+        let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Ack {
+            queue_id: "ack-queue".to_string(),
+            msg_id,
+            reply: ack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Consumer should have received the message
+        assert!(consumer_rx.try_recv().is_ok());
+
+        // Ack should succeed
+        assert!(ack_rx.try_recv().unwrap().is_ok());
+
+        // Message should be gone from messages CF
+        let msg_key =
+            crate::storage::keys::message_key("ack-queue", "default", 1_000_000_000, &msg_id);
+        assert!(
+            scheduler.storage().get_message(&msg_key).unwrap().is_none(),
+            "message should be deleted after ack"
+        );
+
+        // Lease should be gone
+        let lease_key = crate::storage::keys::lease_key("ack-queue", &msg_id);
+        assert!(
+            scheduler.storage().get_lease(&lease_key).unwrap().is_none(),
+            "lease should be deleted after ack"
+        );
+    }
+
+    #[test]
+    fn ack_unknown_message_returns_not_found() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "ack-unknown-queue");
+
+        let msg_id = Uuid::now_v7();
+        let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Ack {
+            queue_id: "ack-unknown-queue".to_string(),
+            msg_id,
+            reply: ack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let err = ack_rx.try_recv().unwrap().unwrap_err();
+        assert!(
+            matches!(err, crate::error::FilaError::MessageNotFound(_)),
+            "expected MessageNotFound, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn ack_same_message_twice_returns_not_found() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "double-ack-queue");
+
+        // Register consumer
+        let (consumer_tx, mut _consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "double-ack-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue and let it be leased
+        let msg = test_message("double-ack-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _enq_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // First ack
+        let (ack1_tx, mut ack1_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Ack {
+            queue_id: "double-ack-queue".to_string(),
+            msg_id,
+            reply: ack1_tx,
+        })
+        .unwrap();
+
+        // Second ack (same message)
+        let (ack2_tx, mut ack2_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Ack {
+            queue_id: "double-ack-queue".to_string(),
+            msg_id,
+            reply: ack2_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // First ack should succeed
+        assert!(
+            ack1_rx.try_recv().unwrap().is_ok(),
+            "first ack should succeed"
+        );
+
+        // Second ack should return NOT_FOUND
+        let err = ack2_rx.try_recv().unwrap().unwrap_err();
+        assert!(
+            matches!(err, crate::error::FilaError::MessageNotFound(_)),
+            "second ack should return MessageNotFound, got {err:?}"
         );
     }
 }
