@@ -1609,6 +1609,133 @@ mod tests {
     }
 
     #[test]
+    fn recovery_skips_corrupt_lease_expiry_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+
+        // Set up a queue with a message
+        let config = crate::queue::QueueConfig::new("corrupt-queue".to_string());
+        storage.put_queue("corrupt-queue", &config).unwrap();
+
+        let msg = test_message("corrupt-queue");
+        let msg_id = msg.id;
+        let msg_key = crate::storage::keys::message_key(
+            "corrupt-queue",
+            &msg.fairness_key,
+            msg.enqueued_at,
+            &msg_id,
+        );
+        storage.put_message(&msg_key, &msg).unwrap();
+
+        // Create a valid lease pointing at this message
+        let lease_key = crate::storage::keys::lease_key("corrupt-queue", &msg_id);
+        let lease_val = crate::storage::keys::lease_value("c1", 1);
+        storage
+            .write_batch(vec![WriteBatchOp::PutLease {
+                key: lease_key.clone(),
+                value: lease_val,
+            }])
+            .unwrap();
+
+        // Write a corrupt lease_expiry key (expired, but unparseable)
+        // Use a valid timestamp prefix so the scanner finds it, but garbage after
+        let mut corrupt_expiry_key = Vec::new();
+        corrupt_expiry_key.extend_from_slice(&1u64.to_be_bytes()); // expired timestamp
+        corrupt_expiry_key.push(b':');
+        corrupt_expiry_key.extend_from_slice(&[0xFF; 4]); // garbage
+        storage
+            .write_batch(vec![WriteBatchOp::PutLeaseExpiry {
+                key: corrupt_expiry_key.clone(),
+            }])
+            .unwrap();
+
+        // Start scheduler — recovery should skip the corrupt key without panicking
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // The corrupt lease_expiry entry should still be there (skipped, not deleted)
+        let up_to = crate::storage::keys::lease_expiry_key(2, "z", &uuid::Uuid::max());
+        let remaining = storage.list_expired_leases(&up_to).unwrap();
+        assert!(
+            remaining.contains(&corrupt_expiry_key),
+            "corrupt expiry key should be skipped, not deleted"
+        );
+
+        // The valid lease should also still be there (recovery couldn't match it
+        // to the corrupt expiry key, so it wasn't reclaimed)
+        assert!(
+            storage.get_lease(&lease_key).unwrap().is_some(),
+            "lease should survive when expiry key is corrupt"
+        );
+    }
+
+    #[test]
+    fn recovery_preserves_non_expired_leases() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+
+        // Set up a queue with a message
+        let config = crate::queue::QueueConfig::new("active-lease-queue".to_string());
+        storage.put_queue("active-lease-queue", &config).unwrap();
+
+        let msg = test_message("active-lease-queue");
+        let msg_id = msg.id;
+        let msg_key = crate::storage::keys::message_key(
+            "active-lease-queue",
+            &msg.fairness_key,
+            msg.enqueued_at,
+            &msg_id,
+        );
+        storage.put_message(&msg_key, &msg).unwrap();
+
+        // Create a lease with an expiry far in the future
+        let future_expiry = u64::MAX;
+        let lease_key = crate::storage::keys::lease_key("active-lease-queue", &msg_id);
+        let lease_val = crate::storage::keys::lease_value("active-consumer", future_expiry);
+        let expiry_key =
+            crate::storage::keys::lease_expiry_key(future_expiry, "active-lease-queue", &msg_id);
+        storage
+            .write_batch(vec![
+                WriteBatchOp::PutLease {
+                    key: lease_key.clone(),
+                    value: lease_val,
+                },
+                WriteBatchOp::PutLeaseExpiry {
+                    key: expiry_key.clone(),
+                },
+            ])
+            .unwrap();
+
+        // Start scheduler — recovery should NOT reclaim this lease
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+
+        // Register a consumer — the message should NOT be delivered because
+        // it still has an active (non-expired) lease
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "active-lease-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Consumer should NOT have received the message
+        assert!(
+            consumer_rx.try_recv().is_err(),
+            "message with active lease should not be delivered"
+        );
+
+        // Lease and expiry should still exist
+        assert!(
+            storage.get_lease(&lease_key).unwrap().is_some(),
+            "non-expired lease should survive recovery"
+        );
+    }
+
+    #[test]
     fn ack_same_message_twice_returns_not_found() {
         let (tx, mut scheduler, _dir) = test_setup();
 
