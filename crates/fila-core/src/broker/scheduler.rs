@@ -247,36 +247,35 @@ impl Scheduler {
             return Err(crate::error::CreateQueueError::QueueAlreadyExists(name));
         }
 
-        // Pre-compile and cache on_enqueue Lua script if provided
+        // Register per-queue safety config and compile Lua scripts if provided
+        if config.on_enqueue_script.is_some() || config.on_failure_script.is_some() {
+            if let Some(ref mut lua_engine) = self.lua_engine {
+                lua_engine.register_queue_safety(
+                    &name,
+                    config.lua_timeout_ms,
+                    config.lua_memory_limit_bytes,
+                );
+            }
+        }
+
         if let Some(ref script_source) = config.on_enqueue_script {
             if let Some(ref mut lua_engine) = self.lua_engine {
                 let bytecode = lua_engine
                     .compile_script(script_source)
                     .map_err(|e| crate::error::CreateQueueError::LuaCompilation(e.to_string()))?;
-                lua_engine.cache_on_enqueue(
-                    &name,
-                    bytecode,
-                    config.lua_timeout_ms,
-                    config.lua_memory_limit_bytes,
-                );
+                lua_engine.cache_on_enqueue(&name, bytecode);
                 debug!(queue = %name, "on_enqueue script compiled and cached");
             } else {
                 warn!(queue = %name, "on_enqueue script provided but Lua engine is disabled");
             }
         }
 
-        // Pre-compile and cache on_failure Lua script if provided
         if let Some(ref script_source) = config.on_failure_script {
             if let Some(ref mut lua_engine) = self.lua_engine {
                 let bytecode = lua_engine
                     .compile_script(script_source)
                     .map_err(|e| crate::error::CreateQueueError::LuaCompilation(e.to_string()))?;
-                lua_engine.cache_on_failure(
-                    &name,
-                    bytecode,
-                    config.lua_timeout_ms,
-                    config.lua_memory_limit_bytes,
-                );
+                lua_engine.cache_on_failure(&name, bytecode);
                 debug!(queue = %name, "on_failure script compiled and cached");
             } else {
                 warn!(queue = %name, "on_failure script provided but Lua engine is disabled");
@@ -825,17 +824,23 @@ impl Scheduler {
         match self.storage.list_queues() {
             Ok(queues) => {
                 for queue in &queues {
+                    // Register per-queue safety config if any scripts are present
+                    if queue.on_enqueue_script.is_some() || queue.on_failure_script.is_some() {
+                        if let Some(ref mut lua_engine) = self.lua_engine {
+                            lua_engine.register_queue_safety(
+                                &queue.name,
+                                queue.lua_timeout_ms,
+                                queue.lua_memory_limit_bytes,
+                            );
+                        }
+                    }
+
                     // Re-compile and cache on_enqueue scripts
                     if let Some(ref script_source) = queue.on_enqueue_script {
                         if let Some(ref mut lua_engine) = self.lua_engine {
                             match lua_engine.compile_script(script_source) {
                                 Ok(bytecode) => {
-                                    lua_engine.cache_on_enqueue(
-                                        &queue.name,
-                                        bytecode,
-                                        queue.lua_timeout_ms,
-                                        queue.lua_memory_limit_bytes,
-                                    );
+                                    lua_engine.cache_on_enqueue(&queue.name, bytecode);
                                     debug!(queue = %queue.name, "recovered on_enqueue script");
                                 }
                                 Err(e) => {
@@ -850,12 +855,7 @@ impl Scheduler {
                         if let Some(ref mut lua_engine) = self.lua_engine {
                             match lua_engine.compile_script(script_source) {
                                 Ok(bytecode) => {
-                                    lua_engine.cache_on_failure(
-                                        &queue.name,
-                                        bytecode,
-                                        queue.lua_timeout_ms,
-                                        queue.lua_memory_limit_bytes,
-                                    );
+                                    lua_engine.cache_on_failure(&queue.name, bytecode);
                                     debug!(queue = %queue.name, "recovered on_failure script");
                                 }
                                 Err(e) => {

@@ -64,21 +64,24 @@ impl LuaEngine {
         Ok(func.dump(true))
     }
 
-    /// Cache a pre-compiled on_enqueue script for a queue and register its
-    /// safety config (circuit breaker, timeout, memory limit).
-    pub fn cache_on_enqueue(
+    /// Register per-queue safety config (circuit breaker, timeout, memory limit).
+    ///
+    /// Must be called once per queue before caching any scripts. Safety config
+    /// is per-queue, not per-script — both on_enqueue and on_failure share the
+    /// same limits.
+    pub fn register_queue_safety(
         &mut self,
         queue_id: &str,
-        bytecode: CompiledScript,
         timeout_ms: Option<u64>,
         memory_limit_bytes: Option<usize>,
     ) {
+        self.safety
+            .register_queue(queue_id, timeout_ms, memory_limit_bytes);
+    }
+
+    /// Cache a pre-compiled on_enqueue script for a queue.
+    pub fn cache_on_enqueue(&mut self, queue_id: &str, bytecode: CompiledScript) {
         self.on_enqueue_cache.insert(queue_id.to_string(), bytecode);
-        // Register safety config if not already present (may exist from on_failure)
-        if self.safety.get_config(queue_id).is_none() {
-            self.safety
-                .register_queue(queue_id, timeout_ms, memory_limit_bytes);
-        }
     }
 
     /// Remove all cached scripts and safety state for a queue.
@@ -94,22 +97,8 @@ impl LuaEngine {
     }
 
     /// Cache a pre-compiled on_failure script for a queue.
-    ///
-    /// Safety config is shared with on_enqueue (same queue = same limits).
-    /// If no on_enqueue script was registered, this also registers the safety config.
-    pub fn cache_on_failure(
-        &mut self,
-        queue_id: &str,
-        bytecode: CompiledScript,
-        timeout_ms: Option<u64>,
-        memory_limit_bytes: Option<usize>,
-    ) {
+    pub fn cache_on_failure(&mut self, queue_id: &str, bytecode: CompiledScript) {
         self.on_failure_cache.insert(queue_id.to_string(), bytecode);
-        // Ensure safety config is registered (may already exist from on_enqueue)
-        if self.safety.get_config(queue_id).is_none() {
-            self.safety
-                .register_queue(queue_id, timeout_ms, memory_limit_bytes);
-        }
     }
 
     /// Execute the on_enqueue script for a queue, returning the scheduling metadata.
@@ -197,11 +186,17 @@ impl LuaEngine {
             return Some(OnFailureResult::default());
         }
 
-        // Set safety hooks before execution
-        if let Some(config) = self.safety.get_config(queue_id) {
-            safety::set_instruction_hook(&self.lua, config.instruction_limit);
-            safety::set_memory_limit(&self.lua, config.memory_limit_bytes);
-        }
+        // Set safety hooks before execution (fail-closed: always apply limits)
+        let (instruction_limit, memory_limit_bytes) = if let Some(config) =
+            self.safety.get_config(queue_id)
+        {
+            (config.instruction_limit, config.memory_limit_bytes)
+        } else {
+            tracing::warn!(queue = %queue_id, "safety config missing for on_failure, applying global defaults");
+            self.safety.default_limits()
+        };
+        safety::set_instruction_hook(&self.lua, instruction_limit);
+        safety::set_memory_limit(&self.lua, memory_limit_bytes);
 
         let bytecode = self.on_failure_cache.get(queue_id).unwrap();
         let result = on_failure::try_run_on_failure(
@@ -296,7 +291,8 @@ mod tests {
             .unwrap();
 
         assert!(!bytecode.is_empty());
-        engine.cache_on_enqueue("q1", bytecode, None, None);
+        engine.register_queue_safety("q1", None, None);
+        engine.cache_on_enqueue("q1", bytecode);
         assert!(engine.get_on_enqueue("q1").is_some());
         assert!(engine.get_on_enqueue("q2").is_none());
     }
@@ -317,7 +313,8 @@ mod tests {
         let bytecode = engine
             .compile_script("function on_enqueue(msg) return { fairness_key = 'x' } end")
             .unwrap();
-        engine.cache_on_enqueue("q1", bytecode, None, None);
+        engine.register_queue_safety("q1", None, None);
+        engine.cache_on_enqueue("q1", bytecode);
         assert!(engine.get_on_enqueue("q1").is_some());
 
         engine.remove_queue_scripts("q1");
@@ -347,7 +344,8 @@ mod tests {
             "#,
             )
             .unwrap();
-        engine.cache_on_enqueue("q1", bytecode, None, None);
+        engine.register_queue_safety("q1", None, None);
+        engine.cache_on_enqueue("q1", bytecode);
 
         let mut headers = HashMap::new();
         headers.insert("tenant".to_string(), "acme".to_string());
