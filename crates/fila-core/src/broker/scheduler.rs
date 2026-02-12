@@ -283,7 +283,25 @@ impl Scheduler {
         }
 
         config.name = name.clone();
-        self.storage.put_queue(&name, &config)?;
+
+        // Auto-create a dead-letter queue unless this queue is itself a DLQ.
+        // Persist the parent queue first so a crash between the two writes
+        // leaves the parent without a DLQ reference (safe — nack falls back to retry).
+        if !name.ends_with(".dlq") {
+            let dlq_name = format!("{name}.dlq");
+            config.dlq_queue_id = Some(dlq_name.clone());
+            self.storage.put_queue(&name, &config)?;
+
+            // Only create if it doesn't already exist (idempotent)
+            if self.storage.get_queue(&dlq_name)?.is_none() {
+                let dlq_config = crate::queue::QueueConfig::new(dlq_name.clone());
+                self.storage.put_queue(&dlq_name, &dlq_config)?;
+                debug!(queue = %name, dlq = %dlq_name, "auto-created dead-letter queue");
+            }
+        } else {
+            self.storage.put_queue(&name, &config)?;
+        }
+
         Ok(name)
     }
 
@@ -295,17 +313,31 @@ impl Scheduler {
         // RocksDB delete is a no-op on missing keys, so the explicit check is
         // the only way to return a meaningful NotFound error.
         // TODO(cluster): same as handle_create_queue — needs atomic operation.
-        if self.storage.get_queue(queue_id)?.is_none() {
-            return Err(crate::error::DeleteQueueError::QueueNotFound(
-                queue_id.to_string(),
-            ));
-        }
+        let queue_config = self
+            .storage
+            .get_queue(queue_id)?
+            .ok_or_else(|| crate::error::DeleteQueueError::QueueNotFound(queue_id.to_string()))?;
+
         self.storage.delete_queue(queue_id)?;
         self.drr.remove_queue(queue_id);
         self.consumer_rr_idx.remove(queue_id);
         if let Some(ref mut lua_engine) = self.lua_engine {
             lua_engine.remove_queue_scripts(queue_id);
         }
+
+        // Also delete the auto-created DLQ if it exists
+        if let Some(ref dlq_id) = queue_config.dlq_queue_id {
+            if self.storage.get_queue(dlq_id)?.is_some() {
+                self.storage.delete_queue(dlq_id)?;
+                self.drr.remove_queue(dlq_id);
+                self.consumer_rr_idx.remove(dlq_id);
+                if let Some(ref mut lua_engine) = self.lua_engine {
+                    lua_engine.remove_queue_scripts(dlq_id);
+                }
+                debug!(queue = %queue_id, dlq = %dlq_id, "deleted auto-created dead-letter queue");
+            }
+        }
+
         Ok(())
     }
 
@@ -2003,18 +2035,21 @@ mod tests {
         scheduler.run();
         drop(tx);
 
-        // Phase 2: reopen — queues should still be there
+        // Phase 2: reopen — queues should still be there (3 queues + 3 auto-created DLQs)
         let queues = storage.list_queues().unwrap();
         assert_eq!(
             queues.len(),
-            3,
-            "all 3 queue definitions should survive restart"
+            6,
+            "all 3 queue definitions + 3 DLQs should survive restart"
         );
 
         let names: Vec<&str> = queues.iter().map(|q| q.name.as_str()).collect();
         assert!(names.contains(&"q1"));
         assert!(names.contains(&"q2"));
         assert!(names.contains(&"q3"));
+        assert!(names.contains(&"q1.dlq"));
+        assert!(names.contains(&"q2.dlq"));
+        assert!(names.contains(&"q3.dlq"));
     }
 
     #[test]
@@ -3915,16 +3950,13 @@ mod tests {
     fn on_failure_dlq_moves_message_to_dead_letter_queue() {
         let (tx, mut scheduler, _dir) = test_setup();
 
-        // Create the DLQ queue first
-        send_create_queue(&tx, "my-dlq");
-
-        // Create the main queue with on_failure script pointing to the DLQ
+        // Create the main queue with on_failure script — DLQ is auto-created as main-queue.dlq
         let on_failure_script = r#"
             function on_failure(msg)
                 return { action = "dlq" }
             end
         "#;
-        send_create_queue_with_on_failure(&tx, "main-queue", on_failure_script, Some("my-dlq"));
+        send_create_queue_with_on_failure(&tx, "main-queue", on_failure_script, None);
 
         // Register consumers for both queues
         let (main_tx, mut main_rx) = tokio::sync::mpsc::channel(64);
@@ -3937,7 +3969,7 @@ mod tests {
 
         let (dlq_tx, mut dlq_rx) = tokio::sync::mpsc::channel(64);
         tx.send(SchedulerCommand::RegisterConsumer {
-            queue_id: "my-dlq".to_string(),
+            queue_id: "main-queue.dlq".to_string(),
             consumer_id: "dlq-consumer".to_string(),
             tx: dlq_tx,
         })
@@ -3997,7 +4029,7 @@ mod tests {
         );
 
         // Verify message exists in DLQ storage
-        let dlq_prefix = crate::storage::keys::message_prefix("my-dlq");
+        let dlq_prefix = crate::storage::keys::message_prefix("main-queue.dlq");
         let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
         assert_eq!(dlq_msgs.len(), 1, "message should exist in DLQ");
         assert_eq!(dlq_msgs[0].1.id, msg_id);
@@ -4007,23 +4039,24 @@ mod tests {
     fn on_failure_dlq_without_dlq_configured_falls_back_to_retry() {
         let (tx, mut scheduler, _dir) = test_setup();
 
-        // Create queue with on_failure that returns DLQ, but NO dlq_queue_id configured
+        // Use a .dlq queue name — DLQ queues don't get auto-created DLQs,
+        // so on_failure returning "dlq" should fall back to retry.
         let on_failure_script = r#"
             function on_failure(msg)
                 return { action = "dlq" }
             end
         "#;
-        send_create_queue_with_on_failure(&tx, "no-dlq-queue", on_failure_script, None);
+        send_create_queue_with_on_failure(&tx, "orphan.dlq", on_failure_script, None);
 
         let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
         tx.send(SchedulerCommand::RegisterConsumer {
-            queue_id: "no-dlq-queue".to_string(),
+            queue_id: "orphan.dlq".to_string(),
             consumer_id: "c1".to_string(),
             tx: consumer_tx,
         })
         .unwrap();
 
-        let msg = test_message("no-dlq-queue");
+        let msg = test_message("orphan.dlq");
         let msg_id = msg.id;
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
@@ -4032,10 +4065,10 @@ mod tests {
         })
         .unwrap();
 
-        // Nack — on_failure says DLQ but no DLQ configured, should retry instead
+        // Nack — on_failure says DLQ but no DLQ configured (it's a .dlq queue), should retry
         let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Nack {
-            queue_id: "no-dlq-queue".to_string(),
+            queue_id: "orphan.dlq".to_string(),
             msg_id,
             error: "some error".to_string(),
             reply: nack_tx,
@@ -4061,10 +4094,8 @@ mod tests {
     fn on_failure_receives_attempt_count_and_error() {
         let (tx, mut scheduler, _dir) = test_setup();
 
-        // Create DLQ queue
-        send_create_queue(&tx, "dlq-for-attempts");
-
-        // Script that DLQs only when attempts >= 3
+        // Script that DLQs only when attempts >= 3 and error is "fatal"
+        // DLQ is auto-created as attempts-queue.dlq
         let on_failure_script = r#"
             function on_failure(msg)
                 if msg.attempts >= 3 and msg.error == "fatal" then
@@ -4073,12 +4104,7 @@ mod tests {
                 return { action = "retry" }
             end
         "#;
-        send_create_queue_with_on_failure(
-            &tx,
-            "attempts-queue",
-            on_failure_script,
-            Some("dlq-for-attempts"),
-        );
+        send_create_queue_with_on_failure(&tx, "attempts-queue", on_failure_script, None);
 
         let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
         tx.send(SchedulerCommand::RegisterConsumer {
@@ -4090,7 +4116,7 @@ mod tests {
 
         let (dlq_consumer_tx, mut dlq_consumer_rx) = tokio::sync::mpsc::channel(64);
         tx.send(SchedulerCommand::RegisterConsumer {
-            queue_id: "dlq-for-attempts".to_string(),
+            queue_id: "attempts-queue.dlq".to_string(),
             consumer_id: "dlq-c1".to_string(),
             tx: dlq_consumer_tx,
         })
@@ -4220,13 +4246,8 @@ mod tests {
                 return { action = "dlq" }
             end
         "#;
-        send_create_queue(&tx, "recovery-dlq");
-        send_create_queue_with_on_failure(
-            &tx,
-            "recovery-queue",
-            on_failure_script,
-            Some("recovery-dlq"),
-        );
+        // DLQ is auto-created as recovery-queue.dlq
+        send_create_queue_with_on_failure(&tx, "recovery-queue", on_failure_script, None);
 
         let msg = test_message("recovery-queue");
         let msg_id = msg.id;
@@ -4268,7 +4289,7 @@ mod tests {
 
         let (dlq_consumer_tx, mut dlq_consumer_rx) = tokio::sync::mpsc::channel(64);
         tx2.send(SchedulerCommand::RegisterConsumer {
-            queue_id: "recovery-dlq".to_string(),
+            queue_id: "recovery-queue.dlq".to_string(),
             consumer_id: "dlq-c2".to_string(),
             tx: dlq_consumer_tx,
         })
@@ -4297,5 +4318,183 @@ mod tests {
             .try_recv()
             .expect("on_failure script should be restored — message should be in DLQ");
         assert_eq!(dlq_msg.msg_id, msg_id);
+    }
+
+    // --- Dead-letter queue auto-creation tests (Story 3.4) ---
+
+    #[test]
+    fn dlq_auto_created_on_queue_creation() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "my-queue");
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Both the queue and its auto-created DLQ should exist
+        let queue = scheduler.storage().get_queue("my-queue").unwrap();
+        assert!(queue.is_some(), "main queue should exist");
+        assert_eq!(
+            queue.unwrap().dlq_queue_id,
+            Some("my-queue.dlq".to_string()),
+            "dlq_queue_id should be set"
+        );
+
+        let dlq = scheduler.storage().get_queue("my-queue.dlq").unwrap();
+        assert!(dlq.is_some(), "DLQ should be auto-created");
+    }
+
+    #[test]
+    fn dlq_not_created_for_dlq_queue() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create a queue with .dlq suffix — no DLQ-of-DLQ should be created
+        send_create_queue(&tx, "orphan.dlq");
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let queue = scheduler.storage().get_queue("orphan.dlq").unwrap();
+        assert!(queue.is_some(), "DLQ queue should exist");
+        assert_eq!(
+            queue.unwrap().dlq_queue_id,
+            None,
+            "DLQ queue should not have its own DLQ"
+        );
+
+        // Verify no "orphan.dlq.dlq" was created
+        let nested_dlq = scheduler.storage().get_queue("orphan.dlq.dlq").unwrap();
+        assert!(nested_dlq.is_none(), "DLQ-of-DLQ should not exist");
+    }
+
+    #[test]
+    fn delete_queue_also_deletes_dlq() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "deletable-queue");
+
+        // Verify both exist
+        let (del_reply_tx, mut del_reply_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::DeleteQueue {
+            queue_id: "deletable-queue".to_string(),
+            reply: del_reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(
+            del_reply_rx.try_recv().unwrap().is_ok(),
+            "delete should succeed"
+        );
+
+        // Both the queue and its DLQ should be gone
+        assert!(
+            scheduler
+                .storage()
+                .get_queue("deletable-queue")
+                .unwrap()
+                .is_none(),
+            "main queue should be deleted"
+        );
+        assert!(
+            scheduler
+                .storage()
+                .get_queue("deletable-queue.dlq")
+                .unwrap()
+                .is_none(),
+            "DLQ should also be deleted"
+        );
+    }
+
+    #[test]
+    fn dlq_full_flow_enqueue_nack_dlq_lease() {
+        // Full flow: enqueue → nack with dlq action → verify message in DLQ → lease from DLQ
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "flow-queue", on_failure_script, None);
+
+        // Register consumers for both main queue and auto-created DLQ
+        let (main_tx, mut main_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "flow-queue".to_string(),
+            consumer_id: "main-c".to_string(),
+            tx: main_tx,
+        })
+        .unwrap();
+
+        let (dlq_tx, mut dlq_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "flow-queue.dlq".to_string(),
+            consumer_id: "dlq-c".to_string(),
+            tx: dlq_tx,
+        })
+        .unwrap();
+
+        // Enqueue message
+        let mut msg = test_message("flow-queue");
+        msg.headers.insert("tenant".to_string(), "acme".to_string());
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Nack — triggers on_failure which returns "dlq"
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "flow-queue".to_string(),
+            msg_id,
+            error: "permanent failure".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(nack_rx.try_recv().unwrap().is_ok());
+
+        // Initial delivery on main queue
+        let initial = main_rx.try_recv().expect("initial delivery");
+        assert_eq!(initial.msg_id, msg_id);
+        assert_eq!(initial.attempt_count, 0);
+
+        // No retry on main queue
+        assert!(
+            main_rx.try_recv().is_err(),
+            "should not retry on main queue"
+        );
+
+        // DLQ consumer receives the message (leased from DLQ like any regular queue)
+        let dlq_delivery = dlq_rx.try_recv().expect("DLQ delivery");
+        assert_eq!(dlq_delivery.msg_id, msg_id);
+        assert_eq!(dlq_delivery.attempt_count, 1);
+
+        // Verify original metadata preserved: message should have the tenant header
+        let dlq_prefix = crate::storage::keys::message_prefix("flow-queue.dlq");
+        let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
+        assert_eq!(dlq_msgs.len(), 1);
+        let stored_msg = &dlq_msgs[0].1;
+        assert_eq!(stored_msg.id, msg_id);
+        assert_eq!(
+            stored_msg.headers.get("tenant"),
+            Some(&"acme".to_string()),
+            "original headers should be preserved in DLQ"
+        );
+
+        // Message should be gone from the original queue
+        let main_prefix = crate::storage::keys::message_prefix("flow-queue");
+        let main_msgs = scheduler.storage().list_messages(&main_prefix).unwrap();
+        assert!(
+            main_msgs.is_empty(),
+            "message should be removed from main queue"
+        );
     }
 }
