@@ -67,11 +67,13 @@ mod tests {
             [scheduler]
             command_channel_capacity = 500
             idle_timeout_ms = 50
+            quantum = 500
         "#;
         let config: BrokerConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.server.listen_addr, "127.0.0.1:9999");
         assert_eq!(config.scheduler.command_channel_capacity, 500);
         assert_eq!(config.scheduler.idle_timeout_ms, 50);
+        assert_eq!(config.scheduler.quantum, 500);
     }
 
     #[test]

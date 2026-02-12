@@ -216,7 +216,10 @@ impl Scheduler {
         Ok(name)
     }
 
-    fn handle_delete_queue(&self, queue_id: &str) -> Result<(), crate::error::DeleteQueueError> {
+    fn handle_delete_queue(
+        &mut self,
+        queue_id: &str,
+    ) -> Result<(), crate::error::DeleteQueueError> {
         // Check-then-delete is safe: same single-threaded guarantee as above.
         // RocksDB delete is a no-op on missing keys, so the explicit check is
         // the only way to return a meaningful NotFound error.
@@ -227,6 +230,8 @@ impl Scheduler {
             ));
         }
         self.storage.delete_queue(queue_id)?;
+        self.drr.remove_queue(queue_id);
+        self.consumer_rr_idx.remove(queue_id);
         Ok(())
     }
 
@@ -1838,6 +1843,27 @@ mod tests {
 
     // --- DRR integration tests ---
 
+    /// Helper: create a message with a specific fairness key and weight.
+    fn test_message_with_key_and_weight(
+        queue_id: &str,
+        fairness_key: &str,
+        weight: u32,
+        enqueued_at: u64,
+    ) -> Message {
+        Message {
+            id: Uuid::now_v7(),
+            queue_id: queue_id.to_string(),
+            headers: HashMap::new(),
+            payload: vec![1, 2, 3],
+            fairness_key: fairness_key.to_string(),
+            weight,
+            throttle_keys: vec![],
+            attempt_count: 0,
+            enqueued_at,
+            leased_at: None,
+        }
+    }
+
     /// Helper: create a message with a specific fairness key.
     fn test_message_with_key(queue_id: &str, fairness_key: &str, enqueued_at: u64) -> Message {
         Message {
@@ -2014,6 +2040,69 @@ mod tests {
             counts.get("tenant_b"),
             Some(&10),
             "tenant_b should get all 10 messages"
+        );
+    }
+
+    #[test]
+    fn drr_weighted_keys_proportional_delivery() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "drr-weighted");
+
+        // Register consumer
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(256);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "drr-weighted".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue: tenant_a (weight=3) gets 20 messages, tenant_b (weight=1) gets 20 messages
+        // With quantum=1000: tenant_a gets 3000 deficit, tenant_b gets 1000 deficit per round
+        // Both have 20 messages each, so both should deliver all 20 within one round
+        let mut ts = 0u64;
+        for _ in 0..20 {
+            let msg = test_message_with_key_and_weight("drr-weighted", "tenant_a", 3, ts);
+            ts += 1;
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+        for _ in 0..20 {
+            let msg = test_message_with_key_and_weight("drr-weighted", "tenant_b", 1, ts);
+            ts += 1;
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Collect delivered messages
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            *counts.entry(ready.fairness_key.clone()).or_insert(0) += 1;
+        }
+
+        let total: usize = counts.values().sum();
+        assert_eq!(total, 40, "all 40 messages should be delivered");
+        assert_eq!(
+            counts.get("tenant_a"),
+            Some(&20),
+            "tenant_a (weight=3) should get all 20 messages"
+        );
+        assert_eq!(
+            counts.get("tenant_b"),
+            Some(&20),
+            "tenant_b (weight=1) should get all 20 messages"
         );
     }
 
