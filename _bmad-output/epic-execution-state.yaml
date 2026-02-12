@@ -25,9 +25,9 @@ stories:
     dependsOn: ["2.1"]
   - id: "2.4"
     title: "Visibility Timeout & Lease Expiry"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/2.4-visibility-timeout-lease-expiry"
     pr: null
     dependsOn: ["2.1"]
 skippedIssues: []
