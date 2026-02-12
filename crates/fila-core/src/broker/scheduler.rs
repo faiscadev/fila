@@ -124,9 +124,11 @@ impl Scheduler {
                 error,
                 reply,
             } => {
-                debug!(%queue_id, %msg_id, error, "nack command received");
-                // Stub: will be implemented in story 1.8
-                let _ = reply.send(Ok(()));
+                debug!(%queue_id, %msg_id, %error, "nack command received");
+                let result = self.handle_nack(&queue_id, &msg_id, &error);
+                let _ = reply.send(result);
+                // Re-deliver: the nacked message is now back in the ready pool
+                self.drr_deliver_queue(&queue_id);
             }
             SchedulerCommand::RegisterConsumer {
                 queue_id,
@@ -270,6 +272,72 @@ impl Scheduler {
         }
 
         self.storage.write_batch(ops)?;
+        Ok(())
+    }
+
+    fn handle_nack(
+        &mut self,
+        queue_id: &str,
+        msg_id: &uuid::Uuid,
+        error: &str,
+    ) -> Result<(), crate::error::NackError> {
+        // Look up the lease — if it doesn't exist, the message was never leased or already nacked/acked
+        let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+        let lease_value = self.storage.get_lease(&lease_key)?.ok_or_else(|| {
+            crate::error::NackError::MessageNotFound(format!(
+                "no lease for message {msg_id} in queue {queue_id}"
+            ))
+        })?;
+
+        // Parse expiry timestamp from lease value to construct the lease_expiry key
+        let expiry_ns = crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
+            .ok_or_else(|| {
+                crate::error::NackError::Storage(crate::error::StorageError::CorruptData(format!(
+                    "lease value: cannot parse expiry for message {msg_id} in queue {queue_id}"
+                )))
+            })?;
+        let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, msg_id);
+
+        // Find the full message key and retrieve the message
+        let msg_key = self.find_message_key(queue_id, msg_id)?.ok_or_else(|| {
+            crate::error::NackError::MessageNotFound(format!(
+                "message {msg_id} not found in queue {queue_id}"
+            ))
+        })?;
+        let mut msg = self
+            .storage
+            .get_message(&msg_key)?
+            .ok_or_else(|| {
+                crate::error::NackError::MessageNotFound(format!(
+                    "message {msg_id} not found in queue {queue_id}"
+                ))
+            })?;
+
+        // Increment attempt count and clear lease timestamp
+        msg.attempt_count += 1;
+        msg.leased_at = None;
+
+        let msg_value = serde_json::to_vec(&msg).map_err(|e| {
+            crate::error::StorageError::Serialization(e.to_string())
+        })?;
+
+        // Atomically: update message (incremented attempt_count), delete lease, delete lease_expiry
+        let ops = vec![
+            WriteBatchOp::PutMessage {
+                key: msg_key,
+                value: msg_value,
+            },
+            WriteBatchOp::DeleteLease { key: lease_key },
+            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+        ];
+
+        self.storage.write_batch(ops)?;
+
+        // Re-add the fairness key to DRR active set so the message can be scheduled
+        self.drr
+            .add_key(queue_id, &msg.fairness_key, msg.weight);
+
+        debug!(%queue_id, %msg_id, %error, attempt_count = msg.attempt_count, "nack processed");
         Ok(())
     }
 
@@ -2470,6 +2538,216 @@ mod tests {
             (a_share - 0.75).abs() <= 0.05,
             "key_a (weight=3) expected ~75% share, got {:.1}% ({a}/{total})",
             a_share * 100.0
+        );
+    }
+
+    #[test]
+    fn nack_requeues_message_with_incremented_attempt_count() {
+        // AC#8: enqueue → lease → nack → lease again → verify attempt count incremented
+        let (tx, mut scheduler, _dir) = test_setup();
+        send_create_queue(&tx, "nack-queue");
+
+        // Register consumer
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "nack-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue a message (attempt_count starts at 0)
+        let msg = test_message("nack-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // Nack the message
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "nack-queue".to_string(),
+            msg_id,
+            error: "processing failed".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // First delivery: attempt_count = 0
+        let first = consumer_rx.try_recv().expect("should receive first delivery");
+        assert_eq!(first.msg_id, msg_id);
+        assert_eq!(first.attempt_count, 0);
+
+        // Nack should succeed
+        assert!(nack_rx.try_recv().unwrap().is_ok(), "nack should succeed");
+
+        // Second delivery: attempt_count = 1 (incremented by nack)
+        let second = consumer_rx.try_recv().expect("should receive second delivery after nack");
+        assert_eq!(second.msg_id, msg_id);
+        assert_eq!(second.attempt_count, 1, "attempt count should be incremented after nack");
+
+        // Message should still exist in storage (not deleted — only ack deletes)
+        let msg_key =
+            crate::storage::keys::message_key("nack-queue", "default", 1_000_000_000, &msg_id);
+        assert!(
+            scheduler.storage().get_message(&msg_key).unwrap().is_some(),
+            "message should still exist after nack (not deleted)"
+        );
+    }
+
+    #[test]
+    fn nack_removes_lease_and_lease_expiry() {
+        let (tx, mut scheduler, _dir) = test_setup();
+        send_create_queue(&tx, "nack-lease-queue");
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "nack-lease-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("nack-lease-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // Unregister consumer so nack doesn't immediately re-deliver
+        tx.send(SchedulerCommand::UnregisterConsumer {
+            consumer_id: "c1".to_string(),
+        })
+        .unwrap();
+
+        // Nack the message to release the lease
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "nack-lease-queue".to_string(),
+            msg_id,
+            error: "retry please".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Consume first delivery
+        let _ = consumer_rx.try_recv();
+        assert!(nack_rx.try_recv().unwrap().is_ok());
+
+        // Lease should be gone after nack (no re-delivery since consumer unregistered)
+        let lease_key = crate::storage::keys::lease_key("nack-lease-queue", &msg_id);
+        assert!(
+            scheduler
+                .storage()
+                .get_lease(&lease_key)
+                .unwrap()
+                .is_none(),
+            "lease should be deleted after nack"
+        );
+    }
+
+    #[test]
+    fn nack_unknown_message_returns_not_found() {
+        let (tx, mut scheduler, _dir) = test_setup();
+        send_create_queue(&tx, "nack-unknown-queue");
+
+        let msg_id = Uuid::now_v7();
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "nack-unknown-queue".to_string(),
+            msg_id,
+            error: "test error".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let err = nack_rx.try_recv().unwrap().unwrap_err();
+        assert!(
+            matches!(err, crate::error::NackError::MessageNotFound(_)),
+            "expected MessageNotFound, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn nack_then_ack_completes_message_lifecycle() {
+        // Full lifecycle: enqueue → lease → nack → lease again → ack
+        let (tx, mut scheduler, _dir) = test_setup();
+        send_create_queue(&tx, "nack-ack-queue");
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "nack-ack-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("nack-ack-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // Nack the message
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "nack-ack-queue".to_string(),
+            msg_id,
+            error: "first attempt failed".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        // Ack the redelivered message
+        let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Ack {
+            queue_id: "nack-ack-queue".to_string(),
+            msg_id,
+            reply: ack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // First delivery
+        let first = consumer_rx.try_recv().expect("first delivery");
+        assert_eq!(first.attempt_count, 0);
+
+        // Nack succeeds
+        assert!(nack_rx.try_recv().unwrap().is_ok());
+
+        // Second delivery with incremented count
+        let second = consumer_rx.try_recv().expect("second delivery after nack");
+        assert_eq!(second.attempt_count, 1);
+
+        // Ack succeeds
+        assert!(ack_rx.try_recv().unwrap().is_ok());
+
+        // Message should be deleted after ack
+        let msg_key =
+            crate::storage::keys::message_key("nack-ack-queue", "default", 1_000_000_000, &msg_id);
+        assert!(
+            scheduler.storage().get_message(&msg_key).unwrap().is_none(),
+            "message should be deleted after ack"
         );
     }
 }
