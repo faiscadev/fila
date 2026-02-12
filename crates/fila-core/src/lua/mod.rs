@@ -261,6 +261,31 @@ mod tests {
     }
 
     #[test]
+    fn run_on_enqueue_applies_safety_limits_without_per_queue_config() {
+        let (mut engine, _dir) = test_engine();
+
+        // An infinite loop script — should be killed by instruction limit
+        let bytecode = engine
+            .compile_script(
+                r#"
+                function on_enqueue(msg)
+                    while true do end
+                end
+            "#,
+            )
+            .unwrap();
+
+        // Insert bytecode directly into the cache WITHOUT registering safety config,
+        // simulating the missing-config scenario. The engine should still apply
+        // global default limits and abort the script (fail-closed).
+        engine.on_enqueue_cache.insert("q1".to_string(), bytecode);
+
+        let result = engine.run_on_enqueue("q1", &HashMap::new(), 100, "test-queue");
+        // Should return defaults (script failed due to instruction limit), not hang
+        assert_eq!(result.unwrap(), OnEnqueueResult::default());
+    }
+
+    #[test]
     fn validate_script_accepts_valid_source() {
         let (engine, _dir) = test_engine();
         engine
