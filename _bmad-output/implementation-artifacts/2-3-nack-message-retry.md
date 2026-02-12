@@ -1,6 +1,6 @@
 # Story 2.3: Nack & Message Retry
 
-Status: review
+Status: done
 
 ## Story
 
@@ -62,6 +62,6 @@ Claude Opus 4.6
 
 ### File List
 
-- `crates/fila-core/src/broker/scheduler.rs` — added `handle_nack()`, wired Nack command, added 4 integration tests
+- `crates/fila-core/src/broker/scheduler.rs` — added `handle_nack()`, wired Nack command, added 5 integration tests
 - `crates/fila-server/src/service.rs` — replaced nack stub with full gRPC handler
 - `crates/fila-server/src/error.rs` — added IntoStatus for NackError

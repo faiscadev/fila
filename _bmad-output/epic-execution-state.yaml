@@ -18,10 +18,10 @@ stories:
     dependsOn: ["2.1"]
   - id: "2.3"
     title: "Nack & Message Retry"
-    status: in-progress
-    currentPhase: "review"
+    status: completed
+    currentPhase: ""
     branch: "feat/2.3-nack-message-retry"
-    pr: null
+    pr: 14
     dependsOn: ["2.1"]
   - id: "2.4"
     title: "Visibility Timeout & Lease Expiry"
