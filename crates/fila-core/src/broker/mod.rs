@@ -33,11 +33,12 @@ impl Broker {
         );
 
         let scheduler_config = config.scheduler.clone();
+        let lua_config = config.lua.clone();
 
         let handle = thread::Builder::new()
             .name("fila-scheduler".to_string())
             .spawn(move || {
-                let mut scheduler = Scheduler::new(storage, rx, &scheduler_config);
+                let mut scheduler = Scheduler::new(storage, rx, &scheduler_config, &lua_config);
                 scheduler.run();
             })
             .map_err(|e| BrokerError::SchedulerSpawn(e.to_string()))?;

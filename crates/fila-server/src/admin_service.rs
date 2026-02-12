@@ -63,6 +63,8 @@ impl FilaAdmin for AdminService {
             },
             visibility_timeout_ms,
             dlq_queue_id: None,
+            lua_timeout_ms: None,
+            lua_memory_limit_bytes: None,
         };
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();

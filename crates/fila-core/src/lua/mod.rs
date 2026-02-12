@@ -1,15 +1,18 @@
 pub mod bridge;
 pub mod on_enqueue;
+pub mod safety;
 pub mod sandbox;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mlua::{ChunkMode, Lua};
+use mlua::Lua;
 
+use crate::broker::config::LuaConfig;
 use crate::storage::Storage;
 
 pub use on_enqueue::OnEnqueueResult;
+pub use safety::SafetyManager;
 
 /// Pre-compiled Lua bytecode for a script.
 pub type CompiledScript = Vec<u8>;
@@ -24,17 +27,20 @@ pub struct LuaEngine {
     lua: Lua,
     /// Pre-compiled on_enqueue bytecode per queue_id.
     on_enqueue_cache: HashMap<String, CompiledScript>,
+    /// Per-queue safety configuration and circuit breakers.
+    safety: SafetyManager,
 }
 
 impl LuaEngine {
     /// Create a new LuaEngine with a sandboxed Lua VM and fila.get() bridge.
-    pub fn new(storage: Arc<dyn Storage>) -> Result<Self, LuaError> {
+    pub fn new(storage: Arc<dyn Storage>, lua_config: &LuaConfig) -> Result<Self, LuaError> {
         let lua = sandbox::create_sandbox().map_err(LuaError::VmCreation)?;
         bridge::register_fila_api(&lua, storage).map_err(LuaError::BridgeRegistration)?;
 
         Ok(Self {
             lua,
             on_enqueue_cache: HashMap::new(),
+            safety: SafetyManager::new(lua_config),
         })
     }
 
@@ -53,14 +59,24 @@ impl LuaEngine {
         Ok(func.dump(true))
     }
 
-    /// Cache a pre-compiled on_enqueue script for a queue.
-    pub fn cache_on_enqueue(&mut self, queue_id: &str, bytecode: CompiledScript) {
+    /// Cache a pre-compiled on_enqueue script for a queue and register its
+    /// safety config (circuit breaker, timeout, memory limit).
+    pub fn cache_on_enqueue(
+        &mut self,
+        queue_id: &str,
+        bytecode: CompiledScript,
+        timeout_ms: Option<u64>,
+        memory_limit_bytes: Option<usize>,
+    ) {
         self.on_enqueue_cache.insert(queue_id.to_string(), bytecode);
+        self.safety
+            .register_queue(queue_id, timeout_ms, memory_limit_bytes);
     }
 
-    /// Remove a cached on_enqueue script for a queue.
+    /// Remove a cached on_enqueue script and its safety state for a queue.
     pub fn remove_on_enqueue(&mut self, queue_id: &str) {
         self.on_enqueue_cache.remove(queue_id);
+        self.safety.remove_queue(queue_id);
     }
 
     /// Get the cached on_enqueue bytecode for a queue, if any.
@@ -71,35 +87,64 @@ impl LuaEngine {
     /// Execute the on_enqueue script for a queue, returning the scheduling metadata.
     ///
     /// If no script is cached for the queue, returns None (caller should use defaults).
-    /// If execution fails, returns safe defaults and logs a warning.
+    /// If the circuit breaker is tripped, returns defaults with a warning.
+    /// If execution fails, returns safe defaults, logs a warning, and updates
+    /// the circuit breaker.
     pub fn run_on_enqueue(
-        &self,
+        &mut self,
         queue_id: &str,
         headers: &std::collections::HashMap<String, String>,
         payload_size: usize,
         queue_name: &str,
     ) -> Option<OnEnqueueResult> {
-        let bytecode = self.on_enqueue_cache.get(queue_id)?;
-        Some(on_enqueue::run_on_enqueue(
-            &self.lua,
-            bytecode,
-            headers,
-            payload_size,
-            queue_name,
-        ))
+        if !self.on_enqueue_cache.contains_key(queue_id) {
+            return None;
+        }
+
+        // Circuit breaker check
+        if !self.safety.should_execute(queue_id) {
+            tracing::warn!(queue = %queue_id, "circuit breaker active, bypassing Lua");
+            return Some(OnEnqueueResult::default());
+        }
+
+        // Set safety hooks before execution
+        if let Some(config) = self.safety.get_config(queue_id) {
+            safety::set_instruction_hook(&self.lua, config.instruction_limit);
+            safety::set_memory_limit(&self.lua, config.memory_limit_bytes);
+        }
+
+        let bytecode = self.on_enqueue_cache.get(queue_id).unwrap();
+        let result =
+            on_enqueue::try_run_on_enqueue(&self.lua, bytecode, headers, payload_size, queue_name);
+
+        // Remove safety hooks after execution
+        safety::remove_instruction_hook(&self.lua);
+        safety::reset_memory_limit(&self.lua);
+
+        // Record success/failure for circuit breaker
+        match result {
+            Ok(on_enqueue_result) => {
+                self.safety.record_success(queue_id);
+                Some(on_enqueue_result)
+            }
+            Err(e) => {
+                tracing::warn!(queue = %queue_id, error = %e, "on_enqueue script failed, using defaults");
+                let just_tripped = self.safety.record_failure(queue_id);
+                if just_tripped {
+                    tracing::warn!(queue = %queue_id, "circuit breaker tripped");
+                }
+                Some(OnEnqueueResult::default())
+            }
+        }
     }
 
     /// Verify a script compiles successfully and can produce a function.
     ///
     /// Used at queue creation time to reject invalid scripts early.
+    /// Only validates syntax (compilation) — does NOT execute the script,
+    /// since execution without safety hooks would be a DoS vector.
     pub fn validate_script(&self, source: &str) -> Result<(), LuaError> {
-        // Compile to bytecode, then verify it can be loaded back
-        let bytecode = self.compile_script(source)?;
-        self.lua
-            .load(bytecode.as_slice())
-            .set_mode(ChunkMode::Binary)
-            .exec()
-            .map_err(LuaError::Compilation)?;
+        self.compile_script(source)?;
         Ok(())
     }
 }
@@ -127,7 +172,8 @@ mod tests {
     fn test_engine() -> (LuaEngine, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
-        let engine = LuaEngine::new(storage).unwrap();
+        let lua_config = crate::broker::config::LuaConfig::default();
+        let engine = LuaEngine::new(storage, &lua_config).unwrap();
         (engine, dir)
     }
 
@@ -146,7 +192,7 @@ mod tests {
             .unwrap();
 
         assert!(!bytecode.is_empty());
-        engine.cache_on_enqueue("q1", bytecode);
+        engine.cache_on_enqueue("q1", bytecode, None, None);
         assert!(engine.get_on_enqueue("q1").is_some());
         assert!(engine.get_on_enqueue("q2").is_none());
     }
@@ -167,7 +213,7 @@ mod tests {
         let bytecode = engine
             .compile_script("function on_enqueue(msg) return { fairness_key = 'x' } end")
             .unwrap();
-        engine.cache_on_enqueue("q1", bytecode);
+        engine.cache_on_enqueue("q1", bytecode, None, None);
         assert!(engine.get_on_enqueue("q1").is_some());
 
         engine.remove_on_enqueue("q1");
@@ -176,7 +222,7 @@ mod tests {
 
     #[test]
     fn run_on_enqueue_returns_none_without_cached_script() {
-        let (engine, _dir) = test_engine();
+        let (mut engine, _dir) = test_engine();
         let result = engine.run_on_enqueue("q1", &HashMap::new(), 100, "test-queue");
         assert!(result.is_none());
     }
@@ -197,7 +243,7 @@ mod tests {
             "#,
             )
             .unwrap();
-        engine.cache_on_enqueue("q1", bytecode);
+        engine.cache_on_enqueue("q1", bytecode, None, None);
 
         let mut headers = HashMap::new();
         headers.insert("tenant".to_string(), "acme".to_string());

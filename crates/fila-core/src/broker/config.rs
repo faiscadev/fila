@@ -6,6 +6,7 @@ use serde::Deserialize;
 pub struct BrokerConfig {
     pub server: ServerConfig,
     pub scheduler: SchedulerConfig,
+    pub lua: LuaConfig,
 }
 
 /// Server configuration (gRPC listen address).
@@ -25,6 +26,33 @@ pub struct SchedulerConfig {
     /// per scheduling round. Higher values mean fewer round resets but
     /// coarser fairness granularity.
     pub quantum: u32,
+}
+
+/// Lua scripting safety configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LuaConfig {
+    /// Default script execution timeout in milliseconds (per queue, overridable).
+    /// Enforced via instruction count hook (approximate).
+    pub default_timeout_ms: u64,
+    /// Default script memory limit in bytes (per queue, overridable).
+    pub default_memory_limit_bytes: usize,
+    /// Number of consecutive Lua failures before the circuit breaker trips.
+    pub circuit_breaker_threshold: u32,
+    /// Cooldown period in milliseconds after circuit breaker trips before
+    /// retrying Lua execution.
+    pub circuit_breaker_cooldown_ms: u64,
+}
+
+impl Default for LuaConfig {
+    fn default() -> Self {
+        Self {
+            default_timeout_ms: 10,
+            default_memory_limit_bytes: 1_048_576, // 1 MB
+            circuit_breaker_threshold: 3,
+            circuit_breaker_cooldown_ms: 10_000,
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -56,6 +84,10 @@ mod tests {
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
         assert_eq!(config.scheduler.idle_timeout_ms, 100);
         assert_eq!(config.scheduler.quantum, 1000);
+        assert_eq!(config.lua.default_timeout_ms, 10);
+        assert_eq!(config.lua.default_memory_limit_bytes, 1_048_576);
+        assert_eq!(config.lua.circuit_breaker_threshold, 3);
+        assert_eq!(config.lua.circuit_breaker_cooldown_ms, 10_000);
     }
 
     #[test]
@@ -68,12 +100,22 @@ mod tests {
             command_channel_capacity = 500
             idle_timeout_ms = 50
             quantum = 500
+
+            [lua]
+            default_timeout_ms = 20
+            default_memory_limit_bytes = 524288
+            circuit_breaker_threshold = 5
+            circuit_breaker_cooldown_ms = 30000
         "#;
         let config: BrokerConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.server.listen_addr, "127.0.0.1:9999");
         assert_eq!(config.scheduler.command_channel_capacity, 500);
         assert_eq!(config.scheduler.idle_timeout_ms, 50);
         assert_eq!(config.scheduler.quantum, 500);
+        assert_eq!(config.lua.default_timeout_ms, 20);
+        assert_eq!(config.lua.default_memory_limit_bytes, 524288);
+        assert_eq!(config.lua.circuit_breaker_threshold, 5);
+        assert_eq!(config.lua.circuit_breaker_cooldown_ms, 30000);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crossbeam_channel::Receiver;
 use tracing::{debug, error, info, warn};
 
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
-use crate::broker::config::SchedulerConfig;
+use crate::broker::config::{LuaConfig, SchedulerConfig};
 use crate::broker::drr::DrrScheduler;
 use crate::lua::LuaEngine;
 use crate::storage::{Storage, WriteBatchOp};
@@ -41,8 +41,9 @@ impl Scheduler {
         storage: Arc<dyn Storage>,
         inbound: Receiver<SchedulerCommand>,
         config: &SchedulerConfig,
+        lua_config: &LuaConfig,
     ) -> Self {
-        let lua_engine = match LuaEngine::new(storage.clone()) {
+        let lua_engine = match LuaEngine::new(storage.clone(), lua_config) {
             Ok(engine) => Some(engine),
             Err(e) => {
                 error!(error = %e, "failed to create Lua engine, scripts will be disabled");
@@ -201,7 +202,7 @@ impl Scheduler {
         }
 
         // Run on_enqueue Lua script if one is cached for this queue
-        if let Some(ref lua_engine) = self.lua_engine {
+        if let Some(ref mut lua_engine) = self.lua_engine {
             if let Some(result) = lua_engine.run_on_enqueue(
                 &message.queue_id,
                 &message.headers,
@@ -252,7 +253,12 @@ impl Scheduler {
                 let bytecode = lua_engine
                     .compile_script(script_source)
                     .map_err(|e| crate::error::CreateQueueError::LuaCompilation(e.to_string()))?;
-                lua_engine.cache_on_enqueue(&name, bytecode);
+                lua_engine.cache_on_enqueue(
+                    &name,
+                    bytecode,
+                    config.lua_timeout_ms,
+                    config.lua_memory_limit_bytes,
+                );
                 debug!(queue = %name, "on_enqueue script compiled and cached");
             } else {
                 warn!(queue = %name, "on_enqueue script provided but Lua engine is disabled");
@@ -732,7 +738,12 @@ impl Scheduler {
                         if let Some(ref mut lua_engine) = self.lua_engine {
                             match lua_engine.compile_script(script_source) {
                                 Ok(bytecode) => {
-                                    lua_engine.cache_on_enqueue(&queue.name, bytecode);
+                                    lua_engine.cache_on_enqueue(
+                                        &queue.name,
+                                        bytecode,
+                                        queue.lua_timeout_ms,
+                                        queue.lua_memory_limit_bytes,
+                                    );
                                     debug!(queue = %queue.name, "recovered on_enqueue script");
                                 }
                                 Err(e) => {
@@ -790,7 +801,8 @@ mod tests {
             quantum: 1000,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let scheduler = Scheduler::new(storage, rx, &config);
+        let lua_config = LuaConfig::default();
+        let scheduler = Scheduler::new(storage, rx, &config, &lua_config);
         (tx, scheduler, dir)
     }
 
@@ -1737,7 +1749,8 @@ mod tests {
             quantum: 1000,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let scheduler = Scheduler::new(storage, rx, &config);
+        let lua_config = LuaConfig::default();
+        let scheduler = Scheduler::new(storage, rx, &config, &lua_config);
         (tx, scheduler)
     }
 
@@ -2396,8 +2409,9 @@ mod tests {
 
         // Spawn scheduler on background thread — Scheduler contains Lua (not Send),
         // so it must be created inside the thread.
+        let lua_config = LuaConfig::default();
         let handle = std::thread::spawn(move || {
-            let mut s = Scheduler::new(storage, rx, &config);
+            let mut s = Scheduler::new(storage, rx, &config, &lua_config);
             s.run();
         });
 
@@ -2616,7 +2630,8 @@ mod tests {
             quantum: 5,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let mut scheduler = Scheduler::new(storage, rx, &config);
+        let lua_config = LuaConfig::default();
+        let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config);
 
         send_create_queue(&tx, "weight-update");
 
@@ -3028,7 +3043,8 @@ mod tests {
         // Run scheduler on background thread — Scheduler contains Lua (not Send),
         // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
-            let mut scheduler = Scheduler::new(storage, rx, &config);
+            let lua_config = LuaConfig::default();
+            let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config);
             scheduler.run();
         });
 
@@ -3092,7 +3108,8 @@ mod tests {
         // Run scheduler on background thread — Scheduler contains Lua (not Send),
         // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
-            let mut scheduler = Scheduler::new(storage_for_thread, rx, &config);
+            let lua_config = LuaConfig::default();
+            let mut scheduler = Scheduler::new(storage_for_thread, rx, &config, &lua_config);
             scheduler.run();
         });
 
@@ -3196,7 +3213,8 @@ mod tests {
         // Run scheduler on background thread — Scheduler contains Lua (not Send),
         // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
-            let mut scheduler = Scheduler::new(storage, rx, &config);
+            let lua_config = LuaConfig::default();
+            let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config);
             scheduler.run();
         });
 
@@ -3264,7 +3282,8 @@ mod tests {
         // Run scheduler on background thread — Scheduler contains Lua (not Send),
         // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
-            let mut scheduler = Scheduler::new(storage, rx, &config);
+            let lua_config = LuaConfig::default();
+            let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config);
             scheduler.run();
         });
 
@@ -3513,5 +3532,193 @@ mod tests {
             ),
             "error should be LuaCompilation"
         );
+    }
+
+    // --- Lua safety integration tests (Story 3.2) ---
+
+    #[test]
+    fn on_enqueue_infinite_loop_falls_back_to_defaults() {
+        // A script that loops forever should be killed by the instruction hook
+        // and the message should get safe defaults.
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let script = r#"
+            function on_enqueue(msg)
+                while true do end
+                return { fairness_key = "unreachable" }
+            end
+        "#;
+        send_create_queue_with_script(&tx, "infinite-loop-queue", script);
+
+        let msg = test_message("infinite-loop-queue");
+        let msg_id = msg.id;
+        let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Enqueue should succeed (Lua failure falls back to defaults)
+        assert!(reply_rx.try_recv().unwrap().is_ok());
+
+        // Message should have default fairness_key
+        let key = crate::storage::keys::message_key(
+            "infinite-loop-queue",
+            "default",
+            1_000_000_000,
+            &msg_id,
+        );
+        let stored = scheduler.storage().get_message(&key).unwrap();
+        assert!(
+            stored.is_some(),
+            "message should be stored with default fairness_key after script timeout"
+        );
+    }
+
+    #[test]
+    fn on_enqueue_memory_bomb_falls_back_to_defaults() {
+        // A script that tries to allocate too much memory should be killed
+        // and the message should get safe defaults.
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let script = r#"
+            function on_enqueue(msg)
+                local t = {}
+                for i = 1, 10000000 do
+                    t[i] = string.rep("x", 1000)
+                end
+                return { fairness_key = "unreachable" }
+            end
+        "#;
+        send_create_queue_with_script(&tx, "memory-bomb-queue", script);
+
+        let msg = test_message("memory-bomb-queue");
+        let msg_id = msg.id;
+        let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Enqueue should succeed (Lua failure falls back to defaults)
+        assert!(reply_rx.try_recv().unwrap().is_ok());
+
+        // Message should have default fairness_key
+        let key = crate::storage::keys::message_key(
+            "memory-bomb-queue",
+            "default",
+            1_000_000_000,
+            &msg_id,
+        );
+        let stored = scheduler.storage().get_message(&key).unwrap();
+        assert!(
+            stored.is_some(),
+            "message should be stored with default fairness_key after memory limit"
+        );
+    }
+
+    #[test]
+    fn circuit_breaker_trips_and_bypasses_lua() {
+        // After enough consecutive failures, the circuit breaker should trip
+        // and bypass Lua entirely (returning defaults without running the script).
+        // Default threshold is 3 failures.
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Script that always fails
+        let script = r#"
+            function on_enqueue(msg)
+                error("always fails")
+            end
+        "#;
+        send_create_queue_with_script(&tx, "cb-queue", script);
+
+        // Enqueue 5 messages — first 3 trip the breaker, last 2 bypass Lua
+        let mut msg_ids = Vec::new();
+        for i in 0u64..5 {
+            let mut msg = test_message("cb-queue");
+            msg.enqueued_at = i;
+            msg_ids.push(msg.id);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // All 5 messages should be stored with default fairness_key
+        for (i, msg_id) in msg_ids.iter().enumerate() {
+            let key = crate::storage::keys::message_key("cb-queue", "default", i as u64, msg_id);
+            let stored = scheduler.storage().get_message(&key).unwrap();
+            assert!(
+                stored.is_some(),
+                "message {i} should be stored with default fairness_key"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_script_does_not_break_subsequent_good_scripts() {
+        // A failing script for one queue should not affect another queue's scripts.
+        // Also verifies the VM is usable after safety hooks fire.
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Queue A: script always errors
+        let bad_script = r#"
+            function on_enqueue(msg)
+                error("queue A failure")
+            end
+        "#;
+        send_create_queue_with_script(&tx, "bad-queue", bad_script);
+
+        // Queue B: normal script
+        let good_script = r#"
+            function on_enqueue(msg)
+                return { fairness_key = "good" }
+            end
+        "#;
+        send_create_queue_with_script(&tx, "good-queue", good_script);
+
+        // Enqueue to bad queue first, then good queue
+        let bad_msg = test_message("bad-queue");
+        let (reply_tx1, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: bad_msg,
+            reply: reply_tx1,
+        })
+        .unwrap();
+
+        let good_msg = test_message("good-queue");
+        let good_msg_id = good_msg.id;
+        let (reply_tx2, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: good_msg,
+            reply: reply_tx2,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Good queue's message should have the correct fairness_key from Lua
+        let key =
+            crate::storage::keys::message_key("good-queue", "good", 1_000_000_000, &good_msg_id);
+        let stored = scheduler.storage().get_message(&key).unwrap();
+        assert!(
+            stored.is_some(),
+            "good queue's Lua script should work even after bad queue's script failed"
+        );
+        assert_eq!(stored.unwrap().fairness_key, "good");
     }
 }

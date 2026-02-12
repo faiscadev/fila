@@ -4,16 +4,16 @@ startedAt: "2026-02-12T12:00:00Z"
 stories:
   - id: "3.1"
     title: "Lua Sandbox & on_enqueue Hook"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/3.1-lua-sandbox-on-enqueue-hook"
-    pr: null
+    pr: 16
     dependsOn: []
   - id: "3.2"
     title: "Lua Safety: Timeouts, Memory Limits & Circuit Breaker"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/3.2-lua-safety-timeouts-memory-circuit-breaker"
     pr: null
     dependsOn: ["3.1"]
   - id: "3.3"
