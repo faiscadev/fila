@@ -26,10 +26,7 @@ mod tests {
     fn sandbox_provides_safe_libs() {
         let lua = create_sandbox().unwrap();
 
-        let math_result: f64 = lua
-            .load("return math.sqrt(144)")
-            .eval()
-            .expect("math.sqrt");
+        let math_result: f64 = lua.load("return math.sqrt(144)").eval().expect("math.sqrt");
         assert!((math_result - 12.0).abs() < f64::EPSILON);
 
         let string_result: String = lua
@@ -60,15 +57,13 @@ mod tests {
             ("os", "os.execute('echo pwned')"),
             ("loadfile", "loadfile('init.lua')"),
             ("dofile", "dofile('init.lua')"),
+            ("load", "load('return 1')()"),
             ("require", "require('os')"),
         ];
 
         for (name, code) in &dangerous_accesses {
             let result = lua.load(*code).exec();
-            assert!(
-                result.is_err(),
-                "{name} should not be available in sandbox"
-            );
+            assert!(result.is_err(), "{name} should not be available in sandbox");
         }
     }
 }

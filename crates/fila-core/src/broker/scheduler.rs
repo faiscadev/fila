@@ -249,9 +249,9 @@ impl Scheduler {
         // Pre-compile and cache on_enqueue Lua script if provided
         if let Some(ref script_source) = config.on_enqueue_script {
             if let Some(ref mut lua_engine) = self.lua_engine {
-                let bytecode = lua_engine.compile_script(script_source).map_err(|e| {
-                    crate::error::CreateQueueError::LuaCompilation(e.to_string())
-                })?;
+                let bytecode = lua_engine
+                    .compile_script(script_source)
+                    .map_err(|e| crate::error::CreateQueueError::LuaCompilation(e.to_string()))?;
                 lua_engine.cache_on_enqueue(&name, bytecode);
                 debug!(queue = %name, "on_enqueue script compiled and cached");
             } else {
@@ -3322,10 +3322,7 @@ mod tests {
     }
 
     /// Helper: create a message with specific headers.
-    fn test_message_with_headers(
-        queue_id: &str,
-        headers: HashMap<String, String>,
-    ) -> Message {
+    fn test_message_with_headers(queue_id: &str, headers: HashMap<String, String>) -> Message {
         Message {
             id: Uuid::now_v7(),
             queue_id: queue_id.to_string(),
@@ -3366,8 +3363,7 @@ mod tests {
         scheduler.run();
 
         // The message should be stored with fairness_key="acme" from the Lua script
-        let key =
-            crate::storage::keys::message_key("lua-fk-queue", "acme", 1_000_000_000, &msg_id);
+        let key = crate::storage::keys::message_key("lua-fk-queue", "acme", 1_000_000_000, &msg_id);
         let stored = scheduler.storage().get_message(&key).unwrap();
         assert!(
             stored.is_some(),
@@ -3404,14 +3400,13 @@ mod tests {
         tx.send(SchedulerCommand::Shutdown).unwrap();
         scheduler.run();
 
-        let key = crate::storage::keys::message_key(
-            "lua-wt-queue",
-            "tenant_x",
-            1_000_000_000,
-            &msg_id,
-        );
+        let key =
+            crate::storage::keys::message_key("lua-wt-queue", "tenant_x", 1_000_000_000, &msg_id);
         let stored = scheduler.storage().get_message(&key).unwrap();
-        assert!(stored.is_some(), "message should exist with fairness_key='tenant_x'");
+        assert!(
+            stored.is_some(),
+            "message should exist with fairness_key='tenant_x'"
+        );
         let stored_msg = stored.unwrap();
         assert_eq!(stored_msg.weight, 5);
         assert_eq!(
@@ -3438,14 +3433,13 @@ mod tests {
         tx.send(SchedulerCommand::Shutdown).unwrap();
         scheduler.run();
 
-        let key = crate::storage::keys::message_key(
-            "no-script-queue",
-            "default",
-            1_000_000_000,
-            &msg_id,
-        );
+        let key =
+            crate::storage::keys::message_key("no-script-queue", "default", 1_000_000_000, &msg_id);
         let stored = scheduler.storage().get_message(&key).unwrap();
-        assert!(stored.is_some(), "message should exist with default fairness_key");
+        assert!(
+            stored.is_some(),
+            "message should exist with default fairness_key"
+        );
         let stored_msg = stored.unwrap();
         assert_eq!(stored_msg.fairness_key, "default");
         assert_eq!(stored_msg.weight, 1);

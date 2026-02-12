@@ -55,9 +55,7 @@ fn run_on_enqueue_inner(
     queue_name: &str,
 ) -> mlua::Result<OnEnqueueResult> {
     // Load the pre-compiled bytecode as a chunk that defines on_enqueue
-    lua.load(bytecode)
-        .set_mode(ChunkMode::Binary)
-        .exec()?;
+    lua.load(bytecode).set_mode(ChunkMode::Binary).exec()?;
 
     // Get the on_enqueue function from globals
     let on_enqueue: mlua::Function = lua.globals().get("on_enqueue")?;
