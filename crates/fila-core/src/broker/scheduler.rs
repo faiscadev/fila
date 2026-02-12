@@ -233,7 +233,7 @@ impl Scheduler {
         let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, msg_id);
 
         // Find the message key by scanning the queue's messages
-        let msg_key = self.find_message_key(queue_id, msg_id);
+        let msg_key = self.find_message_key(queue_id, msg_id)?;
 
         // Atomically delete the message, lease, and lease expiry
         let mut ops = vec![
@@ -249,15 +249,19 @@ impl Scheduler {
     }
 
     /// Find the full message key in the messages CF by scanning the queue prefix.
-    fn find_message_key(&self, queue_id: &str, msg_id: &uuid::Uuid) -> Option<Vec<u8>> {
+    fn find_message_key(
+        &self,
+        queue_id: &str,
+        msg_id: &uuid::Uuid,
+    ) -> Result<Option<Vec<u8>>, crate::error::StorageError> {
         let prefix = crate::storage::keys::message_prefix(queue_id);
-        let messages = self.storage.list_messages(&prefix).ok()?;
+        let messages = self.storage.list_messages(&prefix)?;
         for (key, msg) in messages {
             if msg.id == *msg_id {
-                return Some(key);
+                return Ok(Some(key));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Scan the queue for pending (unleased) messages and deliver them to
