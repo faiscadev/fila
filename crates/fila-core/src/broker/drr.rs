@@ -46,7 +46,7 @@ impl DrrScheduler {
         let state = self
             .queues
             .entry(queue_id.to_string())
-            .or_insert_with(DrrQueueState::default);
+            .or_default();
 
         let w = weight.max(1); // weight must be at least 1
         state.weights.insert(fairness_key.to_string(), w);
