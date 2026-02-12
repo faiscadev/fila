@@ -177,7 +177,10 @@ impl SafetyManager {
     ///
     /// Used as a fail-closed fallback when per-queue config is unexpectedly absent.
     pub fn default_limits(&self) -> (u64, usize) {
-        (self.default_instruction_limit, self.default_memory_limit_bytes)
+        (
+            self.default_instruction_limit,
+            self.default_memory_limit_bytes,
+        )
     }
 }
 
