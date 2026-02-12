@@ -43,10 +43,7 @@ impl DrrScheduler {
     /// active, this is a no-op (deficit is not reset). Weight is updated if
     /// different from the current value.
     pub fn add_key(&mut self, queue_id: &str, fairness_key: &str, weight: u32) {
-        let state = self
-            .queues
-            .entry(queue_id.to_string())
-            .or_default();
+        let state = self.queues.entry(queue_id.to_string()).or_default();
 
         let w = weight.max(1); // weight must be at least 1
         state.weights.insert(fairness_key.to_string(), w);
