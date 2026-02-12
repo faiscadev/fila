@@ -1,4 +1,6 @@
-use fila_core::{AckError, BrokerError, CreateQueueError, DeleteQueueError, EnqueueError, NackError};
+use fila_core::{
+    AckError, BrokerError, CreateQueueError, DeleteQueueError, EnqueueError, NackError,
+};
 use tonic::Status;
 
 pub trait IntoStatus {
