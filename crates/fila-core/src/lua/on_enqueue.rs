@@ -63,9 +63,11 @@ pub fn try_run_on_enqueue(
     // to prevent stale globals from leaking between queue invocations.
     lua.load(bytecode).set_mode(ChunkMode::Binary).exec()?;
 
-    // Get the on_enqueue function from globals and immediately nil the global
-    let on_enqueue: mlua::Function = lua.globals().get("on_enqueue")?;
+    // Get the on_enqueue function from globals and nil the global to prevent leakage.
+    // Nil first so the global is cleaned even if the type cast to Function fails.
+    let on_enqueue_val = lua.globals().get::<mlua::Value>("on_enqueue")?;
     lua.globals().set("on_enqueue", mlua::Value::Nil)?;
+    let on_enqueue: mlua::Function = mlua::FromLua::from_lua(on_enqueue_val, lua)?;
 
     // Build the msg input table
     let msg = lua.create_table()?;

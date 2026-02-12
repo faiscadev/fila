@@ -1,5 +1,6 @@
 pub mod bridge;
 pub mod on_enqueue;
+pub mod on_failure;
 pub mod safety;
 pub mod sandbox;
 
@@ -12,6 +13,7 @@ use crate::broker::config::LuaConfig;
 use crate::storage::Storage;
 
 pub use on_enqueue::OnEnqueueResult;
+pub use on_failure::{FailureAction, OnFailureResult};
 pub use safety::SafetyManager;
 
 /// Pre-compiled Lua bytecode for a script.
@@ -27,6 +29,8 @@ pub struct LuaEngine {
     lua: Lua,
     /// Pre-compiled on_enqueue bytecode per queue_id.
     on_enqueue_cache: HashMap<String, CompiledScript>,
+    /// Pre-compiled on_failure bytecode per queue_id.
+    on_failure_cache: HashMap<String, CompiledScript>,
     /// Per-queue safety configuration and circuit breakers.
     safety: SafetyManager,
 }
@@ -40,6 +44,7 @@ impl LuaEngine {
         Ok(Self {
             lua,
             on_enqueue_cache: HashMap::new(),
+            on_failure_cache: HashMap::new(),
             safety: SafetyManager::new(lua_config),
         })
     }
@@ -52,7 +57,7 @@ impl LuaEngine {
         let func = self
             .lua
             .load(source)
-            .set_name("on_enqueue")
+            .set_name("lua_script")
             .into_function()
             .map_err(LuaError::Compilation)?;
 
@@ -69,19 +74,42 @@ impl LuaEngine {
         memory_limit_bytes: Option<usize>,
     ) {
         self.on_enqueue_cache.insert(queue_id.to_string(), bytecode);
-        self.safety
-            .register_queue(queue_id, timeout_ms, memory_limit_bytes);
+        // Register safety config if not already present (may exist from on_failure)
+        if self.safety.get_config(queue_id).is_none() {
+            self.safety
+                .register_queue(queue_id, timeout_ms, memory_limit_bytes);
+        }
     }
 
-    /// Remove a cached on_enqueue script and its safety state for a queue.
-    pub fn remove_on_enqueue(&mut self, queue_id: &str) {
+    /// Remove all cached scripts and safety state for a queue.
+    pub fn remove_queue_scripts(&mut self, queue_id: &str) {
         self.on_enqueue_cache.remove(queue_id);
+        self.on_failure_cache.remove(queue_id);
         self.safety.remove_queue(queue_id);
     }
 
     /// Get the cached on_enqueue bytecode for a queue, if any.
     pub fn get_on_enqueue(&self, queue_id: &str) -> Option<&CompiledScript> {
         self.on_enqueue_cache.get(queue_id)
+    }
+
+    /// Cache a pre-compiled on_failure script for a queue.
+    ///
+    /// Safety config is shared with on_enqueue (same queue = same limits).
+    /// If no on_enqueue script was registered, this also registers the safety config.
+    pub fn cache_on_failure(
+        &mut self,
+        queue_id: &str,
+        bytecode: CompiledScript,
+        timeout_ms: Option<u64>,
+        memory_limit_bytes: Option<usize>,
+    ) {
+        self.on_failure_cache.insert(queue_id.to_string(), bytecode);
+        // Ensure safety config is registered (may already exist from on_enqueue)
+        if self.safety.get_config(queue_id).is_none() {
+            self.safety
+                .register_queue(queue_id, timeout_ms, memory_limit_bytes);
+        }
     }
 
     /// Execute the on_enqueue script for a queue, returning the scheduling metadata.
@@ -140,6 +168,76 @@ impl LuaEngine {
                     tracing::warn!(queue = %queue_id, "circuit breaker tripped");
                 }
                 Some(OnEnqueueResult::default())
+            }
+        }
+    }
+
+    /// Execute the on_failure script for a queue, returning the failure action.
+    ///
+    /// If no script is cached for the queue, returns None (caller uses default retry).
+    /// If the circuit breaker is tripped, returns default retry.
+    /// If execution fails, returns default retry, logs a warning, and updates
+    /// the circuit breaker.
+    pub fn run_on_failure(
+        &mut self,
+        queue_id: &str,
+        headers: &std::collections::HashMap<String, String>,
+        msg_id: &str,
+        attempt_count: u32,
+        queue_name: &str,
+        error: &str,
+    ) -> Option<OnFailureResult> {
+        if !self.on_failure_cache.contains_key(queue_id) {
+            return None;
+        }
+
+        // Circuit breaker check (shared with on_enqueue for this queue)
+        if !self.safety.should_execute(queue_id) {
+            tracing::warn!(queue = %queue_id, "circuit breaker active, bypassing on_failure Lua");
+            return Some(OnFailureResult::default());
+        }
+
+        // Set safety hooks before execution
+        if let Some(config) = self.safety.get_config(queue_id) {
+            safety::set_instruction_hook(&self.lua, config.instruction_limit);
+            safety::set_memory_limit(&self.lua, config.memory_limit_bytes);
+        }
+
+        let bytecode = self.on_failure_cache.get(queue_id).unwrap();
+        let result = on_failure::try_run_on_failure(
+            &self.lua,
+            bytecode,
+            headers,
+            msg_id,
+            attempt_count,
+            queue_name,
+            error,
+        );
+
+        // Remove safety hooks after execution
+        safety::remove_instruction_hook(&self.lua);
+        safety::reset_memory_limit(&self.lua);
+
+        // Record success/failure for circuit breaker
+        match result {
+            Ok(on_failure_result) => {
+                if on_failure_result.delay_ms > 0 {
+                    tracing::warn!(
+                        queue = %queue_id,
+                        delay_ms = on_failure_result.delay_ms,
+                        "on_failure requested delay_ms but delayed retry is not yet supported, retrying immediately"
+                    );
+                }
+                self.safety.record_success(queue_id);
+                Some(on_failure_result)
+            }
+            Err(e) => {
+                tracing::warn!(queue = %queue_id, error = %e, "on_failure script failed, using default retry");
+                let just_tripped = self.safety.record_failure(queue_id);
+                if just_tripped {
+                    tracing::warn!(queue = %queue_id, "circuit breaker tripped");
+                }
+                Some(OnFailureResult::default())
             }
         }
     }
@@ -222,7 +320,7 @@ mod tests {
         engine.cache_on_enqueue("q1", bytecode, None, None);
         assert!(engine.get_on_enqueue("q1").is_some());
 
-        engine.remove_on_enqueue("q1");
+        engine.remove_queue_scripts("q1");
         assert!(engine.get_on_enqueue("q1").is_none());
     }
 

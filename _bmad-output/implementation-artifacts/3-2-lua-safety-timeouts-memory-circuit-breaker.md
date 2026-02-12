@@ -1,6 +1,6 @@
 # Story 3.2: Lua Safety: Timeouts, Memory Limits & Circuit Breaker
 
-Status: dev-complete
+Status: complete
 
 ## Story
 
