@@ -58,7 +58,7 @@ development_status:
   2-1-deficit-round-robin-scheduler: review
   2-2-weighted-fairness-accuracy-verification: review
   2-3-nack-message-retry: done
-  2-4-visibility-timeout-lease-expiry: ready-for-dev
+  2-4-visibility-timeout-lease-expiry: review
   epic-2-retrospective: optional
 
   # Epic 3: Lua Rules Engine & Dead-Letter Handling
