@@ -1,6 +1,6 @@
 # Story 2.4: Visibility Timeout & Lease Expiry
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -20,24 +20,24 @@ so that stuck or crashed consumers don't block message processing.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Extract `reclaim_expired_leases()` method (AC: #1, #2, #3, #4, #7)
-  - [ ] 1.1 Extract shared logic from `recover()` into `reclaim_expired_leases()` that: scans lease_expiry CF, for each expired entry: deletes lease + lease_expiry, retrieves message, increments attempt_count, clears leased_at, writes updated message, re-adds fairness key to DRR active set
-  - [ ] 1.2 Update `recover()` to call `reclaim_expired_leases()` instead of inline lease scanning
-  - [ ] 1.3 All existing recovery tests must still pass
+- [x] Task 1: Extract `reclaim_expired_leases()` method (AC: #1, #2, #3, #4, #7)
+  - [x] 1.1 Extract shared logic from `recover()` into `reclaim_expired_leases()` that: scans lease_expiry CF, for each expired entry: deletes lease + lease_expiry, retrieves message, increments attempt_count, clears leased_at, writes updated message, re-adds fairness key to DRR active set
+  - [x] 1.2 Update `recover()` to call `reclaim_expired_leases()` instead of inline lease scanning
+  - [x] 1.3 All existing recovery tests must still pass
 
-- [ ] Task 2: Wire periodic expiry check into scheduler loop (AC: #1)
-  - [ ] 2.1 Call `reclaim_expired_leases()` at the idle timeout wakeup point (replace the comment)
-  - [ ] 2.2 Call `drr_deliver()` after reclaim so re-queued messages are delivered immediately
+- [x] Task 2: Wire periodic expiry check into scheduler loop (AC: #1)
+  - [x] 2.1 Call `reclaim_expired_leases()` at the idle timeout wakeup point (replace the comment)
+  - [x] 2.2 Call `drr_deliver()` after reclaim so re-queued messages are delivered immediately
 
-- [ ] Task 3: Fix recovery to increment attempt_count (AC: #6)
-  - [ ] 3.1 Since `reclaim_expired_leases()` now handles attempt_count, this is covered by Task 1
-  - [ ] 3.2 Update `recovery_reclaims_expired_leases` test to verify attempt_count is incremented
+- [x] Task 3: Fix recovery to increment attempt_count (AC: #6)
+  - [x] 3.1 Since `reclaim_expired_leases()` now handles attempt_count, this is covered by Task 1
+  - [x] 3.2 Update `recovery_reclaims_expired_leases` test to verify attempt_count is incremented
 
-- [ ] Task 4: Integration tests (AC: #5)
-  - [ ] 4.1 `lease_expiry_redelivers_message_with_incremented_attempt_count` — enqueue, lease, wait for visibility timeout, verify message reappears with attempt_count=1
-  - [ ] 4.2 `lease_expiry_clears_lease_and_expiry_entries` — verify leases and lease_expiry CFs are clean after expiry reclaim
-  - [ ] 4.3 `lease_expiry_multiple_messages_different_timeouts` — two messages with different queue visibility timeouts, verify correct expiry ordering
-  - [ ] 4.4 `ack_before_expiry_prevents_redelivery` — ack within timeout, verify message is not redelivered
+- [x] Task 4: Integration tests (AC: #5)
+  - [x] 4.1 `lease_expiry_redelivers_message_with_incremented_attempt_count` — enqueue, lease, wait for visibility timeout, verify message reappears with attempt_count=1
+  - [x] 4.2 `lease_expiry_clears_lease_and_expiry_entries` — verify leases and lease_expiry CFs are clean after expiry reclaim
+  - [x] 4.3 `lease_expiry_multiple_messages_different_timeouts` — two messages with different queue visibility timeouts, verify correct expiry ordering
+  - [x] 4.4 `ack_before_expiry_prevents_redelivery` — ack within timeout, verify message is not redelivered
 
 ## Dev Notes
 
@@ -118,8 +118,20 @@ The difference is that `reclaim_expired_leases()` operates in batch:
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
+
+- No issues encountered — all tests passed on first run after fixing mut bindings
 
 ### Completion Notes List
 
+- `reclaim_expired_leases()` extracts and enhances the recovery lease reclaim logic to also increment attempt_count, clear leased_at, and re-add fairness key to DRR
+- `recover()` now delegates to `reclaim_expired_leases()` for lease cleanup, then rebuilds DRR from messages
+- Scheduler loop calls `reclaim_expired_leases()` on every idle timeout wakeup, followed by `drr_deliver()` if any leases were reclaimed
+- Orphaned lease_expiry entries (message not found) are cleaned up gracefully with a warning
+- Tests use threaded scheduler with short visibility timeouts (50ms) to test wall-clock expiry behavior
+
 ### File List
+
+- `crates/fila-core/src/broker/scheduler.rs` — extracted `reclaim_expired_leases()`, wired into scheduler loop, updated recovery, added 4 integration tests + 1 assertion to existing recovery test
