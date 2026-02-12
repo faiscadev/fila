@@ -67,3 +67,9 @@ Output:
     delay_ms = <number>,       -- optional, logged as warning if > 0
 }
 ```
+
+## Post-PR Review Fixes
+
+- **Cubic P2 — first-writer-wins safety config** (identified by cubic): `cache_on_enqueue` and `cache_on_failure` both accepted `timeout_ms` and `memory_limit_bytes` params, but whichever was called first won — the second silently discarded its values. Safety config is per-queue, not per-script, so the API was misleading. Fixed by extracting a dedicated `register_queue_safety` method called once per queue, and removing the safety params from the cache methods.
+- **Also fixed**: `run_on_failure` had the same fail-open safety hooks pattern already fixed for `run_on_enqueue` in PR #17 — scripts would run without limits if per-queue config was missing. Applied the same fail-closed fix (fall back to global defaults with warning).
+- **Dev agent miss**: cubic's automated review flagged the issue on the PR, but the dev agent did not check cubic's review findings before marking the story complete.
