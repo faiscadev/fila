@@ -18,9 +18,9 @@ stories:
     dependsOn: ["2.1"]
   - id: "2.3"
     title: "Nack & Message Retry"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "review"
+    branch: "feat/2.3-nack-message-retry"
     pr: null
     dependsOn: ["2.1"]
   - id: "2.4"

@@ -188,7 +188,36 @@ impl FilaService for HotPathService {
         Ok(Response::new(AckResponse {}))
     }
 
-    async fn nack(&self, _request: Request<NackRequest>) -> Result<Response<NackResponse>, Status> {
-        Err(Status::unimplemented("Nack not yet implemented"))
+    async fn nack(&self, request: Request<NackRequest>) -> Result<Response<NackResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.queue.is_empty() {
+            return Err(Status::invalid_argument("queue name must not be empty"));
+        }
+        if req.message_id.is_empty() {
+            return Err(Status::invalid_argument("message_id must not be empty"));
+        }
+
+        let msg_id: Uuid = req
+            .message_id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid message_id format"))?;
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.broker
+            .send_command(SchedulerCommand::Nack {
+                queue_id: req.queue,
+                msg_id,
+                error: req.error,
+                reply: reply_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .map_err(IntoStatus::into_status)?;
+
+        Ok(Response::new(NackResponse {}))
     }
 }
