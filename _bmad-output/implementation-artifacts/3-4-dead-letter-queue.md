@@ -49,3 +49,9 @@ so that I can inspect and potentially redrive unprocessable messages.
 ```
 crates/fila-core/src/broker/scheduler.rs  # handle_create_queue, handle_delete_queue changes
 ```
+
+## Post-PR Review Fixes
+
+- **Cubic P2 — DLQ-of-DLQ not prevented** (identified by cubic): `.dlq` queues did not have `dlq_queue_id` cleared before persisting, so callers could still configure a nested DLQ contradicting the stated behavior. Fixed by explicitly clearing `dlq_queue_id = None` for `.dlq` queues in `handle_create_queue`.
+- **Cubic P2 — cascade-delete too aggressive** (identified by cubic): `handle_delete_queue` blindly deleted whatever `dlq_queue_id` pointed to, including custom or shared DLQs. Fixed by only cascade-deleting when `dlq_queue_id` matches the auto-created naming convention (`{queue_id}.dlq`).
+- **Dev agent miss**: cubic's automated review flagged both issues on the PR, but the dev agent did not check cubic's review findings before marking the story complete.
