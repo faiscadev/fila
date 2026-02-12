@@ -20,12 +20,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 toml.workspace = true
 tokio = { version = "1", features = ["sync"] }
+mlua.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
-mlua.workspace = true
 
 [[bench]]
 name = "drr"

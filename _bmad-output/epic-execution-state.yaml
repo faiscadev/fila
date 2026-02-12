@@ -1,38 +1,33 @@
-epic: "Epic 2: Fair Scheduling & Message Reliability"
+epic: "Epic 3: Lua Rules Engine & Dead-Letter Handling"
 baseBranch: main
-startedAt: "2026-02-12T00:00:00Z"
+startedAt: "2026-02-12T12:00:00Z"
 stories:
-  - id: "2.1"
-    title: "Deficit Round Robin Scheduler"
-    status: completed
-    currentPhase: ""
-    branch: "feat/2.1-deficit-round-robin-scheduler"
-    pr: 12
+  - id: "3.1"
+    title: "Lua Sandbox & on_enqueue Hook"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/3.1-lua-sandbox-on-enqueue-hook"
+    pr: null
     dependsOn: []
-  - id: "2.2"
-    title: "Weighted Fairness & Accuracy Verification"
-    status: completed
+  - id: "3.2"
+    title: "Lua Safety: Timeouts, Memory Limits & Circuit Breaker"
+    status: pending
     currentPhase: ""
-    branch: "feat/2.2-weighted-fairness-accuracy-verification"
-    pr: 13
-    dependsOn: ["2.1"]
-  - id: "2.3"
-    title: "Nack & Message Retry"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: ["3.1"]
+  - id: "3.3"
+    title: "on_failure Hook & Retry Decisions"
+    status: pending
     currentPhase: ""
-    branch: "feat/2.3-nack-message-retry"
-    pr: 14
-    dependsOn: ["2.1"]
-  - id: "2.4"
-    title: "Visibility Timeout & Lease Expiry"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: ["3.1", "3.2"]
+  - id: "3.4"
+    title: "Dead-Letter Queue"
+    status: pending
     currentPhase: ""
-    branch: "feat/2.4-visibility-timeout-lease-expiry"
-    pr: 15
-    dependsOn: ["2.1"]
+    branch: ""
+    pr: null
+    dependsOn: ["3.3"]
 skippedIssues: []
-completedAt: "2026-02-12T06:00:00Z"
-summary:
-  totalStories: 4
-  completed: 4
-  skipped: 0

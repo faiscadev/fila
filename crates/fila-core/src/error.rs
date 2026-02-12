@@ -64,6 +64,9 @@ pub enum CreateQueueError {
     #[error("queue already exists: {0}")]
     QueueAlreadyExists(String),
 
+    #[error("lua script compilation failed: {0}")]
+    LuaCompilation(String),
+
     #[error(transparent)]
     Storage(#[from] StorageError),
 }

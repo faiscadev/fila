@@ -8,6 +8,7 @@ use tracing::{debug, error, info, warn};
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::config::SchedulerConfig;
 use crate::broker::drr::DrrScheduler;
+use crate::lua::LuaEngine;
 use crate::storage::{Storage, WriteBatchOp};
 
 /// A registered consumer waiting for messages.
@@ -31,6 +32,8 @@ pub struct Scheduler {
     /// Deficit Round Robin scheduler for fair message delivery across
     /// fairness keys.
     drr: DrrScheduler,
+    /// Lua rules engine for executing on_enqueue and on_failure scripts.
+    lua_engine: Option<LuaEngine>,
 }
 
 impl Scheduler {
@@ -39,6 +42,14 @@ impl Scheduler {
         inbound: Receiver<SchedulerCommand>,
         config: &SchedulerConfig,
     ) -> Self {
+        let lua_engine = match LuaEngine::new(storage.clone()) {
+            Ok(engine) => Some(engine),
+            Err(e) => {
+                error!(error = %e, "failed to create Lua engine, scripts will be disabled");
+                None
+            }
+        };
+
         Self {
             storage,
             inbound,
@@ -47,6 +58,7 @@ impl Scheduler {
             consumers: HashMap::new(),
             consumer_rr_idx: HashMap::new(),
             drr: DrrScheduler::new(config.quantum),
+            lua_engine,
         }
     }
 
@@ -179,13 +191,27 @@ impl Scheduler {
 
     fn handle_enqueue(
         &mut self,
-        message: crate::message::Message,
+        mut message: crate::message::Message,
     ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
         // Verify queue exists
         if self.storage.get_queue(&message.queue_id)?.is_none() {
             return Err(crate::error::EnqueueError::QueueNotFound(
                 message.queue_id.clone(),
             ));
+        }
+
+        // Run on_enqueue Lua script if one is cached for this queue
+        if let Some(ref lua_engine) = self.lua_engine {
+            if let Some(result) = lua_engine.run_on_enqueue(
+                &message.queue_id,
+                &message.headers,
+                message.payload.len(),
+                &message.queue_id,
+            ) {
+                message.fairness_key = result.fairness_key;
+                message.weight = result.weight;
+                message.throttle_keys = result.throttle_keys;
+            }
         }
 
         let msg_id = message.id;
@@ -206,7 +232,7 @@ impl Scheduler {
     }
 
     fn handle_create_queue(
-        &self,
+        &mut self,
         name: String,
         mut config: crate::queue::QueueConfig,
     ) -> Result<String, crate::error::CreateQueueError> {
@@ -219,6 +245,20 @@ impl Scheduler {
         if self.storage.get_queue(&name)?.is_some() {
             return Err(crate::error::CreateQueueError::QueueAlreadyExists(name));
         }
+
+        // Pre-compile and cache on_enqueue Lua script if provided
+        if let Some(ref script_source) = config.on_enqueue_script {
+            if let Some(ref mut lua_engine) = self.lua_engine {
+                let bytecode = lua_engine.compile_script(script_source).map_err(|e| {
+                    crate::error::CreateQueueError::LuaCompilation(e.to_string())
+                })?;
+                lua_engine.cache_on_enqueue(&name, bytecode);
+                debug!(queue = %name, "on_enqueue script compiled and cached");
+            } else {
+                warn!(queue = %name, "on_enqueue script provided but Lua engine is disabled");
+            }
+        }
+
         config.name = name.clone();
         self.storage.put_queue(&name, &config)?;
         Ok(name)
@@ -240,6 +280,9 @@ impl Scheduler {
         self.storage.delete_queue(queue_id)?;
         self.drr.remove_queue(queue_id);
         self.consumer_rr_idx.remove(queue_id);
+        if let Some(ref mut lua_engine) = self.lua_engine {
+            lua_engine.remove_on_enqueue(queue_id);
+        }
         Ok(())
     }
 
@@ -680,10 +723,26 @@ impl Scheduler {
     fn recover(&mut self) {
         self.reclaim_expired_leases();
 
-        // Rebuild DRR active keys by scanning messages for each queue
+        // Rebuild DRR active keys and Lua script cache by scanning queues
         match self.storage.list_queues() {
             Ok(queues) => {
                 for queue in &queues {
+                    // Re-compile and cache on_enqueue scripts
+                    if let Some(ref script_source) = queue.on_enqueue_script {
+                        if let Some(ref mut lua_engine) = self.lua_engine {
+                            match lua_engine.compile_script(script_source) {
+                                Ok(bytecode) => {
+                                    lua_engine.cache_on_enqueue(&queue.name, bytecode);
+                                    debug!(queue = %queue.name, "recovered on_enqueue script");
+                                }
+                                Err(e) => {
+                                    warn!(queue = %queue.name, error = %e, "failed to compile on_enqueue script during recovery");
+                                }
+                            }
+                        }
+                    }
+
+                    // Rebuild DRR active keys by scanning messages
                     let prefix = crate::storage::keys::message_prefix(&queue.name);
                     match self.storage.list_messages(&prefix) {
                         Ok(messages) => {
@@ -2306,7 +2365,6 @@ mod tests {
             quantum: 100,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let scheduler = Scheduler::new(storage, rx, &config);
 
         send_create_queue(&tx, "drr-accuracy");
 
@@ -2336,10 +2394,10 @@ mod tests {
         })
         .unwrap();
 
-        // Spawn scheduler on background thread so it can loop through
-        // multiple DRR rounds (each delivers quantum * total_weight messages)
+        // Spawn scheduler on background thread — Scheduler contains Lua (not Send),
+        // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
-            let mut s = scheduler;
+            let mut s = Scheduler::new(storage, rx, &config);
             s.run();
         });
 
@@ -2947,7 +3005,6 @@ mod tests {
             quantum: 1000,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let mut scheduler = Scheduler::new(storage, rx, &config);
 
         send_create_queue_with_timeout(&tx, "expiry-queue", 50);
 
@@ -2968,8 +3025,10 @@ mod tests {
         })
         .unwrap();
 
-        // Run scheduler on background thread
+        // Run scheduler on background thread — Scheduler contains Lua (not Send),
+        // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
+            let mut scheduler = Scheduler::new(storage, rx, &config);
             scheduler.run();
         });
 
@@ -3009,7 +3068,7 @@ mod tests {
             quantum: 1000,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let mut scheduler = Scheduler::new(Arc::clone(&storage), rx, &config);
+        let storage_for_thread = Arc::clone(&storage);
 
         send_create_queue_with_timeout(&tx, "expiry-clean-queue", 50);
 
@@ -3030,8 +3089,10 @@ mod tests {
         })
         .unwrap();
 
-        // Run scheduler on background thread
+        // Run scheduler on background thread — Scheduler contains Lua (not Send),
+        // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
+            let mut scheduler = Scheduler::new(storage_for_thread, rx, &config);
             scheduler.run();
         });
 
@@ -3095,7 +3156,6 @@ mod tests {
             quantum: 1000,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let mut scheduler = Scheduler::new(storage, rx, &config);
 
         send_create_queue_with_timeout(&tx, "fast-queue", 50);
         send_create_queue_with_timeout(&tx, "slow-queue", 200);
@@ -3133,8 +3193,10 @@ mod tests {
         })
         .unwrap();
 
-        // Run scheduler on background thread
+        // Run scheduler on background thread — Scheduler contains Lua (not Send),
+        // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
+            let mut scheduler = Scheduler::new(storage, rx, &config);
             scheduler.run();
         });
 
@@ -3179,7 +3241,6 @@ mod tests {
             quantum: 1000,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let mut scheduler = Scheduler::new(storage, rx, &config);
 
         send_create_queue_with_timeout(&tx, "ack-before-expiry-queue", 100);
 
@@ -3200,8 +3261,10 @@ mod tests {
         })
         .unwrap();
 
-        // Run scheduler on background thread
+        // Run scheduler on background thread — Scheduler contains Lua (not Send),
+        // so it must be created inside the thread.
         let handle = std::thread::spawn(move || {
+            let mut scheduler = Scheduler::new(storage, rx, &config);
             scheduler.run();
         });
 
@@ -3236,5 +3299,225 @@ mod tests {
 
         tx.send(SchedulerCommand::Shutdown).unwrap();
         handle.join().unwrap();
+    }
+
+    // --- Lua on_enqueue integration tests ---
+
+    /// Helper: create a queue with an on_enqueue Lua script.
+    fn send_create_queue_with_script(
+        tx: &crossbeam_channel::Sender<SchedulerCommand>,
+        name: &str,
+        script: &str,
+    ) -> tokio::sync::oneshot::Receiver<Result<String, crate::error::CreateQueueError>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let mut config = crate::queue::QueueConfig::new(name.to_string());
+        config.on_enqueue_script = Some(script.to_string());
+        tx.send(SchedulerCommand::CreateQueue {
+            name: name.to_string(),
+            config,
+            reply: reply_tx,
+        })
+        .unwrap();
+        reply_rx
+    }
+
+    /// Helper: create a message with specific headers.
+    fn test_message_with_headers(
+        queue_id: &str,
+        headers: HashMap<String, String>,
+    ) -> Message {
+        Message {
+            id: Uuid::now_v7(),
+            queue_id: queue_id.to_string(),
+            headers,
+            payload: vec![1, 2, 3],
+            fairness_key: "default".to_string(),
+            weight: 1,
+            throttle_keys: vec![],
+            attempt_count: 0,
+            enqueued_at: 1_000_000_000,
+            leased_at: None,
+        }
+    }
+
+    #[test]
+    fn on_enqueue_assigns_fairness_key_from_header() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let script = r#"
+            function on_enqueue(msg)
+                return { fairness_key = msg.headers["tenant_id"] or "unknown" }
+            end
+        "#;
+        send_create_queue_with_script(&tx, "lua-fk-queue", script);
+
+        let mut headers = HashMap::new();
+        headers.insert("tenant_id".to_string(), "acme".to_string());
+        let msg = test_message_with_headers("lua-fk-queue", headers);
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // The message should be stored with fairness_key="acme" from the Lua script
+        let key =
+            crate::storage::keys::message_key("lua-fk-queue", "acme", 1_000_000_000, &msg_id);
+        let stored = scheduler.storage().get_message(&key).unwrap();
+        assert!(
+            stored.is_some(),
+            "message should be stored with fairness_key='acme' from Lua script"
+        );
+        let stored_msg = stored.unwrap();
+        assert_eq!(stored_msg.fairness_key, "acme");
+    }
+
+    #[test]
+    fn on_enqueue_assigns_weight_and_throttle_keys() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let script = r#"
+            function on_enqueue(msg)
+                return {
+                    fairness_key = "tenant_x",
+                    weight = 5,
+                    throttle_keys = { "rate:global", "rate:tenant_x" },
+                }
+            end
+        "#;
+        send_create_queue_with_script(&tx, "lua-wt-queue", script);
+
+        let msg = test_message("lua-wt-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let key = crate::storage::keys::message_key(
+            "lua-wt-queue",
+            "tenant_x",
+            1_000_000_000,
+            &msg_id,
+        );
+        let stored = scheduler.storage().get_message(&key).unwrap();
+        assert!(stored.is_some(), "message should exist with fairness_key='tenant_x'");
+        let stored_msg = stored.unwrap();
+        assert_eq!(stored_msg.weight, 5);
+        assert_eq!(
+            stored_msg.throttle_keys,
+            vec!["rate:global", "rate:tenant_x"]
+        );
+    }
+
+    #[test]
+    fn queue_without_script_uses_defaults() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "no-script-queue");
+
+        let msg = test_message("no-script-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let key = crate::storage::keys::message_key(
+            "no-script-queue",
+            "default",
+            1_000_000_000,
+            &msg_id,
+        );
+        let stored = scheduler.storage().get_message(&key).unwrap();
+        assert!(stored.is_some(), "message should exist with default fairness_key");
+        let stored_msg = stored.unwrap();
+        assert_eq!(stored_msg.fairness_key, "default");
+        assert_eq!(stored_msg.weight, 1);
+        assert!(stored_msg.throttle_keys.is_empty());
+    }
+
+    #[test]
+    fn on_enqueue_reads_config_via_fila_get() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Write a config value to the state CF that the Lua script will read
+        scheduler
+            .storage()
+            .put_state("default_tenant", b"megacorp")
+            .unwrap();
+
+        let script = r#"
+            function on_enqueue(msg)
+                local tenant = msg.headers["tenant_id"]
+                if tenant == nil or tenant == "" then
+                    tenant = fila.get("default_tenant") or "fallback"
+                end
+                return { fairness_key = tenant }
+            end
+        "#;
+        send_create_queue_with_script(&tx, "lua-fila-get-queue", script);
+
+        // Message without tenant_id header — script should fall back to fila.get()
+        let msg = test_message("lua-fila-get-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let key = crate::storage::keys::message_key(
+            "lua-fila-get-queue",
+            "megacorp",
+            1_000_000_000,
+            &msg_id,
+        );
+        let stored = scheduler.storage().get_message(&key).unwrap();
+        assert!(
+            stored.is_some(),
+            "message should have fairness_key='megacorp' from fila.get()"
+        );
+        assert_eq!(stored.unwrap().fairness_key, "megacorp");
+    }
+
+    #[test]
+    fn create_queue_with_invalid_script_returns_error() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let mut reply_rx =
+            send_create_queue_with_script(&tx, "bad-script-queue", "not valid lua %%%");
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let result = reply_rx.try_recv().unwrap();
+        assert!(result.is_err(), "invalid script should return an error");
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                crate::error::CreateQueueError::LuaCompilation(_)
+            ),
+            "error should be LuaCompilation"
+        );
     }
 }

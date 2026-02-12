@@ -1,5 +1,6 @@
 pub mod broker;
 pub mod error;
+pub mod lua;
 pub mod message;
 pub mod queue;
 pub mod storage;
