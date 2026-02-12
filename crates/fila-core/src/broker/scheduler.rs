@@ -81,7 +81,10 @@ impl Scheduler {
                 match self.inbound.recv_timeout(self.idle_timeout) {
                     Ok(cmd) => self.handle_command(cmd),
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        // Normal idle wakeup — future stories add periodic work here
+                        // Periodic work: reclaim expired leases and deliver re-queued messages
+                        if self.reclaim_expired_leases() > 0 {
+                            self.drr_deliver();
+                        }
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                         info!("inbound channel disconnected, shutting down");
@@ -543,13 +546,15 @@ impl Scheduler {
         false
     }
 
-    /// Recover state after a crash or restart.
+    /// Scan the `lease_expiry` CF for expired leases and reclaim them.
     ///
-    /// RocksDB persists all data to disk, so queue definitions, messages, and
-    /// leases survive restarts. Recovery does two things:
-    /// 1. Reclaim expired leases so messages re-enter the ready pool
-    /// 2. Rebuild DRR active keys by scanning the messages CF
-    fn recover(&mut self) {
+    /// For each expired lease:
+    /// 1. Delete the lease and lease_expiry entries
+    /// 2. Increment the message's attempt_count and clear leased_at
+    /// 3. Re-add the fairness key to the DRR active set
+    ///
+    /// Returns the number of leases reclaimed.
+    fn reclaim_expired_leases(&mut self) -> u64 {
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -565,21 +570,81 @@ impl Scheduler {
         let expired_keys = match self.storage.list_expired_leases(&up_to) {
             Ok(keys) => keys,
             Err(e) => {
-                warn!(error = %e, "failed to scan expired leases during recovery");
-                return;
+                warn!(error = %e, "failed to scan expired leases");
+                return 0;
             }
         };
 
         let mut reclaimed = 0u64;
         for expiry_key in &expired_keys {
-            let Some((queue_id, msg_id)) = crate::storage::keys::parse_lease_expiry_key(expiry_key)
+            let Some((queue_id, msg_id)) =
+                crate::storage::keys::parse_lease_expiry_key(expiry_key)
             else {
-                warn!("corrupt lease_expiry key during recovery, skipping");
+                warn!("corrupt lease_expiry key, skipping");
                 continue;
             };
 
             let lease_key = crate::storage::keys::lease_key(&queue_id, &msg_id);
+
+            // Find the message and update it (increment attempt_count, clear leased_at)
+            let msg_key = match self.find_message_key(&queue_id, &msg_id) {
+                Ok(Some(key)) => key,
+                Ok(None) => {
+                    // Message not found — orphaned lease entry, just clean up
+                    warn!(%queue_id, %msg_id, "orphaned lease_expiry entry, message not found");
+                    let _ = self.storage.write_batch(vec![
+                        WriteBatchOp::DeleteLease {
+                            key: lease_key.clone(),
+                        },
+                        WriteBatchOp::DeleteLeaseExpiry {
+                            key: expiry_key.clone(),
+                        },
+                    ]);
+                    reclaimed += 1;
+                    continue;
+                }
+                Err(e) => {
+                    warn!(error = %e, %queue_id, %msg_id, "failed to find message for expired lease");
+                    continue;
+                }
+            };
+
+            let msg = match self.storage.get_message(&msg_key) {
+                Ok(Some(msg)) => msg,
+                Ok(None) => {
+                    warn!(%queue_id, %msg_id, "message key found but message missing");
+                    let _ = self.storage.write_batch(vec![
+                        WriteBatchOp::DeleteLease { key: lease_key },
+                        WriteBatchOp::DeleteLeaseExpiry {
+                            key: expiry_key.clone(),
+                        },
+                    ]);
+                    reclaimed += 1;
+                    continue;
+                }
+                Err(e) => {
+                    warn!(error = %e, %queue_id, %msg_id, "failed to read message for expired lease");
+                    continue;
+                }
+            };
+
+            let mut updated_msg = msg;
+            updated_msg.attempt_count += 1;
+            updated_msg.leased_at = None;
+
+            let msg_value = match serde_json::to_vec(&updated_msg) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(error = %e, %queue_id, %msg_id, "failed to serialize message during lease reclaim");
+                    continue;
+                }
+            };
+
             if let Err(e) = self.storage.write_batch(vec![
+                WriteBatchOp::PutMessage {
+                    key: msg_key,
+                    value: msg_value,
+                },
                 WriteBatchOp::DeleteLease { key: lease_key },
                 WriteBatchOp::DeleteLeaseExpiry {
                     key: expiry_key.clone(),
@@ -588,12 +653,33 @@ impl Scheduler {
                 warn!(error = %e, %queue_id, %msg_id, "failed to reclaim expired lease");
                 continue;
             }
+
+            self.drr
+                .add_key(&queue_id, &updated_msg.fairness_key, updated_msg.weight);
+
+            debug!(
+                %queue_id,
+                %msg_id,
+                attempt_count = updated_msg.attempt_count,
+                "reclaimed expired lease"
+            );
             reclaimed += 1;
         }
 
         if reclaimed > 0 {
-            info!(reclaimed, "reclaimed expired leases during recovery");
+            info!(reclaimed, "reclaimed expired leases");
         }
+        reclaimed
+    }
+
+    /// Recover state after a crash or restart.
+    ///
+    /// RocksDB persists all data to disk, so queue definitions, messages, and
+    /// leases survive restarts. Recovery does two things:
+    /// 1. Reclaim expired leases so messages re-enter the ready pool
+    /// 2. Rebuild DRR active keys by scanning the messages CF
+    fn recover(&mut self) {
+        self.reclaim_expired_leases();
 
         // Rebuild DRR active keys by scanning messages for each queue
         match self.storage.list_queues() {
@@ -1705,6 +1791,10 @@ mod tests {
             .try_recv()
             .expect("consumer should receive the reclaimed message");
         assert_eq!(ready.msg_id, msg_id);
+        assert_eq!(
+            ready.attempt_count, 1,
+            "attempt_count should be incremented after lease expiry reclaim"
+        );
 
         // The old lease_expiry entry should be gone (recovery deleted it)
         let old_up_to =
