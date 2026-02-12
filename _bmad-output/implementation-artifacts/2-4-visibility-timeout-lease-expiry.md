@@ -1,6 +1,6 @@
 # Story 2.4: Visibility Timeout & Lease Expiry
 
-Status: review
+Status: done
 
 ## Story
 
