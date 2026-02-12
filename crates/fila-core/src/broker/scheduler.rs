@@ -370,9 +370,10 @@ impl Scheduler {
                 self.drr.remove_key(queue_id, &fairness_key);
             } else if !delivered {
                 // Messages exist but couldn't deliver (all consumers full/closed).
-                // Don't remove the key — messages are still pending. Consume deficit
-                // to avoid busy-spinning on the same key.
-                self.drr.consume_deficit(queue_id, &fairness_key);
+                // Break without consuming deficit — the consumer-full condition
+                // applies to all keys equally, so burning this key's deficit would
+                // unfairly penalize whichever key happened to be next in the round.
+                break;
             }
         }
     }
