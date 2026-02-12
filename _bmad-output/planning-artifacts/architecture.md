@@ -89,10 +89,11 @@ Systems infrastructure — standalone Rust binary (message broker). This is not 
 |-------|---------|------|
 | `tokio` | Async runtime | gRPC IO threads, timers, signal handling |
 | `tonic` | gRPC framework | Hot path + admin RPC server and client |
+| `tonic-prost` | tonic + prost integration | Bridges tonic 0.14 with prost for codegen and runtime |
 | `prost` | Protobuf codegen | Message serialization, API definitions |
 | `rocksdb` | Embedded key-value store | Durable message and state persistence |
 | `mlua` | Lua 5.4 bindings | Rules engine: on_enqueue, on_failure hooks |
-| `crossbeam-channel` | Lock-free MPMC channels | IO thread ↔ scheduler core communication |
+| `crossbeam-channel` | Lock-free MPMC channels | IO thread → scheduler inbound command channel |
 | `tracing` | Structured logging/tracing | Application-wide observability |
 | `opentelemetry` + `opentelemetry-otlp` | OTel SDK | Metrics + trace export to collectors |
 | `tracing-opentelemetry` | Bridge | Connect tracing spans to OTel |
@@ -140,7 +141,7 @@ cargo init --name fila
 **Important Decisions (Shape Architecture):**
 
 6. Lua integration model — per-queue pre-compiled scripts with sandbox limits
-7. Channel architecture — crossbeam for scheduler, tokio channels for internal gRPC
+7. Channel architecture — crossbeam inbound for IO→scheduler, tokio mpsc for scheduler→consumer delivery, tokio oneshot for request-reply
 8. Error handling strategy — thiserror in core, gRPC status codes at boundary
 9. Configuration approach — TOML file + runtime key-value store
 10. Testing strategy — unit + integration + property-based + benchmarks
@@ -170,7 +171,7 @@ Producers                                              Consumers
 │                    tonic gRPC IO Threads                      │
 │                    (tokio multi-threaded runtime)             │
 └──────────┬───────────────────────────────────────┬───────────┘
-           │ crossbeam channel (inbound)           ▲ crossbeam channel (outbound)
+           │ crossbeam channel (inbound)           ▲ tokio mpsc (per-consumer)
            ▼                                       │
 ┌──────────────────────────────────────────────────────────────┐
 │              Single-Threaded Scheduler Core                   │
@@ -191,7 +192,7 @@ Producers                                              Consumers
 **Thread model:**
 - **IO threads**: tokio multi-threaded runtime runs the tonic gRPC server. Handles connection management, TLS (future), serialization/deserialization. Multiple threads.
 - **Scheduler thread**: Single dedicated `std::thread`. Owns all mutable scheduler state. Runs a tight event loop. Never blocks on IO.
-- **Communication**: `crossbeam-channel` for lock-free, bounded MPMC between IO and scheduler. `oneshot` channels for request-response patterns.
+- **Communication**: `crossbeam-channel` for lock-free, bounded inbound command channel (IO → scheduler). `tokio::sync::oneshot` for request-response reply patterns. `tokio::sync::mpsc` for per-consumer message delivery (scheduler → IO).
 
 **Scheduler Core Loop (pseudocode):**
 
@@ -386,42 +387,82 @@ Used for: throttle rate limits, feature flags, business logic parameters that Lu
 
 | Layer | Error Approach | Crate |
 |-------|---------------|-------|
-| `fila-core` | `thiserror` enum with typed variants | `thiserror` |
-| `fila-server` | Convert core errors → tonic `Status` | `tonic` |
+| `fila-core` | Per-command `thiserror` enums (one per operation) | `thiserror` |
+| `fila-server` | `IntoStatus` trait converts per-command errors → tonic `Status` | `tonic` |
 | `fila-cli` | Convert tonic `Status` → user-friendly messages | `clap` |
 | Lua hooks | Circuit breaker → safe defaults on error | `mlua` |
 
 **Core Error Types:**
 
+Per-command error types — each command/operation returns only the errors it can actually produce. No single "god enum" where unrelated variants leak across operations.
+
 ```rust
 #[derive(Debug, thiserror::Error)]
-pub enum FilaError {
-    #[error("queue not found: {0}")]
+pub enum StorageError {
+    RocksDb(String),
+    Serialization(String),
+    ColumnFamilyNotFound(&'static str),
+    CorruptData(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EnqueueError {
     QueueNotFound(String),
-    #[error("message not found: {0}")]
+    Storage(#[from] StorageError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AckError {
     MessageNotFound(String),
-    #[error("lua script error: {0}")]
-    LuaError(String),
-    #[error("storage error: {0}")]
-    StorageError(String),
-    #[error("invalid configuration: {0}")]
-    InvalidConfig(String),
-    #[error("queue already exists: {0}")]
+    Storage(#[from] StorageError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum NackError {
+    MessageNotFound(String),
+    Storage(#[from] StorageError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CreateQueueError {
     QueueAlreadyExists(String),
+    Storage(#[from] StorageError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteQueueError {
+    QueueNotFound(String),
+    Storage(#[from] StorageError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BrokerError {
+    SchedulerSpawn(String),
+    ChannelFull,
+    ChannelDisconnected,
+    SchedulerPanicked,
 }
 ```
 
 **gRPC Status Code Mapping:**
 
-| Core Error | gRPC Status |
-|-----------|-------------|
-| `QueueNotFound` | `NOT_FOUND` |
-| `MessageNotFound` | `NOT_FOUND` |
-| `LuaError` | `INTERNAL` (circuit breaker handles gracefully) |
-| `StorageError` | `INTERNAL` |
-| `InvalidConfig` | `INVALID_ARGUMENT` |
-| `QueueAlreadyExists` | `ALREADY_EXISTS` |
-| Unknown Ack/Nack | `NOT_FOUND` (idempotent) |
+Each per-command error type maps to gRPC status codes at the server boundary via an `IntoStatus` trait:
+
+| Error Type | Variant | gRPC Status |
+|-----------|---------|-------------|
+| `EnqueueError` | `QueueNotFound` | `NOT_FOUND` |
+| `EnqueueError` | `Storage` | `INTERNAL` |
+| `AckError` | `MessageNotFound` | `NOT_FOUND` |
+| `AckError` | `Storage` | `INTERNAL` |
+| `NackError` | `MessageNotFound` | `NOT_FOUND` |
+| `NackError` | `Storage` | `INTERNAL` |
+| `CreateQueueError` | `QueueAlreadyExists` | `ALREADY_EXISTS` |
+| `CreateQueueError` | `Storage` | `INTERNAL` |
+| `DeleteQueueError` | `QueueNotFound` | `NOT_FOUND` |
+| `DeleteQueueError` | `Storage` | `INTERNAL` |
+| `BrokerError` | `ChannelFull` | `RESOURCE_EXHAUSTED` |
+| `BrokerError` | `ChannelDisconnected` | `UNAVAILABLE` |
+| `BrokerError` | `SchedulerSpawn` / `SchedulerPanicked` | `INTERNAL` |
 
 ### Testing Strategy
 
@@ -550,8 +591,10 @@ ENTRYPOINT ["fila-server"]
 ### Structure Patterns
 
 **Module Organization — fila-core:**
-- One module per domain concept (message, queue, scheduler, throttle, storage, lua, config, metrics, error)
-- Sub-modules for implementations within a concept (`scheduler/drr.rs`, `storage/rocksdb.rs`)
+- One module per domain concept (message, queue, broker, storage, error, telemetry)
+- `broker/` module owns the scheduler, commands, and config (`broker/scheduler.rs`, `broker/command.rs`, `broker/config.rs`)
+- `storage/` module owns the trait and implementations (`storage/traits.rs`, `storage/rocksdb.rs`, `storage/keys.rs`)
+- Future modules (lua, throttle, scheduler/drr) will be added as their features are implemented
 - `mod.rs` files re-export the public API for the module
 - Traits define boundaries; implementations are behind the trait
 
@@ -574,7 +617,7 @@ ENTRYPOINT ["fila-server"]
 
 **Serialization:**
 - Wire format: Protobuf (via prost) for all gRPC communication
-- Storage format: Protobuf-encoded bytes in RocksDB (same message format as wire)
+- Storage format: JSON-encoded bytes in RocksDB (via serde_json)
 - Config files: TOML for static config
 - Logs: Structured JSON when running in production mode; pretty-print in development
 
@@ -588,18 +631,20 @@ ENTRYPOINT ["fila-server"]
 **Channel Communication (IO ↔ Scheduler):**
 
 ```rust
-// Inbound: IO threads → Scheduler
+// Inbound: IO threads → Scheduler (via crossbeam_channel)
 enum SchedulerCommand {
-    Enqueue { message: Message, reply: oneshot::Sender<Result<EnqueueResult>> },
-    Ack { queue_id: QueueId, msg_id: MsgId, reply: oneshot::Sender<Result<()>> },
-    Nack { queue_id: QueueId, msg_id: MsgId, error: String, reply: oneshot::Sender<Result<NackResult>> },
-    RegisterConsumer { queue_id: QueueId, tx: mpsc::Sender<ReadyMessage> },
-    UnregisterConsumer { consumer_id: ConsumerId },
-    Admin(AdminCommand),
+    Enqueue { message: Message, reply: tokio::sync::oneshot::Sender<Result<Uuid, EnqueueError>> },
+    Ack { queue_id: String, msg_id: Uuid, reply: tokio::sync::oneshot::Sender<Result<(), AckError>> },
+    Nack { queue_id: String, msg_id: Uuid, error: String, reply: tokio::sync::oneshot::Sender<Result<(), NackError>> },
+    RegisterConsumer { queue_id: String, consumer_id: String, tx: tokio::sync::mpsc::Sender<ReadyMessage> },
+    UnregisterConsumer { consumer_id: String },
+    CreateQueue { name: String, config: QueueConfig, reply: tokio::sync::oneshot::Sender<Result<String, CreateQueueError>> },
+    DeleteQueue { queue_id: String, reply: tokio::sync::oneshot::Sender<Result<(), DeleteQueueError>> },
+    Shutdown,
 }
 
 // Outbound: Scheduler → IO threads (ready messages for consumers)
-// Delivered via per-consumer mpsc::Sender registered during RegisterConsumer
+// Delivered via per-consumer tokio::sync::mpsc::Sender registered during RegisterConsumer
 ```
 
 **Logging Patterns:**
@@ -678,45 +723,34 @@ fila/
 ├── crates/
 │   ├── fila-proto/                     # Generated protobuf + gRPC code
 │   │   ├── Cargo.toml
-│   │   ├── build.rs                    # prost-build + tonic-build codegen
+│   │   ├── build.rs                    # tonic-prost-build codegen
 │   │   └── src/
 │   │       └── lib.rs                  # Re-export generated types and services
-│   ├── fila-core/                      # Core library: scheduler, storage, lua, domain types
+│   ├── fila-core/                      # Core library: broker, storage, domain types
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs                  # Public API re-exports
-│   │       ├── error.rs                # FilaError enum (thiserror)
-│   │       ├── message.rs              # Message domain type, MessageMetadata
+│   │       ├── error.rs                # Per-command error enums (thiserror)
+│   │       ├── message.rs              # Message domain type
 │   │       ├── queue.rs                # Queue definition, QueueConfig, DLQ association
-│   │       ├── broker.rs               # Broker orchestrator: owns scheduler thread, channels
-│   │       ├── scheduler/
-│   │       │   ├── mod.rs              # Scheduler trait + core loop
-│   │       │   └── drr.rs              # Deficit Round Robin implementation
-│   │       ├── throttle/
-│   │       │   ├── mod.rs              # Throttle manager: owns all token buckets
-│   │       │   └── token_bucket.rs     # Single token bucket implementation
-│   │       ├── storage/
-│   │       │   ├── mod.rs              # Storage trait re-export
-│   │       │   ├── traits.rs           # Storage trait definition
-│   │       │   └── rocksdb.rs          # RocksDB implementation with column families
-│   │       ├── lua/
-│   │       │   ├── mod.rs              # Lua engine public API
-│   │       │   ├── sandbox.rs          # Lua VM creation, security limits, fila.* API
-│   │       │   └── hooks.rs            # on_enqueue + on_failure hook execution
-│   │       ├── config.rs               # BrokerConfig struct (deserialized from TOML)
-│   │       └── metrics.rs              # Metric names, recording helpers
+│   │       ├── telemetry.rs            # Tracing initialization (debug pretty-print, release JSON)
+│   │       ├── broker/
+│   │       │   ├── mod.rs              # Broker orchestrator: owns scheduler thread, channels
+│   │       │   ├── command.rs          # SchedulerCommand enum, ReadyMessage type
+│   │       │   ├── config.rs           # BrokerConfig, ServerConfig, SchedulerConfig (TOML)
+│   │       │   └── scheduler.rs        # Single-threaded scheduler core loop
+│   │       └── storage/
+│   │           ├── mod.rs              # Storage trait re-export
+│   │           ├── traits.rs           # Storage trait definition + WriteBatchOp enum
+│   │           ├── rocksdb.rs          # RocksDB implementation with column families
+│   │           └── keys.rs             # Key encoding: big-endian, length-prefixed, composite keys
 │   ├── fila-server/                    # gRPC server binary
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── main.rs                 # Entry point: parse args, load config, start server
-│   │       ├── server.rs               # Server setup: create broker, bind gRPC, signal handling
-│   │       ├── service/
-│   │       │   ├── mod.rs              # Service module re-exports
-│   │       │   ├── producer.rs         # Enqueue RPC handler
-│   │       │   ├── consumer.rs         # Lease, Ack, Nack RPC handlers
-│   │       │   └── admin.rs            # Admin RPC handlers (CreateQueue, SetConfig, etc.)
-│   │       ├── convert.rs              # Proto ↔ Core type conversion (From/Into impls)
-│   │       └── telemetry.rs            # OTel setup: tracing subscriber, metrics exporter
+│   │       ├── main.rs                 # Entry point: load config, create broker, bind gRPC, signal handling
+│   │       ├── service.rs              # HotPathService: Enqueue, Lease, Ack, Nack RPC handlers
+│   │       ├── admin_service.rs        # AdminService: CreateQueue, DeleteQueue, SetConfig, etc.
+│   │       └── error.rs                # IntoStatus trait: per-command errors → gRPC Status codes
 │   └── fila-cli/                       # CLI binary (crate: fila-cli, binary: fila)
 │       ├── Cargo.toml
 │       └── src/
@@ -795,10 +829,10 @@ Producer → gRPC IO thread → SchedulerCommand::Enqueue → crossbeam → Sche
 
 ```
 Consumer → gRPC IO thread → SchedulerCommand::RegisterConsumer → crossbeam → Scheduler thread
-    → scheduler adds consumer to registry with mpsc::Sender
+    → scheduler adds consumer to registry with tokio::sync::mpsc::Sender
     → (in DRR loop) scheduler finds ready message for consumer's queue
     → check throttle → check deficit → dequeue → create lease → WriteBatch
-    → mpsc::Sender.send(ReadyMessage) → IO thread → gRPC stream push
+    → tokio::sync::mpsc::Sender.send(ReadyMessage) → converter task → gRPC stream push
 ```
 
 **Data Flow — Ack:**
@@ -825,12 +859,12 @@ Consumer → gRPC IO thread → SchedulerCommand::Nack → crossbeam → Schedul
 
 | FR Category | Primary Location | Supporting Locations |
 |------------|-----------------|---------------------|
-| Message Lifecycle (FR1–7) | `fila-core/src/message.rs`, `broker.rs`, `scheduler/mod.rs` | `fila-server/src/service/producer.rs`, `consumer.rs` |
-| Fair Scheduling (FR8–12) | `fila-core/src/scheduler/drr.rs` | `fila-core/src/broker.rs` |
-| Throttling (FR13–17) | `fila-core/src/throttle/token_bucket.rs` | `fila-core/src/scheduler/mod.rs` |
-| Rules Engine (FR18–25) | `fila-core/src/lua/sandbox.rs`, `hooks.rs` | `fila-core/src/broker.rs` |
-| Runtime Config (FR26–29) | `fila-core/src/storage/traits.rs`, `rocksdb.rs` | `fila-server/src/service/admin.rs` |
-| Queue Management (FR30–34) | `fila-core/src/queue.rs`, `broker.rs` | `fila-server/src/service/admin.rs`, `fila-cli/src/commands/queue.rs` |
+| Message Lifecycle (FR1–7) | `fila-core/src/message.rs`, `broker/mod.rs`, `broker/scheduler.rs` | `fila-server/src/service.rs` |
+| Fair Scheduling (FR8–12) | `fila-core/src/broker/scheduler.rs` (DRR to be added) | `fila-core/src/broker/mod.rs` |
+| Throttling (FR13–17) | `fila-core/src/broker/scheduler.rs` (token buckets to be added) | `fila-core/src/broker/mod.rs` |
+| Rules Engine (FR18–25) | Lua module to be added | `fila-core/src/broker/scheduler.rs` |
+| Runtime Config (FR26–29) | `fila-core/src/storage/traits.rs`, `rocksdb.rs` | `fila-server/src/admin_service.rs` |
+| Queue Management (FR30–34) | `fila-core/src/queue.rs`, `broker/mod.rs` | `fila-server/src/admin_service.rs`, `fila-cli/src/main.rs` |
 | Observability (FR35–41) | `fila-core/src/metrics.rs` | `fila-server/src/telemetry.rs`, every module via `tracing` |
 | Client SDKs (FR42–48) | `proto/fila/v1/*.proto` | External SDK repositories (generated from proto) |
 | Deployment (FR49–53) | `Dockerfile`, `.github/workflows/`, `Cargo.toml` | `fila-server/src/main.rs` |
@@ -840,10 +874,10 @@ Consumer → gRPC IO thread → SchedulerCommand::Nack → crossbeam → Schedul
 
 | Concern | Primary File(s) | Pattern |
 |---------|----------------|---------|
-| Observability | `fila-core/src/metrics.rs`, `fila-server/src/telemetry.rs` | Every module uses `tracing::instrument` |
-| Error handling | `fila-core/src/error.rs`, `fila-server/src/convert.rs` | Core errors → gRPC status at server boundary |
+| Observability | `fila-core/src/telemetry.rs` | Every module uses `tracing::instrument` |
+| Error handling | `fila-core/src/error.rs`, `fila-server/src/error.rs` | Per-command core errors → gRPC status via `IntoStatus` trait at server boundary |
 | Crash recovery | `fila-core/src/storage/rocksdb.rs`, `fila-core/src/broker.rs` | WriteBatch atomicity + startup recovery scan |
-| Configuration | `fila-core/src/config.rs`, `fila-server/src/main.rs` | TOML deserialized at startup, env var overrides |
+| Configuration | `fila-core/src/broker/config.rs`, `fila-server/src/main.rs` | TOML deserialized at startup, env var overrides |
 
 ## Architecture Validation Results
 
@@ -979,6 +1013,6 @@ Consumer → gRPC IO thread → SchedulerCommand::Nack → crossbeam → Schedul
 **First Implementation Priority:**
 1. Create Cargo workspace with all four crates (`fila-proto`, `fila-core`, `fila-server`, `fila-cli`)
 2. Write `.proto` files for `messages.proto`, `service.proto`, `admin.proto`
-3. Set up `fila-proto` build.rs with prost-build + tonic-build
+3. Set up `fila-proto` build.rs with tonic-prost-build
 4. Verify generated code compiles
 5. This establishes the foundation for M1 development
