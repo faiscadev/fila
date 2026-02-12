@@ -172,8 +172,7 @@ fn memory_limit() {
 fn sandbox_via_selective_libs() {
     let safe_libs = StdLib::MATH | StdLib::STRING | StdLib::TABLE | StdLib::UTF8;
 
-    let lua =
-        Lua::new_with(safe_libs, LuaOptions::default()).expect("create sandboxed Lua");
+    let lua = Lua::new_with(safe_libs, LuaOptions::default()).expect("create sandboxed Lua");
 
     // loadfile/dofile/load are Lua core globals — always present regardless of
     // StdLib flags. Must nil them explicitly.
@@ -185,10 +184,7 @@ fn sandbox_via_selective_libs() {
     }
 
     // Verify safe libs work
-    let math_result: f64 = lua
-        .load("return math.sqrt(144)")
-        .eval()
-        .expect("math.sqrt");
+    let math_result: f64 = lua.load("return math.sqrt(144)").eval().expect("math.sqrt");
     assert!((math_result - 12.0).abs() < f64::EPSILON);
 
     let string_result: String = lua
@@ -262,10 +258,7 @@ fn sandbox_via_global_stripping() {
     }
 
     // Verify useful base functions still work (print, type, pcall, etc.)
-    let type_result: String = lua
-        .load(r#"return type("hello")"#)
-        .eval()
-        .expect("type()");
+    let type_result: String = lua.load(r#"return type("hello")"#).eval().expect("type()");
     assert_eq!(type_result, "string");
 
     let pcall_result: bool = lua
@@ -368,9 +361,7 @@ fn script_input_output_pattern() {
 
     // Build the input table from Rust (simulating a message)
     let headers = lua.create_table().expect("create headers");
-    headers
-        .set("x-tenant-id", "acme")
-        .expect("set x-tenant-id");
+    headers.set("x-tenant-id", "acme").expect("set x-tenant-id");
     headers.set("x-region", "eu").expect("set x-region");
     headers
         .set("content-type", "application/json")
@@ -378,8 +369,7 @@ fn script_input_output_pattern() {
 
     let msg = lua.create_table().expect("create msg");
     msg.set("headers", headers).expect("set headers");
-    msg.set("payload_size", 2048_i64)
-        .expect("set payload_size");
+    msg.set("payload_size", 2048_i64).expect("set payload_size");
 
     // Call the function
     let on_enqueue: mlua::Function = lua.globals().get("on_enqueue").expect("get on_enqueue");
@@ -493,8 +483,7 @@ fn global_state_persists_across_calls() {
 #[test]
 fn combined_sandbox_with_hooks_and_bridge() {
     let safe_libs = StdLib::MATH | StdLib::STRING | StdLib::TABLE | StdLib::UTF8;
-    let lua =
-        Lua::new_with(safe_libs, LuaOptions::default()).expect("create sandboxed Lua");
+    let lua = Lua::new_with(safe_libs, LuaOptions::default()).expect("create sandboxed Lua");
 
     // Strip core globals that bypass sandbox
     let globals = lua.globals();

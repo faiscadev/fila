@@ -47,9 +47,7 @@ mod tests {
 
         // Pre-populate state CF
         storage.put_state("max_retries", b"3").unwrap();
-        storage
-            .put_state("queue_name", b"orders")
-            .unwrap();
+        storage.put_state("queue_name", b"orders").unwrap();
 
         let lua = crate::lua::sandbox::create_sandbox().unwrap();
         register_fila_api(&lua, storage).unwrap();
