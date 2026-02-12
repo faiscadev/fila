@@ -222,4 +222,28 @@ mod tests {
         // They should be different (length-prefix prevents collision)
         assert_ne!(k1, k2);
     }
+
+    #[test]
+    fn parse_lease_expiry_key_roundtrip() {
+        let id = Uuid::now_v7();
+        let key = lease_expiry_key(42_000_000_000, "my-queue", &id);
+        let (queue_id, msg_id) = parse_lease_expiry_key(&key).expect("should parse valid key");
+        assert_eq!(queue_id, "my-queue");
+        assert_eq!(msg_id, id);
+    }
+
+    #[test]
+    fn parse_lease_expiry_key_rejects_corrupt_input() {
+        // Too short
+        assert!(parse_lease_expiry_key(&[0; 10]).is_none());
+
+        // Exactly minimum length but with wrong length prefix (claims 255 bytes of queue_id)
+        let mut bad = vec![0u8; 28];
+        bad[9] = 0x00;
+        bad[10] = 0xFF; // length prefix says 255, but only 17 bytes remain
+        assert!(parse_lease_expiry_key(&bad).is_none());
+
+        // Empty input
+        assert!(parse_lease_expiry_key(&[]).is_none());
+    }
 }
