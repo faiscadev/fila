@@ -265,6 +265,24 @@ impl Scheduler {
             }
         }
 
+        // Pre-compile and cache on_failure Lua script if provided
+        if let Some(ref script_source) = config.on_failure_script {
+            if let Some(ref mut lua_engine) = self.lua_engine {
+                let bytecode = lua_engine
+                    .compile_script(script_source)
+                    .map_err(|e| crate::error::CreateQueueError::LuaCompilation(e.to_string()))?;
+                lua_engine.cache_on_failure(
+                    &name,
+                    bytecode,
+                    config.lua_timeout_ms,
+                    config.lua_memory_limit_bytes,
+                );
+                debug!(queue = %name, "on_failure script compiled and cached");
+            } else {
+                warn!(queue = %name, "on_failure script provided but Lua engine is disabled");
+            }
+        }
+
         config.name = name.clone();
         self.storage.put_queue(&name, &config)?;
         Ok(name)
@@ -287,7 +305,7 @@ impl Scheduler {
         self.drr.remove_queue(queue_id);
         self.consumer_rr_idx.remove(queue_id);
         if let Some(ref mut lua_engine) = self.lua_engine {
-            lua_engine.remove_on_enqueue(queue_id);
+            lua_engine.remove_queue_scripts(queue_id);
         }
         Ok(())
     }
@@ -369,9 +387,84 @@ impl Scheduler {
         msg.attempt_count += 1;
         msg.leased_at = None;
 
+        // Run on_failure Lua script to decide retry vs dead-letter
+        let failure_result = self.lua_engine.as_mut().and_then(|engine| {
+            engine.run_on_failure(
+                queue_id,
+                &msg.headers,
+                &msg_id.to_string(),
+                msg.attempt_count,
+                queue_id,
+                error,
+            )
+        });
+
+        let should_dlq = matches!(
+            failure_result,
+            Some(crate::lua::OnFailureResult {
+                action: crate::lua::FailureAction::DeadLetter,
+                ..
+            })
+        );
+
+        if should_dlq {
+            // Look up the DLQ queue ID from the queue config
+            let dlq_queue_id = self
+                .storage
+                .get_queue(queue_id)?
+                .and_then(|config| config.dlq_queue_id.clone());
+
+            if let Some(dlq_queue_id) =
+                dlq_queue_id.filter(|id| self.storage.get_queue(id).ok().flatten().is_some())
+            {
+                // Move message to DLQ atomically: delete from original queue, put in DLQ
+                msg.queue_id = dlq_queue_id.clone();
+                let dlq_msg_key = crate::storage::keys::message_key(
+                    &dlq_queue_id,
+                    &msg.fairness_key,
+                    msg.enqueued_at,
+                    &msg.id,
+                );
+                let msg_value =
+                    serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
+
+                let ops = vec![
+                    WriteBatchOp::DeleteMessage { key: msg_key },
+                    WriteBatchOp::PutMessage {
+                        key: dlq_msg_key,
+                        value: msg_value,
+                    },
+                    WriteBatchOp::DeleteLease { key: lease_key },
+                    WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                ];
+                self.storage.write_batch(ops)?;
+
+                // Add the message to the DLQ's DRR active set for delivery
+                self.drr
+                    .add_key(&dlq_queue_id, &msg.fairness_key, msg.weight);
+
+                debug!(
+                    %queue_id,
+                    %msg_id,
+                    %error,
+                    %dlq_queue_id,
+                    attempt_count = msg.attempt_count,
+                    "message moved to dead-letter queue"
+                );
+                return Ok(());
+            }
+
+            warn!(
+                %queue_id,
+                %msg_id,
+                "on_failure requested DLQ but no valid dlq_queue_id configured, retrying instead"
+            );
+            // Fall through to retry path
+        }
+
+        // Retry path: update message in-place, clear lease
         let msg_value = serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
 
-        // Atomically: update message (incremented attempt_count), delete lease, delete lease_expiry
         let ops = vec![
             WriteBatchOp::PutMessage {
                 key: msg_key,
@@ -380,7 +473,6 @@ impl Scheduler {
             WriteBatchOp::DeleteLease { key: lease_key },
             WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
         ];
-
         self.storage.write_batch(ops)?;
 
         // Re-add the fairness key to DRR active set so the message can be scheduled
@@ -748,6 +840,26 @@ impl Scheduler {
                                 }
                                 Err(e) => {
                                     warn!(queue = %queue.name, error = %e, "failed to compile on_enqueue script during recovery");
+                                }
+                            }
+                        }
+                    }
+
+                    // Re-compile and cache on_failure scripts
+                    if let Some(ref script_source) = queue.on_failure_script {
+                        if let Some(ref mut lua_engine) = self.lua_engine {
+                            match lua_engine.compile_script(script_source) {
+                                Ok(bytecode) => {
+                                    lua_engine.cache_on_failure(
+                                        &queue.name,
+                                        bytecode,
+                                        queue.lua_timeout_ms,
+                                        queue.lua_memory_limit_bytes,
+                                    );
+                                    debug!(queue = %queue.name, "recovered on_failure script");
+                                }
+                                Err(e) => {
+                                    warn!(queue = %queue.name, error = %e, "failed to compile on_failure script during recovery");
                                 }
                             }
                         }
@@ -3720,5 +3832,470 @@ mod tests {
             "good queue's Lua script should work even after bad queue's script failed"
         );
         assert_eq!(stored.unwrap().fairness_key, "good");
+    }
+
+    // --- on_failure integration tests ---
+
+    /// Helper: create a queue with an on_failure script and optional DLQ configuration.
+    fn send_create_queue_with_on_failure(
+        tx: &crossbeam_channel::Sender<SchedulerCommand>,
+        name: &str,
+        on_failure_script: &str,
+        dlq_queue_id: Option<&str>,
+    ) {
+        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+        let mut config = crate::queue::QueueConfig::new(name.to_string());
+        config.on_failure_script = Some(on_failure_script.to_string());
+        config.dlq_queue_id = dlq_queue_id.map(|s| s.to_string());
+        tx.send(SchedulerCommand::CreateQueue {
+            name: name.to_string(),
+            config,
+            reply: reply_tx,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn on_failure_retry_requeues_message() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "retry" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "retry-queue", on_failure_script, None);
+
+        // Register consumer to receive messages
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "retry-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue a message
+        let msg = test_message("retry-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Nack the message — on_failure returns retry
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "retry-queue".to_string(),
+            msg_id,
+            error: "transient error".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Nack should succeed
+        assert!(nack_rx.try_recv().unwrap().is_ok(), "nack should succeed");
+
+        // Should receive the message twice: initial delivery + retry after nack
+        let first = consumer_rx.try_recv().expect("first delivery");
+        assert_eq!(first.msg_id, msg_id);
+        assert_eq!(first.attempt_count, 0);
+
+        let second = consumer_rx.try_recv().expect("second delivery after retry");
+        assert_eq!(second.msg_id, msg_id);
+        assert_eq!(second.attempt_count, 1);
+    }
+
+    #[test]
+    fn on_failure_dlq_moves_message_to_dead_letter_queue() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create the DLQ queue first
+        send_create_queue(&tx, "my-dlq");
+
+        // Create the main queue with on_failure script pointing to the DLQ
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "main-queue", on_failure_script, Some("my-dlq"));
+
+        // Register consumers for both queues
+        let (main_tx, mut main_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "main-queue".to_string(),
+            consumer_id: "main-consumer".to_string(),
+            tx: main_tx,
+        })
+        .unwrap();
+
+        let (dlq_tx, mut dlq_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "my-dlq".to_string(),
+            consumer_id: "dlq-consumer".to_string(),
+            tx: dlq_tx,
+        })
+        .unwrap();
+
+        // Enqueue a message to the main queue
+        let msg = test_message("main-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Nack the message — on_failure returns dlq
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "main-queue".to_string(),
+            msg_id,
+            error: "permanent error".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(nack_rx.try_recv().unwrap().is_ok(), "nack should succeed");
+
+        // First delivery on main queue (before nack)
+        let first = main_rx.try_recv().expect("initial delivery on main queue");
+        assert_eq!(first.msg_id, msg_id);
+
+        // No second delivery on main queue (message was DLQ'd, not retried)
+        assert!(
+            main_rx.try_recv().is_err(),
+            "message should not be retried on main queue"
+        );
+
+        // Message should appear on DLQ
+        let dlq_msg = dlq_rx
+            .try_recv()
+            .expect("message should be delivered to DLQ");
+        assert_eq!(dlq_msg.msg_id, msg_id);
+        assert_eq!(
+            dlq_msg.attempt_count, 1,
+            "attempt_count should be incremented"
+        );
+
+        // Verify message is gone from main queue storage
+        let main_prefix = crate::storage::keys::message_prefix("main-queue");
+        let main_msgs = scheduler.storage().list_messages(&main_prefix).unwrap();
+        assert!(
+            main_msgs.is_empty(),
+            "message should be removed from main queue"
+        );
+
+        // Verify message exists in DLQ storage
+        let dlq_prefix = crate::storage::keys::message_prefix("my-dlq");
+        let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
+        assert_eq!(dlq_msgs.len(), 1, "message should exist in DLQ");
+        assert_eq!(dlq_msgs[0].1.id, msg_id);
+    }
+
+    #[test]
+    fn on_failure_dlq_without_dlq_configured_falls_back_to_retry() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create queue with on_failure that returns DLQ, but NO dlq_queue_id configured
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "no-dlq-queue", on_failure_script, None);
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "no-dlq-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("no-dlq-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Nack — on_failure says DLQ but no DLQ configured, should retry instead
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "no-dlq-queue".to_string(),
+            msg_id,
+            error: "some error".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(nack_rx.try_recv().unwrap().is_ok());
+
+        // Should receive message twice (initial + retry fallback)
+        let first = consumer_rx.try_recv().expect("first delivery");
+        assert_eq!(first.msg_id, msg_id);
+        assert_eq!(first.attempt_count, 0);
+
+        let second = consumer_rx.try_recv().expect("retry after DLQ fallback");
+        assert_eq!(second.msg_id, msg_id);
+        assert_eq!(second.attempt_count, 1);
+    }
+
+    #[test]
+    fn on_failure_receives_attempt_count_and_error() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create DLQ queue
+        send_create_queue(&tx, "dlq-for-attempts");
+
+        // Script that DLQs only when attempts >= 3
+        let on_failure_script = r#"
+            function on_failure(msg)
+                if msg.attempts >= 3 and msg.error == "fatal" then
+                    return { action = "dlq" }
+                end
+                return { action = "retry" }
+            end
+        "#;
+        send_create_queue_with_on_failure(
+            &tx,
+            "attempts-queue",
+            on_failure_script,
+            Some("dlq-for-attempts"),
+        );
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "attempts-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let (dlq_consumer_tx, mut dlq_consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "dlq-for-attempts".to_string(),
+            consumer_id: "dlq-c1".to_string(),
+            tx: dlq_consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("attempts-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Nack 1: attempt_count becomes 1, error is "transient" → retry
+        let (nack1_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "attempts-queue".to_string(),
+            msg_id,
+            error: "transient".to_string(),
+            reply: nack1_tx,
+        })
+        .unwrap();
+
+        // Nack 2: attempt_count becomes 2, error is "fatal" → retry (attempts < 3)
+        let (nack2_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "attempts-queue".to_string(),
+            msg_id,
+            error: "fatal".to_string(),
+            reply: nack2_tx,
+        })
+        .unwrap();
+
+        // Nack 3: attempt_count becomes 3, error is "fatal" → DLQ (attempts >= 3 AND error == "fatal")
+        let (nack3_tx, mut nack3_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "attempts-queue".to_string(),
+            msg_id,
+            error: "fatal".to_string(),
+            reply: nack3_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(nack3_rx.try_recv().unwrap().is_ok());
+
+        // Main queue: initial delivery (0) + retry after nack 1 (1) + retry after nack 2 (2) = 3 deliveries
+        let d0 = consumer_rx.try_recv().expect("delivery 0");
+        assert_eq!(d0.attempt_count, 0);
+        let d1 = consumer_rx.try_recv().expect("delivery 1");
+        assert_eq!(d1.attempt_count, 1);
+        let d2 = consumer_rx.try_recv().expect("delivery 2");
+        assert_eq!(d2.attempt_count, 2);
+
+        // No more deliveries on main queue (nack 3 sent to DLQ)
+        assert!(
+            consumer_rx.try_recv().is_err(),
+            "no more deliveries after DLQ"
+        );
+
+        // DLQ should have the message with attempt_count = 3
+        let dlq_msg = dlq_consumer_rx
+            .try_recv()
+            .expect("message should be in DLQ");
+        assert_eq!(dlq_msg.msg_id, msg_id);
+        assert_eq!(dlq_msg.attempt_count, 3);
+    }
+
+    #[test]
+    fn on_failure_no_script_uses_default_retry() {
+        // Backward compatibility: no on_failure script → default retry behavior
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "no-script-queue");
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "no-script-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("no-script-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "no-script-queue".to_string(),
+            msg_id,
+            error: "some error".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(nack_rx.try_recv().unwrap().is_ok());
+
+        // Should get 2 deliveries: initial + retry (default behavior)
+        let first = consumer_rx.try_recv().expect("first delivery");
+        assert_eq!(first.attempt_count, 0);
+        let second = consumer_rx.try_recv().expect("second delivery after nack");
+        assert_eq!(second.attempt_count, 1);
+    }
+
+    #[test]
+    fn recovery_restores_on_failure_scripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+
+        // Phase 1: create queue with on_failure script, enqueue a message, shut down
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue(&tx, "recovery-dlq");
+        send_create_queue_with_on_failure(
+            &tx,
+            "recovery-queue",
+            on_failure_script,
+            Some("recovery-dlq"),
+        );
+
+        let msg = test_message("recovery-queue");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Register consumer so message gets delivered and leased
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "recovery-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+        drop(tx);
+
+        // Consume the initial delivery
+        let delivered = consumer_rx.try_recv().expect("initial delivery");
+        assert_eq!(delivered.msg_id, msg_id);
+
+        // Phase 2: start new scheduler on same storage — on_failure script should be recovered
+        let (tx2, mut scheduler2) = test_setup_with_storage(Arc::clone(&storage));
+
+        // Register consumers for both queues
+        let (main_consumer_tx, _main_consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx2.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "recovery-queue".to_string(),
+            consumer_id: "c2".to_string(),
+            tx: main_consumer_tx,
+        })
+        .unwrap();
+
+        let (dlq_consumer_tx, mut dlq_consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx2.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "recovery-dlq".to_string(),
+            consumer_id: "dlq-c2".to_string(),
+            tx: dlq_consumer_tx,
+        })
+        .unwrap();
+
+        // Nack the message — should trigger on_failure script (recovered from storage)
+        let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
+        tx2.send(SchedulerCommand::Nack {
+            queue_id: "recovery-queue".to_string(),
+            msg_id,
+            error: "error after recovery".to_string(),
+            reply: nack_tx,
+        })
+        .unwrap();
+
+        tx2.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler2.run();
+
+        assert!(
+            nack_rx.try_recv().unwrap().is_ok(),
+            "nack should succeed after recovery"
+        );
+
+        // Message should be in DLQ (on_failure script was recovered and returned "dlq")
+        let dlq_msg = dlq_consumer_rx
+            .try_recv()
+            .expect("on_failure script should be restored — message should be in DLQ");
+        assert_eq!(dlq_msg.msg_id, msg_id);
     }
 }
