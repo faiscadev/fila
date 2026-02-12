@@ -4,10 +4,10 @@ startedAt: "2026-02-12T00:00:00Z"
 stories:
   - id: "2.1"
     title: "Deficit Round Robin Scheduler"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/2.1-deficit-round-robin-scheduler"
-    pr: null
+    pr: 12
     dependsOn: []
   - id: "2.2"
     title: "Weighted Fairness & Accuracy Verification"
