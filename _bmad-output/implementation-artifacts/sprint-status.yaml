@@ -55,7 +55,7 @@ development_status:
 
   # Epic 2: Fair Scheduling & Message Reliability
   epic-2: in-progress
-  2-1-deficit-round-robin-scheduler: in-progress
+  2-1-deficit-round-robin-scheduler: review
   2-2-weighted-fairness-accuracy-verification: backlog
   2-3-nack-message-retry: backlog
   2-4-visibility-timeout-lease-expiry: backlog
