@@ -3061,6 +3061,15 @@ mod tests {
             "lease_expiry CF should be empty after reclaim, found {} entries",
             expired.len()
         );
+
+        // Message should still exist with leased_at cleared (AC#4)
+        let prefix = crate::storage::keys::message_prefix("expiry-clean-queue");
+        let messages = storage.list_messages(&prefix).unwrap();
+        assert_eq!(messages.len(), 1, "message should still exist after expiry reclaim");
+        let (_, msg) = &messages[0];
+        assert_eq!(msg.id, msg_id);
+        assert!(msg.leased_at.is_none(), "leased_at should be cleared after expiry reclaim");
+        assert_eq!(msg.attempt_count, 1, "attempt_count should be incremented");
     }
 
     #[test]
