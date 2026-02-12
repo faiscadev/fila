@@ -307,21 +307,17 @@ impl Scheduler {
                 "message {msg_id} not found in queue {queue_id}"
             ))
         })?;
-        let mut msg = self
-            .storage
-            .get_message(&msg_key)?
-            .ok_or_else(|| {
-                crate::error::NackError::MessageNotFound(format!(
-                    "message {msg_id} not found in queue {queue_id}"
-                ))
-            })?;
+        let mut msg = self.storage.get_message(&msg_key)?.ok_or_else(|| {
+            crate::error::NackError::MessageNotFound(format!(
+                "message {msg_id} not found in queue {queue_id}"
+            ))
+        })?;
 
         // Increment attempt count and clear lease timestamp
         msg.attempt_count += 1;
         msg.leased_at = None;
 
-        let msg_value = serde_json::to_vec(&msg)
-            .map_err(crate::error::StorageError::from)?;
+        let msg_value = serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
 
         // Atomically: update message (incremented attempt_count), delete lease, delete lease_expiry
         let ops = vec![
@@ -336,8 +332,7 @@ impl Scheduler {
         self.storage.write_batch(ops)?;
 
         // Re-add the fairness key to DRR active set so the message can be scheduled
-        self.drr
-            .add_key(queue_id, &msg.fairness_key, msg.weight);
+        self.drr.add_key(queue_id, &msg.fairness_key, msg.weight);
 
         debug!(%queue_id, %msg_id, %error, attempt_count = msg.attempt_count, "nack processed");
         Ok(())
@@ -2582,7 +2577,9 @@ mod tests {
         scheduler.run();
 
         // First delivery: attempt_count = 0
-        let first = consumer_rx.try_recv().expect("should receive first delivery");
+        let first = consumer_rx
+            .try_recv()
+            .expect("should receive first delivery");
         assert_eq!(first.msg_id, msg_id);
         assert_eq!(first.attempt_count, 0);
 
@@ -2590,9 +2587,14 @@ mod tests {
         assert!(nack_rx.try_recv().unwrap().is_ok(), "nack should succeed");
 
         // Second delivery: attempt_count = 1 (incremented by nack)
-        let second = consumer_rx.try_recv().expect("should receive second delivery after nack");
+        let second = consumer_rx
+            .try_recv()
+            .expect("should receive second delivery after nack");
         assert_eq!(second.msg_id, msg_id);
-        assert_eq!(second.attempt_count, 1, "attempt count should be incremented after nack");
+        assert_eq!(
+            second.attempt_count, 1,
+            "attempt count should be incremented after nack"
+        );
 
         // Message should still exist in storage (not deleted — only ack deletes)
         let msg_key =
@@ -2651,11 +2653,7 @@ mod tests {
         // Lease should be gone after nack (no re-delivery since consumer unregistered)
         let lease_key = crate::storage::keys::lease_key("nack-lease-queue", &msg_id);
         assert!(
-            scheduler
-                .storage()
-                .get_lease(&lease_key)
-                .unwrap()
-                .is_none(),
+            scheduler.storage().get_lease(&lease_key).unwrap().is_none(),
             "lease should be deleted after nack"
         );
 
@@ -2752,7 +2750,10 @@ mod tests {
         // Consume the initial delivery
         let _ = consumer_rx.try_recv();
 
-        assert!(nack1_rx.try_recv().unwrap().is_ok(), "first nack should succeed");
+        assert!(
+            nack1_rx.try_recv().unwrap().is_ok(),
+            "first nack should succeed"
+        );
         let err = nack2_rx.try_recv().unwrap().unwrap_err();
         assert!(
             matches!(err, crate::error::NackError::MessageNotFound(_)),
