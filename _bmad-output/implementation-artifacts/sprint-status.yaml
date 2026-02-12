@@ -54,12 +54,12 @@ development_status:
   epic-1-retrospective: done
 
   # Epic 2: Fair Scheduling & Message Reliability
-  epic-2: in-progress
-  2-1-deficit-round-robin-scheduler: review
-  2-2-weighted-fairness-accuracy-verification: review
+  epic-2: done
+  2-1-deficit-round-robin-scheduler: done
+  2-2-weighted-fairness-accuracy-verification: done
   2-3-nack-message-retry: done
   2-4-visibility-timeout-lease-expiry: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   # Epic 3: Lua Rules Engine & Dead-Letter Handling
   epic-3: backlog
