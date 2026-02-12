@@ -2918,4 +2918,297 @@ mod tests {
             "message should be deleted after ack"
         );
     }
+
+    /// Helper: create a queue with a custom visibility timeout (in ms).
+    fn send_create_queue_with_timeout(
+        tx: &crossbeam_channel::Sender<SchedulerCommand>,
+        name: &str,
+        visibility_timeout_ms: u64,
+    ) {
+        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+        let mut config = crate::queue::QueueConfig::new(name.to_string());
+        config.visibility_timeout_ms = visibility_timeout_ms;
+        tx.send(SchedulerCommand::CreateQueue {
+            name: name.to_string(),
+            config,
+            reply: reply_tx,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn lease_expiry_redelivers_message_with_incremented_attempt_count() {
+        // Use a short visibility timeout (50ms) and idle_timeout (10ms)
+        // so the scheduler wakes up frequently and reclaims quickly.
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let config = SchedulerConfig {
+            command_channel_capacity: 256,
+            idle_timeout_ms: 10,
+            quantum: 1000,
+        };
+        let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
+        let mut scheduler = Scheduler::new(storage, rx, &config);
+
+        send_create_queue_with_timeout(&tx, "expiry-queue", 50);
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "expiry-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("expiry-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // Run scheduler on background thread
+        let handle = std::thread::spawn(move || {
+            scheduler.run();
+        });
+
+        // First delivery — should happen immediately
+        let first = consumer_rx.blocking_recv().expect("first delivery");
+        assert_eq!(first.msg_id, msg_id);
+        assert_eq!(first.attempt_count, 0, "first delivery should have attempt_count=0");
+
+        // Wait for the visibility timeout to expire (50ms) plus some buffer
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Second delivery — after lease expiry, the message should be redelivered
+        let second = consumer_rx.blocking_recv().expect("second delivery after expiry");
+        assert_eq!(second.msg_id, msg_id);
+        assert_eq!(
+            second.attempt_count, 1,
+            "redelivery after expiry should have attempt_count=1"
+        );
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn lease_expiry_clears_lease_and_expiry_entries() {
+        // Verify that lease and lease_expiry CFs are cleaned up after expiry reclaim
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let config = SchedulerConfig {
+            command_channel_capacity: 256,
+            idle_timeout_ms: 10,
+            quantum: 1000,
+        };
+        let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
+        let mut scheduler = Scheduler::new(Arc::clone(&storage), rx, &config);
+
+        send_create_queue_with_timeout(&tx, "expiry-clean-queue", 50);
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "expiry-clean-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("expiry-clean-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // Run scheduler on background thread
+        let handle = std::thread::spawn(move || {
+            scheduler.run();
+        });
+
+        // First delivery
+        let _ = consumer_rx.blocking_recv().expect("first delivery");
+
+        // Unregister consumer so expiry reclaim doesn't immediately redeliver
+        tx.send(SchedulerCommand::UnregisterConsumer {
+            consumer_id: "c1".to_string(),
+        })
+        .unwrap();
+
+        // Wait for expiry
+        std::thread::sleep(Duration::from_millis(100));
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        handle.join().unwrap();
+
+        // After reclaim, lease should be gone
+        let lease_key = crate::storage::keys::lease_key("expiry-clean-queue", &msg_id);
+        assert!(
+            storage.get_lease(&lease_key).unwrap().is_none(),
+            "lease should be deleted after expiry reclaim"
+        );
+
+        // lease_expiry CF should be empty
+        let far_future = crate::storage::keys::lease_expiry_key(u64::MAX, "", &Uuid::nil());
+        let expired = storage.list_expired_leases(&far_future).unwrap();
+        assert!(
+            expired.is_empty(),
+            "lease_expiry CF should be empty after reclaim, found {} entries",
+            expired.len()
+        );
+    }
+
+    #[test]
+    fn lease_expiry_multiple_messages_different_timeouts() {
+        // Two queues with different visibility timeouts: 50ms and 200ms.
+        // After 100ms, only the first message should be redelivered.
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let config = SchedulerConfig {
+            command_channel_capacity: 256,
+            idle_timeout_ms: 10,
+            quantum: 1000,
+        };
+        let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
+        let mut scheduler = Scheduler::new(storage, rx, &config);
+
+        send_create_queue_with_timeout(&tx, "fast-queue", 50);
+        send_create_queue_with_timeout(&tx, "slow-queue", 200);
+
+        let (consumer_tx_fast, mut consumer_rx_fast) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "fast-queue".to_string(),
+            consumer_id: "c-fast".to_string(),
+            tx: consumer_tx_fast,
+        })
+        .unwrap();
+
+        let (consumer_tx_slow, mut consumer_rx_slow) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "slow-queue".to_string(),
+            consumer_id: "c-slow".to_string(),
+            tx: consumer_tx_slow,
+        })
+        .unwrap();
+
+        let msg_fast = test_message("fast-queue");
+        let msg_fast_id = msg_fast.id;
+        let (enq_tx1, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg_fast,
+            reply: enq_tx1,
+        })
+        .unwrap();
+
+        let msg_slow = test_message("slow-queue");
+        let (enq_tx2, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg_slow,
+            reply: enq_tx2,
+        })
+        .unwrap();
+
+        // Run scheduler on background thread
+        let handle = std::thread::spawn(move || {
+            scheduler.run();
+        });
+
+        // Both messages should be delivered immediately
+        let first_fast = consumer_rx_fast.blocking_recv().expect("fast first delivery");
+        assert_eq!(first_fast.attempt_count, 0);
+        let first_slow = consumer_rx_slow.blocking_recv().expect("slow first delivery");
+        assert_eq!(first_slow.attempt_count, 0);
+
+        // Wait 100ms — fast (50ms) should expire, slow (200ms) should not
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Fast message should be redelivered
+        let second_fast = consumer_rx_fast.blocking_recv().expect("fast second delivery");
+        assert_eq!(second_fast.msg_id, msg_fast_id);
+        assert_eq!(second_fast.attempt_count, 1);
+
+        // Slow message should NOT have been redelivered yet
+        assert!(
+            consumer_rx_slow.try_recv().is_err(),
+            "slow message should not have expired yet"
+        );
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn ack_before_expiry_prevents_redelivery() {
+        // Ack within the visibility timeout prevents the message from being redelivered
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let config = SchedulerConfig {
+            command_channel_capacity: 256,
+            idle_timeout_ms: 10,
+            quantum: 1000,
+        };
+        let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
+        let mut scheduler = Scheduler::new(storage, rx, &config);
+
+        send_create_queue_with_timeout(&tx, "ack-before-expiry-queue", 100);
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "ack-before-expiry-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("ack-before-expiry-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // Run scheduler on background thread
+        let handle = std::thread::spawn(move || {
+            scheduler.run();
+        });
+
+        // First delivery
+        let first = consumer_rx.blocking_recv().expect("first delivery");
+        assert_eq!(first.msg_id, msg_id);
+
+        // Ack immediately (before the 100ms visibility timeout)
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Ack {
+            queue_id: "ack-before-expiry-queue".to_string(),
+            msg_id,
+            reply: ack_tx,
+        })
+        .unwrap();
+
+        // Wait to ensure ack is processed
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(
+            ack_rx.blocking_recv().unwrap().is_ok(),
+            "ack should succeed"
+        );
+
+        // Wait past the visibility timeout
+        std::thread::sleep(Duration::from_millis(150));
+
+        // No redelivery should happen — the message was acked
+        assert!(
+            consumer_rx.try_recv().is_err(),
+            "acked message should not be redelivered after visibility timeout"
+        );
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        handle.join().unwrap();
+    }
 }
