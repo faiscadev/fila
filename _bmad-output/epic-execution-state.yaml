@@ -18,16 +18,16 @@ stories:
     dependsOn: ["3.1"]
   - id: "3.3"
     title: "on_failure Hook & Retry Decisions"
-    status: in-progress
-    currentPhase: "story-spec"
-    branch: ""
-    pr: null
+    status: completed
+    currentPhase: ""
+    branch: "feat/3.3-on-failure-hook-retry-decisions"
+    pr: 18
     dependsOn: ["3.1", "3.2"]
   - id: "3.4"
     title: "Dead-Letter Queue"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/3.4-dead-letter-queue"
     pr: null
     dependsOn: ["3.3"]
 skippedIssues: []
