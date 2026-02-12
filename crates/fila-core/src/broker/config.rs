@@ -15,12 +15,16 @@ pub struct ServerConfig {
     pub listen_addr: String,
 }
 
-/// Scheduler configuration (channel capacity, idle timeout).
+/// Scheduler configuration (channel capacity, idle timeout, DRR quantum).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct SchedulerConfig {
     pub command_channel_capacity: usize,
     pub idle_timeout_ms: u64,
+    /// DRR quantum — each fairness key receives `weight * quantum` deficit
+    /// per scheduling round. Higher values mean fewer round resets but
+    /// coarser fairness granularity.
+    pub quantum: u32,
 }
 
 impl Default for ServerConfig {
@@ -36,6 +40,7 @@ impl Default for SchedulerConfig {
         Self {
             command_channel_capacity: 10_000,
             idle_timeout_ms: 100,
+            quantum: 1000,
         }
     }
 }
@@ -50,6 +55,7 @@ mod tests {
         assert_eq!(config.server.listen_addr, "0.0.0.0:5555");
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
         assert_eq!(config.scheduler.idle_timeout_ms, 100);
+        assert_eq!(config.scheduler.quantum, 1000);
     }
 
     #[test]

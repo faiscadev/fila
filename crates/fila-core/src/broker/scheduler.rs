@@ -7,6 +7,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::config::SchedulerConfig;
+use crate::broker::drr::DrrScheduler;
 use crate::storage::{Storage, WriteBatchOp};
 
 /// A registered consumer waiting for messages.
@@ -24,9 +25,12 @@ pub struct Scheduler {
     running: bool,
     consumers: HashMap<String, ConsumerEntry>,
     /// Per-queue round-robin index for delivering messages to consumers.
-    /// Persists across calls to `try_deliver_pending` so messages are
-    /// distributed fairly within each queue independently.
+    /// Persists across calls so messages are distributed fairly across
+    /// consumers within each queue independently.
     consumer_rr_idx: HashMap<String, usize>,
+    /// Deficit Round Robin scheduler for fair message delivery across
+    /// fairness keys.
+    drr: DrrScheduler,
 }
 
 impl Scheduler {
@@ -42,6 +46,7 @@ impl Scheduler {
             running: true,
             consumers: HashMap::new(),
             consumer_rr_idx: HashMap::new(),
+            drr: DrrScheduler::new(config.quantum),
         }
     }
 
@@ -62,11 +67,14 @@ impl Scheduler {
                 }
             }
 
+            // Phase 2: DRR delivery round — deliver ready messages fairly.
+            // Runs after every drain, including the final iteration before
+            // shutdown, so newly enqueued messages are delivered.
+            self.drr_deliver();
+
             if !self.running {
                 break;
             }
-
-            // Phase 2: Future stories will add lease expiry, token bucket refill, DRR here
 
             // Phase 3: Park until next command or timeout
             if drained == 0 {
@@ -98,8 +106,8 @@ impl Scheduler {
                 let queue_id = message.queue_id.clone();
                 let result = self.handle_enqueue(message);
                 let _ = reply.send(result);
-                // Try to deliver the newly enqueued message to a waiting consumer
-                self.try_deliver_pending(&queue_id);
+                // Deliver immediately for responsiveness
+                self.drr_deliver_queue(&queue_id);
             }
             SchedulerCommand::Ack {
                 queue_id,
@@ -133,7 +141,8 @@ impl Scheduler {
                         tx,
                     },
                 );
-                self.try_deliver_pending(&queue_id);
+                // Deliver pending messages to the newly registered consumer
+                self.drr_deliver_queue(&queue_id);
             }
             SchedulerCommand::UnregisterConsumer { consumer_id } => {
                 info!(%consumer_id, "consumer unregistered");
@@ -161,7 +170,7 @@ impl Scheduler {
     }
 
     fn handle_enqueue(
-        &self,
+        &mut self,
         message: crate::message::Message,
     ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
         // Verify queue exists
@@ -180,6 +189,11 @@ impl Scheduler {
         );
 
         self.storage.put_message(&key, &message)?;
+
+        // Register the fairness key in DRR active set so it participates in scheduling
+        self.drr
+            .add_key(&message.queue_id, &message.fairness_key, message.weight);
+
         Ok(msg_id)
     }
 
@@ -270,19 +284,40 @@ impl Scheduler {
         Ok(None)
     }
 
-    /// Scan the queue for pending (unleased) messages and deliver them to
-    /// registered consumers. Creates lease + lease_expiry entries for each
-    /// delivered message.
-    fn try_deliver_pending(&mut self, queue_id: &str) {
-        let queue_consumers: Vec<(&String, &ConsumerEntry)> = self
-            .consumers
-            .iter()
-            .filter(|(_, e)| e.queue_id == queue_id)
+    /// Run one DRR delivery round across all queues that have active keys
+    /// and registered consumers.
+    fn drr_deliver(&mut self) {
+        // Collect queue IDs that have both consumers and active DRR keys
+        let queue_ids: Vec<String> = self
+            .drr
+            .queue_ids()
+            .into_iter()
+            .filter(|qid| {
+                self.drr.has_active_keys(qid) && self.consumers.values().any(|e| e.queue_id == *qid)
+            })
             .collect();
 
-        if queue_consumers.is_empty() {
+        for queue_id in &queue_ids {
+            self.drr_deliver_queue(queue_id);
+        }
+    }
+
+    /// DRR delivery for a single queue. Starts a new round if needed, then
+    /// delivers messages from each fairness key until deficit is exhausted
+    /// or all keys are served.
+    fn drr_deliver_queue(&mut self, queue_id: &str) {
+        if !self.drr.has_active_keys(queue_id) {
             return;
         }
+
+        // Check there are consumers for this queue — no point running DRR without them
+        let has_consumers = self.consumers.values().any(|e| e.queue_id == queue_id);
+        if !has_consumers {
+            return;
+        }
+
+        // Start a new round (refills deficits for all active keys)
+        self.drr.start_new_round(queue_id);
 
         let visibility_timeout_ms = self
             .storage
@@ -292,109 +327,158 @@ impl Scheduler {
             .map(|c| c.visibility_timeout_ms)
             .unwrap_or(30_000);
 
-        let prefix = crate::storage::keys::message_prefix(queue_id);
-        let messages = match self.storage.list_messages(&prefix) {
-            Ok(msgs) => msgs,
-            Err(e) => {
-                error!(%queue_id, error = %e, "failed to list messages for delivery");
-                return;
-            }
-        };
+        loop {
+            let Some(fairness_key) = self.drr.next_key(queue_id) else {
+                // Round exhausted — all keys have non-positive deficit
+                break;
+            };
 
-        for (_key, msg) in messages {
-            // Skip messages that already have a lease
-            let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
-            if self.storage.get_lease(&lease_key).ok().flatten().is_some() {
-                continue;
-            }
-
-            // Try consumers in round-robin until one accepts (per-queue index persists across calls)
-            let rr_idx = self
-                .consumer_rr_idx
-                .entry(queue_id.to_string())
-                .or_insert(0);
-            let mut attempts = 0;
-            while attempts < queue_consumers.len() {
-                let (cid, entry) = queue_consumers[*rr_idx % queue_consumers.len()];
-                *rr_idx = rr_idx.wrapping_add(1);
-                attempts += 1;
-
-                // Write lease BEFORE sending to consumer. If the send
-                // fails the lease expires naturally and the message
-                // becomes available again. The reverse (send-then-lease)
-                // risks delivering without a lease, causing duplicates.
-                let now_ns = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos() as u64;
-                let expiry_ns = now_ns + visibility_timeout_ms * 1_000_000;
-
-                let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
-                let expiry_key =
-                    crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
-
-                if let Err(e) = self.storage.write_batch(vec![
-                    WriteBatchOp::PutLease {
-                        key: lease_key.clone(),
-                        value: lease_val,
-                    },
-                    WriteBatchOp::PutLeaseExpiry {
-                        key: expiry_key.clone(),
-                    },
-                ]) {
-                    error!(msg_id = %msg.id, error = %e, "failed to write lease");
+            // Find the next unleased message for this fairness key
+            let prefix = crate::storage::keys::message_prefix_with_key(queue_id, &fairness_key);
+            let messages = match self.storage.list_messages(&prefix) {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    error!(%queue_id, %fairness_key, error = %e, "failed to list messages");
                     break;
                 }
+            };
 
-                let ready = ReadyMessage {
-                    msg_id: msg.id,
-                    queue_id: msg.queue_id.clone(),
-                    headers: msg.headers.clone(),
-                    payload: msg.payload.clone(),
-                    fairness_key: msg.fairness_key.clone(),
-                    weight: msg.weight,
-                    throttle_keys: msg.throttle_keys.clone(),
-                    attempt_count: msg.attempt_count,
-                };
+            // Find the first unleased message for this key
+            let mut found_unleased = false;
+            let mut delivered = false;
+            for (_key, msg) in messages {
+                let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
+                if self.storage.get_lease(&lease_key).ok().flatten().is_some() {
+                    continue;
+                }
 
-                match entry.tx.try_send(ready) {
-                    Ok(()) => break,
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        // Consumer channel full — roll back lease and try next consumer
-                        warn!(%cid, msg_id = %msg.id, "consumer channel full, trying next");
-                        if let Err(e) = self.storage.write_batch(vec![
-                            WriteBatchOp::DeleteLease {
-                                key: lease_key.clone(),
-                            },
-                            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
-                        ]) {
-                            error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
-                        }
+                found_unleased = true;
+                if self.try_deliver_to_consumer(queue_id, &msg, &lease_key, visibility_timeout_ms) {
+                    self.drr.consume_deficit(queue_id, &fairness_key);
+                    delivered = true;
+                }
+                break; // Only attempt one message per DRR iteration for this key
+            }
+
+            if !found_unleased {
+                // No unleased messages exist for this key — remove from active set
+                self.drr.remove_key(queue_id, &fairness_key);
+            } else if !delivered {
+                // Messages exist but couldn't deliver (all consumers full/closed).
+                // Don't remove the key — messages are still pending. Consume deficit
+                // to avoid busy-spinning on the same key.
+                self.drr.consume_deficit(queue_id, &fairness_key);
+            }
+        }
+    }
+
+    /// Attempt to deliver a single message to a consumer via round-robin.
+    /// Returns true if delivery succeeded.
+    fn try_deliver_to_consumer(
+        &mut self,
+        queue_id: &str,
+        msg: &crate::message::Message,
+        lease_key: &[u8],
+        visibility_timeout_ms: u64,
+    ) -> bool {
+        let queue_consumers: Vec<(String, usize)> = self
+            .consumers
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, e))| e.queue_id == queue_id)
+            .map(|(i, (cid, _))| (cid.clone(), i))
+            .collect();
+
+        if queue_consumers.is_empty() {
+            return false;
+        }
+
+        let rr_idx = self
+            .consumer_rr_idx
+            .entry(queue_id.to_string())
+            .or_insert(0);
+        let mut attempts = 0;
+
+        while attempts < queue_consumers.len() {
+            let (ref cid, _) = queue_consumers[*rr_idx % queue_consumers.len()];
+            *rr_idx = rr_idx.wrapping_add(1);
+            attempts += 1;
+
+            let now_ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
+            let expiry_ns = now_ns + visibility_timeout_ms * 1_000_000;
+
+            let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
+            let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
+
+            if let Err(e) = self.storage.write_batch(vec![
+                WriteBatchOp::PutLease {
+                    key: lease_key.to_vec(),
+                    value: lease_val,
+                },
+                WriteBatchOp::PutLeaseExpiry {
+                    key: expiry_key.clone(),
+                },
+            ]) {
+                error!(msg_id = %msg.id, error = %e, "failed to write lease");
+                return false;
+            }
+
+            let ready = ReadyMessage {
+                msg_id: msg.id,
+                queue_id: msg.queue_id.clone(),
+                headers: msg.headers.clone(),
+                payload: msg.payload.clone(),
+                fairness_key: msg.fairness_key.clone(),
+                weight: msg.weight,
+                throttle_keys: msg.throttle_keys.clone(),
+                attempt_count: msg.attempt_count,
+            };
+
+            // Look up the consumer's tx channel
+            let Some(entry) = self.consumers.get(cid) else {
+                continue;
+            };
+
+            match entry.tx.try_send(ready) {
+                Ok(()) => return true,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    warn!(%cid, msg_id = %msg.id, "consumer channel full, trying next");
+                    if let Err(e) = self.storage.write_batch(vec![
+                        WriteBatchOp::DeleteLease {
+                            key: lease_key.to_vec(),
+                        },
+                        WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                    ]) {
+                        error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
                     }
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                        // Consumer disconnected — roll back lease, will be cleaned up
-                        warn!(%cid, msg_id = %msg.id, "consumer channel closed, trying next");
-                        if let Err(e) = self.storage.write_batch(vec![
-                            WriteBatchOp::DeleteLease {
-                                key: lease_key.clone(),
-                            },
-                            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
-                        ]) {
-                            error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
-                        }
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    warn!(%cid, msg_id = %msg.id, "consumer channel closed, trying next");
+                    if let Err(e) = self.storage.write_batch(vec![
+                        WriteBatchOp::DeleteLease {
+                            key: lease_key.to_vec(),
+                        },
+                        WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                    ]) {
+                        error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
                     }
                 }
             }
         }
+
+        false
     }
 
     /// Recover state after a crash or restart.
     ///
     /// RocksDB persists all data to disk, so queue definitions, messages, and
-    /// leases survive restarts. The only recovery work needed is reclaiming
-    /// leases that expired while the broker was down — deleting their lease
-    /// and lease_expiry entries so the underlying messages re-enter the ready pool.
-    fn recover(&self) {
+    /// leases survive restarts. Recovery does two things:
+    /// 1. Reclaim expired leases so messages re-enter the ready pool
+    /// 2. Rebuild DRR active keys by scanning the messages CF
+    fn recover(&mut self) {
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -440,10 +524,25 @@ impl Scheduler {
             info!(reclaimed, "reclaimed expired leases during recovery");
         }
 
-        // Log recovery summary
+        // Rebuild DRR active keys by scanning messages for each queue
         match self.storage.list_queues() {
-            Ok(queues) => info!(queue_count = queues.len(), "recovery complete"),
-            Err(e) => warn!(error = %e, "failed to list queues during recovery summary"),
+            Ok(queues) => {
+                for queue in &queues {
+                    let prefix = crate::storage::keys::message_prefix(&queue.name);
+                    match self.storage.list_messages(&prefix) {
+                        Ok(messages) => {
+                            for (_, msg) in &messages {
+                                self.drr.add_key(&queue.name, &msg.fairness_key, msg.weight);
+                            }
+                        }
+                        Err(e) => {
+                            warn!(queue = %queue.name, error = %e, "failed to scan messages during DRR recovery");
+                        }
+                    }
+                }
+                info!(queue_count = queues.len(), "recovery complete");
+            }
+            Err(e) => warn!(error = %e, "failed to list queues during recovery"),
         }
     }
 
@@ -473,6 +572,7 @@ mod tests {
         let config = SchedulerConfig {
             command_channel_capacity: 256,
             idle_timeout_ms: 10,
+            quantum: 1000,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
         let scheduler = Scheduler::new(storage, rx, &config);
@@ -1419,6 +1519,7 @@ mod tests {
         let config = SchedulerConfig {
             command_channel_capacity: 256,
             idle_timeout_ms: 10,
+            quantum: 1000,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
         let scheduler = Scheduler::new(storage, rx, &config);
@@ -1732,6 +1833,187 @@ mod tests {
         assert!(
             storage.get_lease(&lease_key).unwrap().is_some(),
             "non-expired lease should survive recovery"
+        );
+    }
+
+    // --- DRR integration tests ---
+
+    /// Helper: create a message with a specific fairness key.
+    fn test_message_with_key(queue_id: &str, fairness_key: &str, enqueued_at: u64) -> Message {
+        Message {
+            id: Uuid::now_v7(),
+            queue_id: queue_id.to_string(),
+            headers: HashMap::new(),
+            payload: vec![1, 2, 3],
+            fairness_key: fairness_key.to_string(),
+            weight: 1,
+            throttle_keys: vec![],
+            attempt_count: 0,
+            enqueued_at,
+            leased_at: None,
+        }
+    }
+
+    #[test]
+    fn drr_three_equal_weight_keys_get_equal_delivery() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "drr-equal");
+
+        // Register a consumer with enough capacity
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(256);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "drr-equal".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue 30 messages: 10 for each of 3 fairness keys
+        let mut ts = 0u64;
+        for key in &["tenant_a", "tenant_b", "tenant_c"] {
+            for _ in 0..10 {
+                let msg = test_message_with_key("drr-equal", key, ts);
+                ts += 1;
+                let (reply_tx, _) = tokio::sync::oneshot::channel();
+                tx.send(SchedulerCommand::Enqueue {
+                    message: msg,
+                    reply: reply_tx,
+                })
+                .unwrap();
+            }
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Collect delivered messages and count per fairness key
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            *counts.entry(ready.fairness_key.clone()).or_insert(0) += 1;
+        }
+
+        // All 30 messages should be delivered
+        let total: usize = counts.values().sum();
+        assert_eq!(total, 30, "all 30 messages should be delivered");
+
+        // Each key should get exactly 10 (equal weight, 10 messages each)
+        assert_eq!(
+            counts.get("tenant_a"),
+            Some(&10),
+            "tenant_a should get 10 messages"
+        );
+        assert_eq!(
+            counts.get("tenant_b"),
+            Some(&10),
+            "tenant_b should get 10 messages"
+        );
+        assert_eq!(
+            counts.get("tenant_c"),
+            Some(&10),
+            "tenant_c should get 10 messages"
+        );
+    }
+
+    #[test]
+    fn drr_single_key_backward_compatible() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "drr-single");
+
+        // Register consumer
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "drr-single".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue 10 messages with default fairness key (Epic 1 behavior)
+        let mut msg_ids = Vec::new();
+        for i in 0u64..10 {
+            let msg = test_message_with_key("drr-single", "default", i);
+            msg_ids.push(msg.id);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // All 10 messages should be delivered in FIFO order
+        let mut received = Vec::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            received.push(ready.msg_id);
+        }
+        assert_eq!(received.len(), 10, "all 10 messages should be delivered");
+        assert_eq!(received, msg_ids, "single-key DRR delivers in FIFO order");
+    }
+
+    #[test]
+    fn drr_key_exhaustion_continues_other_keys() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "drr-exhaust");
+
+        // Register consumer
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(256);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "drr-exhaust".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue: tenant_a has 2 messages, tenant_b has 10 messages
+        // tenant_a will exhaust after 2, tenant_b should continue to 10
+        let mut ts = 0u64;
+        for _ in 0..2 {
+            let msg = test_message_with_key("drr-exhaust", "tenant_a", ts);
+            ts += 1;
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+        for _ in 0..10 {
+            let msg = test_message_with_key("drr-exhaust", "tenant_b", ts);
+            ts += 1;
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Collect delivered messages
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            *counts.entry(ready.fairness_key.clone()).or_insert(0) += 1;
+        }
+
+        let total: usize = counts.values().sum();
+        assert_eq!(total, 12, "all 12 messages should be delivered");
+        assert_eq!(
+            counts.get("tenant_a"),
+            Some(&2),
+            "tenant_a exhausted after 2"
+        );
+        assert_eq!(
+            counts.get("tenant_b"),
+            Some(&10),
+            "tenant_b should get all 10 messages"
         );
     }
 
