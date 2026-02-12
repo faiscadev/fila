@@ -33,6 +33,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 toml = "0.8"
 rocksdb = "0.24"
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
 
 fila-proto = { path = "crates/fila-proto" }
 fila-core = { path = "crates/fila-core" }
