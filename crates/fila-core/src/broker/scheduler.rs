@@ -577,8 +577,7 @@ impl Scheduler {
 
         let mut reclaimed = 0u64;
         for expiry_key in &expired_keys {
-            let Some((queue_id, msg_id)) =
-                crate::storage::keys::parse_lease_expiry_key(expiry_key)
+            let Some((queue_id, msg_id)) = crate::storage::keys::parse_lease_expiry_key(expiry_key)
             else {
                 warn!("corrupt lease_expiry key, skipping");
                 continue;
@@ -2977,13 +2976,18 @@ mod tests {
         // First delivery — should happen immediately
         let first = consumer_rx.blocking_recv().expect("first delivery");
         assert_eq!(first.msg_id, msg_id);
-        assert_eq!(first.attempt_count, 0, "first delivery should have attempt_count=0");
+        assert_eq!(
+            first.attempt_count, 0,
+            "first delivery should have attempt_count=0"
+        );
 
         // Wait for the visibility timeout to expire (50ms) plus some buffer
         std::thread::sleep(Duration::from_millis(100));
 
         // Second delivery — after lease expiry, the message should be redelivered
-        let second = consumer_rx.blocking_recv().expect("second delivery after expiry");
+        let second = consumer_rx
+            .blocking_recv()
+            .expect("second delivery after expiry");
         assert_eq!(second.msg_id, msg_id);
         assert_eq!(
             second.attempt_count, 1,
@@ -3065,10 +3069,17 @@ mod tests {
         // Message should still exist with leased_at cleared (AC#4)
         let prefix = crate::storage::keys::message_prefix("expiry-clean-queue");
         let messages = storage.list_messages(&prefix).unwrap();
-        assert_eq!(messages.len(), 1, "message should still exist after expiry reclaim");
+        assert_eq!(
+            messages.len(),
+            1,
+            "message should still exist after expiry reclaim"
+        );
         let (_, msg) = &messages[0];
         assert_eq!(msg.id, msg_id);
-        assert!(msg.leased_at.is_none(), "leased_at should be cleared after expiry reclaim");
+        assert!(
+            msg.leased_at.is_none(),
+            "leased_at should be cleared after expiry reclaim"
+        );
         assert_eq!(msg.attempt_count, 1, "attempt_count should be incremented");
     }
 
@@ -3128,16 +3139,22 @@ mod tests {
         });
 
         // Both messages should be delivered immediately
-        let first_fast = consumer_rx_fast.blocking_recv().expect("fast first delivery");
+        let first_fast = consumer_rx_fast
+            .blocking_recv()
+            .expect("fast first delivery");
         assert_eq!(first_fast.attempt_count, 0);
-        let first_slow = consumer_rx_slow.blocking_recv().expect("slow first delivery");
+        let first_slow = consumer_rx_slow
+            .blocking_recv()
+            .expect("slow first delivery");
         assert_eq!(first_slow.attempt_count, 0);
 
         // Wait 100ms — fast (50ms) should expire, slow (200ms) should not
         std::thread::sleep(Duration::from_millis(100));
 
         // Fast message should be redelivered
-        let second_fast = consumer_rx_fast.blocking_recv().expect("fast second delivery");
+        let second_fast = consumer_rx_fast
+            .blocking_recv()
+            .expect("fast second delivery");
         assert_eq!(second_fast.msg_id, msg_fast_id);
         assert_eq!(second_fast.attempt_count, 1);
 
