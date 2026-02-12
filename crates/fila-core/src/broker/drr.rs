@@ -13,6 +13,10 @@ struct DrrQueueState {
     weights: HashMap<String, u32>,
     /// Current position in the round-robin traversal.
     round_position: usize,
+    /// Whether a round is currently active (deficits have been allocated
+    /// but not yet exhausted). Prevents `start_new_round` from being
+    /// called multiple times before the current round finishes.
+    round_active: bool,
 }
 
 impl DrrQueueState {
@@ -23,6 +27,7 @@ impl DrrQueueState {
             deficits: HashMap::new(),
             weights: HashMap::new(),
             round_position: 0,
+            round_active: false,
         }
     }
 }
@@ -39,6 +44,7 @@ pub struct DrrScheduler {
 
 impl DrrScheduler {
     pub fn new(quantum: u32) -> Self {
+        assert!(quantum > 0, "DRR quantum must be > 0");
         Self {
             queues: HashMap::new(),
             quantum,
@@ -74,19 +80,29 @@ impl DrrScheduler {
         };
 
         if state.active_set.remove(fairness_key) {
-            state.active_keys.retain(|k| k != fairness_key);
-            state.deficits.remove(fairness_key);
-            // Adjust round position if the removed key was before or at the
-            // current position to avoid skipping a key.
-            if state.round_position > 0 && state.round_position >= state.active_keys.len() {
-                state.round_position = 0;
+            // Find and remove by index so we can adjust round_position correctly
+            if let Some(removed_idx) = state.active_keys.iter().position(|k| k == fairness_key) {
+                state.active_keys.remove(removed_idx);
+                state.deficits.remove(fairness_key);
+                state.weights.remove(fairness_key);
+
+                if state.active_keys.is_empty() {
+                    state.round_position = 0;
+                } else if removed_idx < state.round_position {
+                    // Key was before current position — shift back to avoid skipping
+                    state.round_position -= 1;
+                } else if state.round_position >= state.active_keys.len() {
+                    // Position overshot the end — wrap to start
+                    state.round_position = 0;
+                }
             }
         }
     }
 
     /// Return the next fairness key that has positive deficit in the current
     /// round. Advances the round position. Returns `None` when the round is
-    /// exhausted (all remaining keys have non-positive deficit).
+    /// exhausted (all remaining keys have non-positive deficit), and marks
+    /// the round as inactive so a new round can be started.
     pub fn next_key(&mut self, queue_id: &str) -> Option<String> {
         let state = self.queues.get_mut(queue_id)?;
         let len = state.active_keys.len();
@@ -106,6 +122,7 @@ impl DrrScheduler {
         }
 
         // Round exhausted — all keys have non-positive deficit
+        state.round_active = false;
         None
     }
 
@@ -119,11 +136,16 @@ impl DrrScheduler {
     }
 
     /// Start a new DRR round for a queue: refill deficit for all active keys
-    /// based on `weight * quantum`.
+    /// based on `weight * quantum`. No-op if a round is already active
+    /// (prevents unbounded deficit accumulation from repeated calls).
     pub fn start_new_round(&mut self, queue_id: &str) {
         let Some(state) = self.queues.get_mut(queue_id) else {
             return;
         };
+
+        if state.round_active {
+            return;
+        }
 
         for key in &state.active_keys {
             let weight = state.weights.get(key).copied().unwrap_or(1);
@@ -132,6 +154,12 @@ impl DrrScheduler {
         }
 
         state.round_position = 0;
+        state.round_active = true;
+    }
+
+    /// Remove all DRR state for a queue (e.g., when the queue is deleted).
+    pub fn remove_queue(&mut self, queue_id: &str) {
+        self.queues.remove(queue_id);
     }
 
     /// Check whether a queue has any active fairness keys.
