@@ -429,4 +429,79 @@ mod tests {
         assert!(!drr.has_active_keys("q1"));
         assert!(drr.has_active_keys("q2"));
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for generating a vector of (key_name, weight) tuples.
+        /// Keys: 2-20, weights: 1-10. All keys have unlimited messages
+        /// (sustained load) to ensure fairness can be measured cleanly.
+        fn fairness_scenario() -> impl Strategy<Value = Vec<(String, u32)>> {
+            (2usize..=20).prop_flat_map(|num_keys| {
+                proptest::collection::vec(1u32..=10, num_keys..=num_keys).prop_map(|weights| {
+                    weights
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, weight)| (format!("key_{i}"), weight))
+                        .collect()
+                })
+            })
+        }
+
+        proptest! {
+            /// Property: under sustained load (all keys have unlimited messages),
+            /// each key receives within 5% of its fair share over a fixed number
+            /// of rounds.
+            ///
+            /// Fair share for key `k` = `weight_k / total_weight`.
+            #[test]
+            fn fairness_invariant_holds(scenario in fairness_scenario()) {
+                let quantum = 100u32;
+                let num_rounds = 10;
+                let mut drr = DrrScheduler::new(quantum);
+
+                let total_weight: u32 = scenario.iter().map(|(_, w)| *w).sum();
+
+                for (key, weight) in &scenario {
+                    drr.add_key("q1", key, *weight);
+                }
+
+                // Track deliveries per key — unlimited message supply
+                let mut delivered: HashMap<String, usize> = HashMap::new();
+                let mut total_delivered = 0usize;
+
+                for _ in 0..num_rounds {
+                    drr.start_new_round("q1");
+
+                    loop {
+                        let Some(key) = drr.next_key("q1") else {
+                            break;
+                        };
+                        // Unlimited messages — always deliver
+                        *delivered.entry(key.clone()).or_insert(0) += 1;
+                        total_delivered += 1;
+                        drr.consume_deficit("q1", &key);
+                    }
+                }
+
+                prop_assert!(total_delivered > 0, "should have delivered some messages");
+
+                for (key, weight) in &scenario {
+                    let expected_share = *weight as f64 / total_weight as f64;
+                    let actual_delivered = delivered.get(key).copied().unwrap_or(0);
+                    let actual_share = actual_delivered as f64 / total_delivered as f64;
+
+                    let tolerance = 0.05;
+                    let diff = (actual_share - expected_share).abs();
+                    prop_assert!(
+                        diff <= tolerance,
+                        "Key {} (weight={}): expected share {:.4}, actual {:.4}, diff {:.4} > {:.4}. Delivered {}/{}",
+                        key, weight, expected_share, actual_share, diff, tolerance,
+                        actual_delivered, total_delivered
+                    );
+                }
+            }
+        }
+    }
 }

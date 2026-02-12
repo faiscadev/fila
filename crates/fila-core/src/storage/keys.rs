@@ -245,4 +245,97 @@ mod tests {
         // Empty input
         assert!(parse_lease_expiry_key(&[]).is_none());
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for generating valid queue/key strings (1-100 ASCII alphanumeric chars).
+        fn key_string() -> impl Strategy<Value = String> {
+            "[a-zA-Z0-9_-]{1,100}"
+        }
+
+        proptest! {
+            #[test]
+            fn message_key_starts_with_queue_prefix(
+                queue_id in key_string(),
+                fairness_key in key_string(),
+                ts in any::<u64>(),
+                uuid_bytes in any::<[u8; 16]>(),
+            ) {
+                let id = Uuid::from_bytes(uuid_bytes);
+                let key = message_key(&queue_id, &fairness_key, ts, &id);
+                let prefix = message_prefix(&queue_id);
+                prop_assert!(
+                    key.starts_with(&prefix),
+                    "message key must start with queue prefix"
+                );
+            }
+
+            #[test]
+            fn message_key_starts_with_fairness_prefix(
+                queue_id in key_string(),
+                fairness_key in key_string(),
+                ts in any::<u64>(),
+                uuid_bytes in any::<[u8; 16]>(),
+            ) {
+                let id = Uuid::from_bytes(uuid_bytes);
+                let key = message_key(&queue_id, &fairness_key, ts, &id);
+                let prefix = message_prefix_with_key(&queue_id, &fairness_key);
+                prop_assert!(
+                    key.starts_with(&prefix),
+                    "message key must start with queue+fairness prefix"
+                );
+            }
+
+            #[test]
+            fn lease_expiry_key_roundtrips(
+                ts in any::<u64>(),
+                queue_id in key_string(),
+                uuid_bytes in any::<[u8; 16]>(),
+            ) {
+                let id = Uuid::from_bytes(uuid_bytes);
+                let key = lease_expiry_key(ts, &queue_id, &id);
+                let (parsed_queue, parsed_id) = parse_lease_expiry_key(&key)
+                    .expect("valid key should parse");
+                prop_assert_eq!(parsed_queue, queue_id);
+                prop_assert_eq!(parsed_id, id);
+            }
+
+            #[test]
+            fn lease_value_expiry_roundtrips(
+                consumer_id in key_string(),
+                expiry in any::<u64>(),
+            ) {
+                let val = lease_value(&consumer_id, expiry);
+                let parsed = parse_expiry_from_lease_value(&val)
+                    .expect("valid lease value should parse");
+                prop_assert_eq!(parsed, expiry);
+            }
+
+            #[test]
+            fn message_keys_preserve_timestamp_ordering(
+                queue_id in key_string(),
+                fairness_key in key_string(),
+                ts1 in any::<u64>(),
+                ts2 in any::<u64>(),
+                uuid_bytes1 in any::<[u8; 16]>(),
+                uuid_bytes2 in any::<[u8; 16]>(),
+            ) {
+                let id1 = Uuid::from_bytes(uuid_bytes1);
+                let id2 = Uuid::from_bytes(uuid_bytes2);
+                let k1 = message_key(&queue_id, &fairness_key, ts1, &id1);
+                let k2 = message_key(&queue_id, &fairness_key, ts2, &id2);
+
+                // Same queue and fairness key: timestamp determines ordering
+                // (with UUID as tiebreaker)
+                if ts1 < ts2 {
+                    prop_assert!(k1 < k2, "smaller ts should sort first");
+                } else if ts1 > ts2 {
+                    prop_assert!(k1 > k2, "larger ts should sort later");
+                }
+                // When ts1 == ts2, UUID bytes determine order — not testing that case
+            }
+        }
+    }
 }

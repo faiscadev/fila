@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "2.2"
     title: "Weighted Fairness & Accuracy Verification"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/2.2-weighted-fairness-accuracy-verification"
     pr: null
     dependsOn: ["2.1"]
   - id: "2.3"
