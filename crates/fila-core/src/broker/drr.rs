@@ -88,6 +88,7 @@ impl DrrScheduler {
 
                 if state.active_keys.is_empty() {
                     state.round_position = 0;
+                    state.round_active = false;
                 } else if removed_idx < state.round_position {
                     // Key was before current position — shift back to avoid skipping
                     state.round_position -= 1;
