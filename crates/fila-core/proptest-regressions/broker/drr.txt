@@ -4,4 +4,3 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc 39475dcd5c0216c4f9bff36a2c0327f19a9ec32c68c04f3fca0283a399218517 # shrinks to scenario = [("key_0", 6, 100), ("key_1", 1, 100)]

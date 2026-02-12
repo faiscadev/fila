@@ -2109,6 +2109,12 @@ mod tests {
 
     /// Full-path fairness accuracy test with 10k+ messages (AC#6).
     ///
+    /// Messages are enqueued BEFORE registering the consumer, so the DRR
+    /// scheduler exercises fairness under contention (all keys have pending
+    /// messages simultaneously). The scheduler runs on a background thread;
+    /// the main thread collects deliveries and sends Shutdown after all
+    /// messages are received.
+    ///
     /// This test is slow in debug mode (~3 minutes) because each DRR delivery
     /// iteration scans the messages CF prefix to find the first unleased message,
     /// giving O(n²) total scan cost. The proptest in drr.rs verifies the same
@@ -2142,24 +2148,16 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
         let config = SchedulerConfig {
             command_channel_capacity: total_msgs + 100, // room for all commands
-            idle_timeout_ms: 10,
+            idle_timeout_ms: 50,
             quantum: 100,
         };
         let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
-        let mut scheduler = Scheduler::new(storage, rx, &config);
+        let scheduler = Scheduler::new(storage, rx, &config);
 
         send_create_queue(&tx, "drr-accuracy");
 
-        // Register consumer with large buffer
-        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(total_msgs + 100);
-        tx.send(SchedulerCommand::RegisterConsumer {
-            queue_id: "drr-accuracy".to_string(),
-            consumer_id: "c1".to_string(),
-            tx: consumer_tx,
-        })
-        .unwrap();
-
-        // Enqueue: each key gets weight * msgs_per_weight_unit messages
+        // Enqueue ALL messages BEFORE registering consumer — no delivery
+        // happens during enqueue because has_consumers check returns false.
         let mut ts = 0u64;
         for (key, weight) in &weights {
             let count = (*weight as usize) * msgs_per_weight_unit;
@@ -2175,16 +2173,40 @@ mod tests {
             }
         }
 
-        tx.send(SchedulerCommand::Shutdown).unwrap();
-        scheduler.run();
+        // Register consumer AFTER enqueues — DRR sees all messages at once
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(total_msgs + 100);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "drr-accuracy".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
 
-        // Collect all delivered messages
+        // Spawn scheduler on background thread so it can loop through
+        // multiple DRR rounds (each delivers quantum * total_weight messages)
+        let handle = std::thread::spawn(move || {
+            let mut s = scheduler;
+            s.run();
+        });
+
+        // Collect delivered messages from consumer channel
         let mut counts: HashMap<String, usize> = HashMap::new();
-        while let Ok(ready) = consumer_rx.try_recv() {
-            *counts.entry(ready.fairness_key.clone()).or_insert(0) += 1;
+        let mut total_delivered = 0usize;
+        while total_delivered < total_msgs {
+            match consumer_rx.blocking_recv() {
+                Some(ready) => {
+                    *counts.entry(ready.fairness_key.clone()).or_insert(0) += 1;
+                    total_delivered += 1;
+                }
+                None => break, // scheduler dropped consumer_tx
+            }
         }
 
-        let total_delivered: usize = counts.values().sum();
+        // Shutdown and join
+        let _ = tx.send(SchedulerCommand::Shutdown);
+        drop(tx);
+        handle.join().unwrap();
+
         assert!(
             total_delivered >= 10_000,
             "should deliver at least 10,000 messages, got {total_delivered}"
@@ -2314,6 +2336,54 @@ mod tests {
     }
 
     #[test]
+    fn drr_weight_zero_treated_as_one() {
+        // AC#3: messages with weight=0 should be clamped to weight=1.
+        // Two keys with weight=0 behave the same as weight=1 (equal delivery).
+        let (tx, mut scheduler, _dir) = test_setup();
+        send_create_queue(&tx, "weight-zero");
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "weight-zero".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        for i in 0u64..10 {
+            let msg = test_message_with_key_and_weight("weight-zero", "key_a", 0, i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+        for i in 10u64..20 {
+            let msg = test_message_with_key_and_weight("weight-zero", "key_b", 0, i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            *counts.entry(ready.fairness_key.clone()).or_insert(0) += 1;
+        }
+
+        let a = counts.get("key_a").copied().unwrap_or(0);
+        let b = counts.get("key_b").copied().unwrap_or(0);
+        assert_eq!(a, 10, "key_a (weight=0→1) should get all 10 messages");
+        assert_eq!(b, 10, "key_b (weight=0→1) should get all 10 messages");
+    }
+
+    #[test]
     fn drr_weight_update_changes_proportions() {
         // Verify AC#4: weight changes take effect on the next scheduling round.
         //
@@ -2393,11 +2463,11 @@ mod tests {
         let a = counts.get("key_a").copied().unwrap_or(0);
 
         // With weight 3:1 and quantum=5, each round delivers 15+5=20.
-        // 2 rounds → key_a=30, key_b=10 (3:1 ratio).
+        // 2 rounds → key_a=30, key_b=10 → exactly 75%:25%.
         assert!(total > 0, "should deliver some messages");
         let a_share = a as f64 / total as f64;
         assert!(
-            (a_share - 0.75).abs() <= 0.10,
+            (a_share - 0.75).abs() <= 0.05,
             "key_a (weight=3) expected ~75% share, got {:.1}% ({a}/{total})",
             a_share * 100.0
         );
