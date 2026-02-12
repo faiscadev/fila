@@ -26,7 +26,7 @@ stories:
   - id: "2.4"
     title: "Visibility Timeout & Lease Expiry"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/2.4-visibility-timeout-lease-expiry"
     pr: null
     dependsOn: ["2.1"]
