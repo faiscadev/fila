@@ -107,11 +107,16 @@ impl LuaEngine {
             return Some(OnEnqueueResult::default());
         }
 
-        // Set safety hooks before execution
-        if let Some(config) = self.safety.get_config(queue_id) {
-            safety::set_instruction_hook(&self.lua, config.instruction_limit);
-            safety::set_memory_limit(&self.lua, config.memory_limit_bytes);
-        }
+        // Set safety hooks before execution (fail-closed: always apply limits)
+        let (instruction_limit, memory_limit_bytes) =
+            if let Some(config) = self.safety.get_config(queue_id) {
+                (config.instruction_limit, config.memory_limit_bytes)
+            } else {
+                tracing::warn!(queue = %queue_id, "safety config missing, applying global defaults");
+                self.safety.default_limits()
+            };
+        safety::set_instruction_hook(&self.lua, instruction_limit);
+        safety::set_memory_limit(&self.lua, memory_limit_bytes);
 
         let bytecode = self.on_enqueue_cache.get(queue_id).unwrap();
         let result =
