@@ -51,7 +51,7 @@ development_status:
   1-7-consumer-lease-message-delivery: done
   1-8-message-acknowledgment: done
   1-9-crash-recovery-graceful-shutdown: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   # Epic 2: Fair Scheduling & Message Reliability
   epic-2: backlog

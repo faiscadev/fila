@@ -1,0 +1,26 @@
+name: execute-epic
+description: "Autonomously execute every story in a planned epic — creating story specs, developing, reviewing, and opening PRs with full tracking enforcement"
+author: "BMad"
+
+# Critical variables from config
+config_source: "{project-root}/_bmad/bmm/config.yaml"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+date: system-generated
+planning_artifacts: "{config_source}:planning_artifacts"
+implementation_artifacts: "{config_source}:implementation_artifacts"
+output_folder: "{implementation_artifacts}"
+
+# Workflow components
+installed_path: "{project-root}/_bmad/bmm/workflows/4-implementation/execute-epic"
+instructions: "{installed_path}/workflow.md"
+
+# Variables and inputs
+variables:
+  sprint_status: "{implementation_artifacts}/sprint-status.yaml"
+  epics_file: "{planning_artifacts}/epics.md"
+  architecture_file: "{planning_artifacts}/architecture.md"
+  state_file: "{output_folder}/epic-execution-state.yaml"
+
+# Project context
+project_context: "**/project-context.md"
