@@ -1,5 +1,6 @@
 pub mod command;
 pub mod config;
+pub mod drr;
 mod scheduler;
 
 use std::sync::Arc;
@@ -105,6 +106,7 @@ mod tests {
             scheduler: config::SchedulerConfig {
                 command_channel_capacity: 100,
                 idle_timeout_ms: 10,
+                quantum: 1000,
             },
             ..Default::default()
         };
