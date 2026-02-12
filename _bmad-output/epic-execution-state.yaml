@@ -1,0 +1,33 @@
+epic: "Epic 2: Fair Scheduling & Message Reliability"
+baseBranch: main
+startedAt: "2026-02-12T00:00:00Z"
+stories:
+  - id: "2.1"
+    title: "Deficit Round Robin Scheduler"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/2.1-deficit-round-robin-scheduler"
+    pr: null
+    dependsOn: []
+  - id: "2.2"
+    title: "Weighted Fairness & Accuracy Verification"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["2.1"]
+  - id: "2.3"
+    title: "Nack & Message Retry"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["2.1"]
+  - id: "2.4"
+    title: "Visibility Timeout & Lease Expiry"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["2.1"]
+skippedIssues: []
