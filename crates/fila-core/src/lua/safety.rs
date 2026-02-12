@@ -172,6 +172,13 @@ impl SafetyManager {
     pub fn get_config(&self, queue_id: &str) -> Option<&QueueSafetyConfig> {
         self.queue_configs.get(queue_id)
     }
+
+    /// Return the global default instruction limit and memory limit.
+    ///
+    /// Used as a fail-closed fallback when per-queue config is unexpectedly absent.
+    pub fn default_limits(&self) -> (u64, usize) {
+        (self.default_instruction_limit, self.default_memory_limit_bytes)
+    }
 }
 
 /// Set the instruction count hook on the Lua VM to enforce an execution timeout.
