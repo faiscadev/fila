@@ -435,10 +435,10 @@ mod tests {
         use proptest::prelude::*;
 
         /// Strategy for generating a vector of (key_name, weight) tuples.
-        /// Keys: 2-20, weights: 1-10. All keys have unlimited messages
+        /// Keys: 1-20, weights: 1-10. All keys have unlimited messages
         /// (sustained load) to ensure fairness can be measured cleanly.
         fn fairness_scenario() -> impl Strategy<Value = Vec<(String, u32)>> {
-            (2usize..=20).prop_flat_map(|num_keys| {
+            (1usize..=20).prop_flat_map(|num_keys| {
                 proptest::collection::vec(1u32..=10, num_keys..=num_keys).prop_map(|weights| {
                     weights
                         .into_iter()
