@@ -38,6 +38,7 @@ impl IntoStatus for CreateQueueError {
     fn into_status(self) -> Status {
         match self {
             CreateQueueError::QueueAlreadyExists(msg) => Status::already_exists(msg),
+            CreateQueueError::LuaCompilation(msg) => Status::invalid_argument(msg),
             CreateQueueError::Storage(e) => Status::internal(e.to_string()),
         }
     }
