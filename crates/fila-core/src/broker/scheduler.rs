@@ -23,9 +23,10 @@ pub struct Scheduler {
     idle_timeout: Duration,
     running: bool,
     consumers: HashMap<String, ConsumerEntry>,
-    /// Round-robin index for delivering messages to consumers. Persists across
-    /// calls to `try_deliver_pending` so messages are distributed fairly.
-    consumer_rr_idx: usize,
+    /// Per-queue round-robin index for delivering messages to consumers.
+    /// Persists across calls to `try_deliver_pending` so messages are
+    /// distributed fairly within each queue independently.
+    consumer_rr_idx: HashMap<String, usize>,
 }
 
 impl Scheduler {
@@ -40,7 +41,7 @@ impl Scheduler {
             idle_timeout: Duration::from_millis(config.idle_timeout_ms),
             running: true,
             consumers: HashMap::new(),
-            consumer_rr_idx: 0,
+            consumer_rr_idx: HashMap::new(),
         }
     }
 
@@ -247,11 +248,15 @@ impl Scheduler {
                 continue;
             }
 
-            // Try consumers in round-robin until one accepts (index persists across calls)
+            // Try consumers in round-robin until one accepts (per-queue index persists across calls)
+            let rr_idx = self
+                .consumer_rr_idx
+                .entry(queue_id.to_string())
+                .or_insert(0);
             let mut attempts = 0;
             while attempts < queue_consumers.len() {
-                let (cid, entry) = queue_consumers[self.consumer_rr_idx % queue_consumers.len()];
-                self.consumer_rr_idx = self.consumer_rr_idx.wrapping_add(1);
+                let (cid, entry) = queue_consumers[*rr_idx % queue_consumers.len()];
+                *rr_idx = rr_idx.wrapping_add(1);
                 attempts += 1;
 
                 // Write lease BEFORE sending to consumer. If the send
@@ -297,22 +302,26 @@ impl Scheduler {
                     Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                         // Consumer channel full — roll back lease and try next consumer
                         warn!(%cid, msg_id = %msg.id, "consumer channel full, trying next");
-                        let _ = self.storage.write_batch(vec![
+                        if let Err(e) = self.storage.write_batch(vec![
                             WriteBatchOp::DeleteLease {
                                 key: lease_key.clone(),
                             },
                             WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
-                        ]);
+                        ]) {
+                            error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
+                        }
                     }
                     Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                         // Consumer disconnected — roll back lease, will be cleaned up
                         warn!(%cid, msg_id = %msg.id, "consumer channel closed, trying next");
-                        let _ = self.storage.write_batch(vec![
+                        if let Err(e) = self.storage.write_batch(vec![
                             WriteBatchOp::DeleteLease {
                                 key: lease_key.clone(),
                             },
                             WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
-                        ]);
+                        ]) {
+                            error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
+                        }
                     }
                 }
             }
