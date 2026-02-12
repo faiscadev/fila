@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "2.2"
     title: "Weighted Fairness & Accuracy Verification"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/2.2-weighted-fairness-accuracy-verification"
-    pr: null
+    pr: 13
     dependsOn: ["2.1"]
   - id: "2.3"
     title: "Nack & Message Retry"
