@@ -188,6 +188,7 @@ impl FilaService for HotPathService {
         Ok(Response::new(AckResponse {}))
     }
 
+    #[instrument(skip(self))]
     async fn nack(&self, request: Request<NackRequest>) -> Result<Response<NackResponse>, Status> {
         let req = request.into_inner();
 

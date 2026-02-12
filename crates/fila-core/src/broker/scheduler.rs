@@ -126,9 +126,12 @@ impl Scheduler {
             } => {
                 debug!(%queue_id, %msg_id, %error, "nack command received");
                 let result = self.handle_nack(&queue_id, &msg_id, &error);
+                let ok = result.is_ok();
                 let _ = reply.send(result);
-                // Re-deliver: the nacked message is now back in the ready pool
-                self.drr_deliver_queue(&queue_id);
+                if ok {
+                    // Re-deliver: the nacked message is now back in the ready pool
+                    self.drr_deliver_queue(&queue_id);
+                }
             }
             SchedulerCommand::RegisterConsumer {
                 queue_id,
@@ -317,9 +320,8 @@ impl Scheduler {
         msg.attempt_count += 1;
         msg.leased_at = None;
 
-        let msg_value = serde_json::to_vec(&msg).map_err(|e| {
-            crate::error::StorageError::Serialization(e.to_string())
-        })?;
+        let msg_value = serde_json::to_vec(&msg)
+            .map_err(crate::error::StorageError::from)?;
 
         // Atomically: update message (incremented attempt_count), delete lease, delete lease_expiry
         let ops = vec![
@@ -2656,6 +2658,18 @@ mod tests {
                 .is_none(),
             "lease should be deleted after nack"
         );
+
+        // Lease expiry entry should also be gone
+        let far_future = crate::storage::keys::lease_expiry_key(u64::MAX, "", &Uuid::nil());
+        let expired = scheduler
+            .storage()
+            .list_expired_leases(&far_future)
+            .unwrap();
+        assert!(
+            expired.is_empty(),
+            "lease_expiry CF should be empty after nack, found {} entries",
+            expired.len()
+        );
     }
 
     #[test]
@@ -2680,6 +2694,69 @@ mod tests {
         assert!(
             matches!(err, crate::error::NackError::MessageNotFound(_)),
             "expected MessageNotFound, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn double_nack_returns_not_found() {
+        // First nack succeeds, second nack returns NOT_FOUND because lease is gone
+        let (tx, mut scheduler, _dir) = test_setup();
+        send_create_queue(&tx, "double-nack-queue");
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "double-nack-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        let msg = test_message("double-nack-queue");
+        let msg_id = msg.id;
+        let (enq_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: enq_tx,
+        })
+        .unwrap();
+
+        // Unregister consumer so nack doesn't immediately re-deliver (which would create a new lease)
+        tx.send(SchedulerCommand::UnregisterConsumer {
+            consumer_id: "c1".to_string(),
+        })
+        .unwrap();
+
+        // First nack — should succeed
+        let (nack1_tx, mut nack1_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "double-nack-queue".to_string(),
+            msg_id,
+            error: "first nack".to_string(),
+            reply: nack1_tx,
+        })
+        .unwrap();
+
+        // Second nack — lease is already gone, should return NOT_FOUND
+        let (nack2_tx, mut nack2_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Nack {
+            queue_id: "double-nack-queue".to_string(),
+            msg_id,
+            error: "second nack".to_string(),
+            reply: nack2_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Consume the initial delivery
+        let _ = consumer_rx.try_recv();
+
+        assert!(nack1_rx.try_recv().unwrap().is_ok(), "first nack should succeed");
+        let err = nack2_rx.try_recv().unwrap().unwrap_err();
+        assert!(
+            matches!(err, crate::error::NackError::MessageNotFound(_)),
+            "second nack should return MessageNotFound, got {err:?}"
         );
     }
 
