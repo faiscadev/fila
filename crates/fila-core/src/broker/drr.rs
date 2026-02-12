@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Per-queue DRR scheduling state.
+#[derive(Default)]
 struct DrrQueueState {
     /// Active fairness keys in round-robin order.
     active_keys: VecDeque<String>,
@@ -17,19 +18,6 @@ struct DrrQueueState {
     /// but not yet exhausted). Prevents `start_new_round` from being
     /// called multiple times before the current round finishes.
     round_active: bool,
-}
-
-impl DrrQueueState {
-    fn new() -> Self {
-        Self {
-            active_keys: VecDeque::new(),
-            active_set: HashSet::new(),
-            deficits: HashMap::new(),
-            weights: HashMap::new(),
-            round_position: 0,
-            round_active: false,
-        }
-    }
 }
 
 /// Deficit Round Robin scheduler. Manages per-queue fairness state.
@@ -58,7 +46,7 @@ impl DrrScheduler {
         let state = self
             .queues
             .entry(queue_id.to_string())
-            .or_insert_with(DrrQueueState::new);
+            .or_insert_with(DrrQueueState::default);
 
         let w = weight.max(1); // weight must be at least 1
         state.weights.insert(fairness_key.to_string(), w);
