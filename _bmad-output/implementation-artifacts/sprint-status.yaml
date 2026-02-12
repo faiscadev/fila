@@ -64,7 +64,7 @@ development_status:
   # Epic 3: Lua Rules Engine & Dead-Letter Handling
   epic-3: in-progress
   3-1-lua-sandbox-on-enqueue-hook: review
-  3-2-lua-safety-timeouts-memory-limits-circuit-breaker: backlog
+  3-2-lua-safety-timeouts-memory-limits-circuit-breaker: in-progress
   3-3-on-failure-hook-retry-decisions: backlog
   3-4-dead-letter-queue: backlog
   epic-3-retrospective: optional

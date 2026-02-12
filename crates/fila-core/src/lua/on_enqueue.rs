@@ -38,7 +38,7 @@ pub fn run_on_enqueue(
     payload_size: usize,
     queue_name: &str,
 ) -> OnEnqueueResult {
-    match run_on_enqueue_inner(lua, bytecode, headers, payload_size, queue_name) {
+    match try_run_on_enqueue(lua, bytecode, headers, payload_size, queue_name) {
         Ok(result) => result,
         Err(e) => {
             tracing::warn!(queue = %queue_name, error = %e, "on_enqueue script failed, using defaults");
@@ -47,18 +47,25 @@ pub fn run_on_enqueue(
     }
 }
 
-fn run_on_enqueue_inner(
+/// Execute a pre-compiled on_enqueue script, returning a Result.
+///
+/// Unlike `run_on_enqueue`, this function does not catch errors — the caller
+/// is responsible for handling failures (e.g., circuit breaker tracking).
+pub fn try_run_on_enqueue(
     lua: &Lua,
     bytecode: &[u8],
     headers: &HashMap<String, String>,
     payload_size: usize,
     queue_name: &str,
 ) -> mlua::Result<OnEnqueueResult> {
-    // Load the pre-compiled bytecode as a chunk that defines on_enqueue
+    // Load the pre-compiled bytecode as a chunk that defines on_enqueue.
+    // The bytecode sets a global `on_enqueue` function. We nil it after use
+    // to prevent stale globals from leaking between queue invocations.
     lua.load(bytecode).set_mode(ChunkMode::Binary).exec()?;
 
-    // Get the on_enqueue function from globals
+    // Get the on_enqueue function from globals and immediately nil the global
     let on_enqueue: mlua::Function = lua.globals().get("on_enqueue")?;
+    lua.globals().set("on_enqueue", mlua::Value::Nil)?;
 
     // Build the msg input table
     let msg = lua.create_table()?;
