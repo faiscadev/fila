@@ -299,6 +299,8 @@ impl Scheduler {
                 debug!(queue = %name, dlq = %dlq_name, "auto-created dead-letter queue");
             }
         } else {
+            // DLQ queues don't get their own DLQ — clear any caller-provided value
+            config.dlq_queue_id = None;
             self.storage.put_queue(&name, &config)?;
         }
 
@@ -325,17 +327,19 @@ impl Scheduler {
             lua_engine.remove_queue_scripts(queue_id);
         }
 
-        // Also delete the auto-created DLQ if it exists
-        if let Some(ref dlq_id) = queue_config.dlq_queue_id {
-            if self.storage.get_queue(dlq_id)?.is_some() {
-                self.storage.delete_queue(dlq_id)?;
-                self.drr.remove_queue(dlq_id);
-                self.consumer_rr_idx.remove(dlq_id);
-                if let Some(ref mut lua_engine) = self.lua_engine {
-                    lua_engine.remove_queue_scripts(dlq_id);
-                }
-                debug!(queue = %queue_id, dlq = %dlq_id, "deleted auto-created dead-letter queue");
+        // Only cascade-delete auto-created DLQs (matching {queue_id}.dlq convention).
+        // Custom/shared DLQs configured via dlq_queue_id are left untouched.
+        let auto_dlq_name = format!("{queue_id}.dlq");
+        if queue_config.dlq_queue_id.as_deref() == Some(auto_dlq_name.as_str())
+            && self.storage.get_queue(&auto_dlq_name)?.is_some()
+        {
+            self.storage.delete_queue(&auto_dlq_name)?;
+            self.drr.remove_queue(&auto_dlq_name);
+            self.consumer_rr_idx.remove(&auto_dlq_name);
+            if let Some(ref mut lua_engine) = self.lua_engine {
+                lua_engine.remove_queue_scripts(&auto_dlq_name);
             }
+            debug!(queue = %queue_id, dlq = %auto_dlq_name, "deleted auto-created dead-letter queue");
         }
 
         Ok(())
@@ -4495,6 +4499,79 @@ mod tests {
         assert!(
             main_msgs.is_empty(),
             "message should be removed from main queue"
+        );
+    }
+
+    #[test]
+    fn dlq_queue_clears_caller_provided_dlq_queue_id() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create a .dlq queue with a caller-provided dlq_queue_id — it should be cleared
+        let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
+        let mut config = crate::queue::QueueConfig::new("my-queue.dlq".to_string());
+        config.dlq_queue_id = Some("sneaky-nested.dlq".to_string());
+        tx.send(SchedulerCommand::CreateQueue {
+            name: "my-queue.dlq".to_string(),
+            config,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(reply_rx.try_recv().unwrap().is_ok());
+        let queue = scheduler
+            .storage()
+            .get_queue("my-queue.dlq")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            queue.dlq_queue_id, None,
+            "dlq_queue_id should be cleared for .dlq queues"
+        );
+    }
+
+    #[test]
+    fn delete_queue_does_not_cascade_delete_custom_dlq() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create a shared DLQ first
+        send_create_queue(&tx, "shared.dlq");
+
+        // Create a queue and manually override its dlq_queue_id to point to shared DLQ
+        // (simulating a custom DLQ that doesn't match {queue}.dlq naming)
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        let mut config = crate::queue::QueueConfig::new("custom-dlq-queue".to_string());
+        config.dlq_queue_id = Some("shared.dlq".to_string());
+        tx.send(SchedulerCommand::CreateQueue {
+            name: "custom-dlq-queue".to_string(),
+            config,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Delete the queue
+        let (del_tx, mut del_rx) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::DeleteQueue {
+            queue_id: "custom-dlq-queue".to_string(),
+            reply: del_tx,
+        })
+        .unwrap();
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        assert!(del_rx.try_recv().unwrap().is_ok());
+
+        // The custom/shared DLQ should NOT have been deleted
+        assert!(
+            scheduler
+                .storage()
+                .get_queue("shared.dlq")
+                .unwrap()
+                .is_some(),
+            "custom/shared DLQ should survive parent queue deletion"
         );
     }
 }
