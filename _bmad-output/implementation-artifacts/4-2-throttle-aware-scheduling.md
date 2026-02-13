@@ -204,9 +204,14 @@ Claude Opus 4.6
 - `scheduler.rs`: Added ThrottleManager, PendingEntry, pending/pending_by_id/leased_msg_keys maps, throttle check in DRR loop, refill calls, 5 new tests
 - `command.rs`: Added SetThrottleRate and RemoveThrottleRate variants
 - `keys.rs`: Added `#[cfg(test)]` to `message_prefix_with_key`
+- `throttle.rs`: Split `check_keys` into `peek_keys` + `consume_keys` (code review fix: avoid token waste on failed delivery)
+- `drr.rs`: Added `drain_deficit` method (code review fix: O(1) throttle skip instead of O(quantum))
+- `scheduler.rs`: Clean leased_msg_keys on queue deletion, remove empty pending deques (code review fixes)
 
 ### File List
 
 - `crates/fila-core/src/broker/scheduler.rs` — major changes (ThrottleManager integration, pending index, DRR delivery rewrite)
 - `crates/fila-core/src/broker/command.rs` — added SetThrottleRate and RemoveThrottleRate command variants
+- `crates/fila-core/src/broker/throttle.rs` — added peek_keys and consume_keys methods
+- `crates/fila-core/src/broker/drr.rs` — added drain_deficit method
 - `crates/fila-core/src/storage/keys.rs` — marked `message_prefix_with_key` as `#[cfg(test)]`
