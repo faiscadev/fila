@@ -14,7 +14,7 @@ stories:
     status: in-progress
     currentPhase: "pr-ci"
     branch: "feat/4.2-throttle-aware-scheduling"
-    pr: null
+    pr: 21
     dependsOn: ["4.1"]
   - id: "4.3"
     title: "Runtime Throttle Rate Management"
