@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 /// A token bucket rate limiter for a single throttle key.
@@ -53,7 +53,11 @@ impl TokenBucket {
 
     /// Try to consume `n` tokens. Returns true and decrements if sufficient
     /// tokens are available; returns false without modification otherwise.
+    /// Non-positive `n` is treated as a no-op and returns true.
     pub fn try_consume(&mut self, n: f64) -> bool {
+        if n <= 0.0 {
+            return true;
+        }
         if self.tokens >= n {
             self.tokens -= n;
             true
@@ -119,12 +123,16 @@ impl ThrottleManager {
     /// Check whether all throttle keys have available tokens.
     ///
     /// - Keys without a configured bucket are treated as unthrottled (pass).
-    /// - If ALL configured keys have ≥1 token, consumes 1 from each and returns true.
+    /// - If ALL configured keys have ≥1 token, consumes 1 from each unique key and returns true.
     /// - If ANY configured key is exhausted, consumes nothing and returns false.
+    /// - Duplicate keys are deduplicated — each bucket is checked and consumed at most once.
     pub fn check_keys(&mut self, keys: &[String]) -> bool {
+        // Deduplicate keys to prevent double-consumption
+        let unique_keys: HashSet<&String> = keys.iter().collect();
+
         // First pass: verify all configured keys have tokens
-        for key in keys {
-            if let Some(bucket) = self.buckets.get(key) {
+        for key in &unique_keys {
+            if let Some(bucket) = self.buckets.get(key.as_str()) {
                 if bucket.tokens() < 1.0 {
                     return false;
                 }
@@ -133,8 +141,8 @@ impl ThrottleManager {
         }
 
         // Second pass: consume 1 token from each configured key
-        for key in keys {
-            if let Some(bucket) = self.buckets.get_mut(key) {
+        for key in &unique_keys {
+            if let Some(bucket) = self.buckets.get_mut(key.as_str()) {
                 bucket.try_consume(1.0);
             }
         }
@@ -291,6 +299,16 @@ mod tests {
         // rate and burst clamped to 0
     }
 
+    #[test]
+    fn token_bucket_consume_negative_is_noop() {
+        let mut bucket = TokenBucket::new(10.0, 10.0);
+        // Negative consume must not mint tokens
+        assert!(bucket.try_consume(-5.0));
+        assert_eq!(bucket.tokens(), 10.0); // unchanged
+        assert!(bucket.try_consume(0.0));
+        assert_eq!(bucket.tokens(), 10.0); // unchanged
+    }
+
     // ── ThrottleManager tests ──────────────────────────────────────────
 
     #[test]
@@ -433,5 +451,23 @@ mod tests {
 
         // Now the key is unthrottled — always passes
         assert!(mgr.check_keys(&keys));
+    }
+
+    #[test]
+    fn throttle_manager_check_keys_deduplicates() {
+        let mut mgr = ThrottleManager::new();
+        mgr.set_rate("key_a", 10.0, 2.0); // 2 tokens
+
+        // Same key appears twice — should only consume 1 token, not 2
+        let keys = vec!["key_a".to_string(), "key_a".to_string()];
+        assert!(mgr.check_keys(&keys));
+        // 1 token left (not 0)
+
+        // Should still pass once more
+        assert!(mgr.check_keys(&keys));
+        // 0 tokens left
+
+        // Now should fail
+        assert!(!mgr.check_keys(&keys));
     }
 }

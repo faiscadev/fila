@@ -9,6 +9,9 @@ fn bench_token_bucket_decision(c: &mut Criterion) {
     group.bench_function("try_consume", |b| {
         let mut bucket = TokenBucket::new(1_000_000.0, 1_000_000.0);
         b.iter(|| {
+            // Refill to full before each consume so we always measure the success path
+            let now = Instant::now();
+            bucket.refill(black_box(now));
             black_box(bucket.try_consume(1.0));
         });
     });
@@ -35,6 +38,8 @@ fn bench_throttle_manager(c: &mut Criterion) {
         mgr.set_rate("key_0", 1_000_000.0, 1_000_000.0);
         let keys = vec!["key_0".to_string()];
         b.iter(|| {
+            // Refill before each check so we always measure the success path
+            mgr.refill_all(Instant::now());
             black_box(mgr.check_keys(black_box(&keys)));
         });
     });
@@ -47,6 +52,8 @@ fn bench_throttle_manager(c: &mut Criterion) {
         }
         let keys: Vec<String> = (0..3).map(|i| format!("key_{i}")).collect();
         b.iter(|| {
+            // Refill before each check so we always measure the success path
+            mgr.refill_all(Instant::now());
             black_box(mgr.check_keys(black_box(&keys)));
         });
     });
