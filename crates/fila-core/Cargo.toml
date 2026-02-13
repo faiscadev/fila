@@ -30,3 +30,7 @@ proptest = "1"
 [[bench]]
 name = "drr"
 harness = false
+
+[[bench]]
+name = "throttle"
+harness = false

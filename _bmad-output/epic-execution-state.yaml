@@ -4,10 +4,10 @@ startedAt: "2026-02-12T00:00:00Z"
 stories:
   - id: "4.1"
     title: "Token Bucket Implementation"
-    status: completed
-    currentPhase: ""
+    status: in-progress
+    currentPhase: "dev"
     branch: "feat/4.1-token-bucket-implementation"
-    pr: 20
+    pr: null
     dependsOn: []
   - id: "4.2"
     title: "Throttle-Aware Scheduling"
