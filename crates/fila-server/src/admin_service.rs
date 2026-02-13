@@ -3,9 +3,9 @@ use std::sync::Arc;
 use fila_core::{Broker, QueueConfig, SchedulerCommand};
 use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
-    CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
-    GetConfigRequest, GetConfigResponse, GetStatsRequest, GetStatsResponse, RedriveRequest,
-    RedriveResponse, SetConfigRequest, SetConfigResponse,
+    ConfigEntry, CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
+    GetConfigRequest, GetConfigResponse, GetStatsRequest, GetStatsResponse, ListConfigRequest,
+    ListConfigResponse, RedriveRequest, RedriveResponse, SetConfigRequest, SetConfigResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::instrument;
@@ -189,6 +189,45 @@ impl FilaAdmin for AdminService {
         }))
     }
 
+    #[instrument(skip(self))]
+    async fn list_config(
+        &self,
+        request: Request<ListConfigRequest>,
+    ) -> Result<Response<ListConfigResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.prefix.len() > AdminService::MAX_CONFIG_KEY_LEN {
+            return Err(Status::invalid_argument(format!(
+                "config prefix must not exceed {} bytes",
+                AdminService::MAX_CONFIG_KEY_LEN
+            )));
+        }
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.broker
+            .send_command(SchedulerCommand::ListConfig {
+                prefix: req.prefix,
+                reply: reply_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        let entries = reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .map_err(IntoStatus::into_status)?;
+
+        let total_count = entries.len() as u32;
+        let config_entries = entries
+            .into_iter()
+            .map(|(key, value)| ConfigEntry { key, value })
+            .collect();
+
+        Ok(Response::new(ListConfigResponse {
+            entries: config_entries,
+            total_count,
+        }))
+    }
+
     async fn get_stats(
         &self,
         _request: Request<GetStatsRequest>,
@@ -318,5 +357,91 @@ mod tests {
 
         let resp = svc.get_config(request).await.unwrap();
         assert_eq!(resp.into_inner().value, "");
+    }
+
+    #[tokio::test]
+    async fn list_config_returns_all_entries() {
+        let (svc, _dir) = test_admin_service();
+
+        // Set a few config entries
+        for (key, value) in &[("throttle.provider_a", "10.0,100.0"), ("app.flag", "on")] {
+            svc.set_config(Request::new(SetConfigRequest {
+                key: key.to_string(),
+                value: value.to_string(),
+            }))
+            .await
+            .unwrap();
+        }
+
+        let resp = svc
+            .list_config(Request::new(ListConfigRequest {
+                prefix: String::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.total_count, 2);
+        assert_eq!(resp.entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_config_filters_by_prefix() {
+        let (svc, _dir) = test_admin_service();
+
+        for (key, value) in &[
+            ("throttle.a", "1.0,10.0"),
+            ("throttle.b", "2.0,20.0"),
+            ("app.flag", "on"),
+        ] {
+            svc.set_config(Request::new(SetConfigRequest {
+                key: key.to_string(),
+                value: value.to_string(),
+            }))
+            .await
+            .unwrap();
+        }
+
+        let resp = svc
+            .list_config(Request::new(ListConfigRequest {
+                prefix: "throttle.".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.total_count, 2);
+        assert!(resp.entries.iter().all(|e| e.key.starts_with("throttle.")));
+    }
+
+    #[tokio::test]
+    async fn list_config_empty_result_is_not_error() {
+        let (svc, _dir) = test_admin_service();
+
+        let resp = svc
+            .list_config(Request::new(ListConfigRequest {
+                prefix: "nonexistent.".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.total_count, 0);
+        assert!(resp.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_config_oversized_prefix_returns_invalid_argument() {
+        let (svc, _dir) = test_admin_service();
+
+        let long_prefix = "x".repeat(AdminService::MAX_CONFIG_KEY_LEN + 1);
+        let err = svc
+            .list_config(Request::new(ListConfigRequest {
+                prefix: long_prefix,
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 }

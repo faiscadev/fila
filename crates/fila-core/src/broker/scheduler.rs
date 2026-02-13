@@ -224,6 +224,10 @@ impl Scheduler {
                 let result = self.handle_get_config(&key);
                 let _ = reply.send(result);
             }
+            SchedulerCommand::ListConfig { prefix, reply } => {
+                let result = self.handle_list_config(&prefix);
+                let _ = reply.send(result);
+            }
             SchedulerCommand::Shutdown => {
                 info!("shutdown command received, draining remaining commands");
                 self.running = false;
@@ -437,6 +441,24 @@ impl Scheduler {
         }
 
         Ok(())
+    }
+
+    fn handle_list_config(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, String)>, crate::error::ConfigError> {
+        let entries = self.storage.list_state_by_prefix(prefix)?;
+        entries
+            .into_iter()
+            .map(|(k, v)| {
+                let value_str = String::from_utf8(v).map_err(|e| {
+                    crate::error::ConfigError::InvalidValue(format!(
+                        "non-UTF8 config value for key {k}: {e}"
+                    ))
+                })?;
+                Ok((k, value_str))
+            })
+            .collect()
     }
 
     fn handle_get_config(&self, key: &str) -> Result<Option<String>, crate::error::ConfigError> {
@@ -5478,6 +5500,198 @@ mod tests {
         assert!(
             consumer_rx.try_recv().is_ok(),
             "third message delivered after rate update"
+        );
+    }
+
+    #[test]
+    fn list_config_returns_all_entries_with_empty_prefix() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        // Set multiple config entries
+        for (key, value) in &[
+            ("throttle.provider_a", "10.0,100.0"),
+            ("app.feature_flag", "enabled"),
+            ("app.routing", "tenant"),
+        ] {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            scheduler.handle_command(SchedulerCommand::SetConfig {
+                key: key.to_string(),
+                value: value.to_string(),
+                reply: reply_tx,
+            });
+            reply_rx.blocking_recv().unwrap().unwrap();
+        }
+
+        // List all with empty prefix
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListConfig {
+            prefix: String::new(),
+            reply: reply_tx,
+        });
+        let entries = reply_rx.blocking_recv().unwrap().unwrap();
+
+        assert_eq!(entries.len(), 3);
+        // Entries should be sorted by key (RocksDB lexicographic order)
+        assert_eq!(entries[0].0, "app.feature_flag");
+        assert_eq!(entries[1].0, "app.routing");
+        assert_eq!(entries[2].0, "throttle.provider_a");
+    }
+
+    #[test]
+    fn list_config_filters_by_prefix() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        for (key, value) in &[
+            ("throttle.provider_a", "10.0,100.0"),
+            ("throttle.region:us", "50.0,200.0"),
+            ("app.feature_flag", "enabled"),
+        ] {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            scheduler.handle_command(SchedulerCommand::SetConfig {
+                key: key.to_string(),
+                value: value.to_string(),
+                reply: reply_tx,
+            });
+            reply_rx.blocking_recv().unwrap().unwrap();
+        }
+
+        // List with "throttle." prefix
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListConfig {
+            prefix: "throttle.".to_string(),
+            reply: reply_tx,
+        });
+        let entries = reply_rx.blocking_recv().unwrap().unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "throttle.provider_a");
+        assert_eq!(entries[1].0, "throttle.region:us");
+    }
+
+    #[test]
+    fn list_config_returns_empty_vec_when_no_entries() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListConfig {
+            prefix: "nonexistent.".to_string(),
+            reply: reply_tx,
+        });
+        let entries = reply_rx.blocking_recv().unwrap().unwrap();
+
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn list_config_integration_set_list_filter() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        // Set throttle and non-throttle config values via SetConfig command
+        for (key, value) in &[
+            ("throttle.provider_a", "10.0,100.0"),
+            ("throttle.region:us", "50.0,200.0"),
+            ("app.routing_key", "tenant-priority"),
+            ("app.feature_flag", "enabled"),
+        ] {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            scheduler.handle_command(SchedulerCommand::SetConfig {
+                key: key.to_string(),
+                value: value.to_string(),
+                reply: reply_tx,
+            });
+            reply_rx.blocking_recv().unwrap().unwrap();
+        }
+
+        // List all — should return all 4
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListConfig {
+            prefix: String::new(),
+            reply: reply_tx,
+        });
+        let all = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(all.len(), 4);
+
+        // List throttle prefix — should return 2
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListConfig {
+            prefix: "throttle.".to_string(),
+            reply: reply_tx,
+        });
+        let throttle = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(throttle.len(), 2);
+        assert!(throttle.iter().all(|(k, _)| k.starts_with("throttle.")));
+
+        // List app prefix — should return 2
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListConfig {
+            prefix: "app.".to_string(),
+            reply: reply_tx,
+        });
+        let app = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(app.len(), 2);
+        assert!(app.iter().all(|(k, _)| k.starts_with("app.")));
+
+        // List non-matching prefix — empty
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListConfig {
+            prefix: "zzz.".to_string(),
+            reply: reply_tx,
+        });
+        let empty = reply_rx.blocking_recv().unwrap().unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn lua_e2e_non_throttle_config_via_set_config() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Set a non-throttle config value via SetConfig command (not direct storage)
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "app.routing_key".to_string(),
+            value: "tenant-priority".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Create a queue with a Lua on_enqueue script that reads the config
+        let script = r#"
+            function on_enqueue(msg)
+                local routing = fila.get("app.routing_key")
+                return { fairness_key = routing or "default", weight = 1 }
+            end
+        "#;
+        send_create_queue_with_script(&tx, "lua-config-e2e", script);
+
+        // Enqueue a message — the Lua script should read the config and use it
+        let msg = test_message("lua-config-e2e");
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Register consumer and run to completion
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(10);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "lua-config-e2e".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Verify the delivered message has the fairness_key from the config
+        let delivered = consumer_rx
+            .try_recv()
+            .expect("should have received a message");
+        assert_eq!(delivered.msg_id, msg_id);
+        assert_eq!(
+            delivered.fairness_key, "tenant-priority",
+            "fairness_key should come from fila.get('app.routing_key')"
         );
     }
 
