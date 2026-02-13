@@ -4,10 +4,10 @@ startedAt: "2026-02-13T00:00:00Z"
 stories:
   - id: "5.1"
     title: "Configuration Listing & Operator Visibility"
-    status: in-progress
-    currentPhase: "code-review"
+    status: completed
+    currentPhase: ""
     branch: "feat/5.1-configuration-listing-operator-visibility"
-    pr: null
+    pr: 23
     dependsOn: []
   - id: "5.2"
     title: "Queue Stats & Inspection"
