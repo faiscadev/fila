@@ -216,6 +216,14 @@ impl Scheduler {
                 debug!(%key, "remove throttle rate");
                 self.throttle.remove_rate(&key);
             }
+            SchedulerCommand::SetConfig { key, value, reply } => {
+                let result = self.handle_set_config(&key, &value);
+                let _ = reply.send(result);
+            }
+            SchedulerCommand::GetConfig { key, reply } => {
+                let result = self.handle_get_config(&key);
+                let _ = reply.send(result);
+            }
             SchedulerCommand::Shutdown => {
                 info!("shutdown command received, draining remaining commands");
                 self.running = false;
@@ -389,6 +397,74 @@ impl Scheduler {
         }
 
         Ok(())
+    }
+
+    /// Throttle config key prefix. Keys in the state CF starting with this
+    /// prefix are treated as throttle rate configurations.
+    const THROTTLE_PREFIX: &'static str = "throttle.";
+
+    fn handle_set_config(
+        &mut self,
+        key: &str,
+        value: &str,
+    ) -> Result<(), crate::error::ConfigError> {
+        debug!(%key, %value, "set config");
+
+        if value.is_empty() {
+            // Delete the key
+            self.storage.delete_state(key)?;
+
+            // If throttle-prefixed, remove the rate
+            if let Some(throttle_key) = key.strip_prefix(Self::THROTTLE_PREFIX) {
+                self.throttle.remove_rate(throttle_key);
+            }
+        } else {
+            // Persist the value
+            self.storage.put_state(key, value.as_bytes())?;
+
+            // If throttle-prefixed, parse and apply the rate
+            if let Some(throttle_key) = key.strip_prefix(Self::THROTTLE_PREFIX) {
+                let (rate, burst) = Self::parse_throttle_value(value)?;
+                self.throttle.set_rate(throttle_key, rate, burst);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_get_config(&self, key: &str) -> Result<Option<String>, crate::error::ConfigError> {
+        let value = self.storage.get_state(key)?;
+        match value {
+            Some(bytes) => {
+                let s = String::from_utf8(bytes).map_err(|e| {
+                    crate::error::ConfigError::InvalidValue(format!(
+                        "non-UTF8 config value for key {key}: {e}"
+                    ))
+                })?;
+                Ok(Some(s))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Parse a throttle config value in the format "rate_per_second,burst".
+    fn parse_throttle_value(value: &str) -> Result<(f64, f64), crate::error::ConfigError> {
+        let parts: Vec<&str> = value.split(',').collect();
+        if parts.len() != 2 {
+            return Err(crate::error::ConfigError::InvalidValue(format!(
+                "throttle value must be 'rate_per_second,burst', got: {value}"
+            )));
+        }
+        let rate: f64 = parts[0].trim().parse().map_err(|_| {
+            crate::error::ConfigError::InvalidValue(format!(
+                "invalid rate_per_second: {}",
+                parts[0]
+            ))
+        })?;
+        let burst: f64 = parts[1].trim().parse().map_err(|_| {
+            crate::error::ConfigError::InvalidValue(format!("invalid burst: {}", parts[1]))
+        })?;
+        Ok((rate, burst))
     }
 
     fn handle_ack(
@@ -1099,9 +1175,39 @@ impl Scheduler {
                         }
                     }
                 }
-                info!(queue_count = queues.len(), "recovery complete");
+                info!(
+                    queue_count = queues.len(),
+                    "recovery: queues and messages restored"
+                );
             }
             Err(e) => warn!(error = %e, "failed to list queues during recovery"),
+        }
+
+        // Restore throttle rates from state CF
+        match self.storage.list_state_by_prefix(Self::THROTTLE_PREFIX) {
+            Ok(entries) => {
+                let mut restored = 0;
+                for (key, value) in &entries {
+                    if let Some(throttle_key) = key.strip_prefix(Self::THROTTLE_PREFIX) {
+                        match std::str::from_utf8(value) {
+                            Ok(value_str) => match Self::parse_throttle_value(value_str) {
+                                Ok((rate, burst)) => {
+                                    self.throttle.set_rate(throttle_key, rate, burst);
+                                    restored += 1;
+                                }
+                                Err(e) => {
+                                    warn!(key = %key, error = %e, "skipping corrupt throttle config during recovery");
+                                }
+                            },
+                            Err(e) => {
+                                warn!(key = %key, error = %e, "skipping non-UTF8 throttle config during recovery");
+                            }
+                        }
+                    }
+                }
+                info!(count = restored, "recovery: throttle rates restored");
+            }
+            Err(e) => warn!(error = %e, "failed to scan throttle configs during recovery"),
         }
     }
 
@@ -5073,6 +5179,220 @@ mod tests {
                 "message {i} should be delivered (no throttle keys)"
             );
         }
+    }
+
+    // ── SetConfig / GetConfig tests ──────────────────────────────────
+
+    #[test]
+    fn set_config_throttle_key_sets_rate_in_throttle_manager() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.provider_a".to_string(),
+            value: "10.0,100.0".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Verify the throttle manager has the rate
+        assert!(scheduler.throttle.has_key("provider_a"));
+    }
+
+    #[test]
+    fn set_config_empty_value_removes_throttle_rate() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        // Set a rate first
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.provider_a".to_string(),
+            value: "10.0,100.0".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+        assert!(scheduler.throttle.has_key("provider_a"));
+
+        // Remove it with empty value
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.provider_a".to_string(),
+            value: String::new(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        assert!(!scheduler.throttle.has_key("provider_a"));
+    }
+
+    #[test]
+    fn set_config_persists_to_state_cf() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.provider_a".to_string(),
+            value: "10.0,100.0".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Verify persisted in storage
+        let stored = scheduler
+            .storage()
+            .get_state("throttle.provider_a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, b"10.0,100.0");
+    }
+
+    #[test]
+    fn get_config_returns_stored_value() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        // Set a value
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.provider_a".to_string(),
+            value: "10.0,100.0".to_string(),
+            reply: reply_tx,
+        });
+
+        // Get it back
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetConfig {
+            key: "throttle.provider_a".to_string(),
+            reply: reply_tx,
+        });
+        let value = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(value, Some("10.0,100.0".to_string()));
+    }
+
+    #[test]
+    fn get_config_returns_none_for_missing_key() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetConfig {
+            key: "nonexistent".to_string(),
+            reply: reply_tx,
+        });
+        let value = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn set_config_non_throttle_key_persists_without_affecting_throttle_manager() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "app.feature_flag".to_string(),
+            value: "enabled".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Should be persisted
+        let stored = scheduler
+            .storage()
+            .get_state("app.feature_flag")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, b"enabled");
+
+        // ThrottleManager should be unaffected
+        assert!(scheduler.throttle.is_empty());
+    }
+
+    #[test]
+    fn set_config_invalid_throttle_value_returns_error() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.provider_a".to_string(),
+            value: "not_a_number".to_string(),
+            reply: reply_tx,
+        });
+        let result = reply_rx.blocking_recv().unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn recovery_restores_throttle_rates_from_state_cf() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+
+        // Pre-populate throttle rates in state CF
+        storage
+            .put_state("throttle.provider_a", b"10.0,100.0")
+            .unwrap();
+        storage
+            .put_state("throttle.region:us-east-1", b"50.0,200.0")
+            .unwrap();
+        // Also a non-throttle key to verify it's ignored
+        storage.put_state("app.flag", b"true").unwrap();
+
+        // Create a fresh scheduler — recovery happens inside run()
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+
+        // Send a SetConfig for a non-throttle key so we can verify recovery
+        // happened by checking the throttle manager after run().
+        // We also register a consumer so we can assert throttle state from
+        // the delivery side later if needed.
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        // Verify throttle rates were restored during recovery
+        assert!(scheduler.throttle.has_key("provider_a"));
+        assert!(scheduler.throttle.has_key("region:us-east-1"));
+        assert_eq!(scheduler.throttle.len(), 2);
+    }
+
+    #[test]
+    fn set_config_throttle_rate_enforced_on_delivery() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "config-throttle-q");
+
+        // Set throttle rate via SetConfig: 0 rate, 1 burst (only 1 delivery)
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.rate:global".to_string(),
+            value: "0.0,1.0".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(10);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "config-throttle-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue 3 messages with throttle key "rate:global"
+        for i in 0..3 {
+            let msg =
+                test_message_with_throttle_keys("config-throttle-q", vec!["rate:global".into()], i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        scheduler.handle_all_pending(&tx);
+
+        // Only 1 message should be delivered (bucket starts with 1 token, no refill)
+        assert!(consumer_rx.try_recv().is_ok(), "first message delivered");
+        assert!(
+            consumer_rx.try_recv().is_err(),
+            "second message throttled (bucket exhausted)"
+        );
     }
 
     /// Helper: drain all buffered commands and run a delivery round.

@@ -77,6 +77,9 @@ pub trait Storage: Send + Sync {
     /// Delete a state key.
     fn delete_state(&self, key: &str) -> StorageResult<()>;
 
+    /// List state entries whose keys start with the given prefix.
+    fn list_state_by_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>>;
+
     // --- Batch operations ---
 
     /// Atomically apply a batch of write operations across column families.

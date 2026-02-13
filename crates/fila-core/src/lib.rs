@@ -8,8 +8,8 @@ pub mod telemetry;
 
 pub use broker::{Broker, BrokerConfig, ReadyMessage, SchedulerCommand};
 pub use error::{
-    AckError, BrokerError, BrokerResult, CreateQueueError, DeleteQueueError, EnqueueError,
-    NackError, StorageError, StorageResult,
+    AckError, BrokerError, BrokerResult, ConfigError, CreateQueueError, DeleteQueueError,
+    EnqueueError, NackError, StorageError, StorageResult,
 };
 pub use message::Message;
 pub use queue::QueueConfig;

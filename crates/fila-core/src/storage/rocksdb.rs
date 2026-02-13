@@ -174,6 +174,22 @@ impl Storage for RocksDbStorage {
         Ok(())
     }
 
+    fn list_state_by_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+        let cf = self.cf(CF_STATE)?;
+        let mut result = Vec::new();
+        let iter = self.db.prefix_iterator_cf(&cf, prefix.as_bytes());
+        for item in iter {
+            let (key, value) = item?;
+            let key_str = std::str::from_utf8(&key)
+                .map_err(|e| StorageError::CorruptData(format!("non-UTF8 state key: {e}")))?;
+            if !key_str.starts_with(prefix) {
+                break;
+            }
+            result.push((key_str.to_string(), value.to_vec()));
+        }
+        Ok(result)
+    }
+
     fn write_batch(&self, ops: Vec<WriteBatchOp>) -> StorageResult<()> {
         let mut batch = WriteBatch::default();
 
@@ -367,6 +383,28 @@ mod tests {
 
         storage.delete_state("config:rate_limit").unwrap();
         assert!(storage.get_state("config:rate_limit").unwrap().is_none());
+    }
+
+    #[test]
+    fn list_state_by_prefix_returns_matching_entries() {
+        let (storage, _dir) = test_storage();
+
+        storage.put_state("throttle.a", b"10,100").unwrap();
+        storage.put_state("throttle.b", b"20,200").unwrap();
+        storage.put_state("app.flag", b"true").unwrap();
+
+        let entries = storage.list_state_by_prefix("throttle.").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries
+            .iter()
+            .any(|(k, v)| k == "throttle.a" && v == b"10,100"));
+        assert!(entries
+            .iter()
+            .any(|(k, v)| k == "throttle.b" && v == b"20,200"));
+
+        // Non-matching prefix returns empty
+        let entries = storage.list_state_by_prefix("nonexistent.").unwrap();
+        assert!(entries.is_empty());
     }
 
     #[test]
