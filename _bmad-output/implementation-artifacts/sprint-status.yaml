@@ -77,11 +77,11 @@ development_status:
   epic-4-retrospective: done
 
   # Epic 5: Operator Experience (Admin, Config & CLI)
-  epic-5: in-progress
+  epic-5: done
   5-1-configuration-listing-operator-visibility: done
   5-2-queue-stats-inspection: done
   5-3-dlq-redrive: done
-  5-4-fila-cli: review
+  5-4-fila-cli: done
   epic-5-retrospective: optional
 
   # Epic 6: Observability & Diagnostics
