@@ -44,7 +44,9 @@ impl TokenBucket {
     /// Refill tokens based on elapsed time since last refill.
     /// Tokens are capped at the burst size.
     pub fn refill(&mut self, now: Instant) {
-        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        let elapsed = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
         if elapsed > 0.0 {
             self.tokens = (self.tokens + elapsed * self.rate_per_second).min(self.burst);
             self.last_refill = now;
