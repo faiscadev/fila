@@ -443,17 +443,23 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Maximum number of entries returned by a single ListConfig call.
+    const MAX_LIST_CONFIG_ENTRIES: usize = 10_000;
+
     fn handle_list_config(
         &self,
         prefix: &str,
     ) -> Result<Vec<(String, String)>, crate::error::ConfigError> {
         let entries = self.storage.list_state_by_prefix(prefix)?;
+        let count = entries.len();
+        debug!(%prefix, %count, "list config");
         entries
             .into_iter()
+            .take(Self::MAX_LIST_CONFIG_ENTRIES)
             .map(|(k, v)| {
-                let value_str = String::from_utf8(v).map_err(|e| {
-                    crate::error::ConfigError::InvalidValue(format!(
-                        "non-UTF8 config value for key {k}: {e}"
+                let value_str = String::from_utf8(v).map_err(|_| {
+                    crate::error::StorageError::CorruptData(format!(
+                        "non-UTF8 config value for key {k}"
                     ))
                 })?;
                 Ok((k, value_str))
@@ -465,9 +471,9 @@ impl Scheduler {
         let value = self.storage.get_state(key)?;
         match value {
             Some(bytes) => {
-                let s = String::from_utf8(bytes).map_err(|e| {
-                    crate::error::ConfigError::InvalidValue(format!(
-                        "non-UTF8 config value for key {key}: {e}"
+                let s = String::from_utf8(bytes).map_err(|_| {
+                    crate::error::StorageError::CorruptData(format!(
+                        "non-UTF8 config value for key {key}"
                     ))
                 })?;
                 Ok(Some(s))
@@ -5532,9 +5538,12 @@ mod tests {
 
         assert_eq!(entries.len(), 3);
         // Entries should be sorted by key (RocksDB lexicographic order)
-        assert_eq!(entries[0].0, "app.feature_flag");
-        assert_eq!(entries[1].0, "app.routing");
-        assert_eq!(entries[2].0, "throttle.provider_a");
+        assert_eq!(entries[0], ("app.feature_flag".into(), "enabled".into()));
+        assert_eq!(entries[1], ("app.routing".into(), "tenant".into()));
+        assert_eq!(
+            entries[2],
+            ("throttle.provider_a".into(), "10.0,100.0".into())
+        );
     }
 
     #[test]
@@ -5564,8 +5573,14 @@ mod tests {
         let entries = reply_rx.blocking_recv().unwrap().unwrap();
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].0, "throttle.provider_a");
-        assert_eq!(entries[1].0, "throttle.region:us");
+        assert_eq!(
+            entries[0],
+            ("throttle.provider_a".into(), "10.0,100.0".into())
+        );
+        assert_eq!(
+            entries[1],
+            ("throttle.region:us".into(), "50.0,200.0".into())
+        );
     }
 
     #[test]
@@ -5619,7 +5634,14 @@ mod tests {
         });
         let throttle = reply_rx.blocking_recv().unwrap().unwrap();
         assert_eq!(throttle.len(), 2);
-        assert!(throttle.iter().all(|(k, _)| k.starts_with("throttle.")));
+        assert_eq!(
+            throttle[0],
+            ("throttle.provider_a".into(), "10.0,100.0".into())
+        );
+        assert_eq!(
+            throttle[1],
+            ("throttle.region:us".into(), "50.0,200.0".into())
+        );
 
         // List app prefix — should return 2
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -5629,7 +5651,8 @@ mod tests {
         });
         let app = reply_rx.blocking_recv().unwrap().unwrap();
         assert_eq!(app.len(), 2);
-        assert!(app.iter().all(|(k, _)| k.starts_with("app.")));
+        assert_eq!(app[0], ("app.feature_flag".into(), "enabled".into()));
+        assert_eq!(app[1], ("app.routing_key".into(), "tenant-priority".into()));
 
         // List non-matching prefix — empty
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();

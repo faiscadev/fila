@@ -216,7 +216,7 @@ impl FilaAdmin for AdminService {
             .map_err(|_| Status::internal("scheduler reply channel dropped"))?
             .map_err(IntoStatus::into_status)?;
 
-        let total_count = entries.len() as u32;
+        let total_count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
         let config_entries = entries
             .into_iter()
             .map(|(key, value)| ConfigEntry { key, value })
@@ -383,6 +383,11 @@ mod tests {
 
         assert_eq!(resp.total_count, 2);
         assert_eq!(resp.entries.len(), 2);
+        // RocksDB lexicographic order: app.flag < throttle.provider_a
+        assert_eq!(resp.entries[0].key, "app.flag");
+        assert_eq!(resp.entries[0].value, "on");
+        assert_eq!(resp.entries[1].key, "throttle.provider_a");
+        assert_eq!(resp.entries[1].value, "10.0,100.0");
     }
 
     #[tokio::test]
@@ -411,7 +416,10 @@ mod tests {
             .into_inner();
 
         assert_eq!(resp.total_count, 2);
-        assert!(resp.entries.iter().all(|e| e.key.starts_with("throttle.")));
+        assert_eq!(resp.entries[0].key, "throttle.a");
+        assert_eq!(resp.entries[0].value, "1.0,10.0");
+        assert_eq!(resp.entries[1].key, "throttle.b");
+        assert_eq!(resp.entries[1].value, "2.0,20.0");
     }
 
     #[tokio::test]
