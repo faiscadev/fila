@@ -18,10 +18,10 @@ stories:
     dependsOn: []
   - id: "5.3"
     title: "DLQ Redrive"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/5.3-dlq-redrive"
-    pr: null
+    pr: 25
     dependsOn: []
   - id: "5.4"
     title: "fila-cli"
