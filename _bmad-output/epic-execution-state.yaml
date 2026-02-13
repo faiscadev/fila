@@ -25,9 +25,14 @@ stories:
     dependsOn: []
   - id: "5.4"
     title: "fila-cli"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/5.4-fila-cli"
-    pr: null
+    pr: 26
     dependsOn: ["5.1", "5.2", "5.3"]
 skippedIssues: []
+completedAt: "2026-02-13T12:00:00Z"
+summary:
+  total: 4
+  completed: 4
+  skipped: 0

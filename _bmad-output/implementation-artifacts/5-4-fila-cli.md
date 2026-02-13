@@ -1,6 +1,6 @@
 # Story 5.4: fila-cli
 
-Status: review
+Status: done
 
 ## Story
 
