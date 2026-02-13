@@ -54,5 +54,13 @@ pub enum SchedulerCommand {
         queue_id: String,
         reply: tokio::sync::oneshot::Sender<Result<(), DeleteQueueError>>,
     },
+    SetThrottleRate {
+        key: String,
+        rate_per_second: f64,
+        burst: f64,
+    },
+    RemoveThrottleRate {
+        key: String,
+    },
     Shutdown,
 }

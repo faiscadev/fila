@@ -56,6 +56,7 @@ pub fn message_prefix(queue_id: &str) -> Vec<u8> {
 }
 
 /// Build a prefix for iterating messages with a specific fairness key in a queue.
+#[cfg(test)]
 pub fn message_prefix_with_key(queue_id: &str, fairness_key: &str) -> Vec<u8> {
     let mut prefix = Vec::with_capacity(48);
     prefix.extend_from_slice(&encode_string(queue_id));
