@@ -78,7 +78,12 @@ pub trait Storage: Send + Sync {
     fn delete_state(&self, key: &str) -> StorageResult<()>;
 
     /// List state entries whose keys start with the given prefix.
-    fn list_state_by_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>>;
+    /// At most `limit` entries are returned; pass `usize::MAX` for no cap.
+    fn list_state_by_prefix(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<(String, Vec<u8>)>>;
 
     // --- Batch operations ---
 

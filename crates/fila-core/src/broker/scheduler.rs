@@ -450,12 +450,13 @@ impl Scheduler {
         &self,
         prefix: &str,
     ) -> Result<Vec<(String, String)>, crate::error::ConfigError> {
-        let entries = self.storage.list_state_by_prefix(prefix)?;
+        let entries = self
+            .storage
+            .list_state_by_prefix(prefix, Self::MAX_LIST_CONFIG_ENTRIES)?;
         let count = entries.len();
         debug!(%prefix, %count, "list config");
         entries
             .into_iter()
-            .take(Self::MAX_LIST_CONFIG_ENTRIES)
             .map(|(k, v)| {
                 let value_str = String::from_utf8(v).map_err(|_| {
                     crate::error::StorageError::CorruptData(format!(
@@ -1231,7 +1232,10 @@ impl Scheduler {
         }
 
         // Restore throttle rates from state CF
-        match self.storage.list_state_by_prefix(Self::THROTTLE_PREFIX) {
+        match self
+            .storage
+            .list_state_by_prefix(Self::THROTTLE_PREFIX, usize::MAX)
+        {
             Ok(entries) => {
                 let mut restored = 0;
                 for (key, value) in &entries {
