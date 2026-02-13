@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 use tracing::{debug, error, info, warn};
@@ -8,6 +8,7 @@ use tracing::{debug, error, info, warn};
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::config::{LuaConfig, SchedulerConfig};
 use crate::broker::drr::DrrScheduler;
+use crate::broker::throttle::ThrottleManager;
 use crate::lua::LuaEngine;
 use crate::storage::{Storage, WriteBatchOp};
 
@@ -15,6 +16,14 @@ use crate::storage::{Storage, WriteBatchOp};
 struct ConsumerEntry {
     queue_id: String,
     tx: tokio::sync::mpsc::Sender<ReadyMessage>,
+}
+
+/// An entry in the per-fairness-key pending message index.
+/// Tracks messages available for delivery (not currently leased).
+struct PendingEntry {
+    msg_key: Vec<u8>,
+    msg_id: uuid::Uuid,
+    throttle_keys: Vec<String>,
 }
 
 /// Single-threaded scheduler core. Owns all mutable scheduler state and
@@ -32,6 +41,14 @@ pub struct Scheduler {
     /// Deficit Round Robin scheduler for fair message delivery across
     /// fairness keys.
     drr: DrrScheduler,
+    /// Token bucket rate limiter for throttle keys.
+    throttle: ThrottleManager,
+    /// Per-(queue_id, fairness_key) FIFO queue of pending (unleased) messages.
+    pending: HashMap<(String, String), VecDeque<PendingEntry>>,
+    /// Reverse index: msg_id → (queue_id, fairness_key) for O(1) lookup on ack/nack.
+    pending_by_id: HashMap<uuid::Uuid, (String, String)>,
+    /// Storage key for in-flight (leased) messages, for O(1) lookup on ack/nack.
+    leased_msg_keys: HashMap<uuid::Uuid, Vec<u8>>,
     /// Lua rules engine for executing on_enqueue and on_failure scripts.
     lua_engine: Option<LuaEngine>,
 }
@@ -59,6 +76,10 @@ impl Scheduler {
             consumers: HashMap::new(),
             consumer_rr_idx: HashMap::new(),
             drr: DrrScheduler::new(config.quantum),
+            throttle: ThrottleManager::new(),
+            pending: HashMap::new(),
+            pending_by_id: HashMap::new(),
+            leased_msg_keys: HashMap::new(),
             lua_engine,
         }
     }
@@ -80,9 +101,8 @@ impl Scheduler {
                 }
             }
 
-            // Phase 2: DRR delivery round — deliver ready messages fairly.
-            // Runs after every drain, including the final iteration before
-            // shutdown, so newly enqueued messages are delivered.
+            // Phase 2: Refill token buckets, then DRR delivery round.
+            self.throttle.refill_all(Instant::now());
             self.drr_deliver();
 
             if !self.running {
@@ -96,6 +116,7 @@ impl Scheduler {
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                         // Periodic work: reclaim expired leases and deliver re-queued messages
                         if self.reclaim_expired_leases() > 0 {
+                            self.throttle.refill_all(Instant::now());
                             self.drr_deliver();
                         }
                     }
@@ -183,6 +204,18 @@ impl Scheduler {
                 let result = self.handle_delete_queue(&queue_id);
                 let _ = reply.send(result);
             }
+            SchedulerCommand::SetThrottleRate {
+                key,
+                rate_per_second,
+                burst,
+            } => {
+                debug!(%key, %rate_per_second, %burst, "set throttle rate");
+                self.throttle.set_rate(&key, rate_per_second, burst);
+            }
+            SchedulerCommand::RemoveThrottleRate { key } => {
+                debug!(%key, "remove throttle rate");
+                self.throttle.remove_rate(&key);
+            }
             SchedulerCommand::Shutdown => {
                 info!("shutdown command received, draining remaining commands");
                 self.running = false;
@@ -228,6 +261,17 @@ impl Scheduler {
         // Register the fairness key in DRR active set so it participates in scheduling
         self.drr
             .add_key(&message.queue_id, &message.fairness_key, message.weight);
+
+        // Add to pending index
+        self.pending_push(
+            &message.queue_id,
+            &message.fairness_key,
+            PendingEntry {
+                msg_key: key,
+                msg_id,
+                throttle_keys: message.throttle_keys.clone(),
+            },
+        );
 
         Ok(msg_id)
     }
@@ -323,6 +367,7 @@ impl Scheduler {
         self.storage.delete_queue(queue_id)?;
         self.drr.remove_queue(queue_id);
         self.consumer_rr_idx.remove(queue_id);
+        self.remove_pending_for_queue(queue_id);
         if let Some(ref mut lua_engine) = self.lua_engine {
             lua_engine.remove_queue_scripts(queue_id);
         }
@@ -336,6 +381,7 @@ impl Scheduler {
             self.storage.delete_queue(&auto_dlq_name)?;
             self.drr.remove_queue(&auto_dlq_name);
             self.consumer_rr_idx.remove(&auto_dlq_name);
+            self.remove_pending_for_queue(&auto_dlq_name);
             if let Some(ref mut lua_engine) = self.lua_engine {
                 lua_engine.remove_queue_scripts(&auto_dlq_name);
             }
@@ -346,7 +392,7 @@ impl Scheduler {
     }
 
     fn handle_ack(
-        &self,
+        &mut self,
         queue_id: &str,
         msg_id: &uuid::Uuid,
     ) -> Result<(), crate::error::AckError> {
@@ -367,8 +413,11 @@ impl Scheduler {
             })?;
         let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, msg_id);
 
-        // Find the message key by scanning the queue's messages
-        let msg_key = self.find_message_key(queue_id, msg_id)?;
+        // Look up the message key from the leased index (O(1)), falling back to scan
+        let msg_key = self
+            .leased_msg_keys
+            .remove(msg_id)
+            .or_else(|| self.find_message_key(queue_id, msg_id).ok().flatten());
 
         // Atomically delete the message, lease, and lease expiry
         let mut ops = vec![
@@ -406,12 +455,16 @@ impl Scheduler {
             })?;
         let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, msg_id);
 
-        // Find the full message key and retrieve the message
-        let msg_key = self.find_message_key(queue_id, msg_id)?.ok_or_else(|| {
-            crate::error::NackError::MessageNotFound(format!(
-                "message {msg_id} not found in queue {queue_id}"
-            ))
-        })?;
+        // Look up the message key from leased index (O(1)), falling back to scan
+        let msg_key = self
+            .leased_msg_keys
+            .remove(msg_id)
+            .or_else(|| self.find_message_key(queue_id, msg_id).ok().flatten())
+            .ok_or_else(|| {
+                crate::error::NackError::MessageNotFound(format!(
+                    "message {msg_id} not found in queue {queue_id}"
+                ))
+            })?;
         let mut msg = self.storage.get_message(&msg_key)?.ok_or_else(|| {
             crate::error::NackError::MessageNotFound(format!(
                 "message {msg_id} not found in queue {queue_id}"
@@ -466,7 +519,7 @@ impl Scheduler {
                 let ops = vec![
                     WriteBatchOp::DeleteMessage { key: msg_key },
                     WriteBatchOp::PutMessage {
-                        key: dlq_msg_key,
+                        key: dlq_msg_key.clone(),
                         value: msg_value,
                     },
                     WriteBatchOp::DeleteLease { key: lease_key },
@@ -477,6 +530,17 @@ impl Scheduler {
                 // Add the message to the DLQ's DRR active set for delivery
                 self.drr
                     .add_key(&dlq_queue_id, &msg.fairness_key, msg.weight);
+
+                // Add to DLQ's pending index
+                self.pending_push(
+                    &dlq_queue_id,
+                    &msg.fairness_key,
+                    PendingEntry {
+                        msg_key: dlq_msg_key,
+                        msg_id: msg.id,
+                        throttle_keys: msg.throttle_keys.clone(),
+                    },
+                );
 
                 debug!(
                     %queue_id,
@@ -502,7 +566,7 @@ impl Scheduler {
 
         let ops = vec![
             WriteBatchOp::PutMessage {
-                key: msg_key,
+                key: msg_key.clone(),
                 value: msg_value,
             },
             WriteBatchOp::DeleteLease { key: lease_key },
@@ -512,6 +576,17 @@ impl Scheduler {
 
         // Re-add the fairness key to DRR active set so the message can be scheduled
         self.drr.add_key(queue_id, &msg.fairness_key, msg.weight);
+
+        // Re-add to pending index (message is back in ready pool)
+        self.pending_push(
+            queue_id,
+            &msg.fairness_key,
+            PendingEntry {
+                msg_key,
+                msg_id: msg.id,
+                throttle_keys: msg.throttle_keys.clone(),
+            },
+        );
 
         debug!(%queue_id, %msg_id, %error, attempt_count = msg.attempt_count, "nack processed");
         Ok(())
@@ -531,6 +606,31 @@ impl Scheduler {
             }
         }
         Ok(None)
+    }
+
+    /// Remove all pending index entries for a queue (used on queue deletion).
+    fn remove_pending_for_queue(&mut self, queue_id: &str) {
+        let keys_to_remove: Vec<(String, String)> = self
+            .pending
+            .keys()
+            .filter(|(qid, _)| qid == queue_id)
+            .cloned()
+            .collect();
+        for key in keys_to_remove {
+            if let Some(entries) = self.pending.remove(&key) {
+                for entry in entries {
+                    self.pending_by_id.remove(&entry.msg_id);
+                    self.leased_msg_keys.remove(&entry.msg_id);
+                }
+            }
+        }
+    }
+
+    /// Add a message to the pending index.
+    fn pending_push(&mut self, queue_id: &str, fairness_key: &str, entry: PendingEntry) {
+        let pk = (queue_id.to_string(), fairness_key.to_string());
+        self.pending_by_id.insert(entry.msg_id, pk.clone());
+        self.pending.entry(pk).or_default().push_back(entry);
     }
 
     /// Run one DRR delivery round across all queues that have active keys
@@ -554,6 +654,9 @@ impl Scheduler {
     /// DRR delivery for a single queue. Starts a new round if needed, then
     /// delivers messages from each fairness key until deficit is exhausted
     /// or all keys are served.
+    ///
+    /// Uses the in-memory pending index instead of scanning storage, giving
+    /// O(1) per-message delivery instead of the previous O(n) scan.
     fn drr_deliver_queue(&mut self, queue_id: &str) {
         if !self.drr.has_active_keys(queue_id) {
             return;
@@ -582,41 +685,79 @@ impl Scheduler {
                 break;
             };
 
-            // Find the next unleased message for this fairness key
-            let prefix = crate::storage::keys::message_prefix_with_key(queue_id, &fairness_key);
-            let messages = match self.storage.list_messages(&prefix) {
-                Ok(msgs) => msgs,
+            let pending_key = (queue_id.to_string(), fairness_key.clone());
+
+            // Check if there are pending messages for this fairness key
+            let has_pending = self
+                .pending
+                .get(&pending_key)
+                .is_some_and(|q| !q.is_empty());
+
+            if !has_pending {
+                // No pending messages — remove from active set
+                self.drr.remove_key(queue_id, &fairness_key);
+                continue;
+            }
+
+            // Peek at the front entry to check throttle keys
+            let throttle_keys = self.pending[&pending_key]
+                .front()
+                .unwrap()
+                .throttle_keys
+                .clone();
+
+            // Throttle check: if ANY configured key is exhausted, skip this fairness key
+            if !self.throttle.check_keys(&throttle_keys) {
+                // Throttled — consume deficit so DRR moves to next key (prevents
+                // infinite loop when all messages for this key are throttled).
+                // The key stays in the active set for the next round.
+                self.drr.consume_deficit(queue_id, &fairness_key);
+                continue;
+            }
+
+            // Pop the front entry from pending
+            let entry = self
+                .pending
+                .get_mut(&pending_key)
+                .unwrap()
+                .pop_front()
+                .unwrap();
+            self.pending_by_id.remove(&entry.msg_id);
+
+            // Load the full message from storage
+            let msg = match self.storage.get_message(&entry.msg_key) {
+                Ok(Some(msg)) => msg,
+                Ok(None) => {
+                    warn!(%queue_id, msg_id = %entry.msg_id, "pending message not found in storage, skipping");
+                    continue;
+                }
                 Err(e) => {
-                    error!(%queue_id, %fairness_key, error = %e, "failed to list messages");
+                    error!(%queue_id, msg_id = %entry.msg_id, error = %e, "failed to read pending message");
+                    // Put the entry back so we don't lose it
+                    self.pending_by_id.insert(entry.msg_id, pending_key.clone());
+                    self.pending
+                        .get_mut(&pending_key)
+                        .unwrap()
+                        .push_front(entry);
                     break;
                 }
             };
 
-            // Find the first unleased message for this key
-            let mut found_unleased = false;
-            let mut delivered = false;
-            for (_key, msg) in messages {
-                let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
-                if self.storage.get_lease(&lease_key).ok().flatten().is_some() {
-                    continue;
-                }
-
-                found_unleased = true;
-                if self.try_deliver_to_consumer(queue_id, &msg, &lease_key, visibility_timeout_ms) {
-                    self.drr.consume_deficit(queue_id, &fairness_key);
-                    delivered = true;
-                }
-                break; // Only attempt one message per DRR iteration for this key
-            }
-
-            if !found_unleased {
-                // No unleased messages exist for this key — remove from active set
-                self.drr.remove_key(queue_id, &fairness_key);
-            } else if !delivered {
-                // Messages exist but couldn't deliver (all consumers full/closed).
+            let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
+            if self.try_deliver_to_consumer(queue_id, &msg, &lease_key, visibility_timeout_ms) {
+                self.drr.consume_deficit(queue_id, &fairness_key);
+                // Track the storage key for O(1) lookup on ack/nack
+                self.leased_msg_keys.insert(entry.msg_id, entry.msg_key);
+            } else {
+                // Couldn't deliver (all consumers full/closed).
+                // Put the entry back at the front of the pending queue.
+                self.pending_by_id.insert(entry.msg_id, pending_key.clone());
+                self.pending
+                    .get_mut(&pending_key)
+                    .unwrap()
+                    .push_front(entry);
                 // Break without consuming deficit — the consumer-full condition
-                // applies to all keys equally, so burning this key's deficit would
-                // unfairly penalize whichever key happened to be next in the round.
+                // applies to all keys equally.
                 break;
             }
         }
@@ -761,8 +902,13 @@ impl Scheduler {
 
             let lease_key = crate::storage::keys::lease_key(&queue_id, &msg_id);
 
-            // Find the message and update it (increment attempt_count, clear leased_at)
-            let msg_key = match self.find_message_key(&queue_id, &msg_id) {
+            // Find the message key from leased index (O(1)), falling back to scan
+            let msg_key = match self
+                .leased_msg_keys
+                .remove(&msg_id)
+                .map(|k| Ok(Some(k)))
+                .unwrap_or_else(|| self.find_message_key(&queue_id, &msg_id))
+            {
                 Ok(Some(key)) => key,
                 Ok(None) => {
                     // Message not found — orphaned lease entry, just clean up
@@ -817,7 +963,7 @@ impl Scheduler {
 
             if let Err(e) = self.storage.write_batch(vec![
                 WriteBatchOp::PutMessage {
-                    key: msg_key,
+                    key: msg_key.clone(),
                     value: msg_value,
                 },
                 WriteBatchOp::DeleteLease { key: lease_key },
@@ -831,6 +977,17 @@ impl Scheduler {
 
             self.drr
                 .add_key(&queue_id, &updated_msg.fairness_key, updated_msg.weight);
+
+            // Re-add to pending index (message is back in ready pool)
+            self.pending_push(
+                &queue_id,
+                &updated_msg.fairness_key,
+                PendingEntry {
+                    msg_key,
+                    msg_id,
+                    throttle_keys: updated_msg.throttle_keys.clone(),
+                },
+            );
 
             debug!(
                 %queue_id,
@@ -901,12 +1058,31 @@ impl Scheduler {
                         }
                     }
 
-                    // Rebuild DRR active keys by scanning messages
+                    // Rebuild DRR active keys and pending index by scanning messages
                     let prefix = crate::storage::keys::message_prefix(&queue.name);
                     match self.storage.list_messages(&prefix) {
                         Ok(messages) => {
-                            for (_, msg) in &messages {
+                            for (key, msg) in messages {
                                 self.drr.add_key(&queue.name, &msg.fairness_key, msg.weight);
+
+                                // Only add unleased messages to pending index
+                                let lease_key =
+                                    crate::storage::keys::lease_key(&queue.name, &msg.id);
+                                if self.storage.get_lease(&lease_key).ok().flatten().is_some() {
+                                    // Message is leased (in-flight) — track in leased_msg_keys
+                                    self.leased_msg_keys.insert(msg.id, key);
+                                } else {
+                                    // Message is pending (available for delivery)
+                                    self.pending_push(
+                                        &queue.name,
+                                        &msg.fairness_key,
+                                        PendingEntry {
+                                            msg_key: key,
+                                            msg_id: msg.id,
+                                            throttle_keys: msg.throttle_keys.clone(),
+                                        },
+                                    );
+                                }
                             }
                         }
                         Err(e) => {
@@ -2492,14 +2668,9 @@ mod tests {
     /// the main thread collects deliveries and sends Shutdown after all
     /// messages are received.
     ///
-    /// This test is slow in debug mode (~3 minutes) because each DRR delivery
-    /// iteration scans the messages CF prefix to find the first unleased message,
-    /// giving O(n²) total scan cost. The proptest in drr.rs verifies the same
-    /// fairness invariant at arbitrary scale without storage overhead.
-    ///
-    /// Run explicitly: `cargo test -- --ignored drr_fairness_accuracy`
+    /// With the in-memory pending index (Story 4.2), this test runs in O(n)
+    /// time instead of the previous O(n²) storage scan approach.
     #[test]
-    #[ignore]
     fn drr_fairness_accuracy_10k_messages_6_keys() {
         // 6 keys with weights 1,2,3,4,5,6 → total_weight = 21
         // quantum=100: per round delivers 21*100 = 2100 messages
@@ -4573,5 +4744,274 @@ mod tests {
                 .is_some(),
             "custom/shared DLQ should survive parent queue deletion"
         );
+    }
+
+    // ── Throttle-aware scheduling tests (Story 4.2) ──────────────────
+
+    /// Helper: create a message with throttle keys.
+    fn test_message_with_throttle_keys(
+        queue_id: &str,
+        throttle_keys: Vec<String>,
+        enqueued_at: u64,
+    ) -> Message {
+        Message {
+            id: Uuid::now_v7(),
+            queue_id: queue_id.to_string(),
+            headers: HashMap::new(),
+            payload: vec![1, 2, 3],
+            fairness_key: "default".to_string(),
+            weight: 1,
+            throttle_keys,
+            attempt_count: 0,
+            enqueued_at,
+            leased_at: None,
+        }
+    }
+
+    #[test]
+    fn throttle_skips_throttled_message() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "throttle-q");
+
+        // Set a very restrictive throttle: 1 token, burst 1
+        tx.send(SchedulerCommand::SetThrottleRate {
+            key: "rate:global".to_string(),
+            rate_per_second: 0.0, // no refill
+            burst: 1.0,
+        })
+        .unwrap();
+
+        // Register consumer
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "throttle-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue 3 messages with throttle key
+        for i in 0..3 {
+            let msg =
+                test_message_with_throttle_keys("throttle-q", vec!["rate:global".to_string()], i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        // Process all commands
+        scheduler.handle_all_pending(&tx);
+
+        // Only 1 message should be delivered (1 token available)
+        let msg1 = consumer_rx.try_recv();
+        assert!(msg1.is_ok(), "first message should be delivered");
+
+        let msg2 = consumer_rx.try_recv();
+        assert!(msg2.is_err(), "second message should be throttled");
+    }
+
+    #[test]
+    fn throttle_multi_key_all_must_pass() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "multi-key-q");
+
+        // Set two throttle keys: one with tokens, one exhausted
+        tx.send(SchedulerCommand::SetThrottleRate {
+            key: "rate:a".to_string(),
+            rate_per_second: 0.0,
+            burst: 10.0, // plenty of tokens
+        })
+        .unwrap();
+        tx.send(SchedulerCommand::SetThrottleRate {
+            key: "rate:b".to_string(),
+            rate_per_second: 0.0,
+            burst: 1.0, // only 1 token
+        })
+        .unwrap();
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "multi-key-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue 3 messages with BOTH throttle keys
+        for i in 0..3 {
+            let msg = test_message_with_throttle_keys(
+                "multi-key-q",
+                vec!["rate:a".to_string(), "rate:b".to_string()],
+                i,
+            );
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        scheduler.handle_all_pending(&tx);
+
+        // Only 1 message should be delivered (rate:b has 1 token)
+        assert!(consumer_rx.try_recv().is_ok(), "first message delivered");
+        assert!(
+            consumer_rx.try_recv().is_err(),
+            "second message throttled by rate:b"
+        );
+    }
+
+    #[test]
+    fn throttle_refill_allows_delivery() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "refill-q");
+
+        // Rate of 1000/s, burst 1 — drains after 1 delivery, refills quickly
+        tx.send(SchedulerCommand::SetThrottleRate {
+            key: "rate:fast".to_string(),
+            rate_per_second: 1_000_000.0, // very fast refill
+            burst: 1.0,
+        })
+        .unwrap();
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "refill-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue 2 messages
+        for i in 0..2 {
+            let msg = test_message_with_throttle_keys("refill-q", vec!["rate:fast".to_string()], i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        scheduler.handle_all_pending(&tx);
+
+        // First delivery consumes the 1 token
+        assert!(consumer_rx.try_recv().is_ok());
+
+        // Refill and deliver again — the fast rate should have refilled
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        scheduler.throttle.refill_all(Instant::now());
+        scheduler.drr_deliver();
+
+        assert!(
+            consumer_rx.try_recv().is_ok(),
+            "second message should be delivered after refill"
+        );
+    }
+
+    #[test]
+    fn throttle_skipped_key_stays_active() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "active-q");
+
+        // Exhausted throttle
+        tx.send(SchedulerCommand::SetThrottleRate {
+            key: "rate:exhausted".to_string(),
+            rate_per_second: 0.0,
+            burst: 0.0, // no tokens at all
+        })
+        .unwrap();
+
+        let (consumer_tx, mut _consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "active-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue a message with exhausted throttle key
+        let msg =
+            test_message_with_throttle_keys("active-q", vec!["rate:exhausted".to_string()], 0);
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        scheduler.handle_all_pending(&tx);
+
+        // Key should still be active in DRR (not removed)
+        assert!(
+            scheduler.drr.has_active_keys("active-q"),
+            "throttled key should remain in active set"
+        );
+    }
+
+    #[test]
+    fn throttle_empty_keys_unthrottled() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "unthrottled-q");
+
+        // Set a throttle rate (but messages won't use it)
+        tx.send(SchedulerCommand::SetThrottleRate {
+            key: "rate:global".to_string(),
+            rate_per_second: 0.0,
+            burst: 0.0, // exhausted
+        })
+        .unwrap();
+
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "unthrottled-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        // Enqueue messages with NO throttle keys (backward compatible)
+        for i in 0..3 {
+            let msg = test_message_with_throttle_keys("unthrottled-q", vec![], i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        scheduler.handle_all_pending(&tx);
+
+        // All 3 messages should be delivered (empty throttle_keys = unthrottled)
+        for i in 0..3 {
+            assert!(
+                consumer_rx.try_recv().is_ok(),
+                "message {i} should be delivered (no throttle keys)"
+            );
+        }
+    }
+
+    /// Helper: drain all buffered commands and run a delivery round.
+    impl Scheduler {
+        #[cfg(test)]
+        fn handle_all_pending(&mut self, _tx: &crossbeam_channel::Sender<SchedulerCommand>) {
+            // Drain all pending commands from the inbound channel
+            while let Ok(cmd) = self.inbound.try_recv() {
+                self.handle_command(cmd);
+            }
+            // Refill token buckets and run delivery
+            self.throttle.refill_all(Instant::now());
+            self.drr_deliver();
+        }
     }
 }
