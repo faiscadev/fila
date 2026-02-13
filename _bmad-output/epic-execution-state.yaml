@@ -1,31 +1,33 @@
-epic: "Epic 4: Throttling & Rate Limiting"
+epic: "Epic 5: Operator Experience (Admin, Config & CLI)"
 baseBranch: main
-startedAt: "2026-02-12T00:00:00Z"
+startedAt: "2026-02-13T00:00:00Z"
 stories:
-  - id: "4.1"
-    title: "Token Bucket Implementation"
-    status: completed
-    currentPhase: ""
-    branch: "feat/4.1-token-bucket-implementation"
-    pr: 20
+  - id: "5.1"
+    title: "Configuration Listing & Operator Visibility"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/5.1-configuration-listing-operator-visibility"
+    pr: null
     dependsOn: []
-  - id: "4.2"
-    title: "Throttle-Aware Scheduling"
-    status: completed
+  - id: "5.2"
+    title: "Queue Stats & Inspection"
+    status: pending
     currentPhase: ""
-    branch: "feat/4.2-throttle-aware-scheduling"
-    pr: 21
-    dependsOn: ["4.1"]
-  - id: "4.3"
-    title: "Runtime Throttle Rate Management"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: []
+  - id: "5.3"
+    title: "DLQ Redrive"
+    status: pending
     currentPhase: ""
-    branch: "feat/4.3-runtime-throttle-rate-management"
-    pr: 22
-    dependsOn: ["4.1", "4.2"]
-completedAt: "2026-02-13T02:35:00Z"
-summary:
-  totalStories: 3
-  completed: 3
-  skipped: 0
+    branch: ""
+    pr: null
+    dependsOn: []
+  - id: "5.4"
+    title: "fila-cli"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["5.1", "5.2", "5.3"]
 skippedIssues: []

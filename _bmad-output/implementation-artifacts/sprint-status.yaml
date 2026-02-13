@@ -77,8 +77,8 @@ development_status:
   epic-4-retrospective: done
 
   # Epic 5: Operator Experience (Admin, Config & CLI)
-  epic-5: backlog
-  5-1-configuration-listing-operator-visibility: backlog
+  epic-5: in-progress
+  5-1-configuration-listing-operator-visibility: ready-for-dev
   5-2-queue-stats-inspection: backlog
   5-3-dlq-redrive: backlog
   5-4-fila-cli: backlog

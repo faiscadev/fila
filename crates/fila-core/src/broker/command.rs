@@ -73,5 +73,9 @@ pub enum SchedulerCommand {
         key: String,
         reply: tokio::sync::oneshot::Sender<Result<Option<String>, ConfigError>>,
     },
+    ListConfig {
+        prefix: String,
+        reply: tokio::sync::oneshot::Sender<Result<Vec<(String, String)>, ConfigError>>,
+    },
     Shutdown,
 }
