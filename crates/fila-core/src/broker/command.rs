@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::error::{AckError, CreateQueueError, DeleteQueueError, EnqueueError, NackError};
+use crate::error::{
+    AckError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, NackError,
+};
 
 /// A message ready for delivery to a consumer.
 #[derive(Debug, Clone)]
@@ -61,6 +63,15 @@ pub enum SchedulerCommand {
     },
     RemoveThrottleRate {
         key: String,
+    },
+    SetConfig {
+        key: String,
+        value: String,
+        reply: tokio::sync::oneshot::Sender<Result<(), ConfigError>>,
+    },
+    GetConfig {
+        key: String,
+        reply: tokio::sync::oneshot::Sender<Result<Option<String>, ConfigError>>,
     },
     Shutdown,
 }

@@ -111,18 +111,61 @@ impl FilaAdmin for AdminService {
         Ok(Response::new(DeleteQueueResponse {}))
     }
 
+    #[instrument(skip(self))]
     async fn set_config(
         &self,
-        _request: Request<SetConfigRequest>,
+        request: Request<SetConfigRequest>,
     ) -> Result<Response<SetConfigResponse>, Status> {
-        Err(Status::unimplemented("SetConfig not yet implemented"))
+        let req = request.into_inner();
+
+        if req.key.is_empty() {
+            return Err(Status::invalid_argument("config key must not be empty"));
+        }
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.broker
+            .send_command(SchedulerCommand::SetConfig {
+                key: req.key,
+                value: req.value,
+                reply: reply_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .map_err(IntoStatus::into_status)?;
+
+        Ok(Response::new(SetConfigResponse {}))
     }
 
+    #[instrument(skip(self))]
     async fn get_config(
         &self,
-        _request: Request<GetConfigRequest>,
+        request: Request<GetConfigRequest>,
     ) -> Result<Response<GetConfigResponse>, Status> {
-        Err(Status::unimplemented("GetConfig not yet implemented"))
+        let req = request.into_inner();
+
+        if req.key.is_empty() {
+            return Err(Status::invalid_argument("config key must not be empty"));
+        }
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.broker
+            .send_command(SchedulerCommand::GetConfig {
+                key: req.key,
+                reply: reply_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        let value = reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .map_err(IntoStatus::into_status)?;
+
+        Ok(Response::new(GetConfigResponse {
+            value: value.unwrap_or_default(),
+        }))
     }
 
     async fn get_stats(
@@ -200,5 +243,59 @@ mod tests {
 
         let resp = svc.create_queue(request).await.unwrap();
         assert_eq!(resp.into_inner().queue_id, "test-queue");
+    }
+
+    #[tokio::test]
+    async fn set_config_with_valid_throttle_key() {
+        let (svc, _dir) = test_admin_service();
+
+        let request = Request::new(SetConfigRequest {
+            key: "throttle.provider_a".to_string(),
+            value: "10.0,100.0".to_string(),
+        });
+
+        svc.set_config(request).await.unwrap();
+
+        // Verify via get_config
+        let request = Request::new(GetConfigRequest {
+            key: "throttle.provider_a".to_string(),
+        });
+        let resp = svc.get_config(request).await.unwrap();
+        assert_eq!(resp.into_inner().value, "10.0,100.0");
+    }
+
+    #[tokio::test]
+    async fn set_config_empty_key_returns_invalid_argument() {
+        let (svc, _dir) = test_admin_service();
+
+        let request = Request::new(SetConfigRequest {
+            key: String::new(),
+            value: "10.0,100.0".to_string(),
+        });
+
+        let err = svc.set_config(request).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_config_empty_key_returns_invalid_argument() {
+        let (svc, _dir) = test_admin_service();
+
+        let request = Request::new(GetConfigRequest { key: String::new() });
+
+        let err = svc.get_config(request).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_config_missing_key_returns_empty_value() {
+        let (svc, _dir) = test_admin_service();
+
+        let request = Request::new(GetConfigRequest {
+            key: "nonexistent".to_string(),
+        });
+
+        let resp = svc.get_config(request).await.unwrap();
+        assert_eq!(resp.into_inner().value, "");
     }
 }

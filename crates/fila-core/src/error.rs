@@ -80,6 +80,15 @@ pub enum DeleteQueueError {
     Storage(#[from] StorageError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("invalid config value: {0}")]
+    InvalidValue(String),
+
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
+
 // --- Broker lifecycle/channel errors ---
 
 #[derive(Debug, thiserror::Error)]
