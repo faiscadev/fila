@@ -113,6 +113,12 @@ pub enum RedriveError {
     Storage(#[from] StorageError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ListQueuesError {
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
+
 // --- Broker lifecycle/channel errors ---
 
 #[derive(Debug, thiserror::Error)]

@@ -13,7 +13,7 @@ use tracing::info;
 use crate::error::{BrokerError, BrokerResult};
 use crate::storage::Storage;
 
-pub use command::{ReadyMessage, SchedulerCommand};
+pub use command::{QueueSummary, ReadyMessage, SchedulerCommand};
 pub use config::BrokerConfig;
 
 use scheduler::Scheduler;
