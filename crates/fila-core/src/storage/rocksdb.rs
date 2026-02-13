@@ -174,7 +174,11 @@ impl Storage for RocksDbStorage {
         Ok(())
     }
 
-    fn list_state_by_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
+    fn list_state_by_prefix(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<(String, Vec<u8>)>> {
         let cf = self.cf(CF_STATE)?;
         let mut result = Vec::new();
         let iter = self.db.iterator_cf(
@@ -182,6 +186,9 @@ impl Storage for RocksDbStorage {
             IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward),
         );
         for item in iter {
+            if result.len() >= limit {
+                break;
+            }
             let (key, value) = item?;
             let key_str = std::str::from_utf8(&key)
                 .map_err(|e| StorageError::CorruptData(format!("non-UTF8 state key: {e}")))?;
@@ -396,7 +403,9 @@ mod tests {
         storage.put_state("throttle.b", b"20,200").unwrap();
         storage.put_state("app.flag", b"true").unwrap();
 
-        let entries = storage.list_state_by_prefix("throttle.").unwrap();
+        let entries = storage
+            .list_state_by_prefix("throttle.", usize::MAX)
+            .unwrap();
         assert_eq!(entries.len(), 2);
         assert!(entries
             .iter()
@@ -406,7 +415,9 @@ mod tests {
             .any(|(k, v)| k == "throttle.b" && v == b"20,200"));
 
         // Non-matching prefix returns empty
-        let entries = storage.list_state_by_prefix("nonexistent.").unwrap();
+        let entries = storage
+            .list_state_by_prefix("nonexistent.", usize::MAX)
+            .unwrap();
         assert!(entries.is_empty());
     }
 
