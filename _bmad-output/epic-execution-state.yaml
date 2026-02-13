@@ -18,9 +18,9 @@ stories:
     dependsOn: []
   - id: "5.3"
     title: "DLQ Redrive"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "setup"
+    branch: "feat/5.3-dlq-redrive"
     pr: null
     dependsOn: []
   - id: "5.4"
