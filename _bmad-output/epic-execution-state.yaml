@@ -19,7 +19,7 @@ stories:
   - id: "5.3"
     title: "DLQ Redrive"
     status: in-progress
-    currentPhase: "setup"
+    currentPhase: "pr-ci"
     branch: "feat/5.3-dlq-redrive"
     pr: null
     dependsOn: []

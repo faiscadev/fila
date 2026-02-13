@@ -80,7 +80,7 @@ development_status:
   epic-5: in-progress
   5-1-configuration-listing-operator-visibility: done
   5-2-queue-stats-inspection: done
-  5-3-dlq-redrive: in-progress
+  5-3-dlq-redrive: review
   5-4-fila-cli: backlog
   epic-5-retrospective: optional
 
