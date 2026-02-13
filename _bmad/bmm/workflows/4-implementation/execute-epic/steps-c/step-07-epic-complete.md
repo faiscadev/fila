@@ -67,11 +67,18 @@ Verify:
 - CI checks are passing
 - Note any that have degraded since opening
 
-### 3. Update State with Completion
+### 3. Update State and Sprint Status with Completion
 
 Update {stateFile}:
 - Add `completedAt: [current date/time]`
 - Add `summary` section with final counts
+
+**CRITICAL:** Update sprint-status.yaml to mark the epic as done:
+- Load the FULL sprint-status.yaml file
+- Find the development_status entry for the epic key (e.g., "epic-4")
+- Update its value to "done"
+- Save the file, preserving ALL comments and structure including STATUS DEFINITIONS
+- Commit the change
 
 ### 4. Present Epic Execution Summary
 

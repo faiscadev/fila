@@ -110,13 +110,24 @@ Set iteration counter (start at 0, increment each loop).
 gh pr checks {pr-number} --watch
 ```
 
-**Check for automated PR review comments:**
+**Check for Cubic automated review (CRITICAL — has a delay after CI check):**
+After all CI checks pass, specifically check the Cubic check output. The Cubic CI check summary shows
+"AI review completed with N review(s). X issues found across Y files."
+- If 0 issues found: Cubic has nothing to say — no review will be posted. Proceed.
+- If >0 issues found: Cubic WILL post a review, but there is a **delay** after the check completes.
+  Poll for the review to appear (check every 15-30 seconds, up to 2 minutes):
+  ```
+  gh api repos/{owner}/{repo}/pulls/{pr-number}/reviews
+  ```
+  Wait until Cubic's review appears before evaluating feedback.
+
+**Check for all automated PR review comments:**
 ```
 gh api repos/{owner}/{repo}/pulls/{pr-number}/reviews
 gh api repos/{owner}/{repo}/pulls/{pr-number}/comments
 ```
 
-**If CI passes AND no unresolved review feedback:**
+**If CI passes AND no unresolved review feedback (including Cubic):**
 - Exit loop
 - Proceed to step 5
 

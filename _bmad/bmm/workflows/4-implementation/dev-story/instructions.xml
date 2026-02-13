@@ -401,6 +401,12 @@
     </action>
 
     <output>💡 **Tip:** For best results, run `code-review` using a **different** LLM than the one that implemented this story.</output>
+
+    <critical>CUBIC AUTOMATED REVIEW: After a PR is created, you MUST wait for the Cubic CI check to complete.
+      Read the check output — it shows "AI review completed with N review(s). X issues found across Y files."
+      If 0 issues: clear to proceed.
+      If >0 issues: Cubic will post a review on the PR (there is a delay after the CI check). Wait for it, read the findings, and address every issue before marking the story complete.
+      See CLAUDE.md "PR Review — Cubic Automated Review" for full details.</critical>
     <check if="{sprint_status} file exists">
       <action>Suggest checking {sprint_status} to see project progress</action>
     </check>

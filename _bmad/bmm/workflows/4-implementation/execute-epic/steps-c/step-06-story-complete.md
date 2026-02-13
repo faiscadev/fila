@@ -62,6 +62,12 @@ Load {stateFile} and update the current story:
 
 Clear currentPhase (set to empty string).
 
+### 1b. Update Sprint Status to "done"
+
+**CRITICAL:** Update sprint-status.yaml to reflect story completion. This is the step that keeps sprint-status in sync — skipping it causes stale tracking.
+
+Load the FULL sprint-status.yaml file. Find the development_status entry for the current story key. Update its value to "done". Save the file, preserving ALL comments and structure including STATUS DEFINITIONS. Commit the change.
+
 ### 2. Check for Remaining Stories
 
 Count stories with status "pending":
