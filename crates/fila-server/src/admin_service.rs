@@ -286,11 +286,32 @@ impl FilaAdmin for AdminService {
         }))
     }
 
+    #[instrument(skip(self))]
     async fn redrive(
         &self,
-        _request: Request<RedriveRequest>,
+        request: Request<RedriveRequest>,
     ) -> Result<Response<RedriveResponse>, Status> {
-        Err(Status::unimplemented("Redrive not yet implemented"))
+        let req = request.into_inner();
+
+        if req.dlq_queue.is_empty() {
+            return Err(Status::invalid_argument("dlq_queue name must not be empty"));
+        }
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.broker
+            .send_command(SchedulerCommand::Redrive {
+                dlq_queue_id: req.dlq_queue,
+                count: req.count,
+                reply: reply_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        let redriven = reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .map_err(IntoStatus::into_status)?;
+
+        Ok(Response::new(RedriveResponse { redriven }))
     }
 }
 
@@ -556,5 +577,67 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn redrive_returns_redriven_count() {
+        let (svc, _dir) = test_admin_service();
+
+        // Create a DLQ-named queue and its parent
+        svc.create_queue(Request::new(CreateQueueRequest {
+            name: "redrive-test".to_string(),
+            config: None,
+        }))
+        .await
+        .unwrap();
+
+        // Redrive from the auto-created DLQ (which is empty)
+        let resp = svc
+            .redrive(Request::new(RedriveRequest {
+                dlq_queue: "redrive-test.dlq".to_string(),
+                count: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.redriven, 0);
+    }
+
+    #[tokio::test]
+    async fn redrive_empty_dlq_queue_returns_invalid_argument() {
+        let (svc, _dir) = test_admin_service();
+
+        let err = svc
+            .redrive(Request::new(RedriveRequest {
+                dlq_queue: String::new(),
+                count: 0,
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn redrive_non_dlq_queue_returns_invalid_argument() {
+        let (svc, _dir) = test_admin_service();
+
+        svc.create_queue(Request::new(CreateQueueRequest {
+            name: "not-a-dlq".to_string(),
+            config: None,
+        }))
+        .await
+        .unwrap();
+
+        let err = svc
+            .redrive(Request::new(RedriveRequest {
+                dlq_queue: "not-a-dlq".to_string(),
+                count: 0,
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 }

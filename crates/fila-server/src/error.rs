@@ -1,6 +1,6 @@
 use fila_core::{
     AckError, BrokerError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError,
-    NackError, StatsError,
+    NackError, RedriveError, StatsError,
 };
 use tonic::Status;
 
@@ -68,6 +68,17 @@ impl IntoStatus for StatsError {
         match self {
             StatsError::QueueNotFound(msg) => Status::not_found(msg),
             StatsError::Storage(e) => Status::internal(e.to_string()),
+        }
+    }
+}
+
+impl IntoStatus for RedriveError {
+    fn into_status(self) -> Status {
+        match self {
+            RedriveError::QueueNotFound(msg) => Status::not_found(msg),
+            RedriveError::NotADLQ(msg) => Status::invalid_argument(msg),
+            RedriveError::ParentQueueNotFound(msg) => Status::failed_precondition(msg),
+            RedriveError::Storage(e) => Status::internal(e.to_string()),
         }
     }
 }

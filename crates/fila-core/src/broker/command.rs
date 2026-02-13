@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::{
-    AckError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, NackError, StatsError,
+    AckError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, NackError,
+    RedriveError, StatsError,
 };
 
 /// A message ready for delivery to a consumer.
@@ -80,6 +81,11 @@ pub enum SchedulerCommand {
     GetStats {
         queue_id: String,
         reply: tokio::sync::oneshot::Sender<Result<crate::broker::stats::QueueStats, StatsError>>,
+    },
+    Redrive {
+        dlq_queue_id: String,
+        count: u64,
+        reply: tokio::sync::oneshot::Sender<Result<u64, RedriveError>>,
     },
     Shutdown,
 }
