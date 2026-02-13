@@ -1,6 +1,6 @@
 # Story 5.2: Queue Stats & Inspection
 
-Status: review
+Status: done
 
 ## Story
 
