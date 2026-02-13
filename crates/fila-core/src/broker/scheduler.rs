@@ -692,25 +692,17 @@ impl Scheduler {
 
             let pending_key = (queue_id.to_string(), fairness_key.clone());
 
-            // Check if there are pending messages for this fairness key
-            let has_pending = self
+            // Peek at the front pending entry; if none, this fairness key is drained
+            let Some(front) = self
                 .pending
                 .get(&pending_key)
-                .is_some_and(|q| !q.is_empty());
-
-            if !has_pending {
-                // No pending messages — remove from active set and clean up empty deque
+                .and_then(|deque| deque.front())
+            else {
                 self.drr.remove_key(queue_id, &fairness_key);
                 self.pending.remove(&pending_key);
                 continue;
-            }
-
-            // Peek at the front entry to check throttle keys
-            let throttle_keys = self.pending[&pending_key]
-                .front()
-                .unwrap()
-                .throttle_keys
-                .clone();
+            };
+            let throttle_keys = front.throttle_keys.clone();
 
             // Throttle check (peek only — no tokens consumed yet): if ANY configured
             // key is exhausted, skip this fairness key entirely.
@@ -722,13 +714,14 @@ impl Scheduler {
                 continue;
             }
 
-            // Pop the front entry from pending
-            let entry = self
+            // Pop the front entry from pending (we just peeked it above, so both must exist)
+            let Some(entry) = self
                 .pending
                 .get_mut(&pending_key)
-                .unwrap()
-                .pop_front()
-                .unwrap();
+                .and_then(|deque| deque.pop_front())
+            else {
+                continue;
+            };
             self.pending_by_id.remove(&entry.msg_id);
 
             // Load the full message from storage
@@ -743,8 +736,8 @@ impl Scheduler {
                     // Put the entry back so we don't lose it
                     self.pending_by_id.insert(entry.msg_id, pending_key.clone());
                     self.pending
-                        .get_mut(&pending_key)
-                        .unwrap()
+                        .entry(pending_key)
+                        .or_default()
                         .push_front(entry);
                     break;
                 }
@@ -763,8 +756,8 @@ impl Scheduler {
                 // No throttle tokens were consumed (peek-only check above).
                 self.pending_by_id.insert(entry.msg_id, pending_key.clone());
                 self.pending
-                    .get_mut(&pending_key)
-                    .unwrap()
+                    .entry(pending_key)
+                    .or_default()
                     .push_front(entry);
                 // Break without consuming deficit — the consumer-full condition
                 // applies to all keys equally.
