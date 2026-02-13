@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use fila_core::broker::throttle::{ThrottleManager, TokenBucket};
 use std::time::Instant;
 
@@ -6,16 +6,16 @@ use std::time::Instant;
 fn bench_token_bucket_decision(c: &mut Criterion) {
     let mut group = c.benchmark_group("token_bucket");
 
+    // Pure decision cost — bucket starts full, no refill in the measured path
     group.bench_function("try_consume", |b| {
-        let mut bucket = TokenBucket::new(1_000_000.0, 1_000_000.0);
-        b.iter(|| {
-            // Refill to full before each consume so we always measure the success path
-            let now = Instant::now();
-            bucket.refill(black_box(now));
-            black_box(bucket.try_consume(1.0));
-        });
+        b.iter_batched(
+            || TokenBucket::new(1_000_000.0, 1_000_000.0),
+            |mut bucket| black_box(bucket.try_consume(1.0)),
+            BatchSize::SmallInput,
+        );
     });
 
+    // Combined refill + decision cost
     group.bench_function("refill_and_consume", |b| {
         let mut bucket = TokenBucket::new(1_000_000.0, 1_000_000.0);
         b.iter(|| {
@@ -32,30 +32,34 @@ fn bench_token_bucket_decision(c: &mut Criterion) {
 fn bench_throttle_manager(c: &mut Criterion) {
     let mut group = c.benchmark_group("throttle_manager");
 
-    // Single key check
+    // Single key check — pure decision cost
     group.bench_function("check_1_key", |b| {
-        let mut mgr = ThrottleManager::new();
-        mgr.set_rate("key_0", 1_000_000.0, 1_000_000.0);
         let keys = vec!["key_0".to_string()];
-        b.iter(|| {
-            // Refill before each check so we always measure the success path
-            mgr.refill_all(Instant::now());
-            black_box(mgr.check_keys(black_box(&keys)));
-        });
+        b.iter_batched(
+            || {
+                let mut mgr = ThrottleManager::new();
+                mgr.set_rate("key_0", 1_000_000.0, 1_000_000.0);
+                mgr
+            },
+            |mut mgr| black_box(mgr.check_keys(black_box(&keys))),
+            BatchSize::SmallInput,
+        );
     });
 
-    // 3 keys (typical hierarchical throttling)
+    // 3 keys (typical hierarchical throttling) — pure decision cost
     group.bench_function("check_3_keys", |b| {
-        let mut mgr = ThrottleManager::new();
-        for i in 0..3 {
-            mgr.set_rate(&format!("key_{i}"), 1_000_000.0, 1_000_000.0);
-        }
         let keys: Vec<String> = (0..3).map(|i| format!("key_{i}")).collect();
-        b.iter(|| {
-            // Refill before each check so we always measure the success path
-            mgr.refill_all(Instant::now());
-            black_box(mgr.check_keys(black_box(&keys)));
-        });
+        b.iter_batched(
+            || {
+                let mut mgr = ThrottleManager::new();
+                for i in 0..3 {
+                    mgr.set_rate(&format!("key_{i}"), 1_000_000.0, 1_000_000.0);
+                }
+                mgr
+            },
+            |mut mgr| black_box(mgr.check_keys(black_box(&keys))),
+            BatchSize::SmallInput,
+        );
     });
 
     // Refill all with 10 buckets
