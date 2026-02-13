@@ -11,8 +11,8 @@ stories:
     dependsOn: []
   - id: "4.2"
     title: "Throttle-Aware Scheduling"
-    status: in-progress
-    currentPhase: "pr-complete"
+    status: completed
+    currentPhase: ""
     branch: "feat/4.2-throttle-aware-scheduling"
     pr: 21
     dependsOn: ["4.1"]
