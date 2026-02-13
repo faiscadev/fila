@@ -1,6 +1,6 @@
 # Story 5.1: Configuration Listing & Operator Visibility
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -19,40 +19,40 @@ so that I can understand the current broker configuration state without guessing
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `ListConfig` proto definitions (AC: #1, #2, #3)
-  - [ ] Subtask 1.1: Add `ListConfigRequest { string prefix = 1; }` and `ListConfigResponse { repeated ConfigEntry entries = 1; uint32 total_count = 2; }` with `ConfigEntry { string key = 1; string value = 2; }` to `admin.proto`
-  - [ ] Subtask 1.2: Add `rpc ListConfig(ListConfigRequest) returns (ListConfigResponse)` to `FilaAdmin` service
-  - [ ] Subtask 1.3: Verify generated code compiles (`cargo build -p fila-proto`)
-- [ ] Task 2: Add `ListConfig` scheduler command (AC: #1, #2)
-  - [ ] Subtask 2.1: Add `ListConfig { prefix: String, reply: oneshot::Sender<Result<Vec<(String, String)>, ConfigError>> }` to `SchedulerCommand` in `command.rs`
-  - [ ] Subtask 2.2: Add match arm in scheduler dispatch loop
-- [ ] Task 3: Implement `handle_list_config` in scheduler (AC: #1, #2, #3, #4)
-  - [ ] Subtask 3.1: Call `self.storage.list_state_by_prefix(&prefix)` (already exists from Story 4.3)
-  - [ ] Subtask 3.2: Convert `Vec<(String, Vec<u8>)>` to `Vec<(String, String)>` with UTF-8 conversion
-  - [ ] Subtask 3.3: Return results (empty vec is valid, not an error)
-- [ ] Task 4: Implement `list_config` in admin service (AC: #1, #2, #3, #4)
-  - [ ] Subtask 4.1: Validate prefix length (`<= MAX_CONFIG_KEY_LEN` = 256 bytes)
-  - [ ] Subtask 4.2: Send `ListConfig` command to scheduler, await reply
-  - [ ] Subtask 4.3: Map response to `ListConfigResponse` with entries and total_count
-- [ ] Task 5: Scheduler unit tests (AC: #1, #2, #4)
-  - [ ] Subtask 5.1: Test list_config with no prefix returns all entries
-  - [ ] Subtask 5.2: Test list_config with prefix returns only matching entries
-  - [ ] Subtask 5.3: Test list_config with no entries returns empty vec
-- [ ] Task 6: Admin service unit tests (AC: #1, #2, #4)
-  - [ ] Subtask 6.1: Test list_config returns all entries
-  - [ ] Subtask 6.2: Test list_config with prefix filtering
-  - [ ] Subtask 6.3: Test list_config with no entries returns empty list
-  - [ ] Subtask 6.4: Test list_config with oversized prefix returns InvalidArgument
-- [ ] Task 7: Integration test — ListConfig with prefix filtering (AC: #5)
-  - [ ] Subtask 7.1: Set multiple config values (throttle and non-throttle) via SetConfig
-  - [ ] Subtask 7.2: List all configs, verify all are returned
-  - [ ] Subtask 7.3: List with `throttle.` prefix, verify only throttle entries returned
-  - [ ] Subtask 7.4: List with non-matching prefix, verify empty list
-- [ ] Task 8: Integration test — Lua e2e with non-throttle config (AC: #6)
-  - [ ] Subtask 8.1: Create a queue with an `on_enqueue` Lua script that reads `fila.get("app.routing_key")` and uses it as the fairness key
-  - [ ] Subtask 8.2: Set config `app.routing_key` = `"tenant-priority"` via SetConfig
-  - [ ] Subtask 8.3: Enqueue a message to the queue
-  - [ ] Subtask 8.4: Lease the message and verify its fairness_key is `"tenant-priority"` (proving Lua read the non-throttle config)
+- [x] Task 1: Add `ListConfig` proto definitions (AC: #1, #2, #3)
+  - [x] Subtask 1.1: Add `ListConfigRequest { string prefix = 1; }` and `ListConfigResponse { repeated ConfigEntry entries = 1; uint32 total_count = 2; }` with `ConfigEntry { string key = 1; string value = 2; }` to `admin.proto`
+  - [x] Subtask 1.2: Add `rpc ListConfig(ListConfigRequest) returns (ListConfigResponse)` to `FilaAdmin` service
+  - [x] Subtask 1.3: Verify generated code compiles (`cargo build -p fila-proto`)
+- [x] Task 2: Add `ListConfig` scheduler command (AC: #1, #2)
+  - [x] Subtask 2.1: Add `ListConfig { prefix: String, reply: oneshot::Sender<Result<Vec<(String, String)>, ConfigError>> }` to `SchedulerCommand` in `command.rs`
+  - [x] Subtask 2.2: Add match arm in scheduler dispatch loop
+- [x] Task 3: Implement `handle_list_config` in scheduler (AC: #1, #2, #3, #4)
+  - [x] Subtask 3.1: Call `self.storage.list_state_by_prefix(&prefix)` (already exists from Story 4.3)
+  - [x] Subtask 3.2: Convert `Vec<(String, Vec<u8>)>` to `Vec<(String, String)>` with UTF-8 conversion
+  - [x] Subtask 3.3: Return results (empty vec is valid, not an error)
+- [x] Task 4: Implement `list_config` in admin service (AC: #1, #2, #3, #4)
+  - [x] Subtask 4.1: Validate prefix length (`<= MAX_CONFIG_KEY_LEN` = 256 bytes)
+  - [x] Subtask 4.2: Send `ListConfig` command to scheduler, await reply
+  - [x] Subtask 4.3: Map response to `ListConfigResponse` with entries and total_count
+- [x] Task 5: Scheduler unit tests (AC: #1, #2, #4)
+  - [x] Subtask 5.1: Test list_config with no prefix returns all entries
+  - [x] Subtask 5.2: Test list_config with prefix returns only matching entries
+  - [x] Subtask 5.3: Test list_config with no entries returns empty vec
+- [x] Task 6: Admin service unit tests (AC: #1, #2, #4)
+  - [x] Subtask 6.1: Test list_config returns all entries
+  - [x] Subtask 6.2: Test list_config with prefix filtering
+  - [x] Subtask 6.3: Test list_config with no entries returns empty list
+  - [x] Subtask 6.4: Test list_config with oversized prefix returns InvalidArgument
+- [x] Task 7: Integration test — ListConfig with prefix filtering (AC: #5)
+  - [x] Subtask 7.1: Set multiple config values (throttle and non-throttle) via SetConfig
+  - [x] Subtask 7.2: List all configs, verify all are returned
+  - [x] Subtask 7.3: List with `throttle.` prefix, verify only throttle entries returned
+  - [x] Subtask 7.4: List with non-matching prefix, verify empty list
+- [x] Task 8: Integration test — Lua e2e with non-throttle config (AC: #6)
+  - [x] Subtask 8.1: Create a queue with an `on_enqueue` Lua script that reads `fila.get("app.routing_key")` and uses it as the fairness key
+  - [x] Subtask 8.2: Set config `app.routing_key` = `"tenant-priority"` via SetConfig
+  - [x] Subtask 8.3: Enqueue a message to the queue
+  - [x] Subtask 8.4: Lease the message and verify its fairness_key is `"tenant-priority"` (proving Lua read the non-throttle config)
 
 ## Dev Notes
 
@@ -191,8 +191,30 @@ No new error variants needed.
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
+
+- No issues encountered during implementation
 
 ### Completion Notes List
 
+- All 8 tasks complete, 9 new tests (3 scheduler unit, 4 admin service unit, 2 integration/e2e)
+- ListConfig RPC added to admin.proto with ConfigEntry, ListConfigRequest, ListConfigResponse
+- ListConfig scheduler command routes through single-threaded scheduler (single-writer guarantee)
+- handle_list_config reuses existing list_state_by_prefix from Story 4.3
+- Admin service validates prefix length (reuses MAX_CONFIG_KEY_LEN = 256)
+- Empty prefix lists all entries; empty result is not an error
+- Lua e2e test proves: SetConfig → state CF → Lua fila.get → fairness key assignment
+- 213 total tests pass, fmt and clippy clean
+
+### Change Log
+
+- `fc5232c` feat: listconfig rpc with prefix filtering and lua e2e integration
+
 ### File List
+
+- `proto/fila/v1/admin.proto` — added ListConfig RPC, ConfigEntry, ListConfigRequest, ListConfigResponse
+- `crates/fila-core/src/broker/command.rs` — added ListConfig variant to SchedulerCommand
+- `crates/fila-core/src/broker/scheduler.rs` — added handle_list_config, dispatch arm, 5 tests
+- `crates/fila-server/src/admin_service.rs` — implemented list_config handler, 4 tests

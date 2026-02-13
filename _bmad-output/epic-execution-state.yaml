@@ -5,7 +5,7 @@ stories:
   - id: "5.1"
     title: "Configuration Listing & Operator Visibility"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "code-review"
     branch: "feat/5.1-configuration-listing-operator-visibility"
     pr: null
     dependsOn: []
