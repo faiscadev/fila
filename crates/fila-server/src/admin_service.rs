@@ -19,6 +19,9 @@ pub struct AdminService {
 }
 
 impl AdminService {
+    const MAX_CONFIG_KEY_LEN: usize = 256;
+    const MAX_CONFIG_VALUE_LEN: usize = 1024;
+
     pub fn new(broker: Arc<Broker>) -> Self {
         Self { broker }
     }
@@ -120,6 +123,18 @@ impl FilaAdmin for AdminService {
 
         if req.key.is_empty() {
             return Err(Status::invalid_argument("config key must not be empty"));
+        }
+        if req.key.len() > AdminService::MAX_CONFIG_KEY_LEN {
+            return Err(Status::invalid_argument(format!(
+                "config key must not exceed {} bytes",
+                AdminService::MAX_CONFIG_KEY_LEN
+            )));
+        }
+        if req.value.len() > AdminService::MAX_CONFIG_VALUE_LEN {
+            return Err(Status::invalid_argument(format!(
+                "config value must not exceed {} bytes",
+                AdminService::MAX_CONFIG_VALUE_LEN
+            )));
         }
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();

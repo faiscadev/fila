@@ -416,16 +416,23 @@ impl Scheduler {
 
             // If throttle-prefixed, remove the rate
             if let Some(throttle_key) = key.strip_prefix(Self::THROTTLE_PREFIX) {
-                self.throttle.remove_rate(throttle_key);
+                if !throttle_key.is_empty() {
+                    self.throttle.remove_rate(throttle_key);
+                }
             }
         } else {
-            // Persist the value
-            self.storage.put_state(key, value.as_bytes())?;
-
-            // If throttle-prefixed, parse and apply the rate
+            // If throttle-prefixed, validate before persisting to avoid storing garbage
             if let Some(throttle_key) = key.strip_prefix(Self::THROTTLE_PREFIX) {
+                if throttle_key.is_empty() {
+                    return Err(crate::error::ConfigError::InvalidValue(
+                        "throttle key name must not be empty".into(),
+                    ));
+                }
                 let (rate, burst) = Self::parse_throttle_value(value)?;
+                self.storage.put_state(key, value.as_bytes())?;
                 self.throttle.set_rate(throttle_key, rate, burst);
+            } else {
+                self.storage.put_state(key, value.as_bytes())?;
             }
         }
 
@@ -461,9 +468,21 @@ impl Scheduler {
                 parts[0]
             ))
         })?;
+        if !rate.is_finite() || rate < 0.0 {
+            return Err(crate::error::ConfigError::InvalidValue(format!(
+                "rate_per_second must be a finite non-negative number, got: {}",
+                parts[0].trim()
+            )));
+        }
         let burst: f64 = parts[1].trim().parse().map_err(|_| {
             crate::error::ConfigError::InvalidValue(format!("invalid burst: {}", parts[1]))
         })?;
+        if !burst.is_finite() || burst < 0.0 {
+            return Err(crate::error::ConfigError::InvalidValue(format!(
+                "burst must be a finite non-negative number, got: {}",
+                parts[1].trim()
+            )));
+        }
         Ok((rate, burst))
     }
 
@@ -5317,6 +5336,51 @@ mod tests {
         });
         let result = reply_rx.blocking_recv().unwrap();
         assert!(result.is_err());
+
+        // Verify the invalid value was NOT persisted to storage
+        assert!(scheduler
+            .storage()
+            .get_state("throttle.provider_a")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn set_config_rejects_nan_and_infinity() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        for bad_value in &["NaN,1.0", "1.0,inf", "-1.0,10.0", "10.0,-5.0"] {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            scheduler.handle_command(SchedulerCommand::SetConfig {
+                key: "throttle.bad".to_string(),
+                value: bad_value.to_string(),
+                reply: reply_tx,
+            });
+            let result = reply_rx.blocking_recv().unwrap();
+            assert!(result.is_err(), "should reject {bad_value}");
+            assert!(
+                scheduler
+                    .storage()
+                    .get_state("throttle.bad")
+                    .unwrap()
+                    .is_none(),
+                "rejected value {bad_value} should not be persisted"
+            );
+        }
+    }
+
+    #[test]
+    fn set_config_rejects_empty_throttle_key_name() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.".to_string(), // just prefix, empty key name
+            value: "10.0,100.0".to_string(),
+            reply: reply_tx,
+        });
+        let result = reply_rx.blocking_recv().unwrap();
+        assert!(result.is_err());
     }
 
     #[test]
@@ -5392,6 +5456,28 @@ mod tests {
         assert!(
             consumer_rx.try_recv().is_err(),
             "second message throttled (bucket exhausted)"
+        );
+
+        // Phase 2: Update rate to allow remaining messages (high rate refills bucket)
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.rate:global".to_string(),
+            value: "1000000.0,10.0".to_string(), // high rate + burst refills instantly
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // handle_all_pending calls refill_all then drr_deliver
+        scheduler.handle_all_pending(&tx);
+
+        // The remaining 2 messages should now be delivered after rate update + refill
+        assert!(
+            consumer_rx.try_recv().is_ok(),
+            "second message delivered after rate update"
+        );
+        assert!(
+            consumer_rx.try_recv().is_ok(),
+            "third message delivered after rate update"
         );
     }
 
