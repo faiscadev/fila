@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::{
-    AckError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, NackError,
-    RedriveError, StatsError,
+    AckError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, ListQueuesError,
+    NackError, RedriveError, StatsError,
 };
 
 /// A message ready for delivery to a consumer.
@@ -18,6 +18,15 @@ pub struct ReadyMessage {
     pub weight: u32,
     pub throttle_keys: Vec<String>,
     pub attempt_count: u32,
+}
+
+/// Summary info for a single queue, returned by ListQueues.
+#[derive(Debug, Clone)]
+pub struct QueueSummary {
+    pub name: String,
+    pub depth: u64,
+    pub in_flight: u64,
+    pub active_consumers: u32,
 }
 
 /// Commands sent from IO threads to the single-threaded scheduler core.
@@ -86,6 +95,9 @@ pub enum SchedulerCommand {
         dlq_queue_id: String,
         count: u64,
         reply: tokio::sync::oneshot::Sender<Result<u64, RedriveError>>,
+    },
+    ListQueues {
+        reply: tokio::sync::oneshot::Sender<Result<Vec<QueueSummary>, ListQueuesError>>,
     },
     Shutdown,
 }

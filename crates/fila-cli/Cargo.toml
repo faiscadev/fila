@@ -13,3 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 fila-proto.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true

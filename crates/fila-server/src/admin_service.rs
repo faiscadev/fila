@@ -5,8 +5,9 @@ use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
     ConfigEntry, CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
     GetConfigRequest, GetConfigResponse, GetStatsRequest, GetStatsResponse, ListConfigRequest,
-    ListConfigResponse, PerFairnessKeyStats, PerThrottleKeyStats, RedriveRequest, RedriveResponse,
-    SetConfigRequest, SetConfigResponse,
+    ListConfigResponse, ListQueuesRequest, ListQueuesResponse, PerFairnessKeyStats,
+    PerThrottleKeyStats, QueueInfo, RedriveRequest, RedriveResponse, SetConfigRequest,
+    SetConfigResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::instrument;
@@ -313,6 +314,34 @@ impl FilaAdmin for AdminService {
 
         Ok(Response::new(RedriveResponse { redriven }))
     }
+
+    #[instrument(skip(self))]
+    async fn list_queues(
+        &self,
+        _request: Request<ListQueuesRequest>,
+    ) -> Result<Response<ListQueuesResponse>, Status> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.broker
+            .send_command(SchedulerCommand::ListQueues { reply: reply_tx })
+            .map_err(IntoStatus::into_status)?;
+
+        let summaries = reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .map_err(IntoStatus::into_status)?;
+
+        let queues = summaries
+            .into_iter()
+            .map(|s| QueueInfo {
+                name: s.name,
+                depth: s.depth,
+                in_flight: s.in_flight,
+                active_consumers: s.active_consumers,
+            })
+            .collect();
+
+        Ok(Response::new(ListQueuesResponse { queues }))
+    }
 }
 
 #[cfg(test)]
@@ -617,6 +646,54 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn list_queues_returns_created_queues() {
+        let (svc, _dir) = test_admin_service();
+
+        // No queues initially
+        let resp = svc
+            .list_queues(Request::new(ListQueuesRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(resp.queues.is_empty());
+
+        // Create two queues
+        svc.create_queue(Request::new(CreateQueueRequest {
+            name: "alpha".to_string(),
+            config: None,
+        }))
+        .await
+        .unwrap();
+        svc.create_queue(Request::new(CreateQueueRequest {
+            name: "beta".to_string(),
+            config: None,
+        }))
+        .await
+        .unwrap();
+
+        let resp = svc
+            .list_queues(Request::new(ListQueuesRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        // Should have 4 queues: alpha, alpha.dlq, beta, beta.dlq
+        let names: Vec<&str> = resp.queues.iter().map(|q| q.name.as_str()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"alpha.dlq"));
+        assert!(names.contains(&"beta"));
+        assert!(names.contains(&"beta.dlq"));
+        assert_eq!(resp.queues.len(), 4);
+
+        // All should have zero depth/in_flight/consumers
+        for q in &resp.queues {
+            assert_eq!(q.depth, 0);
+            assert_eq!(q.in_flight, 0);
+            assert_eq!(q.active_consumers, 0);
+        }
     }
 
     #[tokio::test]

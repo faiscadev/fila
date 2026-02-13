@@ -6,10 +6,11 @@ pub mod queue;
 pub mod storage;
 pub mod telemetry;
 
-pub use broker::{Broker, BrokerConfig, ReadyMessage, SchedulerCommand};
+pub use broker::{Broker, BrokerConfig, QueueSummary, ReadyMessage, SchedulerCommand};
 pub use error::{
     AckError, BrokerError, BrokerResult, ConfigError, CreateQueueError, DeleteQueueError,
-    EnqueueError, NackError, RedriveError, StatsError, StorageError, StorageResult,
+    EnqueueError, ListQueuesError, NackError, RedriveError, StatsError, StorageError,
+    StorageResult,
 };
 pub use message::Message;
 pub use queue::QueueConfig;

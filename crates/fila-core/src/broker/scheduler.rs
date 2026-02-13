@@ -240,6 +240,10 @@ impl Scheduler {
                 let result = self.handle_redrive(&dlq_queue_id, count);
                 let _ = reply.send(result);
             }
+            SchedulerCommand::ListQueues { reply } => {
+                let result = self.handle_list_queues();
+                let _ = reply.send(result);
+            }
             SchedulerCommand::Shutdown => {
                 info!("shutdown command received, draining remaining commands");
                 self.running = false;
@@ -707,6 +711,47 @@ impl Scheduler {
         );
 
         Ok(redriven)
+    }
+
+    fn handle_list_queues(
+        &self,
+    ) -> Result<Vec<super::command::QueueSummary>, crate::error::ListQueuesError> {
+        let queues = self.storage.list_queues()?;
+        let mut summaries = Vec::with_capacity(queues.len());
+
+        for q in queues {
+            // Count pending messages for this queue
+            let pending: u64 = self
+                .pending
+                .iter()
+                .filter(|((qid, _), _)| qid == &q.name)
+                .map(|(_, entries)| entries.len() as u64)
+                .sum();
+
+            // Count in-flight (leased) messages for this queue
+            let queue_prefix = crate::storage::keys::message_prefix(&q.name);
+            let in_flight = self
+                .leased_msg_keys
+                .values()
+                .filter(|key| key.starts_with(&queue_prefix))
+                .count() as u64;
+
+            // Count consumers for this queue
+            let consumers = self
+                .consumers
+                .values()
+                .filter(|c| c.queue_id == q.name)
+                .count();
+
+            summaries.push(super::command::QueueSummary {
+                name: q.name,
+                depth: pending + in_flight,
+                in_flight,
+                active_consumers: u32::try_from(consumers).unwrap_or(u32::MAX),
+            });
+        }
+
+        Ok(summaries)
     }
 
     /// Parse a throttle config value in the format "rate_per_second,burst".
@@ -6665,6 +6710,44 @@ mod tests {
         assert_eq!(parent_msgs.len(), 1);
         // The redriven message should be whichever one was NOT leased
         assert_ne!(parent_msgs[0].1.id, leased.msg_id);
+    }
+
+    #[test]
+    fn list_queues_returns_all_queues_with_summary() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Empty initially
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListQueues { reply: reply_tx });
+        let queues = reply_rx.blocking_recv().unwrap().unwrap();
+        assert!(queues.is_empty());
+
+        // Create a queue (auto-creates .dlq)
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::CreateQueue {
+            name: "list-q".to_string(),
+            config: crate::queue::QueueConfig::new("list-q".to_string()),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // List should return 2 queues (list-q + list-q.dlq)
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListQueues { reply: reply_tx });
+        let queues = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(queues.len(), 2);
+
+        let names: Vec<&str> = queues.iter().map(|q| q.name.as_str()).collect();
+        assert!(names.contains(&"list-q"));
+        assert!(names.contains(&"list-q.dlq"));
+
+        for q in &queues {
+            assert_eq!(q.depth, 0);
+            assert_eq!(q.in_flight, 0);
+            assert_eq!(q.active_consumers, 0);
+        }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
     }
 
     /// Helper: drain all buffered commands and run a delivery round.

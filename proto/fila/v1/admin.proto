@@ -10,6 +10,7 @@ service FilaAdmin {
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
   rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
   rpc Redrive(RedriveRequest) returns (RedriveResponse);
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
 }
 
 message CreateQueueRequest {
@@ -97,4 +98,17 @@ message RedriveRequest {
 
 message RedriveResponse {
   uint64 redriven = 1;
+}
+
+message ListQueuesRequest {}
+
+message QueueInfo {
+  string name = 1;
+  uint64 depth = 2;
+  uint64 in_flight = 3;
+  uint32 active_consumers = 4;
+}
+
+message ListQueuesResponse {
+  repeated QueueInfo queues = 1;
 }
