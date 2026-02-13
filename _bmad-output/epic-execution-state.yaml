@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "4.2"
     title: "Throttle-Aware Scheduling"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/4.2-throttle-aware-scheduling"
+    pr: 21
     dependsOn: ["4.1"]
   - id: "4.3"
     title: "Runtime Throttle Rate Management"
