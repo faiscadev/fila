@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::{
-    AckError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, NackError,
+    AckError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, NackError, StatsError,
 };
 
 /// A message ready for delivery to a consumer.
@@ -76,6 +76,10 @@ pub enum SchedulerCommand {
     ListConfig {
         prefix: String,
         reply: tokio::sync::oneshot::Sender<Result<Vec<(String, String)>, ConfigError>>,
+    },
+    GetStats {
+        queue_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<crate::broker::stats::QueueStats, StatsError>>,
     },
     Shutdown,
 }

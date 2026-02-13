@@ -89,6 +89,15 @@ pub enum ConfigError {
     Storage(#[from] StorageError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum StatsError {
+    #[error("queue not found: {0}")]
+    QueueNotFound(String),
+
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
+
 // --- Broker lifecycle/channel errors ---
 
 #[derive(Debug, thiserror::Error)]

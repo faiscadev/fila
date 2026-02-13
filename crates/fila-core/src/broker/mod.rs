@@ -2,6 +2,7 @@ pub mod command;
 pub mod config;
 pub mod drr;
 mod scheduler;
+pub mod stats;
 pub mod throttle;
 
 use std::sync::Arc;

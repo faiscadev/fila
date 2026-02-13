@@ -5,7 +5,8 @@ use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
     ConfigEntry, CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
     GetConfigRequest, GetConfigResponse, GetStatsRequest, GetStatsResponse, ListConfigRequest,
-    ListConfigResponse, RedriveRequest, RedriveResponse, SetConfigRequest, SetConfigResponse,
+    ListConfigResponse, PerFairnessKeyStats, PerThrottleKeyStats, RedriveRequest, RedriveResponse,
+    SetConfigRequest, SetConfigResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::instrument;
@@ -228,11 +229,61 @@ impl FilaAdmin for AdminService {
         }))
     }
 
+    #[instrument(skip(self))]
     async fn get_stats(
         &self,
-        _request: Request<GetStatsRequest>,
+        request: Request<GetStatsRequest>,
     ) -> Result<Response<GetStatsResponse>, Status> {
-        Err(Status::unimplemented("GetStats not yet implemented"))
+        let req = request.into_inner();
+
+        if req.queue.is_empty() {
+            return Err(Status::invalid_argument("queue name must not be empty"));
+        }
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.broker
+            .send_command(SchedulerCommand::GetStats {
+                queue_id: req.queue,
+                reply: reply_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        let stats = reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .map_err(IntoStatus::into_status)?;
+
+        let per_key_stats = stats
+            .per_key_stats
+            .into_iter()
+            .map(|s| PerFairnessKeyStats {
+                key: s.key,
+                pending_count: s.pending_count,
+                current_deficit: s.current_deficit,
+                weight: s.weight,
+            })
+            .collect();
+
+        let per_throttle_stats = stats
+            .per_throttle_stats
+            .into_iter()
+            .map(|s| PerThrottleKeyStats {
+                key: s.key,
+                tokens: s.tokens,
+                rate_per_second: s.rate_per_second,
+                burst: s.burst,
+            })
+            .collect();
+
+        Ok(Response::new(GetStatsResponse {
+            depth: stats.depth,
+            in_flight: stats.in_flight,
+            active_fairness_keys: stats.active_fairness_keys,
+            active_consumers: stats.active_consumers,
+            quantum: stats.quantum,
+            per_key_stats,
+            per_throttle_stats,
+        }))
     }
 
     async fn redrive(
@@ -451,5 +502,59 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_stats_returns_populated_response() {
+        let (svc, _dir) = test_admin_service();
+
+        // Create a queue first
+        svc.create_queue(Request::new(CreateQueueRequest {
+            name: "stats-q".to_string(),
+            config: None,
+        }))
+        .await
+        .unwrap();
+
+        let resp = svc
+            .get_stats(Request::new(GetStatsRequest {
+                queue: "stats-q".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.depth, 0);
+        assert_eq!(resp.in_flight, 0);
+        assert_eq!(resp.active_fairness_keys, 0);
+        assert_eq!(resp.active_consumers, 0);
+    }
+
+    #[tokio::test]
+    async fn get_stats_empty_queue_id_returns_invalid_argument() {
+        let (svc, _dir) = test_admin_service();
+
+        let err = svc
+            .get_stats(Request::new(GetStatsRequest {
+                queue: String::new(),
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_stats_nonexistent_queue_returns_not_found() {
+        let (svc, _dir) = test_admin_service();
+
+        let err = svc
+            .get_stats(Request::new(GetStatsRequest {
+                queue: "nonexistent".to_string(),
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::NotFound);
     }
 }
