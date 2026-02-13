@@ -76,7 +76,7 @@ impl Scheduler {
             consumers: HashMap::new(),
             consumer_rr_idx: HashMap::new(),
             drr: DrrScheduler::new(config.quantum),
-            throttle: ThrottleManager::new(),
+            throttle: ThrottleManager::default(),
             pending: HashMap::new(),
             pending_by_id: HashMap::new(),
             leased_msg_keys: HashMap::new(),
