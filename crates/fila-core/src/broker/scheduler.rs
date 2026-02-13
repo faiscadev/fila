@@ -232,6 +232,14 @@ impl Scheduler {
                 let result = self.handle_get_stats(&queue_id);
                 let _ = reply.send(result);
             }
+            SchedulerCommand::Redrive {
+                dlq_queue_id,
+                count,
+                reply,
+            } => {
+                let result = self.handle_redrive(&dlq_queue_id, count);
+                let _ = reply.send(result);
+            }
             SchedulerCommand::Shutdown => {
                 info!("shutdown command received, draining remaining commands");
                 self.running = false;
@@ -580,6 +588,115 @@ impl Scheduler {
             per_key_stats,
             per_throttle_stats,
         })
+    }
+
+    fn handle_redrive(
+        &mut self,
+        dlq_queue_id: &str,
+        count: u64,
+    ) -> Result<u64, crate::error::RedriveError> {
+        // Verify DLQ queue exists
+        if self.storage.get_queue(dlq_queue_id)?.is_none() {
+            return Err(crate::error::RedriveError::QueueNotFound(
+                dlq_queue_id.to_string(),
+            ));
+        }
+
+        // Verify it's actually a DLQ (name ends with .dlq)
+        let Some(parent_queue_id) = dlq_queue_id.strip_suffix(".dlq") else {
+            return Err(crate::error::RedriveError::NotADLQ(
+                dlq_queue_id.to_string(),
+            ));
+        };
+
+        // Verify parent queue exists
+        if self.storage.get_queue(parent_queue_id)?.is_none() {
+            return Err(crate::error::RedriveError::ParentQueueNotFound(
+                parent_queue_id.to_string(),
+            ));
+        }
+
+        // Enumerate DLQ messages from storage (ordered by enqueue time)
+        let dlq_prefix = crate::storage::keys::message_prefix(dlq_queue_id);
+        let messages = self.storage.list_messages(&dlq_prefix)?;
+
+        let limit = if count == 0 {
+            messages.len()
+        } else {
+            std::cmp::min(count as usize, messages.len())
+        };
+
+        let mut redriven: u64 = 0;
+
+        for (dlq_key, mut msg) in messages.into_iter().take(limit) {
+            // Skip messages that are currently leased (in-flight in DLQ)
+            if self.leased_msg_keys.values().any(|k| k == &dlq_key) {
+                continue;
+            }
+
+            // Move message to parent queue: reset attempt_count, set queue_id
+            msg.queue_id = parent_queue_id.to_string();
+            msg.attempt_count = 0;
+            msg.leased_at = None;
+
+            // Generate new storage key for parent queue
+            let parent_key = crate::storage::keys::message_key(
+                parent_queue_id,
+                &msg.fairness_key,
+                msg.enqueued_at,
+                &msg.id,
+            );
+            let msg_value = serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
+
+            // Atomic move: delete from DLQ, put in parent queue
+            let ops = vec![
+                WriteBatchOp::DeleteMessage { key: dlq_key },
+                WriteBatchOp::PutMessage {
+                    key: parent_key.clone(),
+                    value: msg_value,
+                },
+            ];
+            self.storage.write_batch(ops)?;
+
+            // Remove from DLQ's in-memory pending index if present
+            if let Some(pk) = self.pending_by_id.remove(&msg.id) {
+                if let Some(deque) = self.pending.get_mut(&pk) {
+                    deque.retain(|e| e.msg_id != msg.id);
+                    if deque.is_empty() {
+                        self.pending.remove(&pk);
+                    }
+                }
+            }
+
+            // Add to parent queue's in-memory indices
+            self.drr
+                .add_key(parent_queue_id, &msg.fairness_key, msg.weight);
+            self.pending_push(
+                parent_queue_id,
+                &msg.fairness_key,
+                PendingEntry {
+                    msg_key: parent_key,
+                    msg_id: msg.id,
+                    throttle_keys: msg.throttle_keys.clone(),
+                },
+            );
+
+            redriven += 1;
+        }
+
+        // Trigger delivery for parent queue if any messages were moved
+        if redriven > 0 {
+            self.drr_deliver_queue(parent_queue_id);
+        }
+
+        debug!(
+            %dlq_queue_id,
+            %parent_queue_id,
+            %redriven,
+            "redrive complete"
+        );
+
+        Ok(redriven)
     }
 
     /// Parse a throttle config value in the format "rate_per_second,burst".
@@ -6176,6 +6293,313 @@ mod tests {
         let stats = reply_rx.blocking_recv().unwrap().unwrap();
         assert_eq!(stats.depth, 2);
         assert_eq!(stats.in_flight, 0);
+    }
+
+    // --- Redrive tests ---
+
+    /// Helper: enqueue a message, lease it, then nack it to trigger DLQ routing.
+    /// Returns the msg_id of the dead-lettered message.
+    fn dlq_one_message(
+        tx: &crossbeam_channel::Sender<SchedulerCommand>,
+        scheduler: &mut Scheduler,
+        queue_name: &str,
+    ) -> uuid::Uuid {
+        let msg = test_message(queue_name);
+        let msg_id = msg.id;
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Register consumer to trigger delivery
+        let (consumer_tx, _consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: queue_name.to_string(),
+            consumer_id: format!("dlq-helper-{msg_id}"),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        scheduler.handle_all_pending(tx);
+
+        // Nack to trigger on_failure → DLQ
+        let (nack_tx, nack_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Nack {
+            queue_id: queue_name.to_string(),
+            msg_id,
+            error: "test failure".to_string(),
+            reply: nack_tx,
+        });
+        nack_rx.blocking_recv().unwrap().unwrap();
+
+        // Unregister consumer
+        scheduler.handle_command(SchedulerCommand::UnregisterConsumer {
+            consumer_id: format!("dlq-helper-{msg_id}"),
+        });
+
+        msg_id
+    }
+
+    #[test]
+    fn redrive_moves_messages_from_dlq_to_parent_and_leasable() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "redrive-q", on_failure_script, None);
+        scheduler.handle_all_pending(&tx);
+
+        // Dead-letter a message
+        let msg_id = dlq_one_message(&tx, &mut scheduler, "redrive-q");
+
+        // Verify message is in DLQ
+        let dlq_prefix = crate::storage::keys::message_prefix("redrive-q.dlq");
+        let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
+        assert_eq!(dlq_msgs.len(), 1);
+
+        // Redrive
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Redrive {
+            dlq_queue_id: "redrive-q.dlq".to_string(),
+            count: 0,
+            reply: reply_tx,
+        });
+        let redriven = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(redriven, 1);
+
+        // Verify message is back in parent queue storage
+        let parent_prefix = crate::storage::keys::message_prefix("redrive-q");
+        let parent_msgs = scheduler.storage().list_messages(&parent_prefix).unwrap();
+        assert_eq!(parent_msgs.len(), 1);
+        assert_eq!(parent_msgs[0].1.id, msg_id);
+
+        // Verify DLQ is now empty
+        let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
+        assert!(dlq_msgs.is_empty());
+
+        // Verify message is leasable: register consumer on parent queue
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "redrive-q".to_string(),
+            consumer_id: "lease-after-redrive".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+        scheduler.handle_all_pending(&tx);
+
+        let delivered = consumer_rx
+            .try_recv()
+            .expect("redriven message should be leasable");
+        assert_eq!(delivered.msg_id, msg_id);
+    }
+
+    #[test]
+    fn redrive_resets_attempt_count_to_zero() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "redrive-attempt-q", on_failure_script, None);
+        scheduler.handle_all_pending(&tx);
+
+        dlq_one_message(&tx, &mut scheduler, "redrive-attempt-q");
+
+        // Verify attempt_count in DLQ is 1
+        let dlq_prefix = crate::storage::keys::message_prefix("redrive-attempt-q.dlq");
+        let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
+        assert_eq!(dlq_msgs[0].1.attempt_count, 1);
+
+        // Redrive
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Redrive {
+            dlq_queue_id: "redrive-attempt-q.dlq".to_string(),
+            count: 0,
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Verify attempt_count reset to 0 in parent queue
+        let parent_prefix = crate::storage::keys::message_prefix("redrive-attempt-q");
+        let parent_msgs = scheduler.storage().list_messages(&parent_prefix).unwrap();
+        assert_eq!(parent_msgs[0].1.attempt_count, 0);
+    }
+
+    #[test]
+    fn redrive_with_count_limit_only_moves_that_many() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "redrive-limit-q", on_failure_script, None);
+        scheduler.handle_all_pending(&tx);
+
+        // Dead-letter 3 messages
+        for _ in 0..3 {
+            dlq_one_message(&tx, &mut scheduler, "redrive-limit-q");
+        }
+
+        let dlq_prefix = crate::storage::keys::message_prefix("redrive-limit-q.dlq");
+        assert_eq!(
+            scheduler
+                .storage()
+                .list_messages(&dlq_prefix)
+                .unwrap()
+                .len(),
+            3
+        );
+
+        // Redrive only 2
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Redrive {
+            dlq_queue_id: "redrive-limit-q.dlq".to_string(),
+            count: 2,
+            reply: reply_tx,
+        });
+        let redriven = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(redriven, 2);
+
+        // 1 still in DLQ, 2 in parent
+        assert_eq!(
+            scheduler
+                .storage()
+                .list_messages(&dlq_prefix)
+                .unwrap()
+                .len(),
+            1
+        );
+        let parent_prefix = crate::storage::keys::message_prefix("redrive-limit-q");
+        assert_eq!(
+            scheduler
+                .storage()
+                .list_messages(&parent_prefix)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn redrive_count_zero_moves_all_messages() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "redrive-all-q", on_failure_script, None);
+        scheduler.handle_all_pending(&tx);
+
+        for _ in 0..3 {
+            dlq_one_message(&tx, &mut scheduler, "redrive-all-q");
+        }
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Redrive {
+            dlq_queue_id: "redrive-all-q.dlq".to_string(),
+            count: 0,
+            reply: reply_tx,
+        });
+        let redriven = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(redriven, 3);
+
+        let dlq_prefix = crate::storage::keys::message_prefix("redrive-all-q.dlq");
+        assert!(scheduler
+            .storage()
+            .list_messages(&dlq_prefix)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn redrive_non_dlq_queue_returns_not_a_dlq() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "normal-q");
+        scheduler.handle_all_pending(&tx);
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Redrive {
+            dlq_queue_id: "normal-q".to_string(),
+            count: 0,
+            reply: reply_tx,
+        });
+        let err = reply_rx.blocking_recv().unwrap().unwrap_err();
+        assert!(matches!(err, crate::error::RedriveError::NotADLQ(_)));
+    }
+
+    #[test]
+    fn redrive_nonexistent_queue_returns_not_found() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Redrive {
+            dlq_queue_id: "nonexistent.dlq".to_string(),
+            count: 0,
+            reply: reply_tx,
+        });
+        let err = reply_rx.blocking_recv().unwrap().unwrap_err();
+        assert!(matches!(err, crate::error::RedriveError::QueueNotFound(_)));
+    }
+
+    #[test]
+    fn redrive_parent_deleted_returns_parent_not_found() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "redrive-orphan-q", on_failure_script, None);
+        scheduler.handle_all_pending(&tx);
+
+        // Dead-letter a message
+        dlq_one_message(&tx, &mut scheduler, "redrive-orphan-q");
+
+        // Delete the parent queue
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::DeleteQueue {
+            queue_id: "redrive-orphan-q".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Redrive should fail because parent is gone
+        // But DeleteQueue cascade-deletes auto DLQ, so the DLQ is also gone.
+        // We need to test with a scenario where the DLQ still exists but parent doesn't.
+        // Create a manual DLQ-named queue without a parent.
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::CreateQueue {
+            name: "orphan-parent.dlq".to_string(),
+            config: crate::queue::QueueConfig::new("orphan-parent.dlq".to_string()),
+            reply: reply_tx,
+        })
+        .unwrap();
+        scheduler.handle_all_pending(&tx);
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Redrive {
+            dlq_queue_id: "orphan-parent.dlq".to_string(),
+            count: 0,
+            reply: reply_tx,
+        });
+        let err = reply_rx.blocking_recv().unwrap().unwrap_err();
+        assert!(matches!(
+            err,
+            crate::error::RedriveError::ParentQueueNotFound(_)
+        ));
     }
 
     /// Helper: drain all buffered commands and run a delivery round.

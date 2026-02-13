@@ -98,6 +98,21 @@ pub enum StatsError {
     Storage(#[from] StorageError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RedriveError {
+    #[error("queue not found: {0}")]
+    QueueNotFound(String),
+
+    #[error("not a dead-letter queue: {0}")]
+    NotADLQ(String),
+
+    #[error("parent queue not found: {0}")]
+    ParentQueueNotFound(String),
+
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
+
 // --- Broker lifecycle/channel errors ---
 
 #[derive(Debug, thiserror::Error)]
