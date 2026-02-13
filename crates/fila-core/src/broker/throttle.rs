@@ -16,10 +16,13 @@ pub struct TokenBucket {
 
 impl TokenBucket {
     /// Create a new token bucket starting at full capacity.
+    /// Negative values are clamped to 0.0.
     pub fn new(rate_per_second: f64, burst: f64) -> Self {
+        let rate = rate_per_second.max(0.0);
+        let burst = burst.max(0.0);
         Self {
             tokens: burst,
-            rate_per_second,
+            rate_per_second: rate,
             burst,
             last_refill: Instant::now(),
         }
@@ -28,9 +31,11 @@ impl TokenBucket {
     /// Create a token bucket with a specific start time (for testing).
     #[cfg(test)]
     fn with_time(rate_per_second: f64, burst: f64, now: Instant) -> Self {
+        let rate = rate_per_second.max(0.0);
+        let burst = burst.max(0.0);
         Self {
             tokens: burst,
-            rate_per_second,
+            rate_per_second: rate,
             burst,
             last_refill: now,
         }
@@ -63,10 +68,11 @@ impl TokenBucket {
     }
 
     /// Update the rate and burst. Preserves current tokens, clamped to new burst.
+    /// Negative values are clamped to 0.0.
     pub fn update(&mut self, rate_per_second: f64, burst: f64) {
-        self.rate_per_second = rate_per_second;
-        self.burst = burst;
-        self.tokens = self.tokens.min(burst);
+        self.rate_per_second = rate_per_second.max(0.0);
+        self.burst = burst.max(0.0);
+        self.tokens = self.tokens.min(self.burst);
     }
 }
 
@@ -264,6 +270,25 @@ mod tests {
         // 20 tokens, reduce burst to 5
         bucket.update(10.0, 5.0);
         assert_eq!(bucket.tokens(), 5.0); // clamped
+    }
+
+    #[test]
+    fn token_bucket_zero_rate_never_refills() {
+        let now = Instant::now();
+        let mut bucket = TokenBucket::with_time(0.0, 10.0, now);
+        bucket.try_consume(10.0);
+        assert_eq!(bucket.tokens(), 0.0);
+
+        // After 1 second at rate 0/s → still 0 tokens
+        bucket.refill(now + Duration::from_secs(1));
+        assert_eq!(bucket.tokens(), 0.0);
+    }
+
+    #[test]
+    fn token_bucket_negative_values_clamped_to_zero() {
+        let bucket = TokenBucket::new(-5.0, -10.0);
+        assert_eq!(bucket.tokens(), 0.0);
+        // rate and burst clamped to 0
     }
 
     // ── ThrottleManager tests ──────────────────────────────────────────
