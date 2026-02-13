@@ -19,7 +19,7 @@ stories:
   - id: "4.3"
     title: "Runtime Throttle Rate Management"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "review"
     branch: "feat/4.3-runtime-throttle-rate-management"
     pr: null
     dependsOn: ["4.1", "4.2"]
