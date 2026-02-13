@@ -234,6 +234,7 @@ Claude Opus 4.6
 ### Change Log
 
 - `a9d10fe` feat: runtime throttle rate management via setconfig/getconfig rpcs
+- `6021c10` fix: address code review findings for story 4.3 (H1: validate-before-persist, H2: reject NaN/Inf, M3: iterator_cf, M4: empty key, M5: size limits, L7: integration test)
 
 ### File List
 
