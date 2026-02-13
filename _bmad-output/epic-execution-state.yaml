@@ -5,7 +5,7 @@ stories:
   - id: "4.1"
     title: "Token Bucket Implementation"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/4.1-token-bucket-implementation"
     pr: null
     dependsOn: []
