@@ -1023,6 +1023,12 @@ impl Scheduler {
     fn recover(&mut self) {
         self.reclaim_expired_leases();
 
+        // Clear in-memory indexes populated by reclaim_expired_leases —
+        // the full scan below rebuilds them from scratch, avoiding duplicates.
+        self.pending.clear();
+        self.pending_by_id.clear();
+        self.leased_msg_keys.clear();
+
         // Rebuild DRR active keys and Lua script cache by scanning queues
         match self.storage.list_queues() {
             Ok(queues) => {
@@ -2208,6 +2214,71 @@ mod tests {
         assert!(
             old_expired.is_empty(),
             "expired lease_expiry entry at ts=1 should be removed by recovery"
+        );
+    }
+
+    /// Regression: reclaim_expired_leases + recovery scan must not produce
+    /// duplicate pending entries (Cubic P1 finding on PR #21).
+    #[test]
+    fn recovery_does_not_duplicate_reclaimed_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+
+        let config = crate::queue::QueueConfig::new("dup-queue".to_string());
+        storage.put_queue("dup-queue", &config).unwrap();
+
+        // Create 3 messages: 2 with expired leases, 1 unleased (ready)
+        let mut msg_ids = Vec::new();
+        for i in 0u64..3 {
+            let mut msg = test_message("dup-queue");
+            msg.enqueued_at = i;
+            msg_ids.push(msg.id);
+            let msg_key = crate::storage::keys::message_key(
+                "dup-queue",
+                &msg.fairness_key,
+                msg.enqueued_at,
+                &msg.id,
+            );
+            storage.put_message(&msg_key, &msg).unwrap();
+
+            // Add expired leases for first 2 messages
+            if i < 2 {
+                let lease_key = crate::storage::keys::lease_key("dup-queue", &msg.id);
+                let lease_val = crate::storage::keys::lease_value("old-consumer", 1);
+                let expiry_key =
+                    crate::storage::keys::lease_expiry_key(1 + i, "dup-queue", &msg.id);
+                storage
+                    .write_batch(vec![
+                        WriteBatchOp::PutLease {
+                            key: lease_key,
+                            value: lease_val,
+                        },
+                        WriteBatchOp::PutLeaseExpiry { key: expiry_key },
+                    ])
+                    .unwrap();
+            }
+        }
+
+        // Run recovery: should deliver exactly 3 messages, not 5
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "dup-queue".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
+
+        let mut received = Vec::new();
+        while let Ok(ready) = consumer_rx.try_recv() {
+            received.push(ready.msg_id);
+        }
+        assert_eq!(
+            received.len(),
+            3,
+            "should deliver exactly 3 messages (not duplicated by reclaim + scan)"
         );
     }
 
