@@ -1,6 +1,6 @@
 # Story 4.2: Throttle-Aware Scheduling
 
-Status: review
+Status: done
 
 ## Story
 

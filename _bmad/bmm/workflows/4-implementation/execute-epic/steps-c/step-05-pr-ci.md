@@ -83,7 +83,10 @@ git push -u origin {branch-name}
 Open a pull request using `gh pr create`:
 - **Title:** Story ID and title (e.g., "feat: 2.1 - implement DRR scheduler")
 - **Body:** Summary of changes, acceptance criteria covered, test summary
-- **Base:** The appropriate base branch (main or dependent story's branch)
+- **Base:** Determine the PR target branch using this logic:
+  - **If the story has dependencies** (i.e., a previous story in this epic): Target the dependent story's branch (e.g., Story 4.2 targets `feat/4.1-token-bucket-implementation`). This creates stacked/chained PRs with incremental diffs.
+  - **If the story has no dependencies** (i.e., it is the first story in the epic): Target the epic's baseBranch (typically `main`).
+  - **NEVER target `main` for stories that have dependencies.** This breaks Cubic review scope, cascade rebase, and tracking file consistency.
 
 Record the PR number in {stateFile}.
 

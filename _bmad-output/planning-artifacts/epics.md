@@ -668,24 +668,25 @@ So that I can respond to production conditions by adjusting rate limits.
 
 Operators manage runtime configuration via the gRPC API, redrive DLQ messages, inspect queue stats and per-key metrics, and perform all admin tasks through `fila-cli`. Config changes take effect without restart, enabling live operational adjustments.
 
-### Story 5.1: Runtime Configuration API
+### Story 5.1: Configuration Listing & Operator Visibility
 
 As an operator,
-I want to set and read runtime key-value configuration via the gRPC API,
-So that I can adjust broker behavior without restarting the process.
+I want to list and inspect all runtime configuration entries,
+So that I can understand the current broker configuration state without guessing key names.
+
+**Note:** Core `SetConfig`/`GetConfig` RPCs were implemented in Epic 4, Story 4.3 (including persistence to state CF, Lua `fila.get()` integration, throttle-prefix side effects, and crash recovery). This story covers the remaining operator visibility gaps.
 
 **Acceptance Criteria:**
 
-**Given** the broker is running
-**When** an operator calls `SetConfig` RPC with a key and value
-**Then** the key-value pair is stored in the `state` CF of RocksDB
-**And** the config change takes effect on subsequent message processing (FR28)
-**And** Lua scripts reading via `fila.get(key)` see the updated value immediately (FR27)
-**And** `GetConfig` RPC returns the current value for a given key (FR29)
-**And** `GetConfig` for a non-existent key returns an empty/null value (not an error)
-**And** config values survive broker restart (persisted in RocksDB)
-**And** no broker restart is required for config changes to take effect (NFR17)
-**And** an integration test sets a config value, reads it back via GetConfig, and verifies a Lua script sees the updated value via fila.get()
+**Given** the broker has runtime configuration entries (set via `SetConfig` in Story 4.3)
+**When** an operator calls `ListConfig` RPC with an optional prefix filter
+**Then** all matching key-value pairs from the `state` CF are returned
+**And** if no prefix is specified, all config entries are returned
+**And** if a prefix is specified (e.g., `throttle.`), only matching entries are returned
+**And** the response includes the total count of matching entries
+**And** calling `ListConfig` with no entries returns an empty list (not an error)
+**And** an integration test sets multiple config values (throttle and non-throttle), lists all, lists by prefix, and verifies correct filtering
+**And** an integration test verifies non-throttle config keys are readable by Lua scripts via `fila.get()` (end-to-end: SetConfig → Lua fila.get → verify value)
 
 ### Story 5.2: Queue Stats & Inspection
 
@@ -743,8 +744,11 @@ So that I can manage the broker from the terminal without writing code.
 **And** `fila stats <queue>` shows queue statistics
 **And** `fila redrive <dlq-name> [--count <n>]` redrives DLQ messages
 **And** all commands connect to the broker via gRPC (default `localhost:5555`, configurable via `--addr` flag)
-**And** error messages are human-friendly (translated from gRPC status codes)
-**And** `fila --help` shows usage for all commands
+**And** error messages are human-friendly (translated from gRPC status codes to actionable messages, e.g., `NOT_FOUND` → `Error: queue "foo" does not exist`, `INVALID_ARGUMENT` → `Error: "bar" is not a dead-letter queue`)
+**And** successful operations produce concise confirmation output (e.g., `Created queue "orders"`, `Redrived 42 messages from "orders.dlq" to "orders"`)
+**And** `fila queue list` and `fila queue inspect` output is formatted as aligned tables for terminal readability
+**And** `fila --help` shows usage for all commands with brief descriptions and examples
+**And** each subcommand supports `--help` with detailed usage (e.g., `fila queue create --help`)
 **And** the CLI binary compiles as `fila` (distinct from `fila-server`)
 
 ---
@@ -1013,3 +1017,18 @@ So that I can implement common use cases without starting from scratch.
 **And** each SDK has a working code example showing enqueue → lease → ack flow (FR55)
 **And** copy-paste Lua hook examples are provided for common patterns: tenant fairness, provider throttling, exponential backoff, header-based routing (FR59)
 **And** each example is tested in CI to prevent documentation rot
+
+---
+
+## Future: Refactoring Epic (Not Yet Planned)
+
+**Identified in:** Epic 4 Retrospective (2026-02-13)
+
+**Motivation:** `scheduler.rs` has grown to 5,497 lines — half the codebase in one file. Every epic adds more to it. The file handles: enqueue, delivery, ack, nack, DRR scheduling, throttle integration, pending index, lease management, config handling, recovery, and all associated tests. This is unsustainable.
+
+**Prerequisite:** Blackbox end-to-end tests must be written BEFORE refactoring. Current tests are whitebox and tightly coupled to internal structure. Refactoring without behavioral test coverage risks introducing regressions.
+
+**Proposed sequence:**
+1. Blackbox e2e test suite — exercise the real gRPC server end-to-end (enqueue, lease, ack, nack, throttle, Lua hooks, DLQ, config) as a real operator would
+2. Scheduler decomposition — extract handler groups into submodules (delivery, config, recovery, leasing) while keeping tests green
+3. General cleanup — address any accumulated structural debt

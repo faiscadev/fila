@@ -74,11 +74,11 @@ development_status:
   4-1-token-bucket-implementation: done
   4-2-throttle-aware-scheduling: done
   4-3-runtime-throttle-rate-management: done
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
 
   # Epic 5: Operator Experience (Admin, Config & CLI)
   epic-5: backlog
-  5-1-runtime-configuration-api: backlog
+  5-1-configuration-listing-operator-visibility: backlog
   5-2-queue-stats-inspection: backlog
   5-3-dlq-redrive: backlog
   5-4-fila-cli: backlog

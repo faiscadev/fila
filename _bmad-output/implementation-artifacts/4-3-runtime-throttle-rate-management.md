@@ -1,6 +1,6 @@
 # Story 4.3: Runtime Throttle Rate Management
 
-Status: review
+Status: done
 
 ## Story
 
