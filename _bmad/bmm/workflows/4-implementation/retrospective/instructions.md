@@ -826,6 +826,17 @@ Bob (Scrum Master): "I want specific, achievable actions with clear owners. Not 
 - Relevant: Addresses real issues from retro
 - Time-bound: Has clear deadline
 
+<critical>ENCODE OR DROP RULE: Every action item MUST identify a specific target file where it will be encoded. Action items that live only in the retro document have ~30% follow-through and are effectively ignored. Acceptable targets:
+- **CLAUDE.md** — Project instructions that all agents read every session
+- **Memory files** — Persistent lessons learned across conversations
+- **Workflow files** — Steps added to existing workflows (dev-story, execute-epic, create-story, etc.)
+- **Story/epic definitions** — Requirements baked into epics.md or story files
+- **Code changes** — A concrete task/PR to execute before the next epic
+
+If an action item cannot be mapped to one of these targets, it must be either converted into a concrete file change or explicitly dropped. Do NOT create "team agreements" that exist only in the retro document — they will not be followed.</critical>
+
+<action>For each proposed action item, identify the target file and change type. Present action items in a table with columns: Action, Target File, Change Type. Discuss with {user_name} which items to encode and which to drop.</action>
+
 <output>
 Bob (Scrum Master): "Based on our discussion, here are the action items I'm proposing..."
 
@@ -1300,10 +1311,24 @@ Bob (Scrum Master): "See you all when prep work is done. Meeting adjourned!"
 
 </step>
 
-<step n="11" goal="Save Retrospective and Update Sprint Status">
+<step n="11" goal="Save Retrospective, Execute Encoded Changes, and Update Sprint Status">
 
 <action>Ensure retrospectives folder exists: {retrospectives_folder}</action>
 <action>Create folder if it doesn't exist</action>
+
+<critical>EXECUTE ALL ENCODED CHANGES NOW — the retro is not complete until every action item's file change has been written. This is the step where retro commitments become real.</critical>
+
+<action>For each action item with a target file identified in Step 8:</action>
+- If target is CLAUDE.md → Edit the project CLAUDE.md file with the new instruction
+- If target is memory files → Write/update the relevant memory file
+- If target is a workflow file → Edit the workflow instructions to add the new step/rule
+- If target is epics.md or a story file → Edit the planning artifact with updated requirements
+- If target is a code change → Note it as a pre-epic task (code changes happen outside the retro)
+
+<action>After executing all file changes, list what was changed:</action>
+- File path, what was added/modified, and which action item it addresses
+
+<action>Also update {sprint_status_file} to reflect correct status for all stories in the completed epic (fix any stale entries)</action>
 
 <action>Generate comprehensive retrospective summary document including:</action>
 
@@ -1314,7 +1339,9 @@ Bob (Scrum Master): "See you all when prep work is done. Meeting adjourned!"
 - Key insights and learnings
 - Previous retro follow-through analysis (if applicable)
 - Next epic preview and dependencies
-- Action items with owners and timelines
+- Action items with target files and change types (encode or drop table)
+- Which file changes were executed during the retro
+- Which changes are deferred as pre-epic tasks
 - Preparation tasks for next epic
 - Critical path items
 - Significant discoveries and epic update recommendations (if any)

@@ -640,6 +640,8 @@ So that consumers never receive messages they cannot process due to rate limits.
 **And** hierarchical throttling works: a message with keys `["provider:aws", "region:us-east-1"]` is throttled if either bucket is empty (FR17)
 **And** token buckets are refilled in the scheduler loop before each DRR round
 **And** skipped keys remain in the active set (they still have pending messages)
+**And** the O(n²) message scan in `drr_deliver_queue` is replaced with a per-fairness-key in-memory pending message index, eliminating quadratic scanning during delivery (technical debt from Epic 2, deferred from Epic 3)
+**And** the previously `#[ignore]`d 10k fairness test runs in CI after the scan optimization
 **And** an integration test creates a queue with Lua assigning throttle keys, sets a low rate limit, enqueues rapidly, and verifies consumers receive messages at the throttled rate
 
 ### Story 4.3: Runtime Throttle Rate Management

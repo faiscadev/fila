@@ -40,3 +40,26 @@ When converting or wrapping errors, always follow this pattern:
 ### Per-Command Error Types
 
 Each command/operation returns only the errors it can actually produce. Never use a "god enum" where `put_queue` could return `MessageNotFound`. See `crates/fila-core/src/error.rs` for the pattern.
+
+## PR Review — Cubic Automated Review
+
+This project uses **Cubic**, an automated AI reviewer that runs on every PR. You MUST check Cubic's findings before considering a story complete.
+
+### How Cubic Works
+
+1. When a PR is opened/updated, a **Cubic CI check** runs on the PR
+2. After the CI check finishes, there is a **delay** before Cubic posts its review
+3. The CI check output shows a summary like: `AI review completed with 1 review. 0 issues found across 1 file (changes from recent commits).`
+4. **If 0 issues found**: Cubic has nothing to say — no review will be posted. You're clear.
+5. **If >0 issues found**: Cubic will post a review on the PR with specific findings. Wait for it.
+
+### Required Process
+
+After creating a PR:
+1. Wait for the Cubic CI check to complete
+2. Read the CI check output to see if issues were found (look at the issue count)
+3. If issues > 0, wait for Cubic to post its review (there is a delay after the CI check)
+4. Read the review findings and address every issue
+5. Only then mark the story as complete
+
+**Never skip this step.** Cubic catches real bugs — safety issues, correctness problems, edge cases. Ignoring its findings means shipping known defects.

@@ -62,12 +62,12 @@ development_status:
   epic-2-retrospective: done
 
   # Epic 3: Lua Rules Engine & Dead-Letter Handling
-  epic-3: in-progress
-  3-1-lua-sandbox-on-enqueue-hook: review
-  3-2-lua-safety-timeouts-memory-limits-circuit-breaker: in-progress
-  3-3-on-failure-hook-retry-decisions: backlog
-  3-4-dead-letter-queue: backlog
-  epic-3-retrospective: optional
+  epic-3: done
+  3-1-lua-sandbox-on-enqueue-hook: done
+  3-2-lua-safety-timeouts-memory-limits-circuit-breaker: done
+  3-3-on-failure-hook-retry-decisions: done
+  3-4-dead-letter-queue: done
+  epic-3-retrospective: done
 
   # Epic 4: Throttling & Rate Limiting
   epic-4: backlog
