@@ -37,7 +37,7 @@ fn bench_throttle_manager(c: &mut Criterion) {
         let keys = vec!["key_0".to_string()];
         b.iter_batched(
             || {
-                let mut mgr = ThrottleManager::new();
+                let mut mgr = ThrottleManager::default();
                 mgr.set_rate("key_0", 1_000_000.0, 1_000_000.0);
                 mgr
             },
@@ -51,7 +51,7 @@ fn bench_throttle_manager(c: &mut Criterion) {
         let keys: Vec<String> = (0..3).map(|i| format!("key_{i}")).collect();
         b.iter_batched(
             || {
-                let mut mgr = ThrottleManager::new();
+                let mut mgr = ThrottleManager::default();
                 for i in 0..3 {
                     mgr.set_rate(&format!("key_{i}"), 1_000_000.0, 1_000_000.0);
                 }
@@ -64,7 +64,7 @@ fn bench_throttle_manager(c: &mut Criterion) {
 
     // Refill all with 10 buckets
     group.bench_function("refill_10_buckets", |b| {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         for i in 0..10 {
             mgr.set_rate(&format!("key_{i}"), 1000.0, 1000.0);
         }
