@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "4.2"
     title: "Throttle-Aware Scheduling"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/4.2-throttle-aware-scheduling"
     pr: null
     dependsOn: ["4.1"]
   - id: "4.3"
