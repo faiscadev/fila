@@ -81,7 +81,7 @@ development_status:
   5-1-configuration-listing-operator-visibility: done
   5-2-queue-stats-inspection: done
   5-3-dlq-redrive: done
-  5-4-fila-cli: backlog
+  5-4-fila-cli: in-progress
   epic-5-retrospective: optional
 
   # Epic 6: Observability & Diagnostics
