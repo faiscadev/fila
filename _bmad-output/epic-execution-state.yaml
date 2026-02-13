@@ -11,8 +11,8 @@ stories:
     dependsOn: []
   - id: "5.2"
     title: "Queue Stats & Inspection"
-    status: pending
-    currentPhase: ""
+    status: in-progress
+    currentPhase: "setup"
     branch: ""
     pr: null
     dependsOn: []
