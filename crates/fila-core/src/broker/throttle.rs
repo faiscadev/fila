@@ -84,17 +84,12 @@ impl TokenBucket {
 /// bucket are treated as unthrottled (always pass).
 ///
 /// Intended to be owned by the single-threaded scheduler.
+#[derive(Default)]
 pub struct ThrottleManager {
     buckets: HashMap<String, TokenBucket>,
 }
 
 impl ThrottleManager {
-    pub fn new() -> Self {
-        Self {
-            buckets: HashMap::new(),
-        }
-    }
-
     /// Create or update a token bucket for the given throttle key.
     /// If the key already exists, the rate and burst are updated but
     /// current tokens are preserved (clamped to new burst).
@@ -163,12 +158,6 @@ impl ThrottleManager {
     /// Whether the manager has no configured buckets.
     pub fn is_empty(&self) -> bool {
         self.buckets.is_empty()
-    }
-}
-
-impl Default for ThrottleManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -313,7 +302,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_create_and_remove() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         assert!(mgr.is_empty());
 
         mgr.set_rate("key_a", 10.0, 10.0);
@@ -327,7 +316,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_update_existing() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 10.0, 20.0);
 
         // Consume some tokens
@@ -345,7 +334,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_check_keys_all_pass() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 10.0, 10.0);
         mgr.set_rate("key_b", 10.0, 10.0);
 
@@ -355,7 +344,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_check_keys_one_exhausted() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 10.0, 10.0);
         mgr.set_rate("key_b", 10.0, 1.0); // only 1 token
 
@@ -371,7 +360,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_check_keys_no_partial_drain() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 10.0, 10.0);
         mgr.set_rate("key_b", 10.0, 0.5); // starts with 0.5 — below 1.0
 
@@ -389,7 +378,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_unknown_key_passes() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 10.0, 10.0);
 
         // key_b not configured → unthrottled
@@ -399,7 +388,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_empty_keys_passes() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 10.0, 10.0);
 
         // No throttle keys on message → always passes
@@ -409,7 +398,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_refill_all() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 100.0, 10.0);
         mgr.set_rate("key_b", 100.0, 10.0);
 
@@ -436,7 +425,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_remove_makes_key_unthrottled() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 10.0, 1.0);
 
         let keys = vec!["key_a".to_string()];
@@ -455,7 +444,7 @@ mod tests {
 
     #[test]
     fn throttle_manager_check_keys_deduplicates() {
-        let mut mgr = ThrottleManager::new();
+        let mut mgr = ThrottleManager::default();
         mgr.set_rate("key_a", 10.0, 2.0); // 2 tokens
 
         // Same key appears twice — should only consume 1 token, not 2
