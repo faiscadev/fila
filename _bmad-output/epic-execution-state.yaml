@@ -12,7 +12,7 @@ stories:
   - id: "4.2"
     title: "Throttle-Aware Scheduling"
     status: in-progress
-    currentPhase: "code-review"
+    currentPhase: "pr-ci"
     branch: "feat/4.2-throttle-aware-scheduling"
     pr: null
     dependsOn: ["4.1"]
