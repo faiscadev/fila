@@ -5912,7 +5912,59 @@ mod tests {
             .find(|s| s.key == "key-b")
             .unwrap();
         assert_eq!(key_a.pending_count, 2);
+        assert_eq!(key_a.weight, 1); // default weight from test_message_with_key
         assert_eq!(key_b.pending_count, 1);
+        assert_eq!(key_b.weight, 1);
+
+        // Deficits should be non-negative (keys were just added, no delivery yet)
+        assert!(key_a.current_deficit >= 0);
+        assert!(key_b.current_deficit >= 0);
+    }
+
+    #[test]
+    fn get_stats_returns_weighted_fairness_key_stats() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "stats-wt-q");
+
+        // Enqueue messages with different weights
+        let msg = test_message_with_key_and_weight("stats-wt-q", "heavy", 5, 0);
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        let msg = test_message_with_key_and_weight("stats-wt-q", "light", 1, 1);
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        scheduler.handle_all_pending(&tx);
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "stats-wt-q".to_string(),
+            reply: reply_tx,
+        });
+        let stats = reply_rx.blocking_recv().unwrap().unwrap();
+
+        let heavy = stats
+            .per_key_stats
+            .iter()
+            .find(|s| s.key == "heavy")
+            .unwrap();
+        let light = stats
+            .per_key_stats
+            .iter()
+            .find(|s| s.key == "light")
+            .unwrap();
+        assert_eq!(heavy.weight, 5);
+        assert_eq!(light.weight, 1);
     }
 
     #[test]
@@ -5975,9 +6027,10 @@ mod tests {
         });
         reply_rx.blocking_recv().unwrap().unwrap();
 
-        // Enqueue messages across 3 fairness keys
+        // Enqueue messages across 3 fairness keys, all with throttle key "rate:api"
         for i in 0..3 {
-            let msg = test_message_with_key("stats-int-q", "tenant-a", i);
+            let mut msg = test_message_with_key("stats-int-q", "tenant-a", i);
+            msg.throttle_keys = vec!["rate:api".to_string()];
             let (reply_tx, _) = tokio::sync::oneshot::channel();
             tx.send(SchedulerCommand::Enqueue {
                 message: msg,
@@ -5986,7 +6039,8 @@ mod tests {
             .unwrap();
         }
         for i in 10..12 {
-            let msg = test_message_with_key("stats-int-q", "tenant-b", i);
+            let mut msg = test_message_with_key("stats-int-q", "tenant-b", i);
+            msg.throttle_keys = vec!["rate:api".to_string()];
             let (reply_tx, _) = tokio::sync::oneshot::channel();
             tx.send(SchedulerCommand::Enqueue {
                 message: msg,
@@ -5994,7 +6048,8 @@ mod tests {
             })
             .unwrap();
         }
-        let msg = test_message_with_key("stats-int-q", "tenant-c", 20);
+        let mut msg = test_message_with_key("stats-int-q", "tenant-c", 20);
+        msg.throttle_keys = vec!["rate:api".to_string()];
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
             message: msg,
@@ -6028,11 +6083,15 @@ mod tests {
         assert_eq!(stats.active_fairness_keys, 3);
         assert_eq!(stats.per_key_stats.len(), 3);
 
-        // Throttle state
+        // Throttle state — 2 messages delivered consumed 2 tokens from burst of 50
         assert_eq!(stats.per_throttle_stats.len(), 1);
         assert_eq!(stats.per_throttle_stats[0].key, "rate:api");
         assert!((stats.per_throttle_stats[0].rate_per_second - 5.0).abs() < f64::EPSILON);
         assert!((stats.per_throttle_stats[0].burst - 50.0).abs() < f64::EPSILON);
+        assert!(
+            stats.per_throttle_stats[0].tokens < 50.0,
+            "tokens should be less than burst after delivery consumed some"
+        );
 
         // Quantum should be the configured value
         assert!(stats.quantum > 0);
@@ -6056,6 +6115,67 @@ mod tests {
         assert_eq!(stats.active_fairness_keys, 0);
         assert_eq!(stats.active_consumers, 0);
         assert!(stats.per_key_stats.is_empty());
+    }
+
+    #[test]
+    fn get_stats_after_ack_decreases_in_flight_and_depth() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "stats-ack-q");
+
+        // Enqueue 3 messages
+        for i in 0..3 {
+            let msg = test_message_with_key("stats-ack-q", "key-a", i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        // Register consumer with capacity 1
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(1);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "stats-ack-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        scheduler.handle_all_pending(&tx);
+
+        // 1 message leased
+        let delivered = consumer_rx.try_recv().unwrap();
+
+        // Before ack: depth=3, in_flight=1
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "stats-ack-q".to_string(),
+            reply: reply_tx,
+        });
+        let stats = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(stats.depth, 3);
+        assert_eq!(stats.in_flight, 1);
+
+        // Ack the delivered message
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Ack {
+            queue_id: "stats-ack-q".to_string(),
+            msg_id: delivered.msg_id,
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // After ack: depth=2 (only pending), in_flight=0
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "stats-ack-q".to_string(),
+            reply: reply_tx,
+        });
+        let stats = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(stats.depth, 2);
+        assert_eq!(stats.in_flight, 0);
     }
 
     /// Helper: drain all buffered commands and run a delivery round.
