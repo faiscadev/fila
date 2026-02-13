@@ -122,27 +122,40 @@ impl ThrottleManager {
     /// - If ANY configured key is exhausted, consumes nothing and returns false.
     /// - Duplicate keys are deduplicated — each bucket is checked and consumed at most once.
     pub fn check_keys(&mut self, keys: &[String]) -> bool {
-        // Deduplicate keys to prevent double-consumption
-        let unique_keys: HashSet<&String> = keys.iter().collect();
+        if !self.peek_keys(keys) {
+            return false;
+        }
+        self.consume_keys(keys);
+        true
+    }
 
-        // First pass: verify all configured keys have tokens
+    /// Check whether all throttle keys have available tokens without consuming.
+    ///
+    /// Same semantics as `check_keys` but read-only — no tokens are consumed.
+    /// Use this when you need to check availability before confirming the action.
+    pub fn peek_keys(&self, keys: &[String]) -> bool {
+        let unique_keys: HashSet<&String> = keys.iter().collect();
         for key in &unique_keys {
             if let Some(bucket) = self.buckets.get(key.as_str()) {
                 if bucket.tokens() < 1.0 {
                     return false;
                 }
             }
-            // Key not in manager → unthrottled, passes
         }
+        true
+    }
 
-        // Second pass: consume 1 token from each configured key
+    /// Consume 1 token from each unique configured throttle key.
+    ///
+    /// Call after confirming the action succeeded (e.g. message delivered).
+    /// Keys not in the manager are ignored. Duplicate keys are deduplicated.
+    pub fn consume_keys(&mut self, keys: &[String]) {
+        let unique_keys: HashSet<&String> = keys.iter().collect();
         for key in &unique_keys {
             if let Some(bucket) = self.buckets.get_mut(key.as_str()) {
                 bucket.try_consume(1.0);
             }
         }
-
-        true
     }
 
     /// Returns true if the manager has a bucket for the given key.

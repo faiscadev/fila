@@ -608,8 +608,9 @@ impl Scheduler {
         Ok(None)
     }
 
-    /// Remove all pending index entries for a queue (used on queue deletion).
+    /// Remove all pending and leased index entries for a queue (used on queue deletion).
     fn remove_pending_for_queue(&mut self, queue_id: &str) {
+        // Remove pending (not-yet-delivered) entries
         let keys_to_remove: Vec<(String, String)> = self
             .pending
             .keys()
@@ -620,10 +621,14 @@ impl Scheduler {
             if let Some(entries) = self.pending.remove(&key) {
                 for entry in entries {
                     self.pending_by_id.remove(&entry.msg_id);
-                    self.leased_msg_keys.remove(&entry.msg_id);
                 }
             }
         }
+
+        // Remove in-flight (leased) entries whose storage key belongs to this queue
+        let prefix = crate::storage::keys::message_prefix(queue_id);
+        self.leased_msg_keys
+            .retain(|_, msg_key| !msg_key.starts_with(&prefix));
     }
 
     /// Add a message to the pending index.
@@ -694,8 +699,9 @@ impl Scheduler {
                 .is_some_and(|q| !q.is_empty());
 
             if !has_pending {
-                // No pending messages — remove from active set
+                // No pending messages — remove from active set and clean up empty deque
                 self.drr.remove_key(queue_id, &fairness_key);
+                self.pending.remove(&pending_key);
                 continue;
             }
 
@@ -706,12 +712,13 @@ impl Scheduler {
                 .throttle_keys
                 .clone();
 
-            // Throttle check: if ANY configured key is exhausted, skip this fairness key
-            if !self.throttle.check_keys(&throttle_keys) {
-                // Throttled — consume deficit so DRR moves to next key (prevents
-                // infinite loop when all messages for this key are throttled).
+            // Throttle check (peek only — no tokens consumed yet): if ANY configured
+            // key is exhausted, skip this fairness key entirely.
+            if !self.throttle.peek_keys(&throttle_keys) {
+                // Throttled — drain all remaining deficit so DRR moves to next key
+                // in O(1) rather than iterating once per deficit unit.
                 // The key stays in the active set for the next round.
-                self.drr.consume_deficit(queue_id, &fairness_key);
+                self.drr.drain_deficit(queue_id, &fairness_key);
                 continue;
             }
 
@@ -746,11 +753,14 @@ impl Scheduler {
             let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
             if self.try_deliver_to_consumer(queue_id, &msg, &lease_key, visibility_timeout_ms) {
                 self.drr.consume_deficit(queue_id, &fairness_key);
+                // Consume throttle tokens only after successful delivery
+                self.throttle.consume_keys(&throttle_keys);
                 // Track the storage key for O(1) lookup on ack/nack
                 self.leased_msg_keys.insert(entry.msg_id, entry.msg_key);
             } else {
                 // Couldn't deliver (all consumers full/closed).
                 // Put the entry back at the front of the pending queue.
+                // No throttle tokens were consumed (peek-only check above).
                 self.pending_by_id.insert(entry.msg_id, pending_key.clone());
                 self.pending
                     .get_mut(&pending_key)

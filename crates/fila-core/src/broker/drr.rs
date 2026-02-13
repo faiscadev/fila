@@ -121,6 +121,17 @@ impl DrrScheduler {
         }
     }
 
+    /// Drain all remaining deficit for a fairness key (set to 0).
+    /// Used when a key is throttled to skip all its remaining deficit in O(1)
+    /// rather than consuming one at a time.
+    pub fn drain_deficit(&mut self, queue_id: &str, fairness_key: &str) {
+        if let Some(state) = self.queues.get_mut(queue_id) {
+            if let Some(d) = state.deficits.get_mut(fairness_key) {
+                *d = 0;
+            }
+        }
+    }
+
     /// Start a new DRR round for a queue: refill deficit for all active keys
     /// based on `weight * quantum`. No-op if a round is already active
     /// (prevents unbounded deficit accumulation from repeated calls).
