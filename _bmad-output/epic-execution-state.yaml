@@ -18,9 +18,9 @@ stories:
     dependsOn: ["4.1"]
   - id: "4.3"
     title: "Runtime Throttle Rate Management"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/4.3-runtime-throttle-rate-management"
     pr: null
     dependsOn: ["4.1", "4.2"]
 skippedIssues: []
