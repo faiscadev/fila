@@ -1,6 +1,6 @@
 # Story 5.2: Queue Stats & Inspection
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -19,49 +19,49 @@ so that I can understand the health and behavior of my message infrastructure.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Expand `GetStats` proto definitions (AC: #1, #2, #3, #4)
-  - [ ] Subtask 1.1: Add `PerFairnessKeyStats` message with `key`, `pending_count`, `current_deficit`, `weight`
-  - [ ] Subtask 1.2: Add `PerThrottleKeyStats` message with `key`, `tokens`, `rate_per_second`, `burst`
-  - [ ] Subtask 1.3: Expand `GetStatsResponse` with `active_consumers`, `quantum`, `per_key_stats`, `per_throttle_stats`
-  - [ ] Subtask 1.4: Verify generated code compiles (`cargo build -p fila-proto`)
-- [ ] Task 2: Add `StatsError` type and `IntoStatus` mapping (AC: #5)
-  - [ ] Subtask 2.1: Add `StatsError { QueueNotFound(String), Storage(StorageError) }` to `error.rs`
-  - [ ] Subtask 2.2: Add `IntoStatus` impl mapping `QueueNotFound` → `NOT_FOUND`, `Storage` → `INTERNAL`
-- [ ] Task 3: Add `GetStats` scheduler command (AC: #1)
-  - [ ] Subtask 3.1: Define `QueueStats` struct in a new `crates/fila-core/src/broker/stats.rs` module
-  - [ ] Subtask 3.2: Add `GetStats { queue_id: String, reply: oneshot::Sender<Result<QueueStats, StatsError>> }` to `SchedulerCommand`
-  - [ ] Subtask 3.3: Add match arm in scheduler dispatch loop
-- [ ] Task 4: Add accessor methods to DRR and ThrottleManager (AC: #2, #3)
-  - [ ] Subtask 4.1: Add `DrrScheduler::key_stats(queue_id) -> Vec<(String, i64, u32)>` returning `(key, deficit, weight)` tuples
-  - [ ] Subtask 4.2: Add `DrrScheduler::quantum() -> u32` getter
-  - [ ] Subtask 4.3: Add `ThrottleManager::key_stats() -> Vec<(String, f64, f64, f64)>` returning `(key, tokens, rate, burst)` tuples
-- [ ] Task 5: Implement `handle_get_stats` in scheduler (AC: #1, #2, #3, #4, #5)
-  - [ ] Subtask 5.1: Verify queue exists via `self.storage.get_queue(queue_id)`
-  - [ ] Subtask 5.2: Count depth from `self.pending` entries for this queue + leased count
-  - [ ] Subtask 5.3: Count in-flight from `self.leased_msg_keys` (scan for queue prefix in stored keys)
-  - [ ] Subtask 5.4: Count active consumers from `self.consumers` for this queue
-  - [ ] Subtask 5.5: Collect per-fairness-key stats from `self.pending` and DRR accessor
-  - [ ] Subtask 5.6: Collect throttle stats from ThrottleManager accessor
-  - [ ] Subtask 5.7: Collect DRR scheduling state (quantum, active keys count)
-- [ ] Task 6: Implement `get_stats` in admin service (AC: #1, #5)
-  - [ ] Subtask 6.1: Validate queue ID not empty
-  - [ ] Subtask 6.2: Send `GetStats` command to scheduler via broker, await reply
-  - [ ] Subtask 6.3: Map `QueueStats` to `GetStatsResponse`
-- [ ] Task 7: Scheduler unit tests (AC: #1, #2, #3, #4, #5)
-  - [ ] Subtask 7.1: Test get_stats with enqueued and leased messages returns correct depth and in-flight
-  - [ ] Subtask 7.2: Test get_stats returns per-fairness-key pending counts
-  - [ ] Subtask 7.3: Test get_stats returns throttle key state after SetConfig
-  - [ ] Subtask 7.4: Test get_stats for non-existent queue returns QueueNotFound
-  - [ ] Subtask 7.5: Test get_stats for empty queue returns zero counts (not error)
-- [ ] Task 8: Admin service unit tests (AC: #1, #5)
-  - [ ] Subtask 8.1: Test get_stats returns populated response for queue with messages
-  - [ ] Subtask 8.2: Test get_stats with empty queue ID returns InvalidArgument
-  - [ ] Subtask 8.3: Test get_stats for non-existent queue returns NotFound
-- [ ] Task 9: Integration test — GetStats with multi-key messages and leases (AC: #6)
-  - [ ] Subtask 9.1: Create queue, enqueue messages across 3 fairness keys with throttle keys
-  - [ ] Subtask 9.2: Lease some messages (creating in-flight state)
-  - [ ] Subtask 9.3: Set throttle rate via SetConfig
-  - [ ] Subtask 9.4: Call GetStats and verify depth, in-flight, per-key pending counts, throttle state
+- [x] Task 1: Expand `GetStats` proto definitions (AC: #1, #2, #3, #4)
+  - [x] Subtask 1.1: Add `PerFairnessKeyStats` message with `key`, `pending_count`, `current_deficit`, `weight`
+  - [x] Subtask 1.2: Add `PerThrottleKeyStats` message with `key`, `tokens`, `rate_per_second`, `burst`
+  - [x] Subtask 1.3: Expand `GetStatsResponse` with `active_consumers`, `quantum`, `per_key_stats`, `per_throttle_stats`
+  - [x] Subtask 1.4: Verify generated code compiles (`cargo build -p fila-proto`)
+- [x] Task 2: Add `StatsError` type and `IntoStatus` mapping (AC: #5)
+  - [x] Subtask 2.1: Add `StatsError { QueueNotFound(String), Storage(StorageError) }` to `error.rs`
+  - [x] Subtask 2.2: Add `IntoStatus` impl mapping `QueueNotFound` → `NOT_FOUND`, `Storage` → `INTERNAL`
+- [x] Task 3: Add `GetStats` scheduler command (AC: #1)
+  - [x] Subtask 3.1: Define `QueueStats` struct in a new `crates/fila-core/src/broker/stats.rs` module
+  - [x] Subtask 3.2: Add `GetStats { queue_id: String, reply: oneshot::Sender<Result<QueueStats, StatsError>> }` to `SchedulerCommand`
+  - [x] Subtask 3.3: Add match arm in scheduler dispatch loop
+- [x] Task 4: Add accessor methods to DRR and ThrottleManager (AC: #2, #3)
+  - [x] Subtask 4.1: Add `DrrScheduler::key_stats(queue_id) -> Vec<(String, i64, u32)>` returning `(key, deficit, weight)` tuples
+  - [x] Subtask 4.2: Add `DrrScheduler::quantum() -> u32` getter
+  - [x] Subtask 4.3: Add `ThrottleManager::key_stats() -> Vec<(String, f64, f64, f64)>` returning `(key, tokens, rate, burst)` tuples
+- [x] Task 5: Implement `handle_get_stats` in scheduler (AC: #1, #2, #3, #4, #5)
+  - [x] Subtask 5.1: Verify queue exists via `self.storage.get_queue(queue_id)`
+  - [x] Subtask 5.2: Count depth from `self.pending` entries for this queue + leased count
+  - [x] Subtask 5.3: Count in-flight from `self.leased_msg_keys` (scan for queue prefix in stored keys)
+  - [x] Subtask 5.4: Count active consumers from `self.consumers` for this queue
+  - [x] Subtask 5.5: Collect per-fairness-key stats from `self.pending` and DRR accessor
+  - [x] Subtask 5.6: Collect throttle stats from ThrottleManager accessor
+  - [x] Subtask 5.7: Collect DRR scheduling state (quantum, active keys count)
+- [x] Task 6: Implement `get_stats` in admin service (AC: #1, #5)
+  - [x] Subtask 6.1: Validate queue ID not empty
+  - [x] Subtask 6.2: Send `GetStats` command to scheduler via broker, await reply
+  - [x] Subtask 6.3: Map `QueueStats` to `GetStatsResponse`
+- [x] Task 7: Scheduler unit tests (AC: #1, #2, #3, #4, #5)
+  - [x] Subtask 7.1: Test get_stats with enqueued and leased messages returns correct depth and in-flight
+  - [x] Subtask 7.2: Test get_stats returns per-fairness-key pending counts
+  - [x] Subtask 7.3: Test get_stats returns throttle key state after SetConfig
+  - [x] Subtask 7.4: Test get_stats for non-existent queue returns QueueNotFound
+  - [x] Subtask 7.5: Test get_stats for empty queue returns zero counts (not error)
+- [x] Task 8: Admin service unit tests (AC: #1, #5)
+  - [x] Subtask 8.1: Test get_stats returns populated response for queue with messages
+  - [x] Subtask 8.2: Test get_stats with empty queue ID returns InvalidArgument
+  - [x] Subtask 8.3: Test get_stats for non-existent queue returns NotFound
+- [x] Task 9: Integration test — GetStats with multi-key messages and leases (AC: #6)
+  - [x] Subtask 9.1: Create queue, enqueue messages across 3 fairness keys with throttle keys
+  - [x] Subtask 9.2: Lease some messages (creating in-flight state)
+  - [x] Subtask 9.3: Set throttle rate via SetConfig
+  - [x] Subtask 9.4: Call GetStats and verify depth, in-flight, per-key pending counts, throttle state
 
 ## Dev Notes
 
@@ -240,6 +240,30 @@ Claude Opus 4.6
 
 ### Debug Log References
 
+- Test fix: `get_stats_returns_depth_and_in_flight` — channel capacity 10 caused all 3 messages to be delivered; reduced to capacity 1 so only 1 leased
+- Test fix: `get_stats_returns_throttle_state` — `handle_command(SetConfig)` ran before queue creation was processed from channel; added `handle_all_pending` after `send_create_queue`
+
 ### Completion Notes List
 
+- All 9 tasks completed, 224 tests passing (213 existing + 11 new)
+- Used `leased_msg_keys` scan with storage key prefix matching for in-flight count (simple, no new state needed)
+- Throttle stats are global (not per-queue) since throttle keys span queues — included in response for operator convenience
+
 ### File List
+
+- `proto/fila/v1/admin.proto` — expanded GetStats proto messages
+- `crates/fila-core/src/broker/stats.rs` — new: QueueStats domain types
+- `crates/fila-core/src/broker/mod.rs` — added `pub mod stats`
+- `crates/fila-core/src/broker/command.rs` — added GetStats command variant
+- `crates/fila-core/src/error.rs` — added StatsError
+- `crates/fila-core/src/lib.rs` — re-export StatsError
+- `crates/fila-core/src/broker/drr.rs` — added key_stats() and quantum() accessors
+- `crates/fila-core/src/broker/throttle.rs` — added key_stats() accessor, TokenBucket getters
+- `crates/fila-core/src/broker/scheduler.rs` — handle_get_stats handler, dispatch arm, 8 tests
+- `crates/fila-server/src/admin_service.rs` — get_stats handler, 3 tests
+- `crates/fila-server/src/error.rs` — IntoStatus for StatsError
+
+### Changelog
+
+- `d470ac7` feat: getstats rpc with per-key fairness and throttle inspection
+- `9c3cfaa` test: address code review findings for story 5.2
