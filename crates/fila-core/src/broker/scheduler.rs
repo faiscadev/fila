@@ -717,37 +717,42 @@ impl Scheduler {
         &self,
     ) -> Result<Vec<super::command::QueueSummary>, crate::error::ListQueuesError> {
         let queues = self.storage.list_queues()?;
+
+        // Pre-compute per-queue pending counts in a single pass over the pending map
+        let mut pending_by_queue: HashMap<&str, u64> = HashMap::new();
+        for ((qid, _), entries) in &self.pending {
+            *pending_by_queue.entry(qid.as_str()).or_default() += entries.len() as u64;
+        }
+
+        // Pre-compute per-queue in-flight counts in a single pass over leased keys
+        let mut in_flight_by_queue: HashMap<String, u64> = HashMap::new();
+        for key in self.leased_msg_keys.values() {
+            // Extract queue_id from the message key prefix (length-prefixed encoding)
+            if let Some(queue_id) = crate::storage::keys::extract_queue_id(key) {
+                *in_flight_by_queue.entry(queue_id).or_default() += 1;
+            }
+        }
+
+        // Pre-compute per-queue consumer counts in a single pass
+        let mut consumers_by_queue: HashMap<&str, u32> = HashMap::new();
+        for c in self.consumers.values() {
+            *consumers_by_queue.entry(c.queue_id.as_str()).or_default() += 1;
+        }
+
         let mut summaries = Vec::with_capacity(queues.len());
-
         for q in queues {
-            // Count pending messages for this queue
-            let pending: u64 = self
-                .pending
-                .iter()
-                .filter(|((qid, _), _)| qid == &q.name)
-                .map(|(_, entries)| entries.len() as u64)
-                .sum();
-
-            // Count in-flight (leased) messages for this queue
-            let queue_prefix = crate::storage::keys::message_prefix(&q.name);
-            let in_flight = self
-                .leased_msg_keys
-                .values()
-                .filter(|key| key.starts_with(&queue_prefix))
-                .count() as u64;
-
-            // Count consumers for this queue
-            let consumers = self
-                .consumers
-                .values()
-                .filter(|c| c.queue_id == q.name)
-                .count();
+            let pending = pending_by_queue.get(q.name.as_str()).copied().unwrap_or(0);
+            let in_flight = in_flight_by_queue.get(&q.name).copied().unwrap_or(0);
+            let active_consumers = consumers_by_queue
+                .get(q.name.as_str())
+                .copied()
+                .unwrap_or(0);
 
             summaries.push(super::command::QueueSummary {
                 name: q.name,
                 depth: pending + in_flight,
                 in_flight,
-                active_consumers: u32::try_from(consumers).unwrap_or(u32::MAX),
+                active_consumers,
             });
         }
 
@@ -6746,6 +6751,62 @@ mod tests {
             assert_eq!(q.in_flight, 0);
             assert_eq!(q.active_consumers, 0);
         }
+
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+    }
+
+    #[test]
+    fn list_queues_reports_nonzero_depth_and_consumers() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        // Create a queue
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::CreateQueue {
+            name: "stats-q".to_string(),
+            config: crate::queue::QueueConfig::new("stats-q".to_string()),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Enqueue a message
+        let msg = Message {
+            id: Uuid::now_v7(),
+            queue_id: "stats-q".to_string(),
+            headers: HashMap::new(),
+            payload: vec![1],
+            fairness_key: "fk".to_string(),
+            weight: 1,
+            throttle_keys: vec![],
+            attempt_count: 0,
+            enqueued_at: 1_000_000_000,
+            leased_at: None,
+        };
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Register a consumer
+        let (consumer_tx, _consumer_rx) = tokio::sync::mpsc::channel(10);
+        scheduler.handle_command(SchedulerCommand::RegisterConsumer {
+            queue_id: "stats-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        });
+
+        // Deliver (makes the message in-flight)
+        scheduler.handle_all_pending(&tx);
+
+        // ListQueues should report 1 depth, 1 in_flight, 1 consumer for stats-q
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::ListQueues { reply: reply_tx });
+        let queues = reply_rx.blocking_recv().unwrap().unwrap();
+        let q = queues.iter().find(|q| q.name == "stats-q").unwrap();
+        assert_eq!(q.depth, 1, "depth should include in-flight");
+        assert_eq!(q.in_flight, 1);
+        assert_eq!(q.active_consumers, 1);
 
         tx.send(SchedulerCommand::Shutdown).unwrap();
     }

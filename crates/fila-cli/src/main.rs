@@ -104,8 +104,8 @@ enum ConfigCommands {
 async fn connect(addr: &str) -> FilaAdminClient<Channel> {
     match FilaAdminClient::connect(addr.to_string()).await {
         Ok(client) => client,
-        Err(_) => {
-            eprintln!("Error: cannot connect to broker at {addr}");
+        Err(e) => {
+            eprintln!("Error: cannot connect to broker at {addr}: {e}");
             process::exit(1);
         }
     }
@@ -118,7 +118,9 @@ fn format_rpc_error(status: tonic::Status, context: &str) -> String {
         tonic::Code::InvalidArgument => format!("Error: {}", status.message()),
         tonic::Code::FailedPrecondition => format!("Error: {}", status.message()),
         tonic::Code::ResourceExhausted => "Error: broker overloaded, try again".to_string(),
-        tonic::Code::Unavailable => "Error: cannot connect to broker".to_string(),
+        tonic::Code::Unavailable => {
+            "Error: broker unavailable (connection lost or server down)".to_string()
+        }
         _ => format!("Error: {}", status.message()),
     }
 }
@@ -346,12 +348,6 @@ async fn cmd_config_list(client: &mut FilaAdminClient<Channel>, prefix: String) 
 }
 
 async fn cmd_redrive(client: &mut FilaAdminClient<Channel>, dlq_name: String, count: u64) {
-    // Derive parent name from DLQ name
-    let parent_name = dlq_name
-        .strip_suffix(".dlq")
-        .unwrap_or(&dlq_name)
-        .to_string();
-
     match client
         .redrive(RedriveRequest {
             dlq_queue: dlq_name.clone(),
@@ -360,10 +356,10 @@ async fn cmd_redrive(client: &mut FilaAdminClient<Channel>, dlq_name: String, co
         .await
     {
         Ok(resp) => {
-            let redriven = resp.into_inner().redriven;
+            let n = resp.into_inner().redriven;
             println!(
-                "Redrived {redriven} message{} from \"{dlq_name}\" to \"{parent_name}\"",
-                if redriven == 1 { "" } else { "s" }
+                "Redrive complete: {n} message{} moved from \"{dlq_name}\"",
+                if n == 1 { "" } else { "s" }
             );
         }
         Err(status) => {

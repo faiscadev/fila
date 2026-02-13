@@ -66,6 +66,23 @@ pub fn message_prefix_with_key(queue_id: &str, fairness_key: &str) -> Vec<u8> {
     prefix
 }
 
+/// Extract the queue_id from a message key.
+///
+/// Message key format starts with a length-prefixed queue_id string.
+/// Returns `None` if the key is too short or malformed.
+pub fn extract_queue_id(key: &[u8]) -> Option<String> {
+    if key.len() < 3 {
+        return None;
+    }
+    let queue_id_len = u16::from_be_bytes([key[0], key[1]]) as usize;
+    if key.len() < 2 + queue_id_len {
+        return None;
+    }
+    std::str::from_utf8(&key[2..2 + queue_id_len])
+        .ok()
+        .map(|s| s.to_string())
+}
+
 /// Build a lease key: `{queue_id}:{msg_id}`
 pub fn lease_key(queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
     let mut key = Vec::with_capacity(32);
