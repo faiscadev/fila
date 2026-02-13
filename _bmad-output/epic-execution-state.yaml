@@ -12,8 +12,8 @@ stories:
   - id: "5.2"
     title: "Queue Stats & Inspection"
     status: in-progress
-    currentPhase: "setup"
-    branch: ""
+    currentPhase: "dev"
+    branch: "feat/5.2-queue-stats-inspection"
     pr: null
     dependsOn: []
   - id: "5.3"
