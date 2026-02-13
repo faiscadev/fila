@@ -26,7 +26,7 @@ stories:
   - id: "5.4"
     title: "fila-cli"
     status: in-progress
-    currentPhase: "setup"
+    currentPhase: "pr-ci"
     branch: "feat/5.4-fila-cli"
     pr: null
     dependsOn: ["5.1", "5.2", "5.3"]
