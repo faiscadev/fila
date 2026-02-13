@@ -620,21 +620,21 @@ impl Scheduler {
         let dlq_prefix = crate::storage::keys::message_prefix(dlq_queue_id);
         let messages = self.storage.list_messages(&dlq_prefix)?;
 
-        let limit = if count == 0 {
-            messages.len()
-        } else {
-            std::cmp::min(count as usize, messages.len())
-        };
-
+        let limit = if count == 0 { u64::MAX } else { count };
         let mut redriven: u64 = 0;
 
-        for (dlq_key, mut msg) in messages.into_iter().take(limit) {
+        for (dlq_key, mut msg) in messages {
+            if redriven >= limit {
+                break;
+            }
+
             // Skip messages that are currently leased (in-flight in DLQ)
-            if self.leased_msg_keys.values().any(|k| k == &dlq_key) {
+            if self.leased_msg_keys.contains_key(&msg.id) {
                 continue;
             }
 
             // Move message to parent queue: reset attempt_count, set queue_id
+            let fairness_key = msg.fairness_key.clone();
             msg.queue_id = parent_queue_id.to_string();
             msg.attempt_count = 0;
             msg.leased_at = None;
@@ -646,7 +646,13 @@ impl Scheduler {
                 msg.enqueued_at,
                 &msg.id,
             );
-            let msg_value = serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
+            let msg_value = match serde_json::to_vec(&msg) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(error = %e, msg_id = %msg.id, "serialization failed during redrive, stopping");
+                    break;
+                }
+            };
 
             // Atomic move: delete from DLQ, put in parent queue
             let ops = vec![
@@ -656,7 +662,10 @@ impl Scheduler {
                     value: msg_value,
                 },
             ];
-            self.storage.write_batch(ops)?;
+            if let Err(e) = self.storage.write_batch(ops) {
+                warn!(error = %e, msg_id = %msg.id, "write_batch failed during redrive, returning partial count");
+                break;
+            }
 
             // Remove from DLQ's in-memory pending index if present
             if let Some(pk) = self.pending_by_id.remove(&msg.id) {
@@ -664,6 +673,8 @@ impl Scheduler {
                     deque.retain(|e| e.msg_id != msg.id);
                     if deque.is_empty() {
                         self.pending.remove(&pk);
+                        // Clean up DRR active set for DLQ if no more pending
+                        self.drr.remove_key(dlq_queue_id, &fairness_key);
                     }
                 }
             }
@@ -6600,6 +6611,61 @@ mod tests {
             err,
             crate::error::RedriveError::ParentQueueNotFound(_)
         ));
+    }
+
+    #[test]
+    fn redrive_skips_leased_messages_in_dlq() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        let on_failure_script = r#"
+            function on_failure(msg)
+                return { action = "dlq" }
+            end
+        "#;
+        send_create_queue_with_on_failure(&tx, "redrive-leased-q", on_failure_script, None);
+        scheduler.handle_all_pending(&tx);
+
+        // Dead-letter 2 messages
+        let msg_id_1 = dlq_one_message(&tx, &mut scheduler, "redrive-leased-q");
+        let _msg_id_2 = dlq_one_message(&tx, &mut scheduler, "redrive-leased-q");
+
+        // Register a consumer on the DLQ to lease one message (capacity=1)
+        let (dlq_consumer_tx, mut dlq_consumer_rx) = tokio::sync::mpsc::channel(1);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "redrive-leased-q.dlq".to_string(),
+            consumer_id: "dlq-inspector".to_string(),
+            tx: dlq_consumer_tx,
+        })
+        .unwrap();
+        scheduler.handle_all_pending(&tx);
+
+        // One message is now leased in the DLQ
+        let leased = dlq_consumer_rx
+            .try_recv()
+            .expect("should lease one DLQ message");
+
+        // Redrive all — should skip the leased one
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::Redrive {
+            dlq_queue_id: "redrive-leased-q.dlq".to_string(),
+            count: 0,
+            reply: reply_tx,
+        });
+        let redriven = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(redriven, 1, "should only redrive the non-leased message");
+
+        // The leased message should still be in DLQ storage
+        let dlq_prefix = crate::storage::keys::message_prefix("redrive-leased-q.dlq");
+        let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
+        assert_eq!(dlq_msgs.len(), 1);
+        assert_eq!(dlq_msgs[0].1.id, leased.msg_id);
+
+        // The redriven message should be in parent queue
+        let parent_prefix = crate::storage::keys::message_prefix("redrive-leased-q");
+        let parent_msgs = scheduler.storage().list_messages(&parent_prefix).unwrap();
+        assert_eq!(parent_msgs.len(), 1);
+        assert_ne!(parent_msgs[0].1.id, msg_id_1); // msg_id_1 was first to DLQ, likely leased
+                                                   // (Actual message depends on DRR delivery order, but one is redriven and one is leased)
     }
 
     /// Helper: drain all buffered commands and run a delivery round.
