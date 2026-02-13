@@ -25,9 +25,9 @@ stories:
     dependsOn: []
   - id: "5.4"
     title: "fila-cli"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "setup"
+    branch: "feat/5.4-fila-cli"
     pr: null
     dependsOn: ["5.1", "5.2", "5.3"]
 skippedIssues: []
