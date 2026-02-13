@@ -157,3 +157,18 @@ Claude Opus 4.6
 - `crates/fila-core/src/broker/mod.rs` (modified) — added `pub mod throttle;`
 - `crates/fila-core/benches/throttle.rs` (new) — criterion benchmarks
 - `crates/fila-core/Cargo.toml` (modified) — added `[[bench]]` section for throttle
+
+### Incident: sprint-status.yaml Wrong State After Cascade Rebase (Recurring)
+
+**Observed in:** PR #20 (Epic 4). Same issue found in retros for Epics 1–3.
+
+**Symptom:** After cascade-rebasing stacked PRs and merging, sprint-status.yaml and epic-execution-state.yaml end up with wrong status values (e.g. a story showing `review` instead of `done`).
+
+**Root cause:** Cascade rebase conflict resolution on tracking files. Each stacked branch modifies sprint-status.yaml and epic-execution-state.yaml progressively. When rebasing onto an updated parent branch, these files conflict because both sides changed them. During conflict resolution, the wrong side gets picked for some status lines — typically the earlier (parent) version overwrites the later (child) version. Since the file has many status lines and both sides are partially correct, it's easy to resolve wrong.
+
+**Why it recurs:** Every epic uses stacked PRs with shared tracking files that get modified on every branch. Every cascade rebase produces conflicts in these files. The conflict resolution is manual and error-prone.
+
+**Potential fixes:**
+1. After each cascade rebase, verify the final sprint-status.yaml matches the expected state (automated check or manual review of the diff)
+2. Avoid tracking file updates in implementation commits — update tracking only on main after merge
+3. Use per-story tracking files instead of a single shared sprint-status.yaml to reduce conflicts
