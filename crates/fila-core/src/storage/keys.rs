@@ -241,6 +241,21 @@ mod tests {
     }
 
     #[test]
+    fn extract_queue_id_roundtrip() {
+        let id = Uuid::now_v7();
+        let key = message_key("my-queue", "fk", 1000, &id);
+        assert_eq!(extract_queue_id(&key), Some("my-queue".to_string()));
+    }
+
+    #[test]
+    fn extract_queue_id_rejects_corrupt_input() {
+        assert!(extract_queue_id(&[]).is_none());
+        assert!(extract_queue_id(&[0]).is_none());
+        // Length prefix says 5 bytes but only 1 byte available
+        assert!(extract_queue_id(&[0, 5, b'a']).is_none());
+    }
+
+    #[test]
     fn parse_lease_expiry_key_roundtrip() {
         let id = Uuid::now_v7();
         let key = lease_expiry_key(42_000_000_000, "my-queue", &id);
@@ -288,6 +303,19 @@ mod tests {
                     key.starts_with(&prefix),
                     "message key must start with queue prefix"
                 );
+            }
+
+            #[test]
+            fn extract_queue_id_from_message_key(
+                queue_id in key_string(),
+                fairness_key in key_string(),
+                ts in any::<u64>(),
+                uuid_bytes in any::<[u8; 16]>(),
+            ) {
+                let id = Uuid::from_bytes(uuid_bytes);
+                let key = message_key(&queue_id, &fairness_key, ts, &id);
+                let extracted = extract_queue_id(&key);
+                prop_assert_eq!(extracted, Some(queue_id));
             }
 
             #[test]
