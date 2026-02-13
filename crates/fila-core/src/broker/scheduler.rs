@@ -634,7 +634,6 @@ impl Scheduler {
             }
 
             // Move message to parent queue: reset attempt_count, set queue_id
-            let fairness_key = msg.fairness_key.clone();
             msg.queue_id = parent_queue_id.to_string();
             msg.attempt_count = 0;
             msg.leased_at = None;
@@ -674,7 +673,7 @@ impl Scheduler {
                     if deque.is_empty() {
                         self.pending.remove(&pk);
                         // Clean up DRR active set for DLQ if no more pending
-                        self.drr.remove_key(dlq_queue_id, &fairness_key);
+                        self.drr.remove_key(&pk.0, &pk.1);
                     }
                 }
             }
@@ -6626,8 +6625,8 @@ mod tests {
         scheduler.handle_all_pending(&tx);
 
         // Dead-letter 2 messages
-        let msg_id_1 = dlq_one_message(&tx, &mut scheduler, "redrive-leased-q");
-        let _msg_id_2 = dlq_one_message(&tx, &mut scheduler, "redrive-leased-q");
+        dlq_one_message(&tx, &mut scheduler, "redrive-leased-q");
+        dlq_one_message(&tx, &mut scheduler, "redrive-leased-q");
 
         // Register a consumer on the DLQ to lease one message (capacity=1)
         let (dlq_consumer_tx, mut dlq_consumer_rx) = tokio::sync::mpsc::channel(1);
@@ -6664,8 +6663,8 @@ mod tests {
         let parent_prefix = crate::storage::keys::message_prefix("redrive-leased-q");
         let parent_msgs = scheduler.storage().list_messages(&parent_prefix).unwrap();
         assert_eq!(parent_msgs.len(), 1);
-        assert_ne!(parent_msgs[0].1.id, msg_id_1); // msg_id_1 was first to DLQ, likely leased
-                                                   // (Actual message depends on DRR delivery order, but one is redriven and one is leased)
+        // The redriven message should be whichever one was NOT leased
+        assert_ne!(parent_msgs[0].1.id, leased.msg_id);
     }
 
     /// Helper: drain all buffered commands and run a delivery round.
