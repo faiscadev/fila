@@ -70,7 +70,7 @@ development_status:
   epic-3-retrospective: done
 
   # Epic 4: Throttling & Rate Limiting
-  epic-4: in-progress
+  epic-4: done
   4-1-token-bucket-implementation: done
   4-2-throttle-aware-scheduling: done
   4-3-runtime-throttle-rate-management: done
