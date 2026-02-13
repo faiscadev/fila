@@ -1,33 +1,26 @@
-epic: "Epic 3: Lua Rules Engine & Dead-Letter Handling"
+epic: "Epic 4: Throttling & Rate Limiting"
 baseBranch: main
-startedAt: "2026-02-12T12:00:00Z"
+startedAt: "2026-02-12T00:00:00Z"
 stories:
-  - id: "3.1"
-    title: "Lua Sandbox & on_enqueue Hook"
+  - id: "4.1"
+    title: "Token Bucket Implementation"
     status: completed
     currentPhase: ""
-    branch: "feat/3.1-lua-sandbox-on-enqueue-hook"
-    pr: 16
+    branch: "feat/4.1-token-bucket-implementation"
+    pr: 20
     dependsOn: []
-  - id: "3.2"
-    title: "Lua Safety: Timeouts, Memory Limits & Circuit Breaker"
-    status: completed
+  - id: "4.2"
+    title: "Throttle-Aware Scheduling"
+    status: pending
     currentPhase: ""
-    branch: "feat/3.2-lua-safety-timeouts-memory-circuit-breaker"
-    pr: 17
-    dependsOn: ["3.1"]
-  - id: "3.3"
-    title: "on_failure Hook & Retry Decisions"
-    status: completed
-    currentPhase: ""
-    branch: "feat/3.3-on-failure-hook-retry-decisions"
-    pr: 18
-    dependsOn: ["3.1", "3.2"]
-  - id: "3.4"
-    title: "Dead-Letter Queue"
-    status: in-progress
-    currentPhase: "dev"
-    branch: "feat/3.4-dead-letter-queue"
+    branch: ""
     pr: null
-    dependsOn: ["3.3"]
+    dependsOn: ["4.1"]
+  - id: "4.3"
+    title: "Runtime Throttle Rate Management"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["4.1", "4.2"]
 skippedIssues: []
