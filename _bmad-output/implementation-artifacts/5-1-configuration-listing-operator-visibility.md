@@ -206,15 +206,17 @@ Claude Opus 4.6
 - Admin service validates prefix length (reuses MAX_CONFIG_KEY_LEN = 256)
 - Empty prefix lists all entries; empty result is not an error
 - Lua e2e test proves: SetConfig → state CF → Lua fila.get → fairness key assignment
+- Code review found 5 findings, all addressed: MAX_LIST_CONFIG_ENTRIES cap, u32 truncation fix, non-UTF8 error mapping fix, debug tracing, value assertions in tests
 - 213 total tests pass, fmt and clippy clean
 
 ### Change Log
 
 - `fc5232c` feat: listconfig rpc with prefix filtering and lua e2e integration
+- `3cd3f91` fix: address code review findings for story 5.1
 
 ### File List
 
 - `proto/fila/v1/admin.proto` — added ListConfig RPC, ConfigEntry, ListConfigRequest, ListConfigResponse
 - `crates/fila-core/src/broker/command.rs` — added ListConfig variant to SchedulerCommand
-- `crates/fila-core/src/broker/scheduler.rs` — added handle_list_config, dispatch arm, 5 tests
-- `crates/fila-server/src/admin_service.rs` — implemented list_config handler, 4 tests
+- `crates/fila-core/src/broker/scheduler.rs` — added handle_list_config, dispatch arm, 5 tests, MAX_LIST_CONFIG_ENTRIES cap, debug tracing
+- `crates/fila-server/src/admin_service.rs` — implemented list_config handler, 4 tests, u32 truncation fix
