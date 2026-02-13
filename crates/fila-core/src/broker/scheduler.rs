@@ -228,6 +228,10 @@ impl Scheduler {
                 let result = self.handle_list_config(&prefix);
                 let _ = reply.send(result);
             }
+            SchedulerCommand::GetStats { queue_id, reply } => {
+                let result = self.handle_get_stats(&queue_id);
+                let _ = reply.send(result);
+            }
             SchedulerCommand::Shutdown => {
                 info!("shutdown command received, draining remaining commands");
                 self.running = false;
@@ -481,6 +485,101 @@ impl Scheduler {
             }
             None => Ok(None),
         }
+    }
+
+    fn handle_get_stats(
+        &self,
+        queue_id: &str,
+    ) -> Result<super::stats::QueueStats, crate::error::StatsError> {
+        use super::stats::{FairnessKeyStats, QueueStats, ThrottleKeyStats};
+
+        // Verify queue exists
+        if self.storage.get_queue(queue_id)?.is_none() {
+            return Err(crate::error::StatsError::QueueNotFound(
+                queue_id.to_string(),
+            ));
+        }
+
+        // Count pending messages per fairness key
+        let mut pending_total: u64 = 0;
+        let mut pending_by_key: std::collections::HashMap<&str, u64> =
+            std::collections::HashMap::new();
+        for ((q, fk), entries) in &self.pending {
+            if q == queue_id {
+                let count = entries.len() as u64;
+                pending_total += count;
+                pending_by_key.insert(fk, count);
+            }
+        }
+
+        // Count in-flight (leased) messages for this queue
+        let queue_prefix = crate::storage::keys::message_prefix(queue_id);
+        let in_flight = self
+            .leased_msg_keys
+            .values()
+            .filter(|key| key.starts_with(&queue_prefix))
+            .count() as u64;
+
+        let depth = pending_total + in_flight;
+
+        // Count active consumers for this queue
+        let active_consumers = self
+            .consumers
+            .values()
+            .filter(|c| c.queue_id == queue_id)
+            .count();
+        let active_consumers = u32::try_from(active_consumers).unwrap_or(u32::MAX);
+
+        // Collect per-fairness-key stats from DRR
+        let drr_stats = self.drr.key_stats(queue_id);
+        let per_key_stats: Vec<FairnessKeyStats> = drr_stats
+            .into_iter()
+            .map(|(key, deficit, weight)| {
+                let pending_count = pending_by_key.get(key.as_str()).copied().unwrap_or(0);
+                FairnessKeyStats {
+                    key,
+                    pending_count,
+                    current_deficit: deficit,
+                    weight,
+                }
+            })
+            .collect();
+
+        let active_fairness_keys = per_key_stats.len() as u64;
+
+        // Collect throttle stats (global, not per-queue)
+        let per_throttle_stats: Vec<ThrottleKeyStats> = self
+            .throttle
+            .key_stats()
+            .into_iter()
+            .map(|(key, tokens, rate_per_second, burst)| ThrottleKeyStats {
+                key,
+                tokens,
+                rate_per_second,
+                burst,
+            })
+            .collect();
+
+        let quantum = self.drr.quantum();
+
+        debug!(
+            %queue_id,
+            %depth,
+            %in_flight,
+            %active_fairness_keys,
+            %active_consumers,
+            "get stats"
+        );
+
+        Ok(QueueStats {
+            depth,
+            in_flight,
+            active_fairness_keys,
+            active_consumers,
+            quantum,
+            per_key_stats,
+            per_throttle_stats,
+        })
     }
 
     /// Parse a throttle config value in the format "rate_per_second,burst".
@@ -5720,6 +5819,243 @@ mod tests {
             delivered.fairness_key, "tenant-priority",
             "fairness_key should come from fila.get('app.routing_key')"
         );
+    }
+
+    #[test]
+    fn get_stats_returns_depth_and_in_flight() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "stats-q");
+
+        // Enqueue 3 messages
+        for i in 0..3 {
+            let msg = test_message_with_key("stats-q", "key-a", i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+
+        // Register consumer with capacity 1 so only 1 message gets leased
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(1);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "stats-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        scheduler.handle_all_pending(&tx);
+
+        // 1 message should be delivered (leased); channel capacity=1 blocks more
+        assert!(consumer_rx.try_recv().is_ok());
+
+        // GetStats: depth=3 (2 pending + 1 in-flight), in_flight=1
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "stats-q".to_string(),
+            reply: reply_tx,
+        });
+        let stats = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(stats.depth, 3);
+        assert_eq!(stats.in_flight, 1);
+        assert_eq!(stats.active_consumers, 1);
+    }
+
+    #[test]
+    fn get_stats_returns_per_fairness_key_stats() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "stats-fk-q");
+
+        // Enqueue 2 messages with key-a and 1 with key-b
+        for i in 0..2 {
+            let msg = test_message_with_key("stats-fk-q", "key-a", i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+        let msg = test_message_with_key("stats-fk-q", "key-b", 10);
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        scheduler.handle_all_pending(&tx);
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "stats-fk-q".to_string(),
+            reply: reply_tx,
+        });
+        let stats = reply_rx.blocking_recv().unwrap().unwrap();
+
+        assert_eq!(stats.active_fairness_keys, 2);
+        assert_eq!(stats.per_key_stats.len(), 2);
+
+        // Find key-a and key-b stats
+        let key_a = stats
+            .per_key_stats
+            .iter()
+            .find(|s| s.key == "key-a")
+            .unwrap();
+        let key_b = stats
+            .per_key_stats
+            .iter()
+            .find(|s| s.key == "key-b")
+            .unwrap();
+        assert_eq!(key_a.pending_count, 2);
+        assert_eq!(key_b.pending_count, 1);
+    }
+
+    #[test]
+    fn get_stats_returns_throttle_state() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "stats-throttle-q");
+        // Process the queue creation
+        scheduler.handle_all_pending(&tx);
+
+        // Set a throttle rate via SetConfig
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.rate:global".to_string(),
+            value: "10.0,100.0".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "stats-throttle-q".to_string(),
+            reply: reply_tx,
+        });
+        let stats = reply_rx.blocking_recv().unwrap().unwrap();
+
+        assert_eq!(stats.per_throttle_stats.len(), 1);
+        let throttle = &stats.per_throttle_stats[0];
+        assert_eq!(throttle.key, "rate:global");
+        assert!((throttle.rate_per_second - 10.0).abs() < f64::EPSILON);
+        assert!((throttle.burst - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn get_stats_nonexistent_queue_returns_not_found() {
+        let (_tx, mut scheduler, _dir) = test_setup();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "nonexistent".to_string(),
+            reply: reply_tx,
+        });
+        let result = reply_rx.blocking_recv().unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_stats_integration_multi_key_with_leases_and_throttle() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "stats-int-q");
+        scheduler.handle_all_pending(&tx);
+
+        // Set throttle rate
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::SetConfig {
+            key: "throttle.rate:api".to_string(),
+            value: "5.0,50.0".to_string(),
+            reply: reply_tx,
+        });
+        reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Enqueue messages across 3 fairness keys
+        for i in 0..3 {
+            let msg = test_message_with_key("stats-int-q", "tenant-a", i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+        for i in 10..12 {
+            let msg = test_message_with_key("stats-int-q", "tenant-b", i);
+            let (reply_tx, _) = tokio::sync::oneshot::channel();
+            tx.send(SchedulerCommand::Enqueue {
+                message: msg,
+                reply: reply_tx,
+            })
+            .unwrap();
+        }
+        let msg = test_message_with_key("stats-int-q", "tenant-c", 20);
+        let (reply_tx, _) = tokio::sync::oneshot::channel();
+        tx.send(SchedulerCommand::Enqueue {
+            message: msg,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+        // Register consumer (capacity 2: only 2 messages will be leased)
+        let (consumer_tx, _consumer_rx) = tokio::sync::mpsc::channel(2);
+        tx.send(SchedulerCommand::RegisterConsumer {
+            queue_id: "stats-int-q".to_string(),
+            consumer_id: "c1".to_string(),
+            tx: consumer_tx,
+        })
+        .unwrap();
+
+        scheduler.handle_all_pending(&tx);
+
+        // GetStats
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "stats-int-q".to_string(),
+            reply: reply_tx,
+        });
+        let stats = reply_rx.blocking_recv().unwrap().unwrap();
+
+        // Total depth = 6 (3 + 2 + 1)
+        assert_eq!(stats.depth, 6);
+        assert_eq!(stats.in_flight, 2);
+        assert_eq!(stats.active_consumers, 1);
+        assert_eq!(stats.active_fairness_keys, 3);
+        assert_eq!(stats.per_key_stats.len(), 3);
+
+        // Throttle state
+        assert_eq!(stats.per_throttle_stats.len(), 1);
+        assert_eq!(stats.per_throttle_stats[0].key, "rate:api");
+        assert!((stats.per_throttle_stats[0].rate_per_second - 5.0).abs() < f64::EPSILON);
+        assert!((stats.per_throttle_stats[0].burst - 50.0).abs() < f64::EPSILON);
+
+        // Quantum should be the configured value
+        assert!(stats.quantum > 0);
+    }
+
+    #[test]
+    fn get_stats_empty_queue_returns_zero_counts() {
+        let (tx, mut scheduler, _dir) = test_setup();
+
+        send_create_queue(&tx, "stats-empty-q");
+        scheduler.handle_all_pending(&tx);
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        scheduler.handle_command(SchedulerCommand::GetStats {
+            queue_id: "stats-empty-q".to_string(),
+            reply: reply_tx,
+        });
+        let stats = reply_rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(stats.depth, 0);
+        assert_eq!(stats.in_flight, 0);
+        assert_eq!(stats.active_fairness_keys, 0);
+        assert_eq!(stats.active_consumers, 0);
+        assert!(stats.per_key_stats.is_empty());
     }
 
     /// Helper: drain all buffered commands and run a delivery round.

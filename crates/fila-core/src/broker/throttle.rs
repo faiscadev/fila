@@ -73,6 +73,16 @@ impl TokenBucket {
         self.tokens
     }
 
+    /// Current rate per second.
+    pub fn rate_per_second(&self) -> f64 {
+        self.rate_per_second
+    }
+
+    /// Current burst (max capacity).
+    pub fn burst(&self) -> f64 {
+        self.burst
+    }
+
     /// Update the rate and burst. Preserves current tokens, clamped to new burst.
     /// Negative values are clamped to 0.0.
     pub fn update(&mut self, rate_per_second: f64, burst: f64) {
@@ -173,6 +183,14 @@ impl ThrottleManager {
     /// Whether the manager has no configured buckets.
     pub fn is_empty(&self) -> bool {
         self.buckets.is_empty()
+    }
+
+    /// Return per-key stats: `(key, tokens, rate_per_second, burst)` tuples.
+    pub fn key_stats(&self) -> Vec<(String, f64, f64, f64)> {
+        self.buckets
+            .iter()
+            .map(|(k, b)| (k.clone(), b.tokens(), b.rate_per_second(), b.burst()))
+            .collect()
     }
 }
 

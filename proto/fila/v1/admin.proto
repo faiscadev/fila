@@ -66,10 +66,28 @@ message GetStatsRequest {
   string queue = 1;
 }
 
+message PerFairnessKeyStats {
+  string key = 1;
+  uint64 pending_count = 2;
+  int64 current_deficit = 3;
+  uint32 weight = 4;
+}
+
+message PerThrottleKeyStats {
+  string key = 1;
+  double tokens = 2;
+  double rate_per_second = 3;
+  double burst = 4;
+}
+
 message GetStatsResponse {
   uint64 depth = 1;
   uint64 in_flight = 2;
   uint64 active_fairness_keys = 3;
+  uint32 active_consumers = 4;
+  uint32 quantum = 5;
+  repeated PerFairnessKeyStats per_key_stats = 6;
+  repeated PerThrottleKeyStats per_throttle_stats = 7;
 }
 
 message RedriveRequest {

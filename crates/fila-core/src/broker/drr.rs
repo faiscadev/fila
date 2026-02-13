@@ -187,6 +187,27 @@ impl DrrScheduler {
     pub fn queue_ids(&self) -> Vec<String> {
         self.queues.keys().cloned().collect()
     }
+
+    /// Return the global DRR quantum value.
+    pub fn quantum(&self) -> u32 {
+        self.quantum
+    }
+
+    /// Return per-key stats for a queue: `(key, deficit, weight)` tuples.
+    pub fn key_stats(&self, queue_id: &str) -> Vec<(String, i64, u32)> {
+        let Some(state) = self.queues.get(queue_id) else {
+            return Vec::new();
+        };
+        state
+            .active_keys
+            .iter()
+            .map(|key| {
+                let deficit = state.deficits.get(key).copied().unwrap_or(0);
+                let weight = state.weights.get(key).copied().unwrap_or(1);
+                (key.clone(), deficit, weight)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

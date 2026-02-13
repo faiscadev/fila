@@ -1,5 +1,6 @@
 use fila_core::{
-    AckError, BrokerError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, NackError,
+    AckError, BrokerError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError,
+    NackError, StatsError,
 };
 use tonic::Status;
 
@@ -58,6 +59,15 @@ impl IntoStatus for ConfigError {
         match self {
             ConfigError::InvalidValue(msg) => Status::invalid_argument(msg),
             ConfigError::Storage(e) => Status::internal(e.to_string()),
+        }
+    }
+}
+
+impl IntoStatus for StatsError {
+    fn into_status(self) -> Status {
+        match self {
+            StatsError::QueueNotFound(msg) => Status::not_found(msg),
+            StatsError::Storage(e) => Status::internal(e.to_string()),
         }
     }
 }
