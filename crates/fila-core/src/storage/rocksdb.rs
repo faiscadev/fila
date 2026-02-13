@@ -177,7 +177,10 @@ impl Storage for RocksDbStorage {
     fn list_state_by_prefix(&self, prefix: &str) -> StorageResult<Vec<(String, Vec<u8>)>> {
         let cf = self.cf(CF_STATE)?;
         let mut result = Vec::new();
-        let iter = self.db.prefix_iterator_cf(&cf, prefix.as_bytes());
+        let iter = self.db.iterator_cf(
+            &cf,
+            IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward),
+        );
         for item in iter {
             let (key, value) = item?;
             let key_str = std::str::from_utf8(&key)
