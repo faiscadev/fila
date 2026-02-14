@@ -1,6 +1,6 @@
 # Story 5.1: Configuration Listing & Operator Visibility
 
-Status: review
+Status: done
 
 ## Story
 
