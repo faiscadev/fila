@@ -1,4 +1,4 @@
-use opentelemetry::metrics::{Counter, Gauge, Meter};
+use opentelemetry::metrics::{Counter, Gauge, Histogram, Meter};
 use opentelemetry::KeyValue;
 
 /// Core OTel metrics for the broker. Created once during scheduler init
@@ -15,6 +15,11 @@ pub struct Metrics {
     pub drr_active_keys: Gauge<u64>,
     pub drr_keys_processed: Counter<u64>,
     pub fairness_ratio: Gauge<f64>,
+    pub throttle_decisions: Counter<u64>,
+    pub throttle_tokens_remaining: Gauge<f64>,
+    pub lua_execution_duration: Histogram<f64>,
+    pub lua_errors: Counter<u64>,
+    pub lua_cb_activations: Counter<u64>,
 }
 
 impl Default for Metrics {
@@ -78,6 +83,26 @@ impl Metrics {
                 .f64_gauge("fila.fairness.fair_share_ratio")
                 .with_description("Actual throughput / expected fair share per key (1.0 = fair)")
                 .build(),
+            throttle_decisions: meter
+                .u64_counter("fila.throttle.decisions")
+                .with_description("Throttle decisions per key (pass or hit)")
+                .build(),
+            throttle_tokens_remaining: meter
+                .f64_gauge("fila.throttle.tokens_remaining")
+                .with_description("Current token count per throttle key")
+                .build(),
+            lua_execution_duration: meter
+                .f64_histogram("fila.lua.execution_duration_us")
+                .with_description("Lua hook execution time in microseconds")
+                .build(),
+            lua_errors: meter
+                .u64_counter("fila.lua.errors")
+                .with_description("Lua script execution errors")
+                .build(),
+            lua_cb_activations: meter
+                .u64_counter("fila.lua.circuit_breaker.activations")
+                .with_description("Lua circuit breaker activations")
+                .build(),
         }
     }
 
@@ -121,6 +146,16 @@ impl Metrics {
         );
     }
 
+    pub fn record_throttle_decision(&self, throttle_key: &str, result: &str) {
+        self.throttle_decisions.add(
+            1,
+            &[
+                KeyValue::new("throttle_key", throttle_key.to_string()),
+                KeyValue::new("result", result.to_string()),
+            ],
+        );
+    }
+
     pub fn record_drr_round(&self, queue_id: &str) {
         self.drr_rounds
             .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
@@ -144,6 +179,33 @@ impl Metrics {
                 KeyValue::new("fairness_key", fairness_key.to_string()),
             ],
         );
+    }
+
+    pub fn set_throttle_tokens(&self, throttle_key: &str, tokens: f64) {
+        self.throttle_tokens_remaining.record(
+            tokens,
+            &[KeyValue::new("throttle_key", throttle_key.to_string())],
+        );
+    }
+
+    pub fn record_lua_duration(&self, queue_id: &str, hook: &str, duration_us: f64) {
+        self.lua_execution_duration.record(
+            duration_us,
+            &[
+                KeyValue::new("queue_id", queue_id.to_string()),
+                KeyValue::new("hook", hook.to_string()),
+            ],
+        );
+    }
+
+    pub fn record_lua_error(&self, queue_id: &str) {
+        self.lua_errors
+            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+    }
+
+    pub fn record_lua_cb_activation(&self, queue_id: &str) {
+        self.lua_cb_activations
+            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
     }
 }
 
@@ -225,6 +287,7 @@ pub mod test_harness {
         }
 
         /// Assert a u64 counter with both queue_id and fairness_key labels.
+        /// Convenience wrapper around `assert_counter_with_attrs`.
         pub fn assert_counter_with_labels(
             &self,
             metric_name: &str,
@@ -232,48 +295,64 @@ pub mod test_harness {
             fairness_key: &str,
             expected: u64,
         ) {
-            self.flush();
-            let metrics = self.finished_metrics();
-            let attrs = &[
-                KeyValue::new("queue_id", queue_id.to_string()),
-                KeyValue::new("fairness_key", fairness_key.to_string()),
-            ];
-            let value = counter_value_u64_multi(&metrics, metric_name, attrs);
-            assert_eq!(
-                value,
-                Some(expected),
-                "expected counter {metric_name}[queue_id={queue_id},fairness_key={fairness_key}] = {expected}, got {value:?}"
+            self.assert_counter_with_attrs(
+                metric_name,
+                &[
+                    KeyValue::new("queue_id", queue_id.to_string()),
+                    KeyValue::new("fairness_key", fairness_key.to_string()),
+                ],
+                expected,
             );
         }
 
-        /// Assert an f64 gauge value with both queue_id and fairness_key labels.
+        /// Assert a u64 counter with arbitrary attribute key-value pairs.
+        pub fn assert_counter_with_attrs(
+            &self,
+            metric_name: &str,
+            attrs: &[KeyValue],
+            expected: u64,
+        ) {
+            self.flush();
+            let metrics = self.finished_metrics();
+            let value = counter_value_u64_with_attrs(&metrics, metric_name, attrs);
+            assert_eq!(
+                value,
+                Some(expected),
+                "expected counter {metric_name}{attrs:?} = {expected}, got {value:?}"
+            );
+        }
+
+        /// Assert an f64 histogram has at least `expected_count` recordings.
+        pub fn assert_histogram(&self, metric_name: &str, attrs: &[KeyValue], expected_count: u64) {
+            self.flush();
+            let metrics = self.finished_metrics();
+            let count = histogram_count_f64(&metrics, metric_name, attrs);
+            assert!(
+                count.is_some() && count.unwrap() >= expected_count,
+                "expected histogram {metric_name}{attrs:?} count >= {expected_count}, got {count:?}"
+            );
+        }
+
+        /// Assert an f64 gauge has a value matching the expected within tolerance.
         pub fn assert_gauge_f64(
             &self,
             metric_name: &str,
-            queue_id: &str,
-            fairness_key: &str,
+            attrs: &[KeyValue],
             expected: f64,
             tolerance: f64,
         ) {
             self.flush();
             let metrics = self.finished_metrics();
-            let attrs = &[
-                KeyValue::new("queue_id", queue_id.to_string()),
-                KeyValue::new("fairness_key", fairness_key.to_string()),
-            ];
-            let value = gauge_value_f64_multi(&metrics, metric_name, attrs);
-            match value {
-                Some(actual) => {
-                    let diff = (actual - expected).abs();
-                    assert!(
-                        diff <= tolerance,
-                        "expected gauge {metric_name}[queue_id={queue_id},fairness_key={fairness_key}] ~ {expected} (tolerance {tolerance}), got {actual} (diff {diff})"
-                    );
-                }
-                None => {
-                    panic!("gauge {metric_name}[queue_id={queue_id},fairness_key={fairness_key}] not found");
-                }
-            }
+            let value = gauge_value_f64(&metrics, metric_name, attrs);
+            assert!(
+                value.is_some(),
+                "expected f64 gauge {metric_name}{attrs:?} to exist"
+            );
+            let v = value.unwrap();
+            assert!(
+                (v - expected).abs() <= tolerance,
+                "expected f64 gauge {metric_name}{attrs:?} ≈ {expected} (±{tolerance}), got {v}"
+            );
         }
     }
 
@@ -302,62 +381,6 @@ pub mod test_harness {
         None
     }
 
-    /// Extract a u64 counter value matching ALL given attributes.
-    fn counter_value_u64_multi(
-        resource_metrics: &[ResourceMetrics],
-        name: &str,
-        expected_attrs: &[KeyValue],
-    ) -> Option<u64> {
-        for rm in resource_metrics {
-            for sm in rm.scope_metrics() {
-                for metric in sm.metrics() {
-                    if metric.name() == name {
-                        if let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() {
-                            for dp in sum.data_points() {
-                                let dp_attrs: Vec<KeyValue> = dp.attributes().cloned().collect();
-                                if expected_attrs
-                                    .iter()
-                                    .all(|expected| dp_attrs.contains(expected))
-                                {
-                                    return Some(dp.value());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Extract an f64 gauge value matching ALL given attributes.
-    fn gauge_value_f64_multi(
-        resource_metrics: &[ResourceMetrics],
-        name: &str,
-        expected_attrs: &[KeyValue],
-    ) -> Option<f64> {
-        for rm in resource_metrics {
-            for sm in rm.scope_metrics() {
-                for metric in sm.metrics() {
-                    if metric.name() == name {
-                        if let AggregatedMetrics::F64(MetricData::Gauge(gauge)) = metric.data() {
-                            for dp in gauge.data_points() {
-                                let dp_attrs: Vec<KeyValue> = dp.attributes().cloned().collect();
-                                if expected_attrs
-                                    .iter()
-                                    .all(|expected| dp_attrs.contains(expected))
-                                {
-                                    return Some(dp.value());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
     /// Extract the u64 gauge value for a metric with a specific queue_id attribute.
     fn gauge_value_u64(
         resource_metrics: &[ResourceMetrics],
@@ -372,6 +395,81 @@ pub mod test_harness {
                         if let AggregatedMetrics::U64(MetricData::Gauge(gauge)) = metric.data() {
                             for dp in gauge.data_points() {
                                 if dp.attributes().any(|a| *a == expected_attr) {
+                                    return Some(dp.value());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract u64 counter value for a metric matching ALL given attributes.
+    fn counter_value_u64_with_attrs(
+        resource_metrics: &[ResourceMetrics],
+        name: &str,
+        attrs: &[KeyValue],
+    ) -> Option<u64> {
+        for rm in resource_metrics {
+            for sm in rm.scope_metrics() {
+                for metric in sm.metrics() {
+                    if metric.name() == name {
+                        if let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() {
+                            for dp in sum.data_points() {
+                                let dp_attrs: Vec<KeyValue> = dp.attributes().cloned().collect();
+                                if attrs.iter().all(|a| dp_attrs.contains(a)) {
+                                    return Some(dp.value());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract f64 histogram count for a metric matching ALL given attributes.
+    fn histogram_count_f64(
+        resource_metrics: &[ResourceMetrics],
+        name: &str,
+        attrs: &[KeyValue],
+    ) -> Option<u64> {
+        for rm in resource_metrics {
+            for sm in rm.scope_metrics() {
+                for metric in sm.metrics() {
+                    if metric.name() == name {
+                        if let AggregatedMetrics::F64(MetricData::Histogram(hist)) = metric.data() {
+                            for dp in hist.data_points() {
+                                let dp_attrs: Vec<KeyValue> = dp.attributes().cloned().collect();
+                                if attrs.iter().all(|a| dp_attrs.contains(a)) {
+                                    return Some(dp.count());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract f64 gauge value for a metric matching ALL given attributes.
+    fn gauge_value_f64(
+        resource_metrics: &[ResourceMetrics],
+        name: &str,
+        attrs: &[KeyValue],
+    ) -> Option<f64> {
+        for rm in resource_metrics {
+            for sm in rm.scope_metrics() {
+                for metric in sm.metrics() {
+                    if metric.name() == name {
+                        if let AggregatedMetrics::F64(MetricData::Gauge(gauge)) = metric.data() {
+                            for dp in gauge.data_points() {
+                                let dp_attrs: Vec<KeyValue> = dp.attributes().cloned().collect();
+                                if attrs.iter().all(|a| dp_attrs.contains(a)) {
                                     return Some(dp.value());
                                 }
                             }
@@ -521,8 +619,24 @@ pub mod test_harness {
             h.metrics.set_fairness_ratio("q1", "key_a", 1.0);
             h.metrics.set_fairness_ratio("q1", "key_b", 0.8);
 
-            h.assert_gauge_f64("fila.fairness.fair_share_ratio", "q1", "key_a", 1.0, 0.001);
-            h.assert_gauge_f64("fila.fairness.fair_share_ratio", "q1", "key_b", 0.8, 0.001);
+            h.assert_gauge_f64(
+                "fila.fairness.fair_share_ratio",
+                &[
+                    KeyValue::new("queue_id", "q1".to_string()),
+                    KeyValue::new("fairness_key", "key_a".to_string()),
+                ],
+                1.0,
+                0.001,
+            );
+            h.assert_gauge_f64(
+                "fila.fairness.fair_share_ratio",
+                &[
+                    KeyValue::new("queue_id", "q1".to_string()),
+                    KeyValue::new("fairness_key", "key_b".to_string()),
+                ],
+                0.8,
+                0.001,
+            );
         }
 
         #[test]
@@ -555,8 +669,8 @@ pub mod test_harness {
                 KeyValue::new("queue_id", "q1".to_string()),
                 KeyValue::new("fairness_key", "key_b".to_string()),
             ];
-            let a = counter_value_u64_multi(&metrics, "fila.fairness.throughput", attrs_a).unwrap();
-            let b = counter_value_u64_multi(&metrics, "fila.fairness.throughput", attrs_b).unwrap();
+            let a = counter_value_u64_with_attrs(&metrics, "fila.fairness.throughput", attrs_a).unwrap();
+            let b = counter_value_u64_with_attrs(&metrics, "fila.fairness.throughput", attrs_b).unwrap();
             assert!(
                 a > b,
                 "higher-weight key_a should have more deliveries than key_b"
@@ -566,6 +680,104 @@ pub mod test_harness {
                 (ratio - 3.0).abs() < 0.1,
                 "key_a/key_b ratio should be ~3.0, got {ratio}"
             );
+        }
+
+        #[test]
+        fn throttle_decisions_counter_per_key_and_result() {
+            let h = MetricTestHarness::new();
+            h.metrics.record_throttle_decision("api:tenant-a", "pass");
+            h.metrics.record_throttle_decision("api:tenant-a", "pass");
+            h.metrics.record_throttle_decision("api:tenant-a", "hit");
+            h.metrics.record_throttle_decision("api:tenant-b", "hit");
+
+            h.assert_counter_with_attrs(
+                "fila.throttle.decisions",
+                &[
+                    KeyValue::new("throttle_key", "api:tenant-a"),
+                    KeyValue::new("result", "pass"),
+                ],
+                2,
+            );
+            h.assert_counter_with_attrs(
+                "fila.throttle.decisions",
+                &[
+                    KeyValue::new("throttle_key", "api:tenant-a"),
+                    KeyValue::new("result", "hit"),
+                ],
+                1,
+            );
+            h.assert_counter_with_attrs(
+                "fila.throttle.decisions",
+                &[
+                    KeyValue::new("throttle_key", "api:tenant-b"),
+                    KeyValue::new("result", "hit"),
+                ],
+                1,
+            );
+        }
+
+        #[test]
+        fn throttle_tokens_remaining_gauge() {
+            let h = MetricTestHarness::new();
+            h.metrics.set_throttle_tokens("api:tenant-a", 7.5);
+            h.metrics.set_throttle_tokens("api:tenant-b", 0.0);
+
+            h.assert_gauge_f64(
+                "fila.throttle.tokens_remaining",
+                &[KeyValue::new("throttle_key", "api:tenant-a")],
+                7.5,
+                0.01,
+            );
+            h.assert_gauge_f64(
+                "fila.throttle.tokens_remaining",
+                &[KeyValue::new("throttle_key", "api:tenant-b")],
+                0.0,
+                0.01,
+            );
+        }
+
+        #[test]
+        fn lua_execution_duration_histogram() {
+            let h = MetricTestHarness::new();
+            h.metrics.record_lua_duration("q1", "on_enqueue", 150.0);
+            h.metrics.record_lua_duration("q1", "on_enqueue", 200.0);
+            h.metrics.record_lua_duration("q1", "on_failure", 50.0);
+
+            h.assert_histogram(
+                "fila.lua.execution_duration_us",
+                &[
+                    KeyValue::new("queue_id", "q1"),
+                    KeyValue::new("hook", "on_enqueue"),
+                ],
+                2,
+            );
+            h.assert_histogram(
+                "fila.lua.execution_duration_us",
+                &[
+                    KeyValue::new("queue_id", "q1"),
+                    KeyValue::new("hook", "on_failure"),
+                ],
+                1,
+            );
+        }
+
+        #[test]
+        fn lua_errors_counter() {
+            let h = MetricTestHarness::new();
+            h.metrics.record_lua_error("q1");
+            h.metrics.record_lua_error("q1");
+            h.metrics.record_lua_error("q2");
+
+            h.assert_counter("fila.lua.errors", "q1", 2);
+            h.assert_counter("fila.lua.errors", "q2", 1);
+        }
+
+        #[test]
+        fn lua_circuit_breaker_activations_counter() {
+            let h = MetricTestHarness::new();
+            h.metrics.record_lua_cb_activation("q1");
+
+            h.assert_counter("fila.lua.circuit_breaker.activations", "q1", 1);
         }
     }
 }

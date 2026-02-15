@@ -16,6 +16,18 @@ pub use on_enqueue::OnEnqueueResult;
 pub use on_failure::{FailureAction, OnFailureResult};
 pub use safety::SafetyManager;
 
+/// Outcome of a Lua script execution, surfaced to the scheduler for metric recording.
+#[derive(Debug, PartialEq)]
+pub enum LuaExecOutcome {
+    /// Script executed successfully.
+    Success,
+    /// Script failed with an error. If `circuit_breaker_tripped` is true,
+    /// this failure caused the circuit breaker to transition to open state.
+    ScriptError { circuit_breaker_tripped: bool },
+    /// Script was not executed because the circuit breaker is active.
+    CircuitBreakerBypassed,
+}
+
 /// Pre-compiled Lua bytecode for a script.
 pub type CompiledScript = Vec<u8>;
 
@@ -113,7 +125,7 @@ impl LuaEngine {
         headers: &std::collections::HashMap<String, String>,
         payload_size: usize,
         queue_name: &str,
-    ) -> Option<OnEnqueueResult> {
+    ) -> Option<(OnEnqueueResult, LuaExecOutcome)> {
         if !self.on_enqueue_cache.contains_key(queue_id) {
             return None;
         }
@@ -121,7 +133,10 @@ impl LuaEngine {
         // Circuit breaker check
         if !self.safety.should_execute(queue_id) {
             tracing::warn!(queue = %queue_id, "circuit breaker active, bypassing Lua");
-            return Some(OnEnqueueResult::default());
+            return Some((
+                OnEnqueueResult::default(),
+                LuaExecOutcome::CircuitBreakerBypassed,
+            ));
         }
 
         // Set safety hooks before execution (fail-closed: always apply limits)
@@ -148,7 +163,7 @@ impl LuaEngine {
         match result {
             Ok(on_enqueue_result) => {
                 self.safety.record_success(queue_id);
-                Some(on_enqueue_result)
+                Some((on_enqueue_result, LuaExecOutcome::Success))
             }
             Err(e) => {
                 tracing::warn!(queue = %queue_id, error = %e, "on_enqueue script failed, using defaults");
@@ -156,7 +171,12 @@ impl LuaEngine {
                 if just_tripped {
                     tracing::warn!(queue = %queue_id, "circuit breaker tripped");
                 }
-                Some(OnEnqueueResult::default())
+                Some((
+                    OnEnqueueResult::default(),
+                    LuaExecOutcome::ScriptError {
+                        circuit_breaker_tripped: just_tripped,
+                    },
+                ))
             }
         }
     }
@@ -175,7 +195,7 @@ impl LuaEngine {
         attempt_count: u32,
         queue_name: &str,
         error: &str,
-    ) -> Option<OnFailureResult> {
+    ) -> Option<(OnFailureResult, LuaExecOutcome)> {
         if !self.on_failure_cache.contains_key(queue_id) {
             return None;
         }
@@ -183,7 +203,10 @@ impl LuaEngine {
         // Circuit breaker check (shared with on_enqueue for this queue)
         if !self.safety.should_execute(queue_id) {
             tracing::warn!(queue = %queue_id, "circuit breaker active, bypassing on_failure Lua");
-            return Some(OnFailureResult::default());
+            return Some((
+                OnFailureResult::default(),
+                LuaExecOutcome::CircuitBreakerBypassed,
+            ));
         }
 
         // Set safety hooks before execution (fail-closed: always apply limits)
@@ -224,7 +247,7 @@ impl LuaEngine {
                     );
                 }
                 self.safety.record_success(queue_id);
-                Some(on_failure_result)
+                Some((on_failure_result, LuaExecOutcome::Success))
             }
             Err(e) => {
                 tracing::warn!(queue = %queue_id, error = %e, "on_failure script failed, using default retry");
@@ -232,7 +255,12 @@ impl LuaEngine {
                 if just_tripped {
                     tracing::warn!(queue = %queue_id, "circuit breaker tripped");
                 }
-                Some(OnFailureResult::default())
+                Some((
+                    OnFailureResult::default(),
+                    LuaExecOutcome::ScriptError {
+                        circuit_breaker_tripped: just_tripped,
+                    },
+                ))
             }
         }
     }
@@ -350,11 +378,12 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert("tenant".to_string(), "acme".to_string());
 
-        let result = engine
+        let (result, outcome) = engine
             .run_on_enqueue("q1", &headers, 100, "test-queue")
             .unwrap();
         assert_eq!(result.fairness_key, "acme");
         assert_eq!(result.weight, 2);
+        assert_eq!(outcome, LuaExecOutcome::Success);
     }
 
     #[test]
@@ -377,9 +406,12 @@ mod tests {
         // global default limits and abort the script (fail-closed).
         engine.on_enqueue_cache.insert("q1".to_string(), bytecode);
 
-        let result = engine.run_on_enqueue("q1", &HashMap::new(), 100, "test-queue");
+        let (result, outcome) = engine
+            .run_on_enqueue("q1", &HashMap::new(), 100, "test-queue")
+            .unwrap();
         // Should return defaults (script failed due to instruction limit), not hang
-        assert_eq!(result.unwrap(), OnEnqueueResult::default());
+        assert_eq!(result, OnEnqueueResult::default());
+        assert!(matches!(outcome, LuaExecOutcome::ScriptError { .. }));
     }
 
     #[test]
