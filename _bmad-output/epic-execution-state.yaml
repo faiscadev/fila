@@ -4,10 +4,10 @@ startedAt: "2026-02-14T00:00:00Z"
 stories:
   - id: "6.1"
     title: "OTel Infrastructure & Core Metrics"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/6.1-otel-infrastructure-core-metrics"
-    pr: null
+    pr: 27
     dependsOn: []
   - id: "6.2"
     title: "Scheduler & Fairness Metrics"
