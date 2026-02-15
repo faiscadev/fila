@@ -1,6 +1,6 @@
 # Story 6.3: Throttle, Lua & Diagnostic Metrics
 
-Status: review
+Status: done
 
 ## Story
 
