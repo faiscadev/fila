@@ -82,7 +82,7 @@ development_status:
   5-2-queue-stats-inspection: done
   5-3-dlq-redrive: done
   5-4-fila-cli: done
-  epic-5-retrospective: optional
+  epic-5-retrospective: done
 
   # Epic 6: Observability & Diagnostics
   epic-6: backlog

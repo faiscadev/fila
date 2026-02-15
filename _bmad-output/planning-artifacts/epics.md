@@ -723,6 +723,7 @@ So that I can reprocess messages after fixing the underlying issue.
 **And** the response includes the number of messages redriven
 **And** calling Redrive on a non-DLQ queue returns `INVALID_ARGUMENT` status
 **And** an integration test dead-letters messages, redrives them, and verifies they are available for lease from the source queue
+**And** redrive only moves pending (non-leased) messages — currently leased DLQ messages are not moved to avoid confusing active consumers
 
 ### Story 5.4: fila-cli
 
@@ -778,6 +779,9 @@ So that I can monitor broker health in Prometheus, Grafana, or Datadog.
 **And** metrics export interval is configurable (default 10 seconds)
 **And** log levels follow the convention: ERROR for unrecoverable, WARN for circuit breaker, INFO for lifecycle, DEBUG for per-message, TRACE for scheduler internals
 **And** message payloads and potentially sensitive headers are NEVER logged
+**And** OTel crate versions are verified for compatibility before implementation begins (`opentelemetry` + `opentelemetry-otlp` + `tracing-opentelemetry` — pin versions that work together)
+**And** a test-harness for asserting on emitted metrics is established (in-memory exporter or mock collector) so Stories 6.2 and 6.3 can reuse it
+**And** the `[telemetry]` section in `BrokerConfig` is implemented (OTLP endpoint, service name, metrics interval) if not already present
 
 ### Story 6.2: Scheduler & Fairness Metrics
 
