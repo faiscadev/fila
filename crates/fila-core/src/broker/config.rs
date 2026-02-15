@@ -7,6 +7,7 @@ pub struct BrokerConfig {
     pub server: ServerConfig,
     pub scheduler: SchedulerConfig,
     pub lua: LuaConfig,
+    pub telemetry: TelemetryConfig,
 }
 
 /// Server configuration (gRPC listen address).
@@ -42,6 +43,33 @@ pub struct LuaConfig {
     /// Cooldown period in milliseconds after circuit breaker trips before
     /// retrying Lua execution.
     pub circuit_breaker_cooldown_ms: u64,
+}
+
+/// Telemetry configuration (OpenTelemetry export).
+/// When `otlp_endpoint` is `None`, telemetry export is disabled and the broker
+/// uses plain tracing-subscriber logging only.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TelemetryConfig {
+    /// OTLP gRPC endpoint (e.g., "http://localhost:4317").
+    /// When absent, no metrics or traces are exported.
+    pub otlp_endpoint: Option<String>,
+    /// OTel service name reported in traces and metrics.
+    pub service_name: Option<String>,
+    /// Metrics export interval in milliseconds.
+    pub metrics_interval_ms: Option<u64>,
+}
+
+impl TelemetryConfig {
+    /// Resolved service name, defaulting to "fila".
+    pub fn service_name(&self) -> &str {
+        self.service_name.as_deref().unwrap_or("fila")
+    }
+
+    /// Resolved metrics interval, defaulting to 10 seconds.
+    pub fn metrics_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.metrics_interval_ms.unwrap_or(10_000))
+    }
 }
 
 impl Default for LuaConfig {
@@ -136,5 +164,48 @@ mod tests {
         assert_eq!(config.server.listen_addr, "0.0.0.0:8080");
         // Scheduler defaults preserved
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
+    }
+
+    #[test]
+    fn telemetry_defaults_to_disabled() {
+        let config = BrokerConfig::default();
+        assert!(config.telemetry.otlp_endpoint.is_none());
+        assert!(config.telemetry.service_name.is_none());
+        assert!(config.telemetry.metrics_interval_ms.is_none());
+        assert_eq!(config.telemetry.service_name(), "fila");
+        assert_eq!(
+            config.telemetry.metrics_interval(),
+            std::time::Duration::from_millis(10_000)
+        );
+    }
+
+    #[test]
+    fn telemetry_toml_parsing() {
+        let toml_str = r#"
+            [telemetry]
+            otlp_endpoint = "http://localhost:4317"
+            service_name = "fila-prod"
+            metrics_interval_ms = 5000
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.telemetry.otlp_endpoint.as_deref(),
+            Some("http://localhost:4317")
+        );
+        assert_eq!(config.telemetry.service_name(), "fila-prod");
+        assert_eq!(
+            config.telemetry.metrics_interval(),
+            std::time::Duration::from_millis(5_000)
+        );
+    }
+
+    #[test]
+    fn telemetry_absent_section_uses_defaults() {
+        let toml_str = r#"
+            [server]
+            listen_addr = "0.0.0.0:8080"
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.telemetry.otlp_endpoint.is_none());
     }
 }

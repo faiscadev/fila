@@ -1,38 +1,26 @@
-epic: "Epic 5: Operator Experience (Admin, Config & CLI)"
+epic: "Epic 6: Observability & Diagnostics"
 baseBranch: main
-startedAt: "2026-02-13T00:00:00Z"
+startedAt: "2026-02-14T00:00:00Z"
 stories:
-  - id: "5.1"
-    title: "Configuration Listing & Operator Visibility"
-    status: completed
-    currentPhase: ""
-    branch: "feat/5.1-configuration-listing-operator-visibility"
-    pr: 23
+  - id: "6.1"
+    title: "OTel Infrastructure & Core Metrics"
+    status: in-progress
+    currentPhase: "pr-ci"
+    branch: "feat/6.1-otel-infrastructure-core-metrics"
+    pr: null
     dependsOn: []
-  - id: "5.2"
-    title: "Queue Stats & Inspection"
-    status: completed
+  - id: "6.2"
+    title: "Scheduler & Fairness Metrics"
+    status: pending
     currentPhase: ""
-    branch: "feat/5.2-queue-stats-inspection"
-    pr: 24
-    dependsOn: []
-  - id: "5.3"
-    title: "DLQ Redrive"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: ["6.1"]
+  - id: "6.3"
+    title: "Throttle, Lua & Diagnostic Metrics"
+    status: pending
     currentPhase: ""
-    branch: "feat/5.3-dlq-redrive"
-    pr: 25
-    dependsOn: []
-  - id: "5.4"
-    title: "fila-cli"
-    status: completed
-    currentPhase: ""
-    branch: "feat/5.4-fila-cli"
-    pr: 26
-    dependsOn: ["5.1", "5.2", "5.3"]
+    branch: ""
+    pr: null
+    dependsOn: ["6.1"]
 skippedIssues: []
-completedAt: "2026-02-13T12:00:00Z"
-summary:
-  total: 4
-  completed: 4
-  skipped: 0

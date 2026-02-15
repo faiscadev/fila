@@ -31,7 +31,7 @@ impl AdminService {
 
 #[tonic::async_trait]
 impl FilaAdmin for AdminService {
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(queue_id))]
     async fn create_queue(
         &self,
         request: Request<CreateQueueRequest>,
@@ -41,6 +41,7 @@ impl FilaAdmin for AdminService {
         if req.name.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
+        tracing::Span::current().record("queue_id", &req.name.as_str());
 
         let proto_config = req.config.unwrap_or_default();
 
@@ -89,7 +90,7 @@ impl FilaAdmin for AdminService {
         Ok(Response::new(CreateQueueResponse { queue_id }))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(queue_id))]
     async fn delete_queue(
         &self,
         request: Request<DeleteQueueRequest>,
@@ -99,6 +100,7 @@ impl FilaAdmin for AdminService {
         if req.queue.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
+        tracing::Span::current().record("queue_id", &req.queue.as_str());
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.broker
