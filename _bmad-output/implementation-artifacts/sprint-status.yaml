@@ -88,7 +88,7 @@ development_status:
   epic-6: in-progress
   6-1-otel-infrastructure-core-metrics: done
   6-2-scheduler-fairness-metrics: done
-  6-3-throttle-lua-diagnostic-metrics: backlog
+  6-3-throttle-lua-diagnostic-metrics: in-progress
   epic-6-retrospective: optional
 
   # Epic 7: Client SDKs
