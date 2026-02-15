@@ -278,12 +278,41 @@ impl Scheduler {
 
         // Run on_enqueue Lua script if one is cached for this queue
         if let Some(ref mut lua_engine) = self.lua_engine {
-            if let Some(result) = lua_engine.run_on_enqueue(
+            let start = std::time::Instant::now();
+            if let Some((result, outcome)) = lua_engine.run_on_enqueue(
                 &message.queue_id,
                 &message.headers,
                 message.payload.len(),
                 &message.queue_id,
             ) {
+                // Record Lua metrics based on execution outcome
+                match outcome {
+                    crate::lua::LuaExecOutcome::Success => {
+                        let duration_us = start.elapsed().as_micros() as f64;
+                        self.metrics.record_lua_duration(
+                            &message.queue_id,
+                            "on_enqueue",
+                            duration_us,
+                        );
+                    }
+                    crate::lua::LuaExecOutcome::ScriptError {
+                        circuit_breaker_tripped,
+                    } => {
+                        let duration_us = start.elapsed().as_micros() as f64;
+                        self.metrics.record_lua_duration(
+                            &message.queue_id,
+                            "on_enqueue",
+                            duration_us,
+                        );
+                        self.metrics.record_lua_error(&message.queue_id);
+                        if circuit_breaker_tripped {
+                            self.metrics.record_lua_cb_activation(&message.queue_id);
+                        }
+                    }
+                    crate::lua::LuaExecOutcome::CircuitBreakerBypassed => {
+                        // No duration or error recording — script was not executed
+                    }
+                }
                 message.fairness_key = result.fairness_key;
                 message.weight = result.weight;
                 message.throttle_keys = result.throttle_keys;
@@ -898,7 +927,8 @@ impl Scheduler {
         self.metrics.record_nack(queue_id);
 
         // Run on_failure Lua script to decide retry vs dead-letter
-        let failure_result = self.lua_engine.as_mut().and_then(|engine| {
+        let start = std::time::Instant::now();
+        let on_failure_result = self.lua_engine.as_mut().and_then(|engine| {
             engine.run_on_failure(
                 queue_id,
                 &msg.headers,
@@ -907,6 +937,28 @@ impl Scheduler {
                 queue_id,
                 error,
             )
+        });
+        let failure_result = on_failure_result.map(|(result, outcome)| {
+            match outcome {
+                crate::lua::LuaExecOutcome::Success => {
+                    let duration_us = start.elapsed().as_micros() as f64;
+                    self.metrics
+                        .record_lua_duration(queue_id, "on_failure", duration_us);
+                }
+                crate::lua::LuaExecOutcome::ScriptError {
+                    circuit_breaker_tripped,
+                } => {
+                    let duration_us = start.elapsed().as_micros() as f64;
+                    self.metrics
+                        .record_lua_duration(queue_id, "on_failure", duration_us);
+                    self.metrics.record_lua_error(queue_id);
+                    if circuit_breaker_tripped {
+                        self.metrics.record_lua_cb_activation(queue_id);
+                    }
+                }
+                crate::lua::LuaExecOutcome::CircuitBreakerBypassed => {}
+            }
+            result
         });
 
         let should_dlq = matches!(
@@ -1127,6 +1179,11 @@ impl Scheduler {
 
         // Reset delivery tracking for next reporting window
         self.fairness_deliveries.clear();
+
+        // Report throttle token levels per key
+        for (key, tokens, _, _) in self.throttle.key_stats() {
+            self.metrics.set_throttle_tokens(&key, tokens);
+        }
     }
 
     /// Run one DRR delivery round across all queues that have active keys
@@ -1201,6 +1258,9 @@ impl Scheduler {
             // Throttle check (peek only — no tokens consumed yet): if ANY configured
             // key is exhausted, skip this fairness key entirely.
             if !self.throttle.peek_keys(&throttle_keys) {
+                for tk in &throttle_keys {
+                    self.metrics.record_throttle_decision(tk, "hit");
+                }
                 // Throttled — drain all remaining deficit so DRR moves to next key
                 // in O(1) rather than iterating once per deficit unit.
                 // The key stays in the active set for the next round.
@@ -1249,6 +1309,9 @@ impl Scheduler {
                 self.drr.consume_deficit(queue_id, &fairness_key);
                 // Consume throttle tokens only after successful delivery
                 self.throttle.consume_keys(&throttle_keys);
+                for tk in &throttle_keys {
+                    self.metrics.record_throttle_decision(tk, "pass");
+                }
                 // Track the storage key for O(1) lookup on ack/nack
                 self.leased_msg_keys.insert(entry.msg_id, entry.msg_key);
             } else {
