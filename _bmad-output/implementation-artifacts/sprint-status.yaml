@@ -87,7 +87,7 @@ development_status:
   # Epic 6: Observability & Diagnostics
   epic-6: in-progress
   6-1-otel-infrastructure-core-metrics: done
-  6-2-scheduler-fairness-metrics: backlog
+  6-2-scheduler-fairness-metrics: review
   6-3-throttle-lua-diagnostic-metrics: backlog
   epic-6-retrospective: optional
 
