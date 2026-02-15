@@ -10,6 +10,12 @@ pub struct Metrics {
     pub messages_nacked: Counter<u64>,
     pub queue_depth: Gauge<u64>,
     pub leases_active: Gauge<u64>,
+    // Story 6.2: Scheduler & Fairness metrics
+    pub fairness_throughput: Counter<u64>,
+    pub drr_rounds: Counter<u64>,
+    pub drr_active_keys: Gauge<u64>,
+    pub drr_keys_processed: Counter<u64>,
+    pub fairness_ratio: Gauge<f64>,
 }
 
 impl Default for Metrics {
@@ -53,6 +59,26 @@ impl Metrics {
                 .u64_gauge("fila.leases.active")
                 .with_description("Current active leases")
                 .build(),
+            fairness_throughput: meter
+                .u64_counter("fila.fairness.throughput")
+                .with_description("Messages delivered per fairness key")
+                .build(),
+            drr_rounds: meter
+                .u64_counter("fila.scheduler.drr.rounds")
+                .with_description("DRR scheduling rounds completed")
+                .build(),
+            drr_active_keys: meter
+                .u64_gauge("fila.scheduler.drr.active_keys")
+                .with_description("Current active fairness keys per queue")
+                .build(),
+            drr_keys_processed: meter
+                .u64_counter("fila.scheduler.drr.keys_processed")
+                .with_description("Fairness keys processed by DRR scheduler")
+                .build(),
+            fairness_ratio: meter
+                .f64_gauge("fila.fairness.fair_share_ratio")
+                .with_description("Actual throughput / expected fair share per key (1.0 = fair)")
+                .build(),
         }
     }
 
@@ -84,6 +110,41 @@ impl Metrics {
     pub fn set_leases_active(&self, queue_id: &str, count: u64) {
         self.leases_active
             .record(count, &[KeyValue::new("queue_id", queue_id.to_string())]);
+    }
+
+    pub fn record_fairness_delivery(&self, queue_id: &str, fairness_key: &str) {
+        self.fairness_throughput.add(
+            1,
+            &[
+                KeyValue::new("queue_id", queue_id.to_string()),
+                KeyValue::new("fairness_key", fairness_key.to_string()),
+            ],
+        );
+    }
+
+    pub fn record_drr_round(&self, queue_id: &str) {
+        self.drr_rounds
+            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+    }
+
+    pub fn set_drr_active_keys(&self, queue_id: &str, count: u64) {
+        self.drr_active_keys
+            .record(count, &[KeyValue::new("queue_id", queue_id.to_string())]);
+    }
+
+    pub fn record_drr_key_processed(&self, queue_id: &str) {
+        self.drr_keys_processed
+            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+    }
+
+    pub fn set_fairness_ratio(&self, queue_id: &str, fairness_key: &str, ratio: f64) {
+        self.fairness_ratio.record(
+            ratio,
+            &[
+                KeyValue::new("queue_id", queue_id.to_string()),
+                KeyValue::new("fairness_key", fairness_key.to_string()),
+            ],
+        );
     }
 }
 
@@ -163,6 +224,58 @@ pub mod test_harness {
                 "expected gauge {metric_name}[queue_id={queue_id}] = {expected}, got {value:?}"
             );
         }
+
+        /// Assert a u64 counter with both queue_id and fairness_key labels.
+        pub fn assert_counter_with_labels(
+            &self,
+            metric_name: &str,
+            queue_id: &str,
+            fairness_key: &str,
+            expected: u64,
+        ) {
+            self.flush();
+            let metrics = self.finished_metrics();
+            let attrs = &[
+                KeyValue::new("queue_id", queue_id.to_string()),
+                KeyValue::new("fairness_key", fairness_key.to_string()),
+            ];
+            let value = counter_value_u64_multi(&metrics, metric_name, attrs);
+            assert_eq!(
+                value,
+                Some(expected),
+                "expected counter {metric_name}[queue_id={queue_id},fairness_key={fairness_key}] = {expected}, got {value:?}"
+            );
+        }
+
+        /// Assert an f64 gauge value with both queue_id and fairness_key labels.
+        pub fn assert_gauge_f64(
+            &self,
+            metric_name: &str,
+            queue_id: &str,
+            fairness_key: &str,
+            expected: f64,
+            tolerance: f64,
+        ) {
+            self.flush();
+            let metrics = self.finished_metrics();
+            let attrs = &[
+                KeyValue::new("queue_id", queue_id.to_string()),
+                KeyValue::new("fairness_key", fairness_key.to_string()),
+            ];
+            let value = gauge_value_f64_multi(&metrics, metric_name, attrs);
+            match value {
+                Some(actual) => {
+                    let diff = (actual - expected).abs();
+                    assert!(
+                        diff <= tolerance,
+                        "expected gauge {metric_name}[queue_id={queue_id},fairness_key={fairness_key}] ~ {expected} (tolerance {tolerance}), got {actual} (diff {diff})"
+                    );
+                }
+                None => {
+                    panic!("gauge {metric_name}[queue_id={queue_id},fairness_key={fairness_key}] not found");
+                }
+            }
+        }
     }
 
     /// Extract the u64 counter value for a metric with a specific queue_id attribute.
@@ -179,6 +292,62 @@ pub mod test_harness {
                         if let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() {
                             for dp in sum.data_points() {
                                 if dp.attributes().any(|a| *a == expected_attr) {
+                                    return Some(dp.value());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract a u64 counter value matching ALL given attributes.
+    fn counter_value_u64_multi(
+        resource_metrics: &[ResourceMetrics],
+        name: &str,
+        expected_attrs: &[KeyValue],
+    ) -> Option<u64> {
+        for rm in resource_metrics {
+            for sm in rm.scope_metrics() {
+                for metric in sm.metrics() {
+                    if metric.name() == name {
+                        if let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() {
+                            for dp in sum.data_points() {
+                                let dp_attrs: Vec<KeyValue> = dp.attributes().cloned().collect();
+                                if expected_attrs
+                                    .iter()
+                                    .all(|expected| dp_attrs.contains(expected))
+                                {
+                                    return Some(dp.value());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract an f64 gauge value matching ALL given attributes.
+    fn gauge_value_f64_multi(
+        resource_metrics: &[ResourceMetrics],
+        name: &str,
+        expected_attrs: &[KeyValue],
+    ) -> Option<f64> {
+        for rm in resource_metrics {
+            for sm in rm.scope_metrics() {
+                for metric in sm.metrics() {
+                    if metric.name() == name {
+                        if let AggregatedMetrics::F64(MetricData::Gauge(gauge)) = metric.data() {
+                            for dp in gauge.data_points() {
+                                let dp_attrs: Vec<KeyValue> = dp.attributes().cloned().collect();
+                                if expected_attrs
+                                    .iter()
+                                    .all(|expected| dp_attrs.contains(expected))
+                                {
                                     return Some(dp.value());
                                 }
                             }
@@ -302,6 +471,102 @@ pub mod test_harness {
             h.assert_gauge("fila.queue.depth", "q2", 20);
             h.assert_gauge("fila.leases.active", "q1", 3);
             h.assert_gauge("fila.leases.active", "q2", 7);
+        }
+
+        #[test]
+        fn fairness_throughput_counter_per_key() {
+            let h = MetricTestHarness::new();
+            h.metrics.record_fairness_delivery("q1", "key_a");
+            h.metrics.record_fairness_delivery("q1", "key_a");
+            h.metrics.record_fairness_delivery("q1", "key_a");
+            h.metrics.record_fairness_delivery("q1", "key_b");
+
+            h.assert_counter_with_labels("fila.fairness.throughput", "q1", "key_a", 3);
+            h.assert_counter_with_labels("fila.fairness.throughput", "q1", "key_b", 1);
+        }
+
+        #[test]
+        fn drr_rounds_counter_increments() {
+            let h = MetricTestHarness::new();
+            h.metrics.record_drr_round("q1");
+            h.metrics.record_drr_round("q1");
+            h.metrics.record_drr_round("q2");
+
+            h.assert_counter("fila.scheduler.drr.rounds", "q1", 2);
+            h.assert_counter("fila.scheduler.drr.rounds", "q2", 1);
+        }
+
+        #[test]
+        fn drr_active_keys_gauge() {
+            let h = MetricTestHarness::new();
+            h.metrics.set_drr_active_keys("q1", 3);
+            h.metrics.set_drr_active_keys("q2", 0);
+
+            h.assert_gauge("fila.scheduler.drr.active_keys", "q1", 3);
+            h.assert_gauge("fila.scheduler.drr.active_keys", "q2", 0);
+        }
+
+        #[test]
+        fn drr_keys_processed_counter() {
+            let h = MetricTestHarness::new();
+            h.metrics.record_drr_key_processed("q1");
+            h.metrics.record_drr_key_processed("q1");
+            h.metrics.record_drr_key_processed("q1");
+
+            h.assert_counter("fila.scheduler.drr.keys_processed", "q1", 3);
+        }
+
+        #[test]
+        fn fairness_ratio_gauge_records() {
+            let h = MetricTestHarness::new();
+            h.metrics.set_fairness_ratio("q1", "key_a", 1.0);
+            h.metrics.set_fairness_ratio("q1", "key_b", 0.8);
+
+            h.assert_gauge_f64("fila.fairness.fair_share_ratio", "q1", "key_a", 1.0, 0.001);
+            h.assert_gauge_f64("fila.fairness.fair_share_ratio", "q1", "key_b", 0.8, 0.001);
+        }
+
+        #[test]
+        fn directional_fairness_throughput() {
+            // Higher-weight key should get proportionally more deliveries.
+            // Simulate: key_a weight=3, key_b weight=1. After many deliveries
+            // in a DRR pattern, key_a should have ~3x the throughput.
+            let h = MetricTestHarness::new();
+
+            // Simulate DRR delivery pattern: 3 deliveries for key_a, 1 for key_b
+            // repeated over 4 rounds
+            for _ in 0..4 {
+                h.metrics.record_fairness_delivery("q1", "key_a");
+                h.metrics.record_fairness_delivery("q1", "key_a");
+                h.metrics.record_fairness_delivery("q1", "key_a");
+                h.metrics.record_fairness_delivery("q1", "key_b");
+            }
+
+            h.assert_counter_with_labels("fila.fairness.throughput", "q1", "key_a", 12);
+            h.assert_counter_with_labels("fila.fairness.throughput", "q1", "key_b", 4);
+
+            // Verify directional correctness: key_a got 3x more than key_b
+            h.flush();
+            let metrics = h.finished_metrics();
+            let attrs_a = &[
+                KeyValue::new("queue_id", "q1".to_string()),
+                KeyValue::new("fairness_key", "key_a".to_string()),
+            ];
+            let attrs_b = &[
+                KeyValue::new("queue_id", "q1".to_string()),
+                KeyValue::new("fairness_key", "key_b".to_string()),
+            ];
+            let a = counter_value_u64_multi(&metrics, "fila.fairness.throughput", attrs_a).unwrap();
+            let b = counter_value_u64_multi(&metrics, "fila.fairness.throughput", attrs_b).unwrap();
+            assert!(
+                a > b,
+                "higher-weight key_a should have more deliveries than key_b"
+            );
+            let ratio = a as f64 / b as f64;
+            assert!(
+                (ratio - 3.0).abs() < 0.1,
+                "key_a/key_b ratio should be ~3.0, got {ratio}"
+            );
         }
     }
 }

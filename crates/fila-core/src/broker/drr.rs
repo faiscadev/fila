@@ -135,13 +135,15 @@ impl DrrScheduler {
     /// Start a new DRR round for a queue: refill deficit for all active keys
     /// based on `weight * quantum`. No-op if a round is already active
     /// (prevents unbounded deficit accumulation from repeated calls).
-    pub fn start_new_round(&mut self, queue_id: &str) {
+    /// Returns `true` if a new round was actually started, `false` if the
+    /// previous round is still active.
+    pub fn start_new_round(&mut self, queue_id: &str) -> bool {
         let Some(state) = self.queues.get_mut(queue_id) else {
-            return;
+            return false;
         };
 
         if state.round_active {
-            return;
+            return false;
         }
 
         for key in &state.active_keys {
@@ -152,6 +154,7 @@ impl DrrScheduler {
 
         state.round_position = 0;
         state.round_active = true;
+        true
     }
 
     /// Remove all DRR state for a queue (e.g., when the queue is deleted).
