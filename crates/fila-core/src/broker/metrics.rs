@@ -10,7 +10,6 @@ pub struct Metrics {
     pub messages_nacked: Counter<u64>,
     pub queue_depth: Gauge<u64>,
     pub leases_active: Gauge<u64>,
-    // Story 6.2: Scheduler & Fairness metrics
     pub fairness_throughput: Counter<u64>,
     pub drr_rounds: Counter<u64>,
     pub drr_active_keys: Gauge<u64>,
