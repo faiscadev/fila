@@ -1104,11 +1104,14 @@ impl Scheduler {
 
             let stats = self.drr.key_stats(queue_id);
             let total_weight: u32 = stats.iter().map(|(_, _, w)| *w).sum();
-            let key_weight = stats
+            let Some(key_weight) = stats
                 .iter()
                 .find(|(k, _, _)| k == fairness_key)
                 .map(|(_, _, w)| *w)
-                .unwrap_or(1);
+            else {
+                // Key no longer in DRR stats — skip to avoid incorrect ratio
+                continue;
+            };
 
             if total_weight == 0 {
                 continue;
