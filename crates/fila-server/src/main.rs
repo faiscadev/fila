@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize telemetry (logging + optional OTel export).
     // Must happen after config is loaded but before anything else.
-    let _telemetry_guard = fila_core::telemetry::init_telemetry(&config.telemetry);
+    let telemetry_guard = fila_core::telemetry::init_telemetry(&config.telemetry);
 
     let listen_addr = config.server.listen_addr.clone();
 
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(broker);
 
     // Flush OTel pipeline (spans + metrics) before exit
-    if let Some(guard) = _telemetry_guard {
+    if let Some(guard) = telemetry_guard {
         guard.shutdown();
     }
 
