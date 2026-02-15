@@ -18,9 +18,9 @@ stories:
     dependsOn: ["6.1"]
   - id: "6.3"
     title: "Throttle, Lua & Diagnostic Metrics"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/6.3-throttle-lua-diagnostic-metrics"
     pr: null
     dependsOn: ["6.1"]
 skippedIssues: []
