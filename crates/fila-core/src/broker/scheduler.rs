@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,6 +8,7 @@ use tracing::{debug, error, info, warn};
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::config::{LuaConfig, SchedulerConfig};
 use crate::broker::drr::DrrScheduler;
+use crate::broker::metrics::Metrics;
 use crate::broker::throttle::ThrottleManager;
 use crate::lua::LuaEngine;
 use crate::storage::{Storage, WriteBatchOp};
@@ -51,6 +52,10 @@ pub struct Scheduler {
     leased_msg_keys: HashMap<uuid::Uuid, Vec<u8>>,
     /// Lua rules engine for executing on_enqueue and on_failure scripts.
     lua_engine: Option<LuaEngine>,
+    /// All known queue IDs, for zeroing gauges when queues become idle.
+    known_queues: HashSet<String>,
+    /// OTel metrics for recording counters and gauges.
+    metrics: Metrics,
 }
 
 impl Scheduler {
@@ -81,6 +86,8 @@ impl Scheduler {
             pending_by_id: HashMap::new(),
             leased_msg_keys: HashMap::new(),
             lua_engine,
+            known_queues: HashSet::new(),
+            metrics: Metrics::new(),
         }
     }
 
@@ -104,6 +111,9 @@ impl Scheduler {
             // Phase 2: Refill token buckets, then DRR delivery round.
             self.throttle.refill_all(Instant::now());
             self.drr_deliver();
+
+            // Record gauge metrics after state changes.
+            self.record_gauges();
 
             if !self.running {
                 break;
@@ -286,6 +296,8 @@ impl Scheduler {
 
         self.storage.put_message(&key, &message)?;
 
+        self.metrics.record_enqueue(&message.queue_id);
+
         // Register the fairness key in DRR active set so it participates in scheduling
         self.drr
             .add_key(&message.queue_id, &message.fairness_key, message.weight);
@@ -368,6 +380,7 @@ impl Scheduler {
             if self.storage.get_queue(&dlq_name)?.is_none() {
                 let dlq_config = crate::queue::QueueConfig::new(dlq_name.clone());
                 self.storage.put_queue(&dlq_name, &dlq_config)?;
+                self.known_queues.insert(dlq_name.clone());
                 debug!(queue = %name, dlq = %dlq_name, "auto-created dead-letter queue");
             }
         } else {
@@ -376,6 +389,7 @@ impl Scheduler {
             self.storage.put_queue(&name, &config)?;
         }
 
+        self.known_queues.insert(name.clone());
         Ok(name)
     }
 
@@ -396,6 +410,7 @@ impl Scheduler {
         self.drr.remove_queue(queue_id);
         self.consumer_rr_idx.remove(queue_id);
         self.remove_pending_for_queue(queue_id);
+        self.known_queues.remove(queue_id);
         if let Some(ref mut lua_engine) = self.lua_engine {
             lua_engine.remove_queue_scripts(queue_id);
         }
@@ -410,6 +425,7 @@ impl Scheduler {
             self.drr.remove_queue(&auto_dlq_name);
             self.consumer_rr_idx.remove(&auto_dlq_name);
             self.remove_pending_for_queue(&auto_dlq_name);
+            self.known_queues.remove(&auto_dlq_name);
             if let Some(ref mut lua_engine) = self.lua_engine {
                 lua_engine.remove_queue_scripts(&auto_dlq_name);
             }
@@ -829,6 +845,7 @@ impl Scheduler {
         }
 
         self.storage.write_batch(ops)?;
+        self.metrics.record_ack(queue_id);
         Ok(())
     }
 
@@ -874,6 +891,7 @@ impl Scheduler {
         // Increment attempt count and clear lease timestamp
         msg.attempt_count += 1;
         msg.leased_at = None;
+        self.metrics.record_nack(queue_id);
 
         // Run on_failure Lua script to decide retry vs dead-letter
         let failure_result = self.lua_engine.as_mut().and_then(|engine| {
@@ -1038,6 +1056,32 @@ impl Scheduler {
         self.pending.entry(pk).or_default().push_back(entry);
     }
 
+    /// Record gauge metrics for queue depth and active leases.
+    /// Iterates all known queues to ensure gauges are zeroed when queues become idle.
+    fn record_gauges(&self) {
+        // Compute per-queue pending counts from the pending index
+        let mut queue_depths: HashMap<&str, u64> = HashMap::new();
+        for ((queue_id, _), entries) in &self.pending {
+            *queue_depths.entry(queue_id.as_str()).or_default() += entries.len() as u64;
+        }
+
+        // Compute per-queue lease counts from leased_msg_keys storage keys
+        let mut queue_leases: HashMap<String, u64> = HashMap::new();
+        for msg_key in self.leased_msg_keys.values() {
+            if let Some(queue_id) = crate::storage::keys::extract_queue_id(msg_key) {
+                *queue_leases.entry(queue_id).or_default() += 1;
+            }
+        }
+
+        // Report gauges for ALL known queues, defaulting to 0 for idle ones
+        for queue_id in &self.known_queues {
+            let depth = queue_depths.get(queue_id.as_str()).copied().unwrap_or(0);
+            let leases = queue_leases.get(queue_id).copied().unwrap_or(0);
+            self.metrics.set_queue_depth(queue_id, depth);
+            self.metrics.set_leases_active(queue_id, leases);
+        }
+    }
+
     /// Run one DRR delivery round across all queues that have active keys
     /// and registered consumers.
     fn drr_deliver(&mut self) {
@@ -1145,6 +1189,7 @@ impl Scheduler {
 
             let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
             if self.try_deliver_to_consumer(queue_id, &msg, &lease_key, visibility_timeout_ms) {
+                self.metrics.record_lease(queue_id);
                 self.drr.consume_deficit(queue_id, &fairness_key);
                 // Consume throttle tokens only after successful delivery
                 self.throttle.consume_keys(&throttle_keys);
@@ -1422,10 +1467,11 @@ impl Scheduler {
         self.pending_by_id.clear();
         self.leased_msg_keys.clear();
 
-        // Rebuild DRR active keys and Lua script cache by scanning queues
+        // Rebuild DRR active keys, known queues, and Lua script cache by scanning queues
         match self.storage.list_queues() {
             Ok(queues) => {
                 for queue in &queues {
+                    self.known_queues.insert(queue.name.clone());
                     // Register per-queue safety config if any scripts are present
                     if queue.on_enqueue_script.is_some() || queue.on_failure_script.is_some() {
                         if let Some(ref mut lua_engine) = self.lua_engine {

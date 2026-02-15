@@ -31,6 +31,10 @@ bytes = "1"
 crossbeam-channel = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+tracing-opentelemetry = { version = "0.32", features = ["metrics"] }
+opentelemetry = { version = "0.31", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.31", features = ["trace", "metrics", "rt-tokio", "testing"] }
+opentelemetry-otlp = { version = "0.31", features = ["trace", "metrics", "grpc-tonic"] }
 toml = "0.8"
 rocksdb = "0.24"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }

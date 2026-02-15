@@ -44,9 +44,12 @@ fn load_config() -> BrokerConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    fila_core::telemetry::init_tracing();
-
     let config = load_config();
+
+    // Initialize telemetry (logging + optional OTel export).
+    // Must happen after config is loaded but before anything else.
+    let _telemetry_guard = fila_core::telemetry::init_telemetry(&config.telemetry);
+
     let listen_addr = config.server.listen_addr.clone();
 
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
@@ -70,6 +73,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Graceful broker shutdown — Drop impl will handle it since Arc may have refs
     drop(broker);
+
+    // Flush OTel pipeline (spans + metrics) before exit
+    if let Some(guard) = _telemetry_guard {
+        guard.shutdown();
+    }
 
     Ok(())
 }

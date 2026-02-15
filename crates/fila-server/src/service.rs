@@ -41,7 +41,7 @@ fn ready_to_proto(ready: ReadyMessage) -> fila_proto::Message {
 }
 #[tonic::async_trait]
 impl FilaService for HotPathService {
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(queue_id, msg_id))]
     async fn enqueue(
         &self,
         request: Request<EnqueueRequest>,
@@ -57,8 +57,12 @@ impl FilaService for HotPathService {
             .unwrap_or_default()
             .as_nanos() as u64;
 
+        let msg_id = Uuid::now_v7();
+        tracing::Span::current().record("queue_id", &req.queue.as_str());
+        tracing::Span::current().record("msg_id", &tracing::field::display(&msg_id));
+
         let message = Message {
-            id: Uuid::now_v7(),
+            id: msg_id,
             queue_id: req.queue,
             headers: req.headers,
             payload: req.payload,
@@ -90,7 +94,7 @@ impl FilaService for HotPathService {
 
     type LeaseStream = tokio_stream::wrappers::ReceiverStream<Result<LeaseResponse, Status>>;
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(queue_id))]
     async fn lease(
         &self,
         request: Request<LeaseRequest>,
@@ -101,6 +105,7 @@ impl FilaService for HotPathService {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
 
+        tracing::Span::current().record("queue_id", &req.queue.as_str());
         let consumer_id = Uuid::now_v7().to_string();
 
         // Channel from scheduler (ReadyMessage) to converter task
@@ -155,7 +160,7 @@ impl FilaService for HotPathService {
         )))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(queue_id, msg_id))]
     async fn ack(&self, request: Request<AckRequest>) -> Result<Response<AckResponse>, Status> {
         let req = request.into_inner();
 
@@ -165,6 +170,9 @@ impl FilaService for HotPathService {
         if req.message_id.is_empty() {
             return Err(Status::invalid_argument("message_id must not be empty"));
         }
+
+        tracing::Span::current().record("queue_id", &req.queue.as_str());
+        tracing::Span::current().record("msg_id", &req.message_id.as_str());
 
         let msg_id: Uuid = req
             .message_id
@@ -188,7 +196,7 @@ impl FilaService for HotPathService {
         Ok(Response::new(AckResponse {}))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(queue_id, msg_id))]
     async fn nack(&self, request: Request<NackRequest>) -> Result<Response<NackResponse>, Status> {
         let req = request.into_inner();
 
@@ -198,6 +206,9 @@ impl FilaService for HotPathService {
         if req.message_id.is_empty() {
             return Err(Status::invalid_argument("message_id must not be empty"));
         }
+
+        tracing::Span::current().record("queue_id", &req.queue.as_str());
+        tracing::Span::current().record("msg_id", &req.message_id.as_str());
 
         let msg_id: Uuid = req
             .message_id

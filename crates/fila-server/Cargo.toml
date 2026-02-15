@@ -15,6 +15,8 @@ tonic-prost.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
+opentelemetry.workspace = true
 toml.workspace = true
 uuid.workspace = true
 
