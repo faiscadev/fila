@@ -1,6 +1,6 @@
 # Story 6.2: Scheduler & Fairness Metrics
 
-Status: review
+Status: done
 
 ## Story
 
