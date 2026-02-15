@@ -56,6 +56,9 @@ pub struct Scheduler {
     known_queues: HashSet<String>,
     /// OTel metrics for recording counters and gauges.
     metrics: Metrics,
+    /// Per-(queue_id, fairness_key) delivery counts for fair share ratio calculation.
+    /// Reset each time record_gauges() is called.
+    fairness_deliveries: HashMap<(String, String), u64>,
 }
 
 impl Scheduler {
@@ -88,6 +91,7 @@ impl Scheduler {
             lua_engine,
             known_queues: HashSet::new(),
             metrics: Metrics::new(),
+            fairness_deliveries: HashMap::new(),
         }
     }
 
@@ -1058,7 +1062,7 @@ impl Scheduler {
 
     /// Record gauge metrics for queue depth and active leases.
     /// Iterates all known queues to ensure gauges are zeroed when queues become idle.
-    fn record_gauges(&self) {
+    fn record_gauges(&mut self) {
         // Compute per-queue pending counts from the pending index
         let mut queue_depths: HashMap<&str, u64> = HashMap::new();
         for ((queue_id, _), entries) in &self.pending {
@@ -1079,7 +1083,47 @@ impl Scheduler {
             let leases = queue_leases.get(queue_id).copied().unwrap_or(0);
             self.metrics.set_queue_depth(queue_id, depth);
             self.metrics.set_leases_active(queue_id, leases);
+
+            // DRR active keys gauge
+            let active_keys = self.drr.key_stats(queue_id).len() as u64;
+            self.metrics.set_drr_active_keys(queue_id, active_keys);
         }
+
+        // Compute and record fair share ratios from delivery tracking
+        // Group deliveries by queue to compute per-queue totals
+        let mut queue_totals: HashMap<&str, u64> = HashMap::new();
+        for ((queue_id, _), count) in &self.fairness_deliveries {
+            *queue_totals.entry(queue_id.as_str()).or_default() += count;
+        }
+
+        for ((queue_id, fairness_key), count) in &self.fairness_deliveries {
+            let total = queue_totals.get(queue_id.as_str()).copied().unwrap_or(0);
+            if total == 0 {
+                continue;
+            }
+
+            let stats = self.drr.key_stats(queue_id);
+            let total_weight: u32 = stats.iter().map(|(_, _, w)| *w).sum();
+            let key_weight = stats
+                .iter()
+                .find(|(k, _, _)| k == fairness_key)
+                .map(|(_, _, w)| *w)
+                .unwrap_or(1);
+
+            if total_weight == 0 {
+                continue;
+            }
+
+            let fair_share = key_weight as f64 / total_weight as f64;
+            let actual_share = *count as f64 / total as f64;
+            let ratio = actual_share / fair_share;
+
+            self.metrics
+                .set_fairness_ratio(queue_id, fairness_key, ratio);
+        }
+
+        // Reset delivery tracking for next reporting window
+        self.fairness_deliveries.clear();
     }
 
     /// Run one DRR delivery round across all queues that have active keys
@@ -1118,7 +1162,9 @@ impl Scheduler {
         }
 
         // Start a new round (refills deficits for all active keys)
-        self.drr.start_new_round(queue_id);
+        if self.drr.start_new_round(queue_id) {
+            self.metrics.record_drr_round(queue_id);
+        }
 
         let visibility_timeout_ms = self
             .storage
@@ -1133,6 +1179,7 @@ impl Scheduler {
                 // Round exhausted — all keys have non-positive deficit
                 break;
             };
+            self.metrics.record_drr_key_processed(queue_id);
 
             let pending_key = (queue_id.to_string(), fairness_key.clone());
 
@@ -1190,6 +1237,12 @@ impl Scheduler {
             let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
             if self.try_deliver_to_consumer(queue_id, &msg, &lease_key, visibility_timeout_ms) {
                 self.metrics.record_lease(queue_id);
+                self.metrics
+                    .record_fairness_delivery(queue_id, &fairness_key);
+                *self
+                    .fairness_deliveries
+                    .entry((queue_id.to_string(), fairness_key.clone()))
+                    .or_default() += 1;
                 self.drr.consume_deficit(queue_id, &fairness_key);
                 // Consume throttle tokens only after successful delivery
                 self.throttle.consume_keys(&throttle_keys);
