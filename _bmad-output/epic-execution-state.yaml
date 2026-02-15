@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "6.2"
     title: "Scheduler & Fairness Metrics"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/6.2-scheduler-fairness-metrics"
+    pr: 28
     dependsOn: ["6.1"]
   - id: "6.3"
     title: "Throttle, Lua & Diagnostic Metrics"
