@@ -41,7 +41,7 @@ impl FilaAdmin for AdminService {
         if req.name.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
-        tracing::Span::current().record("queue_id", &req.name.as_str());
+        tracing::Span::current().record("queue_id", req.name.as_str());
 
         let proto_config = req.config.unwrap_or_default();
 
@@ -100,7 +100,7 @@ impl FilaAdmin for AdminService {
         if req.queue.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
-        tracing::Span::current().record("queue_id", &req.queue.as_str());
+        tracing::Span::current().record("queue_id", req.queue.as_str());
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.broker
