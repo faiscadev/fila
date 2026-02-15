@@ -12,6 +12,12 @@ pub struct Metrics {
     pub leases_active: Gauge<u64>,
 }
 
+impl Default for Metrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Metrics {
     /// Create metrics from the global meter provider. If no meter provider
     /// is configured (OTel disabled), the instruments are no-op.
@@ -101,13 +107,17 @@ pub mod test_harness {
         pub meter_provider: SdkMeterProvider,
     }
 
+    impl Default for MetricTestHarness {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl MetricTestHarness {
         pub fn new() -> Self {
             let exporter = InMemoryMetricExporter::default();
             let reader = PeriodicReader::builder(exporter.clone()).build();
-            let meter_provider = SdkMeterProvider::builder()
-                .with_reader(reader)
-                .build();
+            let meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
             let meter = meter_provider.meter("fila-test");
             let metrics = Metrics::from_meter(&meter);
             Self {

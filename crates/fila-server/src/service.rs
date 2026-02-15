@@ -58,8 +58,8 @@ impl FilaService for HotPathService {
             .as_nanos() as u64;
 
         let msg_id = Uuid::now_v7();
-        tracing::Span::current().record("queue_id", &req.queue.as_str());
-        tracing::Span::current().record("msg_id", &tracing::field::display(&msg_id));
+        tracing::Span::current().record("queue_id", req.queue.as_str());
+        tracing::Span::current().record("msg_id", tracing::field::display(&msg_id));
 
         let message = Message {
             id: msg_id,
@@ -105,7 +105,7 @@ impl FilaService for HotPathService {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
 
-        tracing::Span::current().record("queue_id", &req.queue.as_str());
+        tracing::Span::current().record("queue_id", req.queue.as_str());
         let consumer_id = Uuid::now_v7().to_string();
 
         // Channel from scheduler (ReadyMessage) to converter task
@@ -171,8 +171,8 @@ impl FilaService for HotPathService {
             return Err(Status::invalid_argument("message_id must not be empty"));
         }
 
-        tracing::Span::current().record("queue_id", &req.queue.as_str());
-        tracing::Span::current().record("msg_id", &req.message_id.as_str());
+        tracing::Span::current().record("queue_id", req.queue.as_str());
+        tracing::Span::current().record("msg_id", req.message_id.as_str());
 
         let msg_id: Uuid = req
             .message_id
@@ -207,8 +207,8 @@ impl FilaService for HotPathService {
             return Err(Status::invalid_argument("message_id must not be empty"));
         }
 
-        tracing::Span::current().record("queue_id", &req.queue.as_str());
-        tracing::Span::current().record("msg_id", &req.message_id.as_str());
+        tracing::Span::current().record("queue_id", req.queue.as_str());
+        tracing::Span::current().record("msg_id", req.message_id.as_str());
 
         let msg_id: Uuid = req
             .message_id
