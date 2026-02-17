@@ -1,31 +1,12 @@
-epic: "Epic 6: Observability & Diagnostics"
+epic: "Epic 7: Rust Client SDK"
 baseBranch: main
-startedAt: "2026-02-14T00:00:00Z"
+startedAt: "2026-02-17T00:00:00Z"
 stories:
-  - id: "6.1"
-    title: "OTel Infrastructure & Core Metrics"
-    status: completed
-    currentPhase: ""
-    branch: "feat/6.1-otel-infrastructure-core-metrics"
-    pr: 27
+  - id: "7.1"
+    title: "Rust Client SDK"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/7.1-rust-client-sdk"
+    pr: null
     dependsOn: []
-  - id: "6.2"
-    title: "Scheduler & Fairness Metrics"
-    status: completed
-    currentPhase: ""
-    branch: "feat/6.2-scheduler-fairness-metrics"
-    pr: 28
-    dependsOn: ["6.1"]
-  - id: "6.3"
-    title: "Throttle, Lua & Diagnostic Metrics"
-    status: completed
-    currentPhase: ""
-    branch: "feat/6.3-throttle-lua-diagnostic-metrics"
-    pr: 29
-    dependsOn: ["6.1"]
 skippedIssues: []
-completedAt: "2026-02-14T01:00:00Z"
-summary:
-  total: 3
-  completed: 3
-  skipped: 0
