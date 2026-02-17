@@ -466,18 +466,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fila-client"
-version = "0.1.0"
-dependencies = [
- "fila-proto",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tonic",
-]
-
-[[package]]
 name = "fila-core"
 version = "0.1.0"
 dependencies = [
@@ -512,6 +500,18 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+]
+
+[[package]]
+name = "fila-sdk"
+version = "0.1.0"
+dependencies = [
+ "fila-proto",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tonic",
 ]
 
 [[package]]
