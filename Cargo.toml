@@ -4,6 +4,7 @@ members = [
     "crates/fila-core",
     "crates/fila-server",
     "crates/fila-cli",
+    "crates/fila-client",
 ]
 resolver = "2"
 
@@ -39,5 +40,8 @@ toml = "0.8"
 rocksdb = "0.24"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 
+tokio-stream = "0.1"
+
 fila-proto = { path = "crates/fila-proto" }
 fila-core = { path = "crates/fila-core" }
+fila-client = { path = "crates/fila-client" }
