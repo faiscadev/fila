@@ -92,7 +92,7 @@ development_status:
   epic-6-retrospective: done
 
   # Epic 7: Rust Client SDK
-  epic-7: in-progress
+  epic-7: done
   7-1-rust-client-sdk: done
   epic-7-retrospective: optional
 
