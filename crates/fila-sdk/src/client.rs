@@ -115,6 +115,9 @@ impl FilaClient {
 
         let stream = response.into_inner().filter_map(|result| match result {
             Ok(lease_response) => {
+                // The server may send LeaseResponse frames with `message: None` as
+                // keepalive signals on the streaming connection. These are expected
+                // and silently skipped — they are not protocol errors.
                 let msg = lease_response.message?;
                 let metadata = msg.metadata.unwrap_or_default();
                 Some(Ok(LeaseMessage {

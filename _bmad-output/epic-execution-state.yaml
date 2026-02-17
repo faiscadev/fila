@@ -7,6 +7,6 @@ stories:
     status: in-progress
     currentPhase: "pr-ci"
     branch: "feat/7.1-rust-client-sdk"
-    pr: null
+    pr: 30
     dependsOn: []
 skippedIssues: []

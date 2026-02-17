@@ -10,7 +10,7 @@ so that I can integrate message enqueue, lease, ack, and nack into my Rust appli
 
 ## Acceptance Criteria
 
-1. **Given** the Fila proto definitions are available, **when** the Rust SDK crate is built, **then** a `fila-client` crate exists in the workspace as a thin wrapper over tonic gRPC clients from `fila-proto`
+1. **Given** the Fila proto definitions are available, **when** the Rust SDK crate is built, **then** a `fila-sdk` crate exists in the workspace as a thin wrapper over tonic gRPC clients from `fila-proto`
 2. **Given** a running Fila broker, **when** a client connects, **then** `FilaClient::connect(addr)` returns a connected client instance
 3. **Given** a connected client and an existing queue, **when** `client.enqueue(queue, headers, payload)` is called, **then** a `Result<String>` is returned containing the assigned message ID
 4. **Given** a connected client and a queue with messages, **when** `client.lease(queue)` is called, **then** a `Result<impl Stream<Item = Result<LeaseMessage>>>` is returned for streaming consumption
@@ -22,10 +22,10 @@ so that I can integrate message enqueue, lease, ack, and nack into my Rust appli
 
 ## Tasks / Subtasks
 
-- [x] Task 1: Create `fila-client` crate in workspace (AC: #1)
-  - [x] Subtask 1.1: Create `crates/fila-client/` with `Cargo.toml` and `src/lib.rs`
-  - [x] Subtask 1.2: Add `fila-client` to workspace members in root `Cargo.toml`
-  - [x] Subtask 1.3: Add `fila-client = { path = "crates/fila-client" }` to `[workspace.dependencies]`
+- [x] Task 1: Create `fila-sdk` crate in workspace (AC: #1)
+  - [x] Subtask 1.1: Create `crates/fila-sdk/` with `Cargo.toml` and `src/lib.rs`
+  - [x] Subtask 1.2: Add `fila-sdk` to workspace members in root `Cargo.toml`
+  - [x] Subtask 1.3: Add `fila-sdk = { path = "crates/fila-sdk" }` to `[workspace.dependencies]`
   - [x] Subtask 1.4: Dependencies: `fila-proto` (workspace), `tonic` (workspace), `tokio-stream` (workspace), `thiserror` (workspace)
 
 - [x] Task 2: Define SDK error type (AC: #3, #4, #5, #6)
@@ -60,7 +60,7 @@ so that I can integrate message enqueue, lease, ack, and nack into my Rust appli
 
 ### Architecture Compliance
 
-- **Crate organization**: `fila-client` is a new workspace member at `crates/fila-client/`. It depends only on `fila-proto` and `tonic` — no dependency on `fila-core` or `fila-server`
+- **Crate organization**: `fila-sdk` is a new workspace member at `crates/fila-sdk/`. It depends only on `fila-proto` and `tonic` — no dependency on `fila-core` or `fila-server`
 - **Thin wrapper**: The SDK wraps tonic-generated `FilaServiceClient<Channel>` from `fila-proto::fila_service_client`. Do NOT reimplement gRPC plumbing
 - **Error handling**: Per CLAUDE.md rules, match on `tonic::Status` code explicitly (not `.to_string()` catch-all). Map each gRPC status code to a specific `ClientError` variant
 
@@ -98,7 +98,7 @@ Convert from `LeaseResponse` in the stream mapping — handle `None` message fie
 ### Integration Test Setup
 
 For integration tests, the SDK crate needs to start a real `fila-server`. Pattern:
-1. `fila-client/Cargo.toml` → `[dev-dependencies]` include `fila-server` (or build the binary and spawn as subprocess)
+1. `fila-sdk/Cargo.toml` → `[dev-dependencies]` include `fila-server` (or build the binary and spawn as subprocess)
 2. Prefer subprocess approach: build `fila-server` binary, spawn with random port and temp dir, wait for ready, run tests, kill on drop
 3. For queue creation in tests, use `fila_proto::fila_admin_client::FilaAdminClient` directly (the SDK doesn't wrap admin operations)
 4. Tests must be independent — each gets its own server instance (or at minimum its own queue names)
@@ -128,7 +128,7 @@ Add `tokio-stream` to `[workspace.dependencies]` in root Cargo.toml if not alrea
 ### Project Structure Notes
 
 ```
-crates/fila-client/
+crates/fila-sdk/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs          # Re-exports: FilaClient, ClientError, LeaseMessage, ConnectOptions
@@ -156,7 +156,7 @@ Claude Opus 4.6
 
 ### Completion Notes List
 
-- Implemented `fila-client` crate as thin wrapper over tonic-generated `FilaServiceClient<Channel>`
+- Implemented `fila-sdk` crate as thin wrapper over tonic-generated `FilaServiceClient<Channel>`
 - Context-aware error mapping: `queue_status_error()` maps NOT_FOUND → QueueNotFound, `message_status_error()` maps NOT_FOUND → MessageNotFound
 - `LeaseMessage` flattens proto `Message` + `MessageMetadata` into ergonomic struct
 - Lease stream uses `filter_map` to skip `None` message fields (empty keepalive frames)
@@ -166,12 +166,12 @@ Claude Opus 4.6
 
 ### File List
 
-- `Cargo.toml` (modified — added fila-client to workspace members, added tokio-stream and fila-client to workspace deps)
-- `crates/fila-client/Cargo.toml` (new)
-- `crates/fila-client/src/lib.rs` (new)
-- `crates/fila-client/src/client.rs` (new)
-- `crates/fila-client/src/error.rs` (new)
-- `crates/fila-client/tests/integration.rs` (new)
+- `Cargo.toml` (modified — added fila-sdk to workspace members, added tokio-stream and fila-sdk to workspace deps)
+- `crates/fila-sdk/Cargo.toml` (new)
+- `crates/fila-sdk/src/lib.rs` (new)
+- `crates/fila-sdk/src/client.rs` (new)
+- `crates/fila-sdk/src/error.rs` (new)
+- `crates/fila-sdk/tests/integration.rs` (new)
 - `_bmad-output/implementation-artifacts/7-1-rust-client-sdk.md` (new — story file)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — epic-7 in-progress, story 7-1 in-progress)
 - `_bmad-output/epic-execution-state.yaml` (modified — epic 7 execution state)

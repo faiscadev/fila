@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use fila_client::{ClientError, FilaClient};
+use fila_sdk::{ClientError, FilaClient};
 use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::{CreateQueueRequest, QueueConfig};
 use tokio_stream::StreamExt;
@@ -91,12 +91,18 @@ otlp_endpoint = ""
 
         // Poll until we can connect
         let start = std::time::Instant::now();
+        let mut connected = false;
         while start.elapsed() < Duration::from_secs(10) {
             if std::net::TcpStream::connect(&addr).is_ok() {
+                connected = true;
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+        assert!(
+            connected,
+            "fila-server did not become reachable at {addr} within 10s"
+        );
 
         Self {
             child: Some(child),
