@@ -669,8 +669,10 @@ pub mod test_harness {
                 KeyValue::new("queue_id", "q1".to_string()),
                 KeyValue::new("fairness_key", "key_b".to_string()),
             ];
-            let a = counter_value_u64_with_attrs(&metrics, "fila.fairness.throughput", attrs_a).unwrap();
-            let b = counter_value_u64_with_attrs(&metrics, "fila.fairness.throughput", attrs_b).unwrap();
+            let a = counter_value_u64_with_attrs(&metrics, "fila.fairness.throughput", attrs_a)
+                .unwrap();
+            let b = counter_value_u64_with_attrs(&metrics, "fila.fairness.throughput", attrs_b)
+                .unwrap();
             assert!(
                 a > b,
                 "higher-weight key_a should have more deliveries than key_b"
