@@ -167,25 +167,25 @@ FR38: Epic 6 — DRR scheduling round metrics
 FR39: Epic 6 — Lua execution time histograms and error counters
 FR40: Epic 6 — Tracing spans for enqueue, lease, ack, nack
 FR41: Epic 6 — Diagnose "why was key X delayed?" from metrics
-FR42: Epic 7 — Go client SDK
-FR43: Epic 7 — Python client SDK
-FR44: Epic 7 — JavaScript/Node.js client SDK
-FR45: Epic 7 — Ruby client SDK
-FR46: Epic 7 — Rust client SDK
-FR47: Epic 7 — Java client SDK
-FR48: Epic 7 — All SDKs support enqueue, streaming lease, ack, nack
+FR42: Epic 8 — Go client SDK
+FR43: Epic 8 — Python client SDK
+FR44: Epic 8 — JavaScript/Node.js client SDK
+FR45: Epic 8 — Ruby client SDK
+FR46: Epic 8 — Rust client SDK
+FR47: Epic 8 — Java client SDK
+FR48: Epic 8 — All SDKs support enqueue, streaming lease, ack, nack
 FR49: Epic 1 — Single binary process
-FR50: Epic 8 — Docker image
-FR51: Epic 8 — cargo install installation
-FR52: Epic 8 — Shell script installation
+FR50: Epic 9 — Docker image
+FR51: Epic 9 — cargo install installation
+FR52: Epic 9 — Shell script installation
 FR53: Epic 1 — Full crash recovery with zero message loss
-FR54: Epic 8 — Comprehensive, example-rich documentation
-FR55: Epic 8 — Working code examples per SDK per language
-FR56: Epic 8 — Guided tutorials for common use cases
-FR57: Epic 8 — API reference generated from Protobuf
-FR58: Epic 8 — Structured llms.txt for LLM agents
-FR59: Epic 8 — Copy-paste Lua hook examples
-FR60: Epic 8 — Documentation as primary onboarding experience
+FR54: Epic 9 — Comprehensive, example-rich documentation
+FR55: Epic 9 — Working code examples per SDK per language
+FR56: Epic 9 — Guided tutorials for common use cases
+FR57: Epic 9 — API reference generated from Protobuf
+FR58: Epic 9 — Structured llms.txt for LLM agents
+FR59: Epic 9 — Copy-paste Lua hook examples
+FR60: Epic 9 — Documentation as primary onboarding experience
 
 ## Epic List
 
@@ -213,11 +213,14 @@ Operators manage runtime configuration via the gRPC API, redrive DLQ messages, i
 Full observability via OpenTelemetry metrics and distributed tracing. Per-fairness-key throughput, per-throttle-key hit rates, DRR scheduling rounds, Lua execution histograms. Operators can answer "why was key X delayed?" from broker metrics alone.
 **FRs covered:** FR35, FR36, FR37, FR38, FR39, FR40, FR41
 
-### Epic 7: Client SDKs
+### Epic 7: Scheduler Refactoring
+Decompose the monolithic `scheduler.rs` (6,800+ lines) into focused submodules with a blackbox e2e test safety net. The observability layer from Epic 6 provides runtime verification during restructuring. This reduces maintenance risk and improves developer velocity for all subsequent epics.
+
+### Epic 8: Client SDKs
 Developers integrate Fila into applications using idiomatic client SDKs in six languages: Go, Python, JavaScript/Node.js, Ruby, Rust, and Java. All SDKs support the full hot-path API: enqueue, streaming lease, ack, and nack.
 **FRs covered:** FR42, FR43, FR44, FR45, FR46, FR47, FR48
 
-### Epic 8: Distribution & Documentation
+### Epic 9: Distribution & Documentation
 Users install Fila via Docker, `cargo install`, or `curl | bash` shell script. Comprehensive documentation — tutorials, API reference, Lua hook examples, and `llms.txt` — enables onboarding in under 10 minutes. Documentation is the primary adoption driver.
 **FRs covered:** FR50, FR51, FR52, FR54, FR55, FR56, FR57, FR58, FR59, FR60
 
@@ -822,11 +825,85 @@ So that I can diagnose throttling behavior and script performance.
 
 ---
 
-## Epic 7: Client SDKs
+## Epic 7: Scheduler Refactoring
+
+Decompose the monolithic `scheduler.rs` (6,800+ lines) into focused submodules with a blackbox e2e test safety net. The observability layer from Epic 6 provides runtime verification during restructuring. This reduces maintenance risk and improves developer velocity for all subsequent epics.
+
+**Identified in:** Epic 4 Retrospective (2026-02-13). **Sequenced here by:** Epic 6 Retrospective (2026-02-17) — observability safety net now in place.
+
+**Prerequisite:** Epic 6 complete (metrics provide runtime verification during refactoring).
+
+### Story 7.1: Blackbox End-to-End Test Suite
+
+As a developer,
+I want a comprehensive blackbox e2e test suite that exercises the full gRPC API,
+So that I can refactor scheduler internals safely with behavioral regression coverage.
+
+**Acceptance Criteria:**
+
+**Given** a running `fila-server` instance started in the test harness
+**When** the e2e test suite runs
+**Then** each test communicates exclusively via gRPC client calls (no internal API access)
+**And** the following flows are tested end-to-end:
+- Enqueue → Lease → Ack lifecycle (basic message flow)
+- Enqueue → Lease → Nack → re-Lease (retry with attempt count increment)
+- Lua `on_enqueue` assigns fairness key, weight, and throttle keys from headers
+- Lua `on_failure` decides retry vs DLQ based on attempt count
+- DLQ flow: nack to exhaustion → message in DLQ → Redrive → re-Lease from source queue
+- DRR fairness: multi-key weighted delivery (higher-weight key gets proportionally more)
+- Throttle: rate-limited key skipped, unthrottled keys served immediately
+- Config: SetConfig → GetConfig → ListConfig with prefix filter → Lua `fila.get()` reads value
+- Queue management: CreateQueue → ListQueues → queue inspect (GetStats) → DeleteQueue
+- Crash recovery: enqueue messages → kill server → restart → verify all messages available for lease
+- Visibility timeout: lease message → wait for expiry → message available for re-lease
+**And** tests are independent and can run in parallel (separate ports, separate temp data dirs)
+**And** a shared test helper starts/stops `fila-server` instances and creates gRPC clients
+**And** all existing 258+ unit/integration tests continue to pass alongside the new e2e tests
+
+### Story 7.2: Scheduler Decomposition
+
+As a developer,
+I want `scheduler.rs` decomposed into focused submodules,
+So that each module is under 500 lines and has a clear single responsibility.
+
+**Acceptance Criteria:**
+
+**Given** the blackbox e2e test suite from Story 7.1 is passing
+**When** the scheduler is decomposed
+**Then** `scheduler.rs` is split into submodules under `broker/scheduler/`:
+- `mod.rs` — Scheduler struct, event loop, command dispatch
+- `delivery.rs` — DRR delivery logic, `drr_deliver_queue`, consumer management
+- `handlers.rs` — Command handlers: enqueue, ack, nack, config, stats, redrive, list_queues, list_config
+- `recovery.rs` — Startup recovery, lease expiry scanning, state rebuild
+- `leasing.rs` — Lease creation, expiry tracking, visibility timeout
+- `metrics_recording.rs` — `record_gauges`, fairness delivery tracking, all metric recording logic
+**And** no submodule exceeds ~500 lines (architecture guideline)
+**And** all existing tests (unit, integration, metric, e2e) pass with zero changes to test assertions
+**And** the public API of `Scheduler` remains unchanged (internal restructure only)
+**And** `cargo clippy` and `cargo fmt` pass cleanly
+
+### Story 7.3: Cleanup & Deferred Items
+
+As a developer,
+I want accumulated structural debt and deferred items addressed,
+So that the codebase is clean for the SDK epic.
+
+**Acceptance Criteria:**
+
+**Given** the scheduler decomposition from Story 7.2 is complete
+**When** cleanup is performed
+**Then** the deferred tonic interceptor for trace context extraction is wired (Story 6.1 Task 7 completion)
+**And** incoming gRPC requests with W3C `traceparent` metadata have their trace context propagated to scheduler spans
+**And** any dead code, unused imports, or stale comments identified during decomposition are removed
+**And** all tests pass, clippy clean, fmt clean
+
+---
+
+## Epic 8: Client SDKs
 
 Developers integrate Fila into applications using idiomatic client SDKs in six languages: Go, Python, JavaScript/Node.js, Ruby, Rust, and Java. All SDKs support the full hot-path API: enqueue, streaming lease, ack, and nack.
 
-### Story 7.1: Rust Client SDK
+### Story 8.1: Rust Client SDK
 
 As a Rust developer,
 I want an idiomatic Rust client SDK for Fila,
@@ -845,7 +922,7 @@ So that I can integrate message enqueue, lease, ack, and nack into my Rust appli
 **And** the SDK follows Rust conventions: `Result<T, E>` errors, async/await, `Send + Sync` types
 **And** integration tests verify all four operations against a running broker
 
-### Story 7.2: Go Client SDK
+### Story 8.2: Go Client SDK
 
 As a Go developer,
 I want an idiomatic Go client SDK for Fila,
@@ -863,7 +940,7 @@ So that I can integrate Fila into my Go services with minimal effort.
 **And** the SDK follows Go conventions: exported types, error returns, godoc comments
 **And** a README with usage examples is included (FR55)
 
-### Story 7.3: Python Client SDK
+### Story 8.3: Python Client SDK
 
 As a Python developer,
 I want an idiomatic Python client SDK for Fila,
@@ -882,7 +959,7 @@ So that I can integrate Fila into my Python applications.
 **And** the package is installable via `pip install fila-client`
 **And** a README with usage examples is included (FR55)
 
-### Story 7.4: JavaScript/Node.js Client SDK
+### Story 8.4: JavaScript/Node.js Client SDK
 
 As a JavaScript/Node.js developer,
 I want an idiomatic JS/TS client SDK for Fila,
@@ -901,7 +978,7 @@ So that I can integrate Fila into my Node.js services.
 **And** the package is installable via `npm install @fila/client`
 **And** a README with usage examples is included (FR55)
 
-### Story 7.5: Ruby Client SDK
+### Story 8.5: Ruby Client SDK
 
 As a Ruby developer,
 I want an idiomatic Ruby client SDK for Fila,
@@ -919,7 +996,7 @@ So that I can integrate Fila into my Ruby applications.
 **And** the gem is installable via `gem install fila-client`
 **And** a README with usage examples is included (FR55)
 
-### Story 7.6: Java Client SDK
+### Story 8.6: Java Client SDK
 
 As a Java developer,
 I want an idiomatic Java client SDK for Fila,
@@ -940,11 +1017,11 @@ So that I can integrate Fila into my Java applications.
 
 ---
 
-## Epic 8: Distribution & Documentation
+## Epic 9: Distribution & Documentation
 
 Users install Fila via Docker, `cargo install`, or `curl | bash` shell script. Comprehensive documentation — tutorials, API reference, Lua hook examples, and `llms.txt` — enables onboarding in under 10 minutes. Documentation is the primary adoption driver.
 
-### Story 8.1: Docker Image
+### Story 9.1: Docker Image
 
 As a user evaluating Fila,
 I want to run Fila with a single Docker command,
@@ -963,7 +1040,7 @@ So that I can try it out in under a minute without installing anything.
 **And** environment variables can override config (`-e FILA_SERVER__LISTEN_ADDR=0.0.0.0:6666`)
 **And** the image size is minimized (no build tools in runtime layer)
 
-### Story 8.2: Binary Distribution & Installation
+### Story 9.2: Binary Distribution & Installation
 
 As a user,
 I want to install Fila via cargo or a shell script,
@@ -988,7 +1065,7 @@ So that I can run it natively on my machine without Docker.
 **And** binaries are uploaded as GitHub Release assets
 **And** checksums are generated for verification
 
-### Story 8.3: Core Documentation & API Reference
+### Story 9.3: Core Documentation & API Reference
 
 As a user evaluating Fila,
 I want comprehensive documentation that explains concepts, architecture, and API,
@@ -1005,7 +1082,7 @@ So that I can understand and adopt Fila quickly.
 **And** documentation uses a docs-as-product approach — the primary onboarding experience (FR60)
 **And** download to fair-scheduling demo is achievable in under 10 minutes following the docs (NFR14)
 
-### Story 8.4: Tutorials, Examples & Lua Patterns
+### Story 9.4: Tutorials, Examples & Lua Patterns
 
 As a developer adopting Fila,
 I want guided tutorials, working code examples, and copy-paste Lua patterns,
@@ -1024,15 +1101,9 @@ So that I can implement common use cases without starting from scratch.
 
 ---
 
-## Future: Refactoring Epic (Not Yet Planned)
+## Future Work
 
-**Identified in:** Epic 4 Retrospective (2026-02-13)
-
-**Motivation:** `scheduler.rs` has grown to 5,497 lines — half the codebase in one file. Every epic adds more to it. The file handles: enqueue, delivery, ack, nack, DRR scheduling, throttle integration, pending index, lease management, config handling, recovery, and all associated tests. This is unsustainable.
-
-**Prerequisite:** Blackbox end-to-end tests must be written BEFORE refactoring. Current tests are whitebox and tightly coupled to internal structure. Refactoring without behavioral test coverage risks introducing regressions.
-
-**Proposed sequence:**
-1. Blackbox e2e test suite — exercise the real gRPC server end-to-end (enqueue, lease, ack, nack, throttle, Lua hooks, DLQ, config) as a real operator would
-2. Scheduler decomposition — extract handler groups into submodules (delivery, config, recovery, leasing) while keeping tests green
-3. General cleanup — address any accumulated structural debt
+- Authentication and authorization (API keys, mTLS)
+- Distributed clustering (multi-node horizontal scalability)
+- Consumer groups (broker-managed consumer coordination)
+- Management GUI (web interface for monitoring)

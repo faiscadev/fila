@@ -1,6 +1,6 @@
 # Story 6.1: OTel Infrastructure & Core Metrics
 
-Status: review
+Status: done
 
 ## Story
 

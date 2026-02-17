@@ -89,22 +89,29 @@ development_status:
   6-1-otel-infrastructure-core-metrics: done
   6-2-scheduler-fairness-metrics: done
   6-3-throttle-lua-diagnostic-metrics: done
-  epic-6-retrospective: optional
+  epic-6-retrospective: done
 
-  # Epic 7: Client SDKs
+  # Epic 7: Scheduler Refactoring
   epic-7: backlog
-  7-1-rust-client-sdk: backlog
-  7-2-go-client-sdk: backlog
-  7-3-python-client-sdk: backlog
-  7-4-javascript-nodejs-client-sdk: backlog
-  7-5-ruby-client-sdk: backlog
-  7-6-java-client-sdk: backlog
+  7-1-blackbox-e2e-test-suite: backlog
+  7-2-scheduler-decomposition: backlog
+  7-3-cleanup-deferred-items: backlog
   epic-7-retrospective: optional
 
-  # Epic 8: Distribution & Documentation
+  # Epic 8: Client SDKs
   epic-8: backlog
-  8-1-docker-image: backlog
-  8-2-binary-distribution-installation: backlog
-  8-3-core-documentation-api-reference: backlog
-  8-4-tutorials-examples-lua-patterns: backlog
+  8-1-rust-client-sdk: backlog
+  8-2-go-client-sdk: backlog
+  8-3-python-client-sdk: backlog
+  8-4-javascript-nodejs-client-sdk: backlog
+  8-5-ruby-client-sdk: backlog
+  8-6-java-client-sdk: backlog
   epic-8-retrospective: optional
+
+  # Epic 9: Distribution & Documentation
+  epic-9: backlog
+  9-1-docker-image: backlog
+  9-2-binary-distribution-installation: backlog
+  9-3-core-documentation-api-reference: backlog
+  9-4-tutorials-examples-lua-patterns: backlog
+  epic-9-retrospective: optional
