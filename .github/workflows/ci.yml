@@ -46,6 +46,7 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: taiki-e/install-action@34ac9396e2ddcdd0baa9d56f88b84e09f95c0c77 # cargo-nextest
+      - run: cargo build --workspace
       - run: cargo nextest run
 
   bench:
