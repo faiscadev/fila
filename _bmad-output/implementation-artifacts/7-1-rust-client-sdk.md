@@ -1,6 +1,6 @@
 # Story 7.1: Rust Client SDK
 
-Status: review
+Status: done
 
 ## Story
 

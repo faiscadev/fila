@@ -4,8 +4,8 @@ startedAt: "2026-02-17T00:00:00Z"
 stories:
   - id: "7.1"
     title: "Rust Client SDK"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: done
+    currentPhase: "complete"
     branch: "feat/7.1-rust-client-sdk"
     pr: 30
     dependsOn: []
