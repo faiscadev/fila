@@ -5,7 +5,7 @@ stories:
   - id: "7.1"
     title: "Rust Client SDK"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/7.1-rust-client-sdk"
     pr: null
     dependsOn: []
