@@ -91,27 +91,31 @@ development_status:
   6-3-throttle-lua-diagnostic-metrics: done
   epic-6-retrospective: done
 
-  # Epic 7: Scheduler Refactoring
+  # Epic 7: Rust Client SDK
   epic-7: backlog
-  7-1-blackbox-e2e-test-suite: backlog
-  7-2-scheduler-decomposition: backlog
-  7-3-cleanup-deferred-items: backlog
+  7-1-rust-client-sdk: backlog
   epic-7-retrospective: optional
 
-  # Epic 8: Client SDKs
+  # Epic 8: E2E Tests & Scheduler Refactoring
   epic-8: backlog
-  8-1-rust-client-sdk: backlog
-  8-2-go-client-sdk: backlog
-  8-3-python-client-sdk: backlog
-  8-4-javascript-nodejs-client-sdk: backlog
-  8-5-ruby-client-sdk: backlog
-  8-6-java-client-sdk: backlog
+  8-1-blackbox-e2e-test-suite: backlog
+  8-2-scheduler-decomposition: backlog
+  8-3-cleanup-deferred-items: backlog
   epic-8-retrospective: optional
 
-  # Epic 9: Distribution & Documentation
+  # Epic 9: Client SDKs
   epic-9: backlog
-  9-1-docker-image: backlog
-  9-2-binary-distribution-installation: backlog
-  9-3-core-documentation-api-reference: backlog
-  9-4-tutorials-examples-lua-patterns: backlog
+  9-1-go-client-sdk: backlog
+  9-2-python-client-sdk: backlog
+  9-3-javascript-nodejs-client-sdk: backlog
+  9-4-ruby-client-sdk: backlog
+  9-5-java-client-sdk: backlog
   epic-9-retrospective: optional
+
+  # Epic 10: Distribution & Documentation
+  epic-10: backlog
+  10-1-docker-image: backlog
+  10-2-binary-distribution-installation: backlog
+  10-3-core-documentation-api-reference: backlog
+  10-4-tutorials-examples-lua-patterns: backlog
+  epic-10-retrospective: optional
