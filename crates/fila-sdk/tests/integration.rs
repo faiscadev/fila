@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use fila_sdk::{ClientError, FilaClient};
 use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::{CreateQueueRequest, QueueConfig};
+use fila_sdk::{ClientError, FilaClient};
 use tokio_stream::StreamExt;
 
 /// Find a free TCP port by binding to port 0 and reading the assigned port.
