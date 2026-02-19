@@ -100,7 +100,7 @@ development_status:
   epic-8: in-progress
   8-1-blackbox-e2e-test-suite: done
   8-2-scheduler-decomposition: done
-  8-3-cleanup-deferred-items: review
+  8-3-cleanup-deferred-items: done
   epic-8-retrospective: optional
 
   # Epic 9: Client SDKs
