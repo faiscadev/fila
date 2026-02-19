@@ -492,6 +492,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fila-e2e"
+version = "0.1.0"
+dependencies = [
+ "fila-sdk",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "fila-proto"
 version = "0.1.0"
 dependencies = [
