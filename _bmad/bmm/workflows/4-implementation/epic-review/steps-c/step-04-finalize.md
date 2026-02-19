@@ -84,7 +84,15 @@ Update {stateFile}:
 - Set all PRs to final "merged" status (should already be)
 - Add completedAt timestamp
 
-### 5. Checkout Main Branch
+### 5. Commit Review State File
+
+Commit the updated {stateFile} so the review history is preserved in the repo:
+```
+git add {stateFile}
+git commit -m "chore: update epic-review state for epic {epicNumber} completion"
+```
+
+### 6. Checkout Main Branch
 
 Switch back to main and pull the latest (all PRs are now merged):
 ```
@@ -92,7 +100,7 @@ git checkout main
 git pull origin main
 ```
 
-### 6. Present Final Summary
+### 7. Present Final Summary
 
 Display:
 
@@ -112,7 +120,7 @@ All PRs merged and tracking updated.
 
 Epic review workflow complete."
 
-### 7. No Next Step
+### 8. No Next Step
 
 This is the final step. The workflow is complete.
 
@@ -124,6 +132,7 @@ This is the final step. The workflow is complete.
 - Sprint-status updated: all stories "done", epic "done"
 - All story artifact files verified as "done"
 - State file updated with completion timestamp
+- Review state file committed to repo
 - Checked out main branch with latest
 - Clear final summary presented
 
@@ -133,6 +142,7 @@ This is the final step. The workflow is complete.
 - Story artifacts inconsistent with sprint-status
 - Epic status not set to "done"
 - Not verifying all PRs are actually merged
+- Review state file left uncommitted
 - Leaving agent on a feature branch instead of main
 
 **Master Rule:** Skipping steps, optimizing sequences, or not following exact instructions is FORBIDDEN and constitutes SYSTEM FAILURE.
