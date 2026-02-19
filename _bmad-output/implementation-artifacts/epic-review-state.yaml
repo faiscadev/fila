@@ -1,34 +1,13 @@
-epic: "Operator Experience (Admin, Config & CLI)"
-epicNumber: 5
-startedAt: "2026-02-14"
-completedAt: "2026-02-14"
-currentPrIndex: 3
+epic: "Rust Client SDK"
+epicNumber: 7
+startedAt: "2026-02-19"
+completedAt: "2026-02-19"
+currentPrIndex: 1
 prChain:
-  - storyId: "5.1"
-    storyKey: "5-1-configuration-listing-operator-visibility"
-    title: "Configuration Listing & Operator Visibility"
-    branch: "feat/5.1-configuration-listing-operator-visibility"
-    pr: 23
-    baseBranch: "main"
-    status: merged
-  - storyId: "5.2"
-    storyKey: "5-2-queue-stats-inspection"
-    title: "Queue Stats & Inspection"
-    branch: "feat/5.2-queue-stats-inspection"
-    pr: 24
-    baseBranch: "main"
-    status: merged
-  - storyId: "5.3"
-    storyKey: "5-3-dlq-redrive"
-    title: "DLQ Redrive"
-    branch: "feat/5.3-dlq-redrive"
-    pr: 25
-    baseBranch: "main"
-    status: merged
-  - storyId: "5.4"
-    storyKey: "5-4-fila-cli"
-    title: "fila-cli"
-    branch: "feat/5.4-fila-cli"
-    pr: 26
+  - storyId: "7.1"
+    storyKey: "7-1-rust-client-sdk"
+    title: "Rust Client SDK"
+    branch: "feat/7.1-rust-client-sdk"
+    pr: 30
     baseBranch: "main"
     status: merged
