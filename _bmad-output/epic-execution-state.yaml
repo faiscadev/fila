@@ -18,9 +18,9 @@ stories:
     dependsOn: ["8.1"]
   - id: "8.3"
     title: "Cleanup & Deferred Items"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "review"
+    branch: "feat/8.3-cleanup-deferred-items"
     pr: null
     dependsOn: ["8.2"]
 skippedIssues: []

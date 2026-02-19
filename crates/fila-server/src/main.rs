@@ -1,6 +1,7 @@
 mod admin_service;
 mod error;
 mod service;
+mod trace_context;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -64,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(%addr, "starting gRPC server");
 
     Server::builder()
+        .layer(trace_context::TraceContextLayer)
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))
         .serve_with_shutdown(addr, shutdown_signal())
