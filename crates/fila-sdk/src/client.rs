@@ -163,12 +163,7 @@ impl FilaClient {
     ///
     /// The message is requeued for retry or routed to the dead-letter queue
     /// based on the queue's on_failure Lua hook configuration.
-    pub async fn nack(
-        &self,
-        queue: &str,
-        message_id: &str,
-        error: &str,
-    ) -> Result<(), NackError> {
+    pub async fn nack(&self, queue: &str, message_id: &str, error: &str) -> Result<(), NackError> {
         self.inner
             .clone()
             .nack(NackRequest {
