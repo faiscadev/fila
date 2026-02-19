@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "8.2"
     title: "Scheduler Decomposition"
-    status: in-progress
-    currentPhase: "review"
+    status: completed
+    currentPhase: ""
     branch: "feat/8.2-scheduler-decomposition"
-    pr: null
+    pr: 32
     dependsOn: ["8.1"]
   - id: "8.3"
     title: "Cleanup & Deferred Items"

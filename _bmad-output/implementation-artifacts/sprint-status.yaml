@@ -99,7 +99,7 @@ development_status:
   # Epic 8: E2E Tests & Scheduler Refactoring
   epic-8: in-progress
   8-1-blackbox-e2e-test-suite: done
-  8-2-scheduler-decomposition: review
+  8-2-scheduler-decomposition: done
   8-3-cleanup-deferred-items: backlog
   epic-8-retrospective: optional
 
