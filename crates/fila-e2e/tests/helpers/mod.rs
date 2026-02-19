@@ -83,8 +83,7 @@ otlp_endpoint = ""
             for line in reader.lines() {
                 match line {
                     Ok(line) => {
-                        if line.contains(&addr_for_thread)
-                            || line.contains("starting gRPC server")
+                        if line.contains(&addr_for_thread) || line.contains("starting gRPC server")
                         {
                             // Server is ready — keep draining.
                         }
@@ -139,12 +138,7 @@ otlp_endpoint = ""
     }
 
     fn port(&self) -> u16 {
-        self.host_port()
-            .split(':')
-            .last()
-            .unwrap()
-            .parse()
-            .unwrap()
+        self.host_port().split(':').last().unwrap().parse().unwrap()
     }
 
     /// Restart a server on the same data directory and port.
@@ -152,7 +146,10 @@ otlp_endpoint = ""
         let addr = format!("127.0.0.1:{port}");
 
         let binary = server_binary();
-        assert!(binary.exists(), "fila-server binary not found at {binary:?}");
+        assert!(
+            binary.exists(),
+            "fila-server binary not found at {binary:?}"
+        );
 
         let mut child = Command::new(&binary)
             .env(
@@ -290,7 +287,9 @@ pub fn create_queue_with_scripts_cli(
 
 /// Connect an SDK client to the given server address.
 pub async fn sdk_client(addr: &str) -> fila_sdk::FilaClient {
-    fila_sdk::FilaClient::connect(addr).await.expect("connect SDK client")
+    fila_sdk::FilaClient::connect(addr)
+        .await
+        .expect("connect SDK client")
 }
 
 /// Find a free TCP port.

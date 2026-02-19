@@ -51,8 +51,14 @@ async fn e2e_lua_on_enqueue_assigns_keys() {
         received.push(msg);
     }
 
-    let msg1 = received.iter().find(|m| m.id == id1).expect("msg1 not received");
-    let msg2 = received.iter().find(|m| m.id == id2).expect("msg2 not received");
+    let msg1 = received
+        .iter()
+        .find(|m| m.id == id1)
+        .expect("msg1 not received");
+    let msg2 = received
+        .iter()
+        .find(|m| m.id == id2)
+        .expect("msg2 not received");
 
     assert_eq!(msg1.fairness_key, "acme");
     assert_eq!(msg2.fairness_key, "globex");
@@ -68,8 +74,7 @@ async fn e2e_lua_on_enqueue_assigns_keys() {
 async fn e2e_lua_on_failure_retry_vs_dlq() {
     let server = helpers::TestServer::start();
 
-    let on_failure =
-        r#"function on_failure(msg) if msg.attempts >= 3 then return { action = "dlq" } end return { action = "retry", delay_ms = 0 } end"#;
+    let on_failure = r#"function on_failure(msg) if msg.attempts >= 3 then return { action = "dlq" } end return { action = "retry", delay_ms = 0 } end"#;
 
     helpers::create_queue_with_scripts_cli(
         server.addr(),

@@ -33,7 +33,10 @@ async fn e2e_enqueue_lease_ack() {
 
     assert_eq!(msg.id, msg_id);
     assert_eq!(msg.payload, b"payload-1");
-    assert_eq!(msg.headers.get("test").map(|s| s.as_str()), Some("ack-flow"));
+    assert_eq!(
+        msg.headers.get("test").map(|s| s.as_str()),
+        Some("ack-flow")
+    );
 
     // Ack
     client.ack("lifecycle-ack", &msg_id).await.unwrap();

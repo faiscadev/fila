@@ -21,13 +21,7 @@ async fn e2e_drr_weighted_fairness() {
 
     let on_enqueue = r#"function on_enqueue(msg) return { fairness_key = msg.headers["key"] or "default", weight = tonumber(msg.headers["weight"]) or 1, throttle_keys = {} } end"#;
 
-    helpers::create_queue_with_scripts_cli(
-        server.addr(),
-        "fairness",
-        Some(on_enqueue),
-        None,
-        None,
-    );
+    helpers::create_queue_with_scripts_cli(server.addr(), "fairness", Some(on_enqueue), None, None);
 
     let client = helpers::sdk_client(server.addr()).await;
 
