@@ -1,0 +1,16 @@
+[package]
+name = "fila-e2e"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Blackbox end-to-end tests for Fila message broker"
+
+# This crate has no library code — it exists only for integration tests.
+
+[dependencies]
+
+[dev-dependencies]
+fila-sdk = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tempfile = "3"

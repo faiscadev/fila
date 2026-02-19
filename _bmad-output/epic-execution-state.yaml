@@ -1,17 +1,26 @@
-epic: "Epic 7: Rust Client SDK"
+epic: "Epic 8: E2E Tests & Scheduler Refactoring"
 baseBranch: main
-startedAt: "2026-02-17T00:00:00Z"
+startedAt: "2026-02-19T00:00:00Z"
 stories:
-  - id: "7.1"
-    title: "Rust Client SDK"
-    status: done
-    currentPhase: "complete"
-    branch: "feat/7.1-rust-client-sdk"
-    pr: 30
+  - id: "8.1"
+    title: "Blackbox End-to-End Test Suite"
+    status: in-progress
+    currentPhase: "pr-ci"
+    branch: "feat/8.1-blackbox-e2e-test-suite"
+    pr: null
     dependsOn: []
+  - id: "8.2"
+    title: "Scheduler Decomposition"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["8.1"]
+  - id: "8.3"
+    title: "Cleanup & Deferred Items"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["8.2"]
 skippedIssues: []
-completedAt: "2026-02-17T23:35:00Z"
-summary:
-  total: 1
-  completed: 1
-  skipped: 0
