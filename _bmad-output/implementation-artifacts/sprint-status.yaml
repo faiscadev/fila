@@ -94,7 +94,7 @@ development_status:
   # Epic 7: Rust Client SDK
   epic-7: done
   7-1-rust-client-sdk: done
-  epic-7-retrospective: optional
+  epic-7-retrospective: done
 
   # Epic 8: E2E Tests & Scheduler Refactoring
   epic-8: backlog
