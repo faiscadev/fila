@@ -4,8 +4,8 @@ startedAt: "2026-02-19T00:00:00Z"
 stories:
   - id: "8.1"
     title: "Blackbox End-to-End Test Suite"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/8.1-blackbox-e2e-test-suite"
     pr: 31
     dependsOn: []
