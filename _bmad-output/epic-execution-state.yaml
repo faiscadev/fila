@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "8.2"
     title: "Scheduler Decomposition"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "review"
+    branch: "feat/8.2-scheduler-decomposition"
     pr: null
     dependsOn: ["8.1"]
   - id: "8.3"
