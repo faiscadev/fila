@@ -189,18 +189,20 @@ fn recovery_does_not_duplicate_reclaimed_messages() {
 #[test]
 fn recovery_preserves_queue_definitions() {
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
 
-    // Phase 1: create queues, shut down
-    let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
-    for name in &["q1", "q2", "q3"] {
-        send_create_queue(&tx, name);
+    // Phase 1: create queues, shut down, drop all handles
+    {
+        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
+        for name in &["q1", "q2", "q3"] {
+            send_create_queue(&tx, name);
+        }
+        tx.send(SchedulerCommand::Shutdown).unwrap();
+        scheduler.run();
     }
-    tx.send(SchedulerCommand::Shutdown).unwrap();
-    scheduler.run();
-    drop(tx);
 
-    // Phase 2: reopen — queues should still be there (3 queues + 3 auto-created DLQs)
+    // Phase 2: reopen storage from disk — queues should survive the restart
+    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
     let queues = storage.list_queues().unwrap();
     assert_eq!(
         queues.len(),
