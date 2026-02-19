@@ -1,22 +1,13 @@
 use tonic::Code;
 
-/// Errors returned by the Fila client SDK.
+/// Common gRPC status errors shared across all operations.
+///
+/// Analogous to `StorageError` in fila-core — the "infra" error that every
+/// per-operation type embeds via `#[from]`.
 #[derive(Debug, thiserror::Error)]
-pub enum ClientError {
-    #[error("connection failed: {0}")]
-    Connect(#[from] tonic::transport::Error),
-
-    #[error("queue not found: {0}")]
-    QueueNotFound(String),
-
-    #[error("message not found: {0}")]
-    MessageNotFound(String),
-
+pub enum StatusError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
-
-    #[error("already exists: {0}")]
-    AlreadyExists(String),
 
     #[error("server unavailable: {0}")]
     Unavailable(String),
@@ -28,32 +19,93 @@ pub enum ClientError {
     Rpc { code: Code, message: String },
 }
 
-/// Maps a tonic Status to ClientError in a queue-operation context
-/// (NOT_FOUND → QueueNotFound).
-pub(crate) fn queue_status_error(status: tonic::Status) -> ClientError {
+// --- Per-operation error types ---
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectError {
+    #[error("connection failed: {0}")]
+    Transport(#[from] tonic::transport::Error),
+
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EnqueueError {
+    #[error("queue not found: {0}")]
+    QueueNotFound(String),
+
+    #[error(transparent)]
+    Status(#[from] StatusError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LeaseError {
+    #[error("queue not found: {0}")]
+    QueueNotFound(String),
+
+    #[error(transparent)]
+    Status(#[from] StatusError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AckError {
+    #[error("message not found: {0}")]
+    MessageNotFound(String),
+
+    #[error(transparent)]
+    Status(#[from] StatusError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum NackError {
+    #[error("message not found: {0}")]
+    MessageNotFound(String),
+
+    #[error(transparent)]
+    Status(#[from] StatusError),
+}
+
+// --- Mapping helpers ---
+
+pub(crate) fn status_error(status: tonic::Status) -> StatusError {
     let message = status.message().to_string();
     match status.code() {
-        Code::NotFound => ClientError::QueueNotFound(message),
-        code => status_error_common(code, message),
+        Code::InvalidArgument => StatusError::InvalidArgument(message),
+        Code::Unavailable => StatusError::Unavailable(message),
+        Code::Internal => StatusError::Internal(message),
+        code => StatusError::Rpc { code, message },
     }
 }
 
-/// Maps a tonic Status to ClientError in a message-operation context
-/// (NOT_FOUND → MessageNotFound).
-pub(crate) fn message_status_error(status: tonic::Status) -> ClientError {
+pub(crate) fn enqueue_status_error(status: tonic::Status) -> EnqueueError {
     let message = status.message().to_string();
     match status.code() {
-        Code::NotFound => ClientError::MessageNotFound(message),
-        code => status_error_common(code, message),
+        Code::NotFound => EnqueueError::QueueNotFound(message),
+        _ => EnqueueError::Status(status_error(status)),
     }
 }
 
-fn status_error_common(code: Code, message: String) -> ClientError {
-    match code {
-        Code::InvalidArgument => ClientError::InvalidArgument(message),
-        Code::AlreadyExists => ClientError::AlreadyExists(message),
-        Code::Unavailable => ClientError::Unavailable(message),
-        Code::Internal => ClientError::Internal(message),
-        code => ClientError::Rpc { code, message },
+pub(crate) fn lease_status_error(status: tonic::Status) -> LeaseError {
+    let message = status.message().to_string();
+    match status.code() {
+        Code::NotFound => LeaseError::QueueNotFound(message),
+        _ => LeaseError::Status(status_error(status)),
+    }
+}
+
+pub(crate) fn ack_status_error(status: tonic::Status) -> AckError {
+    let message = status.message().to_string();
+    match status.code() {
+        Code::NotFound => AckError::MessageNotFound(message),
+        _ => AckError::Status(status_error(status)),
+    }
+}
+
+pub(crate) fn nack_status_error(status: tonic::Status) -> NackError {
+    let message = status.message().to_string();
+    match status.code() {
+        Code::NotFound => NackError::MessageNotFound(message),
+        _ => NackError::Status(status_error(status)),
     }
 }

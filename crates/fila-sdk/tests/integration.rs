@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::{CreateQueueRequest, QueueConfig};
-use fila_sdk::{ClientError, FilaClient};
+use fila_sdk::{AckError, EnqueueError, FilaClient};
 use tokio_stream::StreamExt;
 
 /// Find a free TCP port by binding to port 0 and reading the assigned port.
@@ -179,7 +179,7 @@ async fn enqueue_lease_ack_lifecycle() {
     // Ack again should return not found
     let err = client.ack(queue, &msg_id).await.unwrap_err();
     assert!(
-        matches!(err, ClientError::MessageNotFound(_)),
+        matches!(err, AckError::MessageNotFound(_)),
         "expected MessageNotFound, got: {err:?}"
     );
 }
@@ -237,7 +237,7 @@ async fn enqueue_to_nonexistent_queue() {
         .unwrap_err();
 
     assert!(
-        matches!(err, ClientError::QueueNotFound(_)),
+        matches!(err, EnqueueError::QueueNotFound(_)),
         "expected QueueNotFound, got: {err:?}"
     );
 }
