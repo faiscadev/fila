@@ -42,6 +42,9 @@ rocksdb = "0.24"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 
 tokio-stream = "0.1"
+tower = "0.5"
+http = "1"
+pin-project-lite = "0.2"
 
 fila-proto = { path = "crates/fila-proto" }
 fila-core = { path = "crates/fila-core" }
