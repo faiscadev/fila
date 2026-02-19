@@ -10,8 +10,7 @@ use tokio_stream::StreamExt;
 async fn e2e_dlq_redrive() {
     let server = helpers::TestServer::start();
 
-    let on_failure =
-        r#"function on_failure(msg) if msg.attempts >= 2 then return { action = "dlq" } end return { action = "retry", delay_ms = 0 } end"#;
+    let on_failure = r#"function on_failure(msg) if msg.attempts >= 2 then return { action = "dlq" } end return { action = "retry", delay_ms = 0 } end"#;
 
     helpers::create_queue_with_scripts_cli(
         server.addr(),

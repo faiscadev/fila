@@ -11,9 +11,16 @@ async fn e2e_config_set_get_list_lua() {
     let server = helpers::TestServer::start();
 
     // Set a config value via CLI
-    let set = helpers::cli_run(server.addr(), &["config", "set", "myapp.region", "us-east-1"]);
+    let set = helpers::cli_run(
+        server.addr(),
+        &["config", "set", "myapp.region", "us-east-1"],
+    );
     assert!(set.success, "config set failed: {}", set.stderr);
-    assert!(set.stdout.contains("us-east-1"), "expected confirmation, got: {}", set.stdout);
+    assert!(
+        set.stdout.contains("us-east-1"),
+        "expected confirmation, got: {}",
+        set.stdout
+    );
 
     // Get the value via CLI
     let get = helpers::cli_run(server.addr(), &["config", "get", "myapp.region"]);
@@ -31,8 +38,14 @@ async fn e2e_config_set_get_list_lua() {
     // List all config entries
     let list_all = helpers::cli_run(server.addr(), &["config", "list"]);
     assert!(list_all.success, "config list failed: {}", list_all.stderr);
-    assert!(list_all.stdout.contains("myapp.region"), "list should include myapp.region");
-    assert!(list_all.stdout.contains("myapp.env"), "list should include myapp.env");
+    assert!(
+        list_all.stdout.contains("myapp.region"),
+        "list should include myapp.region"
+    );
+    assert!(
+        list_all.stdout.contains("myapp.env"),
+        "list should include myapp.env"
+    );
 
     // List with prefix filter
     let list_prefix = helpers::cli_run(server.addr(), &["config", "list", "--prefix", "myapp."]);
