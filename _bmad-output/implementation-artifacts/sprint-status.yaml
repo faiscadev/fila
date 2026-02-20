@@ -109,7 +109,7 @@ development_status:
   9-2-python-client-sdk: done
   9-3-javascript-nodejs-client-sdk: done
   9-4-ruby-client-sdk: done
-  9-5-java-client-sdk: ready-for-dev
+  9-5-java-client-sdk: review
   epic-9-retrospective: optional
 
   # Epic 10: Distribution & Documentation
