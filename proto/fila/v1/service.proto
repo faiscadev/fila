@@ -6,7 +6,7 @@ import "fila/v1/messages.proto";
 // Hot-path RPCs for producers and consumers.
 service FilaService {
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
-  rpc Lease(LeaseRequest) returns (stream LeaseResponse);
+  rpc Consume(ConsumeRequest) returns (stream ConsumeResponse);
   rpc Ack(AckRequest) returns (AckResponse);
   rpc Nack(NackRequest) returns (NackResponse);
 }
@@ -21,11 +21,11 @@ message EnqueueResponse {
   string message_id = 1;
 }
 
-message LeaseRequest {
+message ConsumeRequest {
   string queue = 1;
 }
 
-message LeaseResponse {
+message ConsumeResponse {
   Message message = 1;
 }
 

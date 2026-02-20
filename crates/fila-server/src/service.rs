@@ -3,7 +3,7 @@ use std::sync::Arc;
 use fila_core::{Broker, Message, ReadyMessage, SchedulerCommand};
 use fila_proto::fila_service_server::FilaService;
 use fila_proto::{
-    AckRequest, AckResponse, EnqueueRequest, EnqueueResponse, LeaseRequest, LeaseResponse,
+    AckRequest, AckResponse, ConsumeRequest, ConsumeResponse, EnqueueRequest, EnqueueResponse,
     NackRequest, NackResponse,
 };
 use tonic::{Request, Response, Status};
@@ -23,7 +23,7 @@ impl HotPathService {
     }
 }
 
-/// Convert a ReadyMessage to a protobuf Message for the LeaseResponse.
+/// Convert a ReadyMessage to a protobuf Message for the ConsumeResponse.
 fn ready_to_proto(ready: ReadyMessage) -> fila_proto::Message {
     fila_proto::Message {
         id: ready.msg_id.to_string(),
@@ -92,13 +92,13 @@ impl FilaService for HotPathService {
         }))
     }
 
-    type LeaseStream = tokio_stream::wrappers::ReceiverStream<Result<LeaseResponse, Status>>;
+    type ConsumeStream = tokio_stream::wrappers::ReceiverStream<Result<ConsumeResponse, Status>>;
 
     #[instrument(skip(self), fields(queue_id))]
-    async fn lease(
+    async fn consume(
         &self,
-        request: Request<LeaseRequest>,
-    ) -> Result<Response<Self::LeaseStream>, Status> {
+        request: Request<ConsumeRequest>,
+    ) -> Result<Response<Self::ConsumeStream>, Status> {
         let req = request.into_inner();
 
         if req.queue.is_empty() {
@@ -123,9 +123,9 @@ impl FilaService for HotPathService {
             })
             .map_err(IntoStatus::into_status)?;
 
-        debug!(%consumer_id, queue = %req.queue, "lease stream opened");
+        debug!(%consumer_id, queue = %req.queue, "consume stream opened");
 
-        // Spawn a converter task that bridges ReadyMessage -> LeaseResponse
+        // Spawn a converter task that bridges ReadyMessage -> ConsumeResponse
         // and handles cleanup on disconnect
         let broker = Arc::clone(&self.broker);
         let cid = consumer_id.clone();
@@ -135,7 +135,7 @@ impl FilaService for HotPathService {
                     msg = ready_rx.recv() => {
                         match msg {
                             Some(ready) => {
-                                let response = LeaseResponse {
+                                let response = ConsumeResponse {
                                     message: Some(ready_to_proto(ready)),
                                 };
                                 if stream_tx.send(Ok(response)).await.is_err() {
@@ -151,7 +151,7 @@ impl FilaService for HotPathService {
                 }
             }
             // Unregister consumer when the stream ends
-            debug!(consumer_id = %cid, "lease stream closed, unregistering consumer");
+            debug!(consumer_id = %cid, "consume stream closed, unregistering consumer");
             let _ = broker.send_command(SchedulerCommand::UnregisterConsumer { consumer_id: cid });
         });
 

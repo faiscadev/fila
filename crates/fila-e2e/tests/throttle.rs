@@ -52,7 +52,7 @@ async fn e2e_throttle_rate_limiting() {
             .unwrap();
     }
 
-    let mut stream = client.lease("throttle").await.unwrap();
+    let mut stream = client.consume("throttle").await.unwrap();
 
     // Collect the first 3 messages quickly — unthrottled messages should arrive first
     // since the throttled key only allows 1 msg/s (starts with 1 token).
@@ -62,7 +62,7 @@ async fn e2e_throttle_rate_limiting() {
             .await
             .expect("timeout — expected at least 4 messages quickly")
             .expect("stream ended")
-            .expect("lease error");
+            .expect("consume error");
         received.push(msg);
     }
 

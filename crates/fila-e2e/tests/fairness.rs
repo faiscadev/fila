@@ -14,7 +14,7 @@ use tokio_stream::StreamExt;
 /// gets 1, so the ratio is 75/25 from the start.
 ///
 /// Setup: 2 fairness keys — "high" (weight 3) and "low" (weight 1).
-/// Enqueue 100 per key, lease only 60 → distribution should be ~75/25.
+/// Enqueue 100 per key, consume only 60 → distribution should be ~75/25.
 #[tokio::test]
 async fn e2e_drr_weighted_fairness() {
     let server = helpers::TestServer::start_with_quantum(1);
@@ -49,9 +49,9 @@ async fn e2e_drr_weighted_fairness() {
             .unwrap();
     }
 
-    // Lease only a subset — both keys remain saturated throughout
+    // Consume only a subset — both keys remain saturated throughout
     let sample_size = 60;
-    let mut stream = client.lease("fairness").await.unwrap();
+    let mut stream = client.consume("fairness").await.unwrap();
 
     let mut high_count = 0u32;
     let mut low_count = 0u32;
@@ -61,7 +61,7 @@ async fn e2e_drr_weighted_fairness() {
             .await
             .expect("timeout")
             .expect("stream ended")
-            .expect("lease error");
+            .expect("consume error");
 
         match msg.fairness_key.as_str() {
             "high" => high_count += 1,

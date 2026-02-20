@@ -6,9 +6,9 @@ use std::time::Duration;
 use fila_sdk::{AckError, NackError};
 use tokio_stream::StreamExt;
 
-/// AC 5a: Enqueue → Lease → Ack lifecycle (basic message flow via SDK).
+/// AC 5a: Enqueue → Consume → Ack lifecycle (basic message flow via SDK).
 #[tokio::test]
-async fn e2e_enqueue_lease_ack() {
+async fn e2e_enqueue_consume_ack() {
     let server = helpers::TestServer::start();
     helpers::create_queue_cli(server.addr(), "lifecycle-ack");
 
@@ -23,13 +23,13 @@ async fn e2e_enqueue_lease_ack() {
         .unwrap();
     assert!(!msg_id.is_empty());
 
-    // Lease and receive
-    let mut stream = client.lease("lifecycle-ack").await.unwrap();
+    // Consume and receive
+    let mut stream = client.consume("lifecycle-ack").await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("timeout")
         .expect("stream ended")
-        .expect("lease error");
+        .expect("consume error");
 
     assert_eq!(msg.id, msg_id);
     assert_eq!(msg.payload, b"payload-1");
@@ -49,9 +49,9 @@ async fn e2e_enqueue_lease_ack() {
     );
 }
 
-/// AC 5b: Enqueue → Lease → Nack → re-Lease (retry with attempt count increment).
+/// AC 5b: Enqueue → Consume → Nack → re-Consume (retry with attempt count increment).
 #[tokio::test]
-async fn e2e_enqueue_lease_nack_retry() {
+async fn e2e_enqueue_consume_nack_retry() {
     let server = helpers::TestServer::start();
     helpers::create_queue_cli(server.addr(), "lifecycle-nack");
 
@@ -62,7 +62,7 @@ async fn e2e_enqueue_lease_nack_retry() {
         .await
         .unwrap();
 
-    let mut stream = client.lease("lifecycle-nack").await.unwrap();
+    let mut stream = client.consume("lifecycle-nack").await.unwrap();
 
     // First delivery
     let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
@@ -84,7 +84,7 @@ async fn e2e_enqueue_lease_nack_retry() {
         .await
         .expect("timeout waiting for redelivery")
         .expect("stream ended")
-        .expect("lease error");
+        .expect("consume error");
 
     assert_eq!(msg2.id, msg_id);
     assert_eq!(msg2.attempt_count, 1);

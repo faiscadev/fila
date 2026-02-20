@@ -72,7 +72,7 @@ async fn e2e_config_set_get_list_lua() {
         .await
         .unwrap();
 
-    let mut stream = client.lease("config-lua").await.unwrap();
+    let mut stream = client.consume("config-lua").await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .unwrap()

@@ -38,8 +38,8 @@ async fn e2e_lua_on_enqueue_assigns_keys() {
         .await
         .unwrap();
 
-    // Lease and verify fairness keys
-    let mut stream = client.lease("lua-enqueue").await.unwrap();
+    // Consume and verify fairness keys
+    let mut stream = client.consume("lua-enqueue").await.unwrap();
 
     let mut received = Vec::new();
     for _ in 0..2 {
@@ -91,7 +91,7 @@ async fn e2e_lua_on_failure_retry_vs_dlq() {
         .await
         .unwrap();
 
-    let mut stream = client.lease("lua-failure").await.unwrap();
+    let mut stream = client.consume("lua-failure").await.unwrap();
 
     // Nack 3 times — on_failure should retry first 3, then DLQ on the 4th nack
     // attempt_count starts at 0, so: attempt 0 → nack → attempt 1 → nack → attempt 2 → nack → DLQ
@@ -100,7 +100,7 @@ async fn e2e_lua_on_failure_retry_vs_dlq() {
             .await
             .unwrap_or_else(|_| panic!("timeout waiting for attempt {expected_attempt}"))
             .expect("stream ended")
-            .expect("lease error");
+            .expect("consume error");
 
         assert_eq!(msg.id, msg_id);
         assert_eq!(msg.attempt_count, expected_attempt);
@@ -111,13 +111,13 @@ async fn e2e_lua_on_failure_retry_vs_dlq() {
             .unwrap();
     }
 
-    // Message should now be in the DLQ. Lease from the DLQ.
-    let mut dlq_stream = client.lease("lua-failure.dlq").await.unwrap();
+    // Message should now be in the DLQ. Consume from the DLQ.
+    let mut dlq_stream = client.consume("lua-failure.dlq").await.unwrap();
     let dlq_msg = tokio::time::timeout(Duration::from_secs(5), dlq_stream.next())
         .await
         .expect("timeout waiting for DLQ message")
         .expect("DLQ stream ended")
-        .expect("DLQ lease error");
+        .expect("DLQ consume error");
 
     assert_eq!(dlq_msg.id, msg_id);
     assert_eq!(dlq_msg.payload, b"fail-me");

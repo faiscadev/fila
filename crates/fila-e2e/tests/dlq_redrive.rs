@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio_stream::StreamExt;
 
-/// AC 5e: DLQ flow — nack to exhaustion → DLQ → Redrive via CLI → re-Lease from source.
+/// AC 5e: DLQ flow — nack to exhaustion → DLQ → Redrive via CLI → re-Consume from source.
 #[tokio::test]
 async fn e2e_dlq_redrive() {
     let server = helpers::TestServer::start();
@@ -29,7 +29,7 @@ async fn e2e_dlq_redrive() {
         .unwrap();
 
     // Nack until DLQ (attempts: nack→on_failure(1)→retry, nack→on_failure(2)→DLQ)
-    let mut stream = client.lease("redrive-src").await.unwrap();
+    let mut stream = client.consume("redrive-src").await.unwrap();
 
     // First delivery: attempt_count=0, nack → on_failure gets attempts=1 → retry
     let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
@@ -62,16 +62,16 @@ async fn e2e_dlq_redrive() {
     // Give the scheduler a moment to route to DLQ and unregister the consumer
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Verify DLQ has the message by leasing from it
-    let mut dlq_stream = client.lease("redrive-src.dlq").await.unwrap();
+    // Verify DLQ has the message by consuming from it
+    let mut dlq_stream = client.consume("redrive-src.dlq").await.unwrap();
     let dlq_msg = tokio::time::timeout(Duration::from_secs(5), dlq_stream.next())
         .await
         .expect("timeout waiting for DLQ message")
         .expect("DLQ stream ended")
-        .expect("DLQ lease error");
+        .expect("DLQ consume error");
     assert_eq!(dlq_msg.id, msg_id);
 
-    // Ack the DLQ message so it's no longer leased (redrive only moves pending messages)
+    // Ack the DLQ message so it's no longer in-flight (redrive only moves pending messages)
     client.ack("redrive-src.dlq", &dlq_msg.id).await.unwrap();
     drop(dlq_stream);
 
@@ -86,7 +86,7 @@ async fn e2e_dlq_redrive() {
         .await
         .unwrap();
 
-    let mut stream2 = client.lease("redrive-src").await.unwrap();
+    let mut stream2 = client.consume("redrive-src").await.unwrap();
     for _ in 0..2 {
         let msg = tokio::time::timeout(Duration::from_secs(5), stream2.next())
             .await
@@ -102,7 +102,7 @@ async fn e2e_dlq_redrive() {
     drop(stream2);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Now redrive via CLI — the message is pending (not leased) in the DLQ
+    // Now redrive via CLI — the message is pending (not in-flight) in the DLQ
     let redrive = helpers::cli_run(server.addr(), &["redrive", "redrive-src.dlq"]);
     assert!(redrive.success, "redrive failed: {}", redrive.stderr);
     assert!(
@@ -111,13 +111,13 @@ async fn e2e_dlq_redrive() {
         redrive.stdout
     );
 
-    // Lease from source queue — message should be available with reset attempt count
-    let mut stream3 = client.lease("redrive-src").await.unwrap();
+    // Consume from source queue — message should be available with reset attempt count
+    let mut stream3 = client.consume("redrive-src").await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(5), stream3.next())
         .await
         .expect("timeout waiting for redriven message")
         .expect("stream ended")
-        .expect("lease error");
+        .expect("consume error");
 
     assert_eq!(msg.id, msg_id2);
     assert_eq!(

@@ -30,8 +30,8 @@ async fn e2e_crash_recovery() {
     let server2 = helpers::TestServer::restart_on(data_dir, port);
     let client2 = helpers::sdk_client(server2.addr()).await;
 
-    // Lease from the queue — all messages should be available
-    let mut stream = client2.lease("recovery").await.unwrap();
+    // Consume from the queue — all messages should be available
+    let mut stream = client2.consume("recovery").await.unwrap();
     let mut recovered_ids = Vec::new();
 
     for _ in 0..5 {
@@ -39,7 +39,7 @@ async fn e2e_crash_recovery() {
             .await
             .expect("timeout waiting for recovered message")
             .expect("stream ended")
-            .expect("lease error");
+            .expect("consume error");
         recovered_ids.push(msg.id.clone());
         client2.ack("recovery", &msg.id).await.unwrap();
     }

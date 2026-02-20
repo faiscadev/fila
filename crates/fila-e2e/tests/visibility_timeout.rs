@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio_stream::StreamExt;
 
-/// AC 5k: Visibility timeout — lease message → wait for expiry → message available for re-lease.
+/// AC 5k: Visibility timeout — consume message → wait for expiry → message available for re-consume.
 #[tokio::test]
 async fn e2e_visibility_timeout_expiry() {
     let server = helpers::TestServer::start();
@@ -26,8 +26,8 @@ async fn e2e_visibility_timeout_expiry() {
         .await
         .unwrap();
 
-    // First consumer leases the message but does NOT ack/nack
-    let mut stream1 = client.lease("vt-test").await.unwrap();
+    // First consumer receives the message but does NOT ack/nack
+    let mut stream1 = client.consume("vt-test").await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(5), stream1.next())
         .await
         .unwrap()
@@ -43,12 +43,12 @@ async fn e2e_visibility_timeout_expiry() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Second consumer should receive the message with incremented attempt count
-    let mut stream2 = client.lease("vt-test").await.unwrap();
+    let mut stream2 = client.consume("vt-test").await.unwrap();
     let msg2 = tokio::time::timeout(Duration::from_secs(5), stream2.next())
         .await
         .expect("timeout — message should have been re-made available after visibility timeout")
         .expect("stream ended")
-        .expect("lease error");
+        .expect("consume error");
 
     assert_eq!(msg2.id, msg_id, "should be the same message");
     assert_eq!(msg2.payload, b"timeout-me");

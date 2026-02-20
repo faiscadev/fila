@@ -2,18 +2,18 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use fila_proto::fila_service_client::FilaServiceClient;
-use fila_proto::{AckRequest, EnqueueRequest, LeaseRequest, NackRequest};
+use fila_proto::{AckRequest, ConsumeRequest, EnqueueRequest, NackRequest};
 use tokio_stream::{Stream, StreamExt};
 use tonic::transport::Channel;
 
 use crate::error::{
-    ack_status_error, enqueue_status_error, lease_status_error, nack_status_error, status_error,
-    AckError, ConnectError, EnqueueError, LeaseError, NackError, StatusError,
+    ack_status_error, consume_status_error, enqueue_status_error, nack_status_error, status_error,
+    AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError,
 };
 
-/// A leased message received from the broker.
+/// A consumed message received from the broker.
 #[derive(Debug, Clone)]
-pub struct LeaseMessage {
+pub struct ConsumeMessage {
     pub id: String,
     pub headers: HashMap<String, String>,
     pub payload: Vec<u8>,
@@ -45,7 +45,7 @@ impl ConnectOptions {
 
 /// Idiomatic Rust client for the Fila message broker.
 ///
-/// Wraps the hot-path gRPC operations: enqueue, lease, ack, nack.
+/// Wraps the hot-path gRPC operations: enqueue, consume, ack, nack.
 /// The client is `Clone`, `Send`, and `Sync` — it can be shared across tasks.
 #[derive(Debug, Clone)]
 pub struct FilaClient {
@@ -98,37 +98,37 @@ impl FilaClient {
         Ok(response.into_inner().message_id)
     }
 
-    /// Open a streaming lease on a queue.
+    /// Open a streaming consumer on a queue.
     ///
-    /// Returns a stream of leased messages. The broker pushes messages as they
+    /// Returns a stream of consumed messages. The broker pushes messages as they
     /// become available. The stream remains open until the client drops it or
     /// the broker disconnects.
     ///
-    /// The outer `Result` fails with [`LeaseError`] if the queue does not exist
+    /// The outer `Result` fails with [`ConsumeError`] if the queue does not exist
     /// or the stream cannot be established. The inner `Result` on each stream
     /// item uses [`StatusError`] — only transport/server errors, never
     /// queue-not-found.
-    pub async fn lease(
+    pub async fn consume(
         &self,
         queue: &str,
-    ) -> Result<impl Stream<Item = Result<LeaseMessage, StatusError>>, LeaseError> {
+    ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
         let response = self
             .inner
             .clone()
-            .lease(LeaseRequest {
+            .consume(ConsumeRequest {
                 queue: queue.to_string(),
             })
             .await
-            .map_err(lease_status_error)?;
+            .map_err(consume_status_error)?;
 
         let stream = response.into_inner().filter_map(|result| match result {
-            Ok(lease_response) => {
-                // The server may send LeaseResponse frames with `message: None` as
+            Ok(consume_response) => {
+                // The server may send ConsumeResponse frames with `message: None` as
                 // keepalive signals on the streaming connection. These are expected
                 // and silently skipped — they are not protocol errors.
-                let msg = lease_response.message?;
+                let msg = consume_response.message?;
                 let metadata = msg.metadata.unwrap_or_default();
-                Some(Ok(LeaseMessage {
+                Some(Ok(ConsumeMessage {
                     id: msg.id,
                     headers: msg.headers,
                     payload: msg.payload,

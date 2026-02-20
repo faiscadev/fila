@@ -144,7 +144,7 @@ async fn create_queue(addr: &str, name: &str) {
 }
 
 #[tokio::test]
-async fn enqueue_lease_ack_lifecycle() {
+async fn enqueue_consume_ack_lifecycle() {
     let server = TestServer::start();
     let client = FilaClient::connect(server.addr()).await.unwrap();
 
@@ -161,13 +161,13 @@ async fn enqueue_lease_ack_lifecycle() {
 
     assert!(!msg_id.is_empty(), "message ID should not be empty");
 
-    // Lease and receive the message
-    let mut stream = client.lease(queue).await.unwrap();
+    // Consume the message
+    let mut stream = client.consume(queue).await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("timeout waiting for message")
         .expect("stream ended unexpectedly")
-        .expect("lease error");
+        .expect("consume error");
 
     assert_eq!(msg.id, msg_id);
     assert_eq!(msg.headers.get("key").map(|s| s.as_str()), Some("value"));
@@ -185,7 +185,7 @@ async fn enqueue_lease_ack_lifecycle() {
 }
 
 #[tokio::test]
-async fn enqueue_lease_nack_release() {
+async fn enqueue_consume_nack_release() {
     let server = TestServer::start();
     let client = FilaClient::connect(server.addr()).await.unwrap();
 
@@ -198,8 +198,8 @@ async fn enqueue_lease_nack_release() {
         .await
         .unwrap();
 
-    // Lease
-    let mut stream = client.lease(queue).await.unwrap();
+    // Consume
+    let mut stream = client.consume(queue).await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .unwrap()
@@ -220,7 +220,7 @@ async fn enqueue_lease_nack_release() {
         .await
         .expect("timeout waiting for redelivery")
         .expect("stream ended")
-        .expect("lease error");
+        .expect("consume error");
 
     assert_eq!(msg2.id, msg_id);
     assert_eq!(msg2.attempt_count, 1, "attempt count should be incremented");

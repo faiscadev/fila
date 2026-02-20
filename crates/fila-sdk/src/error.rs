@@ -40,7 +40,7 @@ pub enum EnqueueError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum LeaseError {
+pub enum ConsumeError {
     #[error("queue not found: {0}")]
     QueueNotFound(String),
 
@@ -86,11 +86,11 @@ pub(crate) fn enqueue_status_error(status: tonic::Status) -> EnqueueError {
     }
 }
 
-pub(crate) fn lease_status_error(status: tonic::Status) -> LeaseError {
+pub(crate) fn consume_status_error(status: tonic::Status) -> ConsumeError {
     let message = status.message().to_string();
     match status.code() {
-        Code::NotFound => LeaseError::QueueNotFound(message),
-        _ => LeaseError::Status(status_error(status)),
+        Code::NotFound => ConsumeError::QueueNotFound(message),
+        _ => ConsumeError::Status(status_error(status)),
     }
 }
 
