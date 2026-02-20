@@ -25,9 +25,9 @@ stories:
     dependsOn: []
   - id: "9.4"
     title: "Ruby Client SDK"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/9.4-ruby-client-sdk"
     pr: null
     dependsOn: []
   - id: "9.5"
