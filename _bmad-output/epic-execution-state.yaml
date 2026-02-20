@@ -32,8 +32,8 @@ stories:
     dependsOn: []
   - id: "9.5"
     title: "Java Client SDK"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/9.5-java-client-sdk"
     pr: 38
     dependsOn: []
