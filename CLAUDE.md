@@ -41,6 +41,17 @@ When converting or wrapping errors, always follow this pattern:
 
 Each command/operation returns only the errors it can actually produce. Never use a "god enum" where `put_queue` could return `MessageNotFound`. See `crates/fila-core/src/error.rs` for the pattern.
 
+## CI Requirements for New Projects/Crates
+
+Any story that introduces a new test crate, new project/repository, or new CI-visible artifact **MUST** include CI pipeline configuration as an explicit deliverable — not an afterthought. Tests and builds that don't run in CI provide no safety.
+
+This applies to:
+- New Cargo workspace crates (e.g., `fila-e2e`)
+- New SDK repositories (e.g., `fila-go`, `fila-python`)
+- New test suites that require binary dependencies (e.g., e2e tests needing `fila-server`)
+
+If a story creates something that should be built or tested in CI, the story's ACs must include CI setup.
+
 ## PR Review — Cubic Automated Review
 
 This project uses **Cubic**, an automated AI reviewer that runs on every PR. You MUST check Cubic's findings before considering a story complete.
