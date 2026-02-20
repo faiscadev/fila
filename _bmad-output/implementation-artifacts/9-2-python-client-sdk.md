@@ -1,6 +1,6 @@
 # Story 9.2: Python Client SDK
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -28,55 +28,55 @@ so that I can integrate Fila into my Python applications with minimal effort.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `fila-python` repository structure (AC: #1, #2, #3, #14)
-  - [ ] Subtask 1.1: Initialize repository with `pyproject.toml` (package name: `fila-python`, import name: `fila`)
-  - [ ] Subtask 1.2: Copy proto files from `fila` repo: `proto/fila/v1/messages.proto`, `proto/fila/v1/service.proto`, `proto/fila/v1/admin.proto` (admin for test helpers)
-  - [ ] Subtask 1.3: Generate Python stubs with `grpcio-tools` (`python -m grpc_tools.protoc`), commit output to `fila/_proto/`
-  - [ ] Subtask 1.4: Verify generated stubs import and produce correct types
+- [x] Task 1: Create `fila-python` repository structure (AC: #1, #2, #3, #14)
+  - [x] Subtask 1.1: Initialize repository with `pyproject.toml` (package name: `fila-python`, import name: `fila`)
+  - [x] Subtask 1.2: Copy proto files from `fila` repo: `proto/fila/v1/messages.proto`, `proto/fila/v1/service.proto`, `proto/fila/v1/admin.proto` (admin for test helpers)
+  - [x] Subtask 1.3: Generate Python stubs with `grpcio-tools` (`python -m grpc_tools.protoc`), commit output to `fila/v1/`
+  - [x] Subtask 1.4: Verify generated stubs import and produce correct types
 
-- [ ] Task 2: Implement `Client` (sync) and `AsyncClient` (async) (AC: #4, #8, #9, #11)
-  - [ ] Subtask 2.1: Create `fila/client.py` with `Client` class wrapping sync `grpc.insecure_channel`
-  - [ ] Subtask 2.2: Create `fila/async_client.py` with `AsyncClient` class wrapping `grpc.aio.insecure_channel`
-  - [ ] Subtask 2.3: Both classes: `__init__(self, addr: str)`, `close()`, context manager support (`__enter__`/`__exit__`, `__aenter__`/`__aexit__`)
-  - [ ] Subtask 2.4: Type hints on all public methods, docstrings on all public classes/methods
+- [x] Task 2: Implement `Client` (sync) and `AsyncClient` (async) (AC: #4, #8, #9, #11)
+  - [x] Subtask 2.1: Create `fila/client.py` with `Client` class wrapping sync `grpc.insecure_channel`
+  - [x] Subtask 2.2: Create `fila/async_client.py` with `AsyncClient` class wrapping `grpc.aio.insecure_channel`
+  - [x] Subtask 2.3: Both classes: `__init__(self, addr: str)`, `close()`, context manager support (`__enter__`/`__exit__`, `__aenter__`/`__aexit__`)
+  - [x] Subtask 2.4: Type hints on all public methods, docstrings on all public classes/methods
 
-- [ ] Task 3: Implement `enqueue` method (AC: #4, #9)
-  - [ ] Subtask 3.1: `Client.enqueue(queue, headers, payload) -> str` — returns message ID
-  - [ ] Subtask 3.2: `AsyncClient.enqueue(queue, headers, payload) -> str` — async version
-  - [ ] Subtask 3.3: Map gRPC NOT_FOUND to `QueueNotFoundError`
+- [x] Task 3: Implement `enqueue` method (AC: #4, #9)
+  - [x] Subtask 3.1: `Client.enqueue(queue, headers, payload) -> str` — returns message ID
+  - [x] Subtask 3.2: `AsyncClient.enqueue(queue, headers, payload) -> str` — async version
+  - [x] Subtask 3.3: Map gRPC NOT_FOUND to `QueueNotFoundError`
 
-- [ ] Task 4: Implement `consume` method (AC: #5, #6, #7, #9)
-  - [ ] Subtask 4.1: `Client.consume(queue)` — returns `Iterator[ConsumeMessage]` (sync iterator)
-  - [ ] Subtask 4.2: `AsyncClient.consume(queue)` — returns `AsyncIterator[ConsumeMessage]` (async iterator)
-  - [ ] Subtask 4.3: `ConsumeMessage` dataclass with `id`, `headers`, `payload`, `fairness_key`, `attempt_count`, `queue`
-  - [ ] Subtask 4.4: Skip nil message frames (keepalive signals)
+- [x] Task 4: Implement `consume` method (AC: #5, #6, #7, #9)
+  - [x] Subtask 4.1: `Client.consume(queue)` — returns `Iterator[ConsumeMessage]` (sync iterator)
+  - [x] Subtask 4.2: `AsyncClient.consume(queue)` — returns `AsyncIterator[ConsumeMessage]` (async iterator)
+  - [x] Subtask 4.3: `ConsumeMessage` dataclass with `id`, `headers`, `payload`, `fairness_key`, `attempt_count`, `queue`
+  - [x] Subtask 4.4: Skip nil message frames (keepalive signals)
 
-- [ ] Task 5: Implement `ack` and `nack` methods (AC: #8, #9, #10)
-  - [ ] Subtask 5.1: `Client.ack(queue, msg_id)` and `AsyncClient.ack(queue, msg_id)` — map NOT_FOUND to `MessageNotFoundError`
-  - [ ] Subtask 5.2: `Client.nack(queue, msg_id, error)` and `AsyncClient.nack(queue, msg_id, error)` — map NOT_FOUND to `MessageNotFoundError`
+- [x] Task 5: Implement `ack` and `nack` methods (AC: #8, #9, #10)
+  - [x] Subtask 5.1: `Client.ack(queue, msg_id)` and `AsyncClient.ack(queue, msg_id)` — map NOT_FOUND to `MessageNotFoundError`
+  - [x] Subtask 5.2: `Client.nack(queue, msg_id, error)` and `AsyncClient.nack(queue, msg_id, error)` — map NOT_FOUND to `MessageNotFoundError`
 
-- [ ] Task 6: Exception hierarchy (AC: #10)
-  - [ ] Subtask 6.1: Define `FilaError` base exception
-  - [ ] Subtask 6.2: `QueueNotFoundError(FilaError)` and `MessageNotFoundError(FilaError)`
-  - [ ] Subtask 6.3: `RPCError(FilaError)` for unexpected gRPC failures, preserving status code and message
+- [x] Task 6: Exception hierarchy (AC: #10)
+  - [x] Subtask 6.1: Define `FilaError` base exception
+  - [x] Subtask 6.2: `QueueNotFoundError(FilaError)` and `MessageNotFoundError(FilaError)`
+  - [x] Subtask 6.3: `RPCError(FilaError)` for unexpected gRPC failures, preserving status code and message
 
-- [ ] Task 7: Integration tests (AC: #12)
-  - [ ] Subtask 7.1: Test helper: start `fila-server` binary on random port with temp data dir, wait for ready, cleanup on test end (pytest fixture)
-  - [ ] Subtask 7.2: Test helper: create queue via direct gRPC admin call
-  - [ ] Subtask 7.3: Test `test_enqueue_consume_ack` lifecycle for sync client
-  - [ ] Subtask 7.4: Test `test_enqueue_consume_nack_redeliver` for sync client — verify AttemptCount incremented on same stream
-  - [ ] Subtask 7.5: Test `test_enqueue_nonexistent_queue` for sync client — verify `QueueNotFoundError`
-  - [ ] Subtask 7.6: Test `test_async_enqueue_consume_ack` lifecycle for async client
-  - [ ] Subtask 7.7: Integration tests skip gracefully when fila-server binary not found
+- [x] Task 7: Integration tests (AC: #12)
+  - [x] Subtask 7.1: Test helper: start `fila-server` binary on random port with temp data dir, wait for ready, cleanup on test end (pytest fixture)
+  - [x] Subtask 7.2: Test helper: create queue via direct gRPC admin call
+  - [x] Subtask 7.3: Test `test_enqueue_consume_ack` lifecycle for sync client
+  - [x] Subtask 7.4: Test `test_enqueue_consume_nack_redeliver` for sync client — verify AttemptCount incremented on same stream
+  - [x] Subtask 7.5: Test `test_enqueue_nonexistent_queue` for sync client — verify `QueueNotFoundError`
+  - [x] Subtask 7.6: Test `test_async_enqueue_consume_ack` lifecycle for async client
+  - [x] Subtask 7.7: Integration tests skip gracefully when fila-server binary not found
 
-- [ ] Task 8: CI pipeline (AC: #13)
-  - [ ] Subtask 8.1: `.github/workflows/ci.yml` — trigger on PR and push to main
-  - [ ] Subtask 8.2: Steps: checkout, setup Python, install deps, ruff lint, mypy type check, pytest
-  - [ ] Subtask 8.3: Integration tests skip gracefully when fila-server binary not found
+- [x] Task 8: CI pipeline (AC: #13)
+  - [x] Subtask 8.1: `.github/workflows/ci.yml` — trigger on PR and push to main
+  - [x] Subtask 8.2: Steps: checkout, setup Python, install deps, ruff lint, mypy type check, pytest
+  - [x] Subtask 8.3: Integration tests skip gracefully when fila-server binary not found
 
-- [ ] Task 9: README and documentation (AC: #15)
-  - [ ] Subtask 9.1: README with: installation (`pip install`), sync quickstart, async quickstart, error handling, API reference overview
-  - [ ] Subtask 9.2: Docstrings on all public types and methods
+- [x] Task 9: README and documentation (AC: #15)
+  - [x] Subtask 9.1: README with: installation (`pip install`), sync quickstart, async quickstart, error handling, API reference overview
+  - [x] Subtask 9.2: Docstrings on all public types and methods
 
 ## Dev Notes
 
@@ -275,4 +275,47 @@ Claude Opus 4.6
 
 ### Completion Notes List
 
+- Created `fila-python` repository at `/Users/lucas/code/faisca/fila-python/` as a separate Python package
+- Proto files copied and generated into `fila/v1/` (not `fila/_proto/`) to avoid import path conflicts — the proto package `fila.v1` naturally maps to `fila/v1/` within the SDK package
+- Sync `Client` and async `AsyncClient` both implemented with context manager support
+- `ConsumeMessage` is a frozen dataclass with all required fields
+- Per-operation exception hierarchy: `FilaError` → `QueueNotFoundError`, `MessageNotFoundError`, `RPCError`
+- 4 integration tests: 3 sync (lifecycle, nack-redeliver, nonexistent queue) + 1 async (lifecycle)
+- ruff clean, mypy strict mode clean (with type: ignore for untyped gRPC stubs)
+- All 278 existing fila tests pass (zero regressions)
+- Python 3.12 used for development; `requires-python >= "3.10"` in pyproject.toml
+
 ### File List
+
+All files in the separate `fila-python` repository:
+- `pyproject.toml` (new)
+- `.gitignore` (new)
+- `.github/workflows/ci.yml` (new)
+- `LICENSE` (new — AGPLv3)
+- `README.md` (new)
+- `fila/__init__.py` (new)
+- `fila/client.py` (new — sync Client)
+- `fila/async_client.py` (new — async AsyncClient)
+- `fila/errors.py` (new — exception hierarchy)
+- `fila/types.py` (new — ConsumeMessage dataclass)
+- `fila/v1/__init__.py` (new)
+- `fila/v1/messages_pb2.py` (new — generated)
+- `fila/v1/messages_pb2.pyi` (new — generated)
+- `fila/v1/messages_pb2_grpc.py` (new — generated)
+- `fila/v1/service_pb2.py` (new — generated)
+- `fila/v1/service_pb2.pyi` (new — generated)
+- `fila/v1/service_pb2_grpc.py` (new — generated)
+- `fila/v1/admin_pb2.py` (new — generated, for test helpers)
+- `fila/v1/admin_pb2.pyi` (new — generated)
+- `fila/v1/admin_pb2_grpc.py` (new — generated, for test helpers)
+- `proto/fila/v1/messages.proto` (new — copied)
+- `proto/fila/v1/service.proto` (new — copied)
+- `proto/fila/v1/admin.proto` (new — copied, for test helpers)
+- `tests/__init__.py` (new)
+- `tests/conftest.py` (new — pytest fixtures with server management)
+- `tests/test_client.py` (new — 4 integration tests)
+
+Tracking files in `fila` repository:
+- `_bmad-output/implementation-artifacts/9-2-python-client-sdk.md` (new — story spec)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified)
+- `_bmad-output/epic-execution-state.yaml` (modified)
