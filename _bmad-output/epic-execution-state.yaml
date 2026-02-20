@@ -35,6 +35,6 @@ stories:
     status: in-progress
     currentPhase: "dev"
     branch: "feat/9.5-java-client-sdk"
-    pr: null
+    pr: 38
     dependsOn: []
 skippedIssues: []
