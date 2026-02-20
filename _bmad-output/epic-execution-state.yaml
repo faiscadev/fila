@@ -4,8 +4,8 @@ startedAt: "2026-02-19T20:00:00Z"
 stories:
   - id: "9.1"
     title: "Go Client SDK"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/9.1-go-client-sdk"
     pr: 34
     dependsOn: []
