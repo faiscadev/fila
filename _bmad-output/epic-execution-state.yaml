@@ -18,9 +18,9 @@ stories:
     dependsOn: []
   - id: "9.3"
     title: "JavaScript/Node.js Client SDK"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "setup"
+    branch: "feat/9.3-js-client-sdk"
     pr: null
     dependsOn: []
   - id: "9.4"
