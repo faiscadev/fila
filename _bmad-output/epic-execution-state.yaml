@@ -1,31 +1,40 @@
-epic: "Epic 8: E2E Tests & Scheduler Refactoring"
+epic: "Epic 9: Client SDKs"
 baseBranch: main
-startedAt: "2026-02-19T00:00:00Z"
+startedAt: "2026-02-19T20:00:00Z"
 stories:
-  - id: "8.1"
-    title: "Blackbox End-to-End Test Suite"
-    status: completed
-    currentPhase: ""
-    branch: "feat/8.1-blackbox-e2e-test-suite"
-    pr: 31
+  - id: "9.1"
+    title: "Go Client SDK"
+    status: in-progress
+    currentPhase: "code-review"
+    branch: "feat/9.1-go-client-sdk"
+    pr: null
     dependsOn: []
-  - id: "8.2"
-    title: "Scheduler Decomposition"
-    status: completed
+  - id: "9.2"
+    title: "Python Client SDK"
+    status: pending
     currentPhase: ""
-    branch: "feat/8.2-scheduler-decomposition"
-    pr: 32
-    dependsOn: ["8.1"]
-  - id: "8.3"
-    title: "Cleanup & Deferred Items"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: []
+  - id: "9.3"
+    title: "JavaScript/Node.js Client SDK"
+    status: pending
     currentPhase: ""
-    branch: "feat/8.3-cleanup-deferred-items"
-    pr: 33
-    dependsOn: ["8.2"]
+    branch: ""
+    pr: null
+    dependsOn: []
+  - id: "9.4"
+    title: "Ruby Client SDK"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: []
+  - id: "9.5"
+    title: "Java Client SDK"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: []
 skippedIssues: []
-completedAt: "2026-02-19T19:30:00Z"
-summary:
-  totalStories: 3
-  completedStories: 3
-  skippedStories: 0
