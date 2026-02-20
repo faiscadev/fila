@@ -5,9 +5,9 @@ stories:
   - id: "9.1"
     title: "Go Client SDK"
     status: in-progress
-    currentPhase: "code-review"
+    currentPhase: "pr-ci"
     branch: "feat/9.1-go-client-sdk"
-    pr: null
+    pr: 34
     dependsOn: []
   - id: "9.2"
     title: "Python Client SDK"
