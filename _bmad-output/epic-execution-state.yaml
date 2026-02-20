@@ -18,10 +18,10 @@ stories:
     dependsOn: []
   - id: "9.3"
     title: "JavaScript/Node.js Client SDK"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/9.3-js-client-sdk"
-    pr: null
+    pr: 36
     dependsOn: []
   - id: "9.4"
     title: "Ruby Client SDK"

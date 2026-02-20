@@ -107,7 +107,7 @@ development_status:
   epic-9: in-progress
   9-1-go-client-sdk: done
   9-2-python-client-sdk: done
-  9-3-javascript-nodejs-client-sdk: review
+  9-3-javascript-nodejs-client-sdk: done
   9-4-ruby-client-sdk: backlog
   9-5-java-client-sdk: backlog
   epic-9-retrospective: optional
