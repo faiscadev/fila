@@ -26,7 +26,7 @@ stories:
   - id: "9.4"
     title: "Ruby Client SDK"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/9.4-ruby-client-sdk"
     pr: null
     dependsOn: []
