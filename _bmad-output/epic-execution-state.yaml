@@ -19,7 +19,7 @@ stories:
   - id: "9.3"
     title: "JavaScript/Node.js Client SDK"
     status: in-progress
-    currentPhase: "setup"
+    currentPhase: "pr-ci"
     branch: "feat/9.3-js-client-sdk"
     pr: null
     dependsOn: []
