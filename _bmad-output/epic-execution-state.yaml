@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "9.2"
     title: "Python Client SDK"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "setup"
+    branch: "feat/9.2-python-client-sdk"
     pr: null
     dependsOn: []
   - id: "9.3"
