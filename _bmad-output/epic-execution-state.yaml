@@ -12,7 +12,7 @@ stories:
   - id: "9.2"
     title: "Python Client SDK"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/9.2-python-client-sdk"
     pr: null
     dependsOn: []
