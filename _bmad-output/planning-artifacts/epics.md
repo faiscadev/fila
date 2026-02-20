@@ -67,7 +67,7 @@ FR44: JavaScript/Node.js client SDK
 FR45: Ruby client SDK
 FR46: Rust client SDK
 FR47: Java client SDK
-FR48: All SDKs support enqueue, streaming lease, ack, and nack
+FR48: All SDKs support enqueue, streaming consume, ack, and nack
 FR49: Single binary process
 FR50: Docker image
 FR51: `cargo install` installation
@@ -173,7 +173,7 @@ FR44: Epic 9 — JavaScript/Node.js client SDK
 FR45: Epic 9 — Ruby client SDK
 FR46: Epic 7 — Rust client SDK
 FR47: Epic 9 — Java client SDK
-FR48: Epic 7 + Epic 9 — All SDKs support enqueue, streaming lease, ack, nack
+FR48: Epic 7 + Epic 9 — All SDKs support enqueue, streaming consume, ack, nack
 FR49: Epic 1 — Single binary process
 FR50: Epic 10 — Docker image
 FR51: Epic 10 — cargo install installation
@@ -221,7 +221,7 @@ Developers integrate Fila into Rust applications using an idiomatic client SDK b
 Build a true blackbox e2e test suite using the Rust SDK (for producer/consumer operations) and the `fila` CLI binary (for admin operations), then use it as a safety net to decompose the monolithic `scheduler.rs` (6,800+ lines) into focused submodules. The observability layer from Epic 6 provides runtime verification during restructuring.
 
 ### Epic 9: Client SDKs
-Developers integrate Fila into applications using idiomatic client SDKs in five additional languages: Go, Python, JavaScript/Node.js, Ruby, and Java. All SDKs support the full hot-path API: enqueue, streaming lease, ack, and nack.
+Developers integrate Fila into applications using idiomatic client SDKs in five additional languages: Go, Python, JavaScript/Node.js, Ruby, and Java. All SDKs support the full hot-path API: enqueue, streaming consume, ack, and nack.
 **FRs covered:** FR42, FR43, FR44, FR45, FR47, FR48 (partial — 5 languages)
 
 ### Epic 10: Distribution & Documentation
@@ -936,7 +936,7 @@ So that the codebase is clean for the remaining SDK epics.
 
 ## Epic 9: Client SDKs
 
-Developers integrate Fila into applications using idiomatic client SDKs in five additional languages: Go, Python, JavaScript/Node.js, Ruby, and Java. All SDKs support the full hot-path API: enqueue, streaming lease, ack, and nack.
+Developers integrate Fila into applications using idiomatic client SDKs in five additional languages: Go, Python, JavaScript/Node.js, Ruby, and Java. All SDKs support the full hot-path API: enqueue, streaming consume, ack, and nack.
 
 **FRs covered:** FR42, FR43, FR44, FR45, FR47, FR48 (partial — 5 languages)
 
@@ -950,12 +950,18 @@ So that I can integrate Fila into my Go services with minimal effort.
 
 **Given** the Fila proto definitions are available
 **When** the Go SDK is built
-**Then** gRPC stubs are generated from proto files using `protoc-gen-go-grpc`
+**Then** the SDK lives in a separate repository (`fila-go`)
+**And** proto files are copied into the repo and generated Go code is committed (no submodules, no Buf)
+**And** gRPC stubs are generated from proto files using `protoc-gen-go-grpc`
 **And** an ergonomic Go wrapper provides: `client.Enqueue(ctx, queue, headers, payload) (string, error)`
-**And** `client.Lease(ctx, queue) (<-chan *LeaseMessage, error)` returns a channel for streaming consumption
+**And** `client.Consume(ctx, queue) (<-chan *ConsumeMessage, error)` returns a channel for streaming consumption
+**And** `ConsumeMessage` includes: `ID`, `Headers`, `Payload`, `FairnessKey`, `AttemptCount`, `Queue`
 **And** `client.Ack(ctx, queue, msgID) error` and `client.Nack(ctx, queue, msgID, errMsg) error`
 **And** all methods accept `context.Context` for cancellation and deadlines
+**And** per-operation error types are defined (e.g., `ErrQueueNotFound`, `ErrMessageNotFound`) checkable via `errors.Is`
 **And** the SDK follows Go conventions: exported types, error returns, godoc comments
+**And** integration tests verify all four operations against a running `fila-server` binary
+**And** GitHub Actions CI runs lint (`golangci-lint`), test, and build on every PR
 **And** a README with usage examples is included (FR55)
 
 ### Story 9.2: Python Client SDK
@@ -968,13 +974,19 @@ So that I can integrate Fila into my Python applications.
 
 **Given** the Fila proto definitions are available
 **When** the Python SDK is built
-**Then** gRPC stubs are generated from proto files using `grpcio-tools`
+**Then** the SDK lives in a separate repository (`fila-python`)
+**And** proto files are copied into the repo and generated Python code is committed (no submodules, no Buf)
+**And** gRPC stubs are generated from proto files using `grpcio-tools`
 **And** an ergonomic Python wrapper provides: `client.enqueue(queue, headers, payload) -> str`
-**And** `client.lease(queue)` returns an async iterator of `LeaseMessage` objects
+**And** `client.consume(queue)` returns an async iterator of `ConsumeMessage` objects
+**And** `ConsumeMessage` includes: `id`, `headers`, `payload`, `fairness_key`, `attempt_count`, `queue`
 **And** `client.ack(queue, msg_id)` and `client.nack(queue, msg_id, error)`
 **And** both sync and async interfaces are supported
+**And** per-operation exception classes are defined (e.g., `QueueNotFoundError`, `MessageNotFoundError`)
 **And** the SDK follows Python conventions: snake_case methods, type hints, docstrings
 **And** the package is installable via `pip install fila-client`
+**And** integration tests verify all four operations against a running `fila-server` binary
+**And** GitHub Actions CI runs lint, type check, and test on every PR
 **And** a README with usage examples is included (FR55)
 
 ### Story 9.3: JavaScript/Node.js Client SDK
@@ -987,13 +999,19 @@ So that I can integrate Fila into my Node.js services.
 
 **Given** the Fila proto definitions are available
 **When** the JS SDK is built
-**Then** gRPC stubs are generated using `@grpc/proto-loader` or `grpc-js`
+**Then** the SDK lives in a separate repository (`fila-js`)
+**And** proto files are copied into the repo and generated TypeScript code is committed (no submodules, no Buf)
+**And** gRPC stubs are generated using `@grpc/proto-loader` or `grpc-js`
 **And** the SDK provides: `client.enqueue(queue, headers, payload): Promise<string>`
-**And** `client.lease(queue)` returns an async iterable of lease messages
+**And** `client.consume(queue)` returns an async iterable of `ConsumeMessage` objects
+**And** `ConsumeMessage` includes: `id`, `headers`, `payload`, `fairnessKey`, `attemptCount`, `queue`
 **And** `client.ack(queue, msgId): Promise<void>` and `client.nack(queue, msgId, error): Promise<void>`
+**And** per-operation error classes are defined (e.g., `QueueNotFoundError`, `MessageNotFoundError`)
 **And** TypeScript type definitions are included
 **And** the SDK follows JS/TS conventions: Promise-based API, camelCase methods
 **And** the package is installable via `npm install @fila/client`
+**And** integration tests verify all four operations against a running `fila-server` binary
+**And** GitHub Actions CI runs lint, type check, and test on every PR
 **And** a README with usage examples is included (FR55)
 
 ### Story 9.4: Ruby Client SDK
@@ -1006,12 +1024,18 @@ So that I can integrate Fila into my Ruby applications.
 
 **Given** the Fila proto definitions are available
 **When** the Ruby SDK is built
-**Then** gRPC stubs are generated using `grpc-tools` gem
+**Then** the SDK lives in a separate repository (`fila-ruby`)
+**And** proto files are copied into the repo and generated Ruby code is committed (no submodules, no Buf)
+**And** gRPC stubs are generated using `grpc-tools` gem
 **And** the SDK provides: `client.enqueue(queue:, headers:, payload:)` returning the message ID
-**And** `client.lease(queue:)` yields lease messages via block or returns an Enumerator
+**And** `client.consume(queue:)` yields `ConsumeMessage` objects via block or returns an Enumerator
+**And** `ConsumeMessage` includes: `id`, `headers`, `payload`, `fairness_key`, `attempt_count`, `queue`
 **And** `client.ack(queue:, msg_id:)` and `client.nack(queue:, msg_id:, error:)`
+**And** per-operation error classes are defined (e.g., `Fila::QueueNotFoundError`, `Fila::MessageNotFoundError`)
 **And** the SDK follows Ruby conventions: keyword arguments, snake_case methods, block patterns
 **And** the gem is installable via `gem install fila-client`
+**And** integration tests verify all four operations against a running `fila-server` binary
+**And** GitHub Actions CI runs lint (`rubocop`), and test on every PR
 **And** a README with usage examples is included (FR55)
 
 ### Story 9.5: Java Client SDK
@@ -1024,13 +1048,19 @@ So that I can integrate Fila into my Java applications.
 
 **Given** the Fila proto definitions are available
 **When** the Java SDK is built
-**Then** gRPC stubs are generated using `protoc-gen-grpc-java`
+**Then** the SDK lives in a separate repository (`fila-java`)
+**And** proto files are copied into the repo and generated Java code is committed (no submodules, no Buf)
+**And** gRPC stubs are generated using `protoc-gen-grpc-java`
 **And** the SDK provides a `FilaClient` class with builder pattern for configuration
 **And** `client.enqueue(queue, headers, payload)` returns the message ID
-**And** `client.lease(queue, observer)` accepts a `StreamObserver<LeaseMessage>` for streaming consumption
+**And** `client.consume(queue, observer)` accepts a `StreamObserver<ConsumeMessage>` for streaming consumption
+**And** `ConsumeMessage` includes: `id`, `headers`, `payload`, `fairnessKey`, `attemptCount`, `queue`
 **And** `client.ack(queue, msgId)` and `client.nack(queue, msgId, error)` for acknowledgment
+**And** per-operation exception classes are defined (e.g., `QueueNotFoundException`, `MessageNotFoundException`)
 **And** the SDK follows Java conventions: Builder pattern, checked exceptions, Javadoc
 **And** the artifact is publishable to Maven Central
+**And** integration tests verify all four operations against a running `fila-server` binary
+**And** GitHub Actions CI runs build, test, and lint on every PR
 **And** a README with usage examples is included (FR55)
 
 ---
@@ -1115,7 +1145,7 @@ So that I can implement common use cases without starting from scratch.
 **Then** guided tutorials cover: multi-tenant fair scheduling, per-provider throttling, exponential backoff retry (FR56)
 **And** working `examples/fair_scheduling.rs` demonstrates multi-tenant fairness with Lua hooks
 **And** working `examples/throttling.rs` demonstrates per-key rate limiting
-**And** each SDK has a working code example showing enqueue → lease → ack flow (FR55)
+**And** each SDK has a working code example showing enqueue → consume → ack flow (FR55)
 **And** copy-paste Lua hook examples are provided for common patterns: tenant fairness, provider throttling, exponential backoff, header-based routing (FR59)
 **And** each example is tested in CI to prevent documentation rot
 
