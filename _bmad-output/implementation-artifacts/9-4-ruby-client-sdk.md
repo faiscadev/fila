@@ -1,6 +1,6 @@
 # Story 9.4: Ruby Client SDK
 
-Status: review
+Status: done
 
 ## Story
 

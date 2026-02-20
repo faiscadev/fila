@@ -25,10 +25,10 @@ stories:
     dependsOn: []
   - id: "9.4"
     title: "Ruby Client SDK"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/9.4-ruby-client-sdk"
-    pr: null
+    pr: 37
     dependsOn: []
   - id: "9.5"
     title: "Java Client SDK"
