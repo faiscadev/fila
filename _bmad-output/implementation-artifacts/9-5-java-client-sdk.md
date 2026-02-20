@@ -1,6 +1,6 @@
 # Story 9.5: Java Client SDK
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
