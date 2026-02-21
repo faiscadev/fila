@@ -46,6 +46,6 @@ tower = "0.5"
 http = "1"
 pin-project-lite = "0.2"
 
-fila-proto = { path = "crates/fila-proto" }
-fila-core = { path = "crates/fila-core" }
-fila-sdk = { path = "crates/fila-sdk" }
+fila-proto = { path = "crates/fila-proto", version = "0.1.0" }
+fila-core = { path = "crates/fila-core", version = "0.1.0" }
+fila-sdk = { path = "crates/fila-sdk", version = "0.1.0" }
