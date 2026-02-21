@@ -18,9 +18,9 @@ stories:
     dependsOn: ["10.1"]
   - id: "10.3"
     title: "Binary Distribution & Installation"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "pr-ci"
+    branch: "feat/10.3-binary-distribution"
     pr: null
     dependsOn: ["10.1"]
   - id: "10.4"
