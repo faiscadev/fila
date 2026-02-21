@@ -4,10 +4,10 @@ startedAt: "2026-02-21T12:00:00Z"
 stories:
   - id: "10.1"
     title: "Server & CLI Release Pipeline + Docker Image"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/10.1-release-pipeline-docker"
-    pr: null
+    pr: 39
     dependsOn: []
   - id: "10.2"
     title: "SDK Package Publishing"
