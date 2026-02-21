@@ -1,45 +1,40 @@
-epic: "Epic 9: Client SDKs"
+epic: "Epic 10: Distribution & Documentation"
 baseBranch: main
-startedAt: "2026-02-19T20:00:00Z"
+startedAt: "2026-02-21T12:00:00Z"
 stories:
-  - id: "9.1"
-    title: "Go Client SDK"
-    status: completed
-    currentPhase: ""
-    branch: "feat/9.1-go-client-sdk"
-    pr: 34
+  - id: "10.1"
+    title: "Server & CLI Release Pipeline + Docker Image"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/10.1-release-pipeline-docker"
+    pr: null
     dependsOn: []
-  - id: "9.2"
-    title: "Python Client SDK"
-    status: completed
+  - id: "10.2"
+    title: "SDK Package Publishing"
+    status: pending
     currentPhase: ""
-    branch: "feat/9.2-python-client-sdk"
-    pr: 35
-    dependsOn: []
-  - id: "9.3"
-    title: "JavaScript/Node.js Client SDK"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: ["10.1"]
+  - id: "10.3"
+    title: "Binary Distribution & Installation"
+    status: pending
     currentPhase: ""
-    branch: "feat/9.3-js-client-sdk"
-    pr: 36
-    dependsOn: []
-  - id: "9.4"
-    title: "Ruby Client SDK"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: ["10.1"]
+  - id: "10.4"
+    title: "Core Documentation & API Reference"
+    status: pending
     currentPhase: ""
-    branch: "feat/9.4-ruby-client-sdk"
-    pr: 37
+    branch: ""
+    pr: null
     dependsOn: []
-  - id: "9.5"
-    title: "Java Client SDK"
-    status: completed
+  - id: "10.5"
+    title: "Tutorials, Examples & Lua Patterns"
+    status: pending
     currentPhase: ""
-    branch: "feat/9.5-java-client-sdk"
-    pr: 38
-    dependsOn: []
+    branch: ""
+    pr: null
+    dependsOn: ["10.4"]
 skippedIssues: []
-completedAt: "2026-02-20T02:35:00Z"
-summary:
-  totalStories: 5
-  completedStories: 5
-  skippedStories: 0

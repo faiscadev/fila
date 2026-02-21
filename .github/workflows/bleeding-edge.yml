@@ -1,0 +1,141 @@
+name: Bleeding Edge
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            use-cross: false
+          - name: linux-arm64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use-cross: true
+          - name: darwin-amd64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            use-cross: false
+          - name: darwin-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            use-cross: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cross
+        if: matrix.use-cross
+        uses: taiki-e/install-action@1b3bc86acdfdec1fb87c2f1d07e7d21780962619 # cross
+
+      - name: Build
+        run: |
+          BUILD_CMD="cargo"
+          if [ "${{ matrix.use-cross }}" = "true" ]; then
+            BUILD_CMD="cross"
+          fi
+          $BUILD_CMD build --release --locked --target ${{ matrix.target }} --bin fila-server --bin fila
+
+      - name: Package
+        shell: bash
+        run: |
+          SHA="${GITHUB_SHA::7}"
+          DIR="fila-dev-${SHA}-${{ matrix.name }}"
+          mkdir -p "${DIR}"
+          cp "target/${{ matrix.target }}/release/fila-server" "${DIR}/"
+          cp "target/${{ matrix.target }}/release/fila" "${DIR}/"
+          cp LICENSE "${DIR}/"
+          tar czf "${DIR}.tar.gz" "${DIR}"
+          shasum -a 256 "${DIR}.tar.gz" > "${DIR}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.name }}
+          path: fila-*.tar.gz*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create dev release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA="${GITHUB_SHA::7}"
+          TAG="dev-${SHA}"
+
+          # Delete existing 'latest' release and tag if present
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+
+          # Create the commit-specific release
+          gh release create "${TAG}" artifacts/* \
+            --title "Dev build ${TAG}" \
+            --notes "Bleeding-edge build from commit ${GITHUB_SHA}" \
+            --prerelease
+
+          # Create the rolling 'latest' release pointing to same commit
+          gh release create latest artifacts/* \
+            --title "Latest dev build" \
+            --notes "Rolling pre-release tracking the latest build from main. Currently: ${GITHUB_SHA}" \
+            --prerelease \
+            --target "${GITHUB_SHA}"
+
+  docker:
+    name: Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:dev
+            ghcr.io/${{ github.repository }}:dev-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
