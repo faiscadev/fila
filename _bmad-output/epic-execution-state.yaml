@@ -12,7 +12,7 @@ stories:
   - id: "10.2"
     title: "SDK Package Publishing"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/10.2-sdk-package-publishing"
     pr: null
     dependsOn: ["10.1"]
