@@ -26,7 +26,10 @@ docker run -p 5555:5555 ghcr.io/faiscadev/fila:dev
 ### Option 2: Install script
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/faiscadev/fila/main/install.sh | bash
+# Download, inspect, then run:
+curl -fsSL https://raw.githubusercontent.com/faiscadev/fila/main/install.sh -o install.sh
+less install.sh
+bash install.sh
 fila-server
 ```
 
