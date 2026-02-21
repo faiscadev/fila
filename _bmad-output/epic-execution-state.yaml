@@ -18,10 +18,10 @@ stories:
     dependsOn: ["10.1"]
   - id: "10.3"
     title: "Binary Distribution & Installation"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/10.3-binary-distribution"
-    pr: null
+    pr: 41
     dependsOn: ["10.1"]
   - id: "10.4"
     title: "Core Documentation & API Reference"
