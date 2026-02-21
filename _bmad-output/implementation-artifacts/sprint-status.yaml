@@ -114,7 +114,7 @@ development_status:
 
   # Epic 10: Distribution & Documentation (reshaped in Epic 9 retro)
   epic-10: in-progress
-  10-1-release-pipeline-docker: ready-for-dev
+  10-1-release-pipeline-docker: review
   10-2-sdk-package-publishing: backlog
   10-3-binary-distribution-installation: backlog
   10-4-core-documentation-api-reference: backlog
