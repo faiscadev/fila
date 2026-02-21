@@ -1,6 +1,6 @@
 # Story 10.3: Binary Distribution & Installation
 
-Status: review
+Status: done
 
 ## Story
 
