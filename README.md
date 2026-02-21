@@ -103,7 +103,7 @@ fila queue inspect fair-demo
 | **Runtime config** | Key-value pairs readable from Lua via `fila.get(key)`. Change behavior without restarting the broker. |
 | **Visibility timeout** | Consumed messages are "leased" for a configurable duration. If not acked, they're re-delivered. |
 
-See [docs/concepts.md](docs/concepts.md) for a deep dive.
+See [docs/concepts.md](docs/concepts.md) for a deep dive, [docs/tutorials.md](docs/tutorials.md) for guided walkthroughs, and [docs/lua-patterns.md](docs/lua-patterns.md) for copy-paste Lua scripts.
 
 ## Client SDKs
 
