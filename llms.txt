@@ -1,0 +1,158 @@
+# Fila
+
+> A message broker with fair scheduling and per-key throttling as first-class primitives.
+
+## What is Fila?
+
+Fila is a single-binary message broker written in Rust. It solves the "noisy neighbor" problem in shared message queues: when multiple tenants, customers, or workload types share a queue, a single high-volume producer can starve everyone else. Traditional brokers deliver FIFO — Fila uses Deficit Round Robin (DRR) to give each fairness group its fair share of delivery bandwidth.
+
+Key differentiators:
+- DRR fair scheduling across fairness groups (assigned via Lua hooks)
+- Token bucket throttling enforced at the broker, not the consumer
+- Lua 5.4 rules engine for scheduling policy (`on_enqueue`, `on_failure` hooks)
+- Consumers only receive messages ready for processing (zero wasted work)
+- Single-threaded scheduler core, multi-threaded I/O (Redis-inspired architecture)
+- RocksDB persistence with crash recovery
+
+## API Surface
+
+Fila uses gRPC (protobuf). Two services share port 5555:
+
+### Hot-path: fila.v1.FilaService
+
+- Enqueue(queue, headers, payload) → message_id
+- Consume(queue) → stream of Message
+- Ack(queue, message_id) → void
+- Nack(queue, message_id, error) → void
+
+### Admin: fila.v1.FilaAdmin
+
+- CreateQueue(name, config{on_enqueue_script, on_failure_script, visibility_timeout_ms})
+- DeleteQueue(queue)
+- ListQueues() → [{name, depth, in_flight, active_consumers}]
+- GetStats(queue) → {depth, in_flight, per_key_stats, per_throttle_stats}
+- SetConfig(key, value) / GetConfig(key) / ListConfig(prefix)
+- Redrive(dlq_queue, count) → redriven count
+
+### Message structure
+
+```
+Message {
+  id: string (UUID)
+  headers: map<string, string>
+  payload: bytes
+  metadata: { fairness_key, weight, throttle_keys[], attempt_count, queue_id }
+  timestamps: { enqueued_at, leased_at }
+}
+```
+
+## Configuration
+
+TOML file at `fila.toml` or `/etc/fila/fila.toml`. Runs with zero config (all defaults).
+
+```toml
+[server]
+listen_addr = "0.0.0.0:5555"
+
+[scheduler]
+quantum = 1000       # DRR quantum
+
+[lua]
+default_timeout_ms = 10
+default_memory_limit_bytes = 1048576
+circuit_breaker_threshold = 3
+
+[telemetry]
+otlp_endpoint = "http://localhost:4317"  # omit to disable
+```
+
+Environment: FILA_DATA_DIR (default: "data") — RocksDB path.
+
+## Lua Hooks
+
+### on_enqueue(msg) → {fairness_key, weight?, throttle_keys?}
+
+Runs at enqueue time. Assigns scheduling metadata.
+
+Input: msg.headers (table), msg.payload_size (number), msg.queue (string)
+
+```lua
+function on_enqueue(msg)
+  return {
+    fairness_key = msg.headers["tenant"] or "default",
+    weight = tonumber(msg.headers["priority"]) or 1,
+    throttle_keys = { msg.headers["endpoint"] }
+  }
+end
+```
+
+### on_failure(msg) → {action, delay_ms?}
+
+Runs on nack. Decides retry or dead-letter.
+
+Input: msg.headers, msg.id, msg.attempts (number), msg.queue, msg.error (string)
+
+```lua
+function on_failure(msg)
+  if msg.attempts >= 3 then
+    return { action = "dlq" }
+  end
+  return { action = "retry", delay_ms = 1000 * msg.attempts }
+end
+```
+
+### Lua API
+
+- fila.get(key) → string | nil — reads runtime config
+
+## CLI
+
+```
+fila queue create <name> [--on-enqueue <script>] [--on-failure <script>] [--visibility-timeout <ms>]
+fila queue delete <name>
+fila queue list
+fila queue inspect <name>
+fila config set <key> <value>
+fila config get <key>
+fila config list [--prefix <p>]
+fila redrive <dlq_queue> --count <N>
+```
+
+Default broker address: http://localhost:5555 (override with --addr)
+
+## SDKs
+
+- Rust: fila-sdk (crates.io)
+- Go: github.com/faiscadev/fila-go
+- Python: fila (PyPI)
+- JavaScript: @anthropic/fila (npm)
+- Ruby: fila (RubyGems)
+- Java: dev.fila:fila-client (Maven Central)
+
+## Installation
+
+```sh
+# Docker
+docker run -p 5555:5555 ghcr.io/faiscadev/fila:dev
+
+# Install script
+curl -fsSL https://raw.githubusercontent.com/faiscadev/fila/main/install.sh | bash
+
+# Cargo
+cargo install fila-server fila-cli
+```
+
+## Architecture Notes
+
+- Single-threaded scheduler loop (no locks, channel-based communication)
+- Multi-threaded I/O via tokio
+- RocksDB with 6 column families for persistence
+- W3C trace context propagation (traceparent/tracestate headers)
+- Graceful shutdown on SIGTERM/SIGINT
+- Dead letter queues named <queue>.dlq
+- Visibility timeout = lease duration; expired leases re-enqueue automatically
+
+## Source
+
+https://github.com/faiscadev/fila
+License: AGPLv3
