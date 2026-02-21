@@ -86,9 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nFirst 20 messages delivered:");
     println!("  noisy: {noisy_count}");
     println!("  quiet: {quiet_count}");
-    println!(
-        "\nWithout fair scheduling, all 20 would be from 'noisy'."
-    );
+    println!("\nWithout fair scheduling, all 20 would be from 'noisy'.");
     println!("With DRR, 'quiet' gets its fair share despite being outnumbered 10:1.");
 
     Ok(())
