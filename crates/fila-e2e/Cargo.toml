@@ -3,6 +3,7 @@ name = "fila-e2e"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Blackbox end-to-end tests for Fila message broker"
 
 # This crate has no library code — it exists only for integration tests.

@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "10.2"
     title: "SDK Package Publishing"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/10.2-sdk-package-publishing"
     pr: null
     dependsOn: ["10.1"]
   - id: "10.3"
