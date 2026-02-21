@@ -185,18 +185,22 @@ The `on_failure` hook reads this with `fila.get("max_retries")`. Change it witho
 // JavaScript SDK
 const { FilaClient } = require('@anthropic/fila');
 
-const client = await FilaClient.connect('localhost:5555');
-const stream = client.consume('jobs');
+async function main() {
+  const client = await FilaClient.connect('localhost:5555');
+  const stream = client.consume('jobs');
 
-for await (const msg of stream) {
-  try {
-    await processJob(msg.payload);
-    await client.ack('jobs', msg.id);
-  } catch (err) {
-    // Nack triggers on_failure hook — broker handles retry/DLQ
-    await client.nack('jobs', msg.id, err.message);
+  for await (const msg of stream) {
+    try {
+      await processJob(msg.payload);
+      await client.ack('jobs', msg.id);
+    } catch (err) {
+      // Nack triggers on_failure hook — broker handles retry/DLQ
+      await client.nack('jobs', msg.id, err.message);
+    }
   }
 }
+
+main().catch(console.error);
 ```
 
 ### 4. Monitor and redrive
