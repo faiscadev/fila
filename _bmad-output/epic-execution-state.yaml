@@ -25,9 +25,9 @@ stories:
     dependsOn: ["10.1"]
   - id: "10.4"
     title: "Core Documentation & API Reference"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "implementation"
+    branch: "feat/10.4-core-documentation"
     pr: null
     dependsOn: []
   - id: "10.5"
