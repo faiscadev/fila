@@ -167,13 +167,13 @@ When the circuit breaker trips, Lua hooks are bypassed and messages use default 
 
 ## Dead letter queue
 
-Messages that exhaust retries (when `on_failure` returns `{ action = "dlq" }`) are moved to a dead letter queue named `<queue>.dlq`. For example, messages dead-lettered from `orders` go to `orders::dlq`.
+Messages that exhaust retries (when `on_failure` returns `{ action = "dlq" }`) are moved to a dead letter queue named `<queue>.dlq`. For example, messages dead-lettered from `orders` go to `orders.dlq`.
 
 ### Inspecting and redriving
 
 ```sh
 # Check how many messages are in the DLQ
-fila queue inspect orders::dlq
+fila queue inspect orders.dlq
 
 # Move 10 messages back to the source queue
 fila redrive orders.dlq --count 10
