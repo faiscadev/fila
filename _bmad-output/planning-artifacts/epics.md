@@ -1067,30 +1067,61 @@ So that I can integrate Fila into my Java applications.
 
 ## Epic 10: Distribution & Documentation
 
-Users install Fila via Docker, `cargo install`, or `curl | bash` shell script. Comprehensive documentation — tutorials, API reference, Lua hook examples, and `llms.txt` — enables onboarding in under 10 minutes. Documentation is the primary adoption driver.
+Users install Fila via Docker, `cargo install`, or `curl | bash` shell script. Bleeding-edge releases from main enable SDK CIs and early adopters. Comprehensive documentation — tutorials, API reference, Lua hook examples, and `llms.txt` — enables onboarding in under 10 minutes. Documentation is the primary adoption driver.
 
 **FRs covered:** FR50, FR51, FR52, FR54, FR55, FR56, FR57, FR58, FR59, FR60
 
-### Story 10.1: Docker Image
+**Reshaped in:** Epic 9 Retrospective (2026-02-21). Release pipeline front-loaded as Story 10.1 to unblock SDK CIs, binary distribution, and documentation. SDK package publishing added as Story 10.2.
 
-As a user evaluating Fila,
-I want to run Fila with a single Docker command,
-So that I can try it out in under a minute without installing anything.
+### Story 10.1: Server & CLI Release Pipeline + Docker Image
+
+As a developer and user,
+I want bleeding-edge releases of fila-server and fila CLI from every push to main, plus a Docker image,
+So that SDK CIs can download pre-built binaries, and users can try Fila with a single Docker command.
 
 **Acceptance Criteria:**
 
-**Given** the Fila binaries are built
+**Given** a commit is pushed to main
+**When** the bleeding-edge release workflow runs
+**Then** cross-compiled binaries are built for: linux-amd64, linux-arm64, darwin-amd64, darwin-arm64
+**And** both `fila-server` and `fila` (CLI) binaries are included for each platform
+**And** a GitHub Release is created, tagged with the short commit hash (e.g., `dev-abc1234`), marked as pre-release
+**And** binaries are uploaded as GitHub Release assets with checksums
+**And** a `latest` pre-release tag is updated to always point to the most recent build
+**And** SDK CI workflows can download the latest pre-built binary instead of building from source
+
+**Given** the release workflow produces binaries
 **When** a Docker image is created
 **Then** a multi-stage Dockerfile builds from `rust:latest` and produces a `debian:bookworm-slim` runtime image
 **And** the image contains both `fila-server` and `fila` (CLI) binaries
 **And** the image exposes port 5555
 **And** `docker run ghcr.io/faisca/fila` starts the broker with default configuration
-**And** the image is published to `ghcr.io/faisca/fila`
+**And** the image is published to `ghcr.io/faisca/fila` with `dev` and commit-hash tags
 **And** data directory is configurable via volume mount (`-v /data:/var/lib/fila`)
 **And** environment variables can override config (`-e FILA_SERVER__LISTEN_ADDR=0.0.0.0:6666`)
 **And** the image size is minimized (no build tools in runtime layer)
 
-### Story 10.2: Binary Distribution & Installation
+### Story 10.2: SDK Package Publishing
+
+As a developer,
+I want all Fila SDKs published to their respective package registries with bleeding-edge versions,
+So that users can install them via standard package managers and SDK CIs use real published artifacts.
+
+**Acceptance Criteria:**
+
+**Given** the SDK repositories exist (fila-go, fila-python, fila-js, fila-ruby, fila-java, fila-sdk)
+**When** a publish workflow is configured for each
+**Then** the Rust SDK (`fila-sdk`) is published to crates.io
+**And** the Go SDK (`fila-go`) is available via `go get` (Go modules use git tags, no registry publish needed)
+**And** the Python SDK (`fila-python`) is published to PyPI as `fila-python`
+**And** the JS SDK (`fila-js`) is published to npm as `@fila/client`
+**And** the Ruby SDK (`fila-ruby`) is published to RubyGems as `fila-client`
+**And** the Java SDK (`fila-java`) is published to Maven Central as `dev.faisca:fila-client`
+**And** each SDK uses dev/pre-release versioning appropriate to its ecosystem
+**And** each SDK's CI workflow is updated to download the fila-server pre-built binary from Story 10.1 (replacing build-from-source)
+**And** integration tests in all SDK CIs actually execute against the downloaded binary (no silent skips)
+
+### Story 10.3: Binary Distribution & Installation
 
 As a user,
 I want to install Fila via cargo or a shell script,
@@ -1103,19 +1134,18 @@ So that I can run it natively on my machine without Docker.
 **Then** `cargo install fila-server` installs the broker binary
 **And** `cargo install fila-cli` installs the CLI binary as `fila`
 
-**Given** release binaries are built
+**Given** release binaries are available from Story 10.1
 **When** a user installs via shell script
 **Then** `curl -fsSL https://get.fila.dev | bash` downloads and installs the correct binary for the platform
 **And** the script detects OS (linux/darwin) and architecture (amd64/arm64)
 **And** binaries are placed in a standard location (`/usr/local/bin` or `~/.local/bin`)
 
-**Given** a new version is tagged
+**Given** a semver version is tagged
 **When** the release workflow runs
-**Then** cross-compiled binaries are built for: linux-amd64, linux-arm64, darwin-amd64, darwin-arm64
-**And** binaries are uploaded as GitHub Release assets
+**Then** a stable GitHub Release is created (not pre-release) with the version tag
 **And** checksums are generated for verification
 
-### Story 10.3: Core Documentation & API Reference
+### Story 10.4: Core Documentation & API Reference
 
 As a user evaluating Fila,
 I want comprehensive documentation that explains concepts, architecture, and API,
@@ -1132,7 +1162,7 @@ So that I can understand and adopt Fila quickly.
 **And** documentation uses a docs-as-product approach — the primary onboarding experience (FR60)
 **And** download to fair-scheduling demo is achievable in under 10 minutes following the docs (NFR14)
 
-### Story 10.4: Tutorials, Examples & Lua Patterns
+### Story 10.5: Tutorials, Examples & Lua Patterns
 
 As a developer adopting Fila,
 I want guided tutorials, working code examples, and copy-paste Lua patterns,

@@ -52,6 +52,14 @@ This applies to:
 
 If a story creates something that should be built or tested in CI, the story's ACs must include CI setup.
 
+### Integration Tests Must Actually Run
+
+CI pipelines must not silently skip integration tests. If a test suite includes integration tests that require an external dependency (e.g., `fila-server` binary), the CI pipeline **MUST** either:
+1. **Provision the dependency** (download a pre-built release binary, build from source, etc.) so integration tests execute, OR
+2. **Fail explicitly** if the dependency is unavailable — never silently skip with a green checkmark.
+
+Tests that use `skip-if-not-found` patterns are acceptable for **local development** but not for CI. In CI, the agent must verify that integration tests actually ran (not just existed). A CI pipeline where integration tests are silently skipped provides false confidence and is considered incomplete.
+
 ## PR Review — Cubic Automated Review
 
 This project uses **Cubic**, an automated AI reviewer that runs on every PR. You MUST check Cubic's findings before considering a story complete.

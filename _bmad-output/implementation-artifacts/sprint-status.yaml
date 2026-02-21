@@ -110,7 +110,7 @@ development_status:
   9-3-javascript-nodejs-client-sdk: done
   9-4-ruby-client-sdk: done
   9-5-java-client-sdk: done
-  epic-9-retrospective: optional
+  epic-9-retrospective: done
 
   # Epic 10: Distribution & Documentation
   epic-10: backlog
