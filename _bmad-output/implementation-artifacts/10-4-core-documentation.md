@@ -1,6 +1,6 @@
 # Story 10.4: Core Documentation & API Reference
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -19,28 +19,61 @@ So that I can understand and adopt Fila quickly.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Rewrite README.md (AC: 1, 6)
-  - [ ] 1.1: Project overview and problem statement
-  - [ ] 1.2: Quickstart with Docker and install script
-  - [ ] 1.3: Key concepts overview with links to detailed docs
-  - [ ] 1.4: SDK links table (all 6 languages)
-  - [ ] 1.5: Configuration and CLI overview
-- [ ] Task 2: Create docs/concepts.md (AC: 4)
-  - [ ] 2.1: Message lifecycle diagram
-  - [ ] 2.2: Fairness groups and DRR scheduling
-  - [ ] 2.3: Token bucket throttling
-  - [ ] 2.4: Lua hooks (on_enqueue, on_failure)
-  - [ ] 2.5: Dead letter queue and redrive
-  - [ ] 2.6: Runtime configuration
-- [ ] Task 3: Create docs/api-reference.md (AC: 2)
-  - [ ] 3.1: Hot-path RPCs (Enqueue, Consume, Ack, Nack)
-  - [ ] 3.2: Admin RPCs (CreateQueue, DeleteQueue, SetConfig, GetConfig, ListConfig, GetStats, Redrive, ListQueues)
-  - [ ] 3.3: Message types and structures
-- [ ] Task 4: Create docs/configuration.md (AC: 5)
-  - [ ] 4.1: TOML config reference with all sections and defaults
-  - [ ] 4.2: Environment variables
-- [ ] Task 5: Create llms.txt (AC: 3)
-  - [ ] 5.1: Project context and API surface for LLM consumption
+- [x] Task 1: Rewrite README.md (AC: 1, 6)
+  - [x] 1.1: Project overview and problem statement
+  - [x] 1.2: Quickstart with Docker and install script
+  - [x] 1.3: Key concepts overview with links to detailed docs
+  - [x] 1.4: SDK links table (all 6 languages)
+  - [x] 1.5: Configuration and CLI overview
+- [x] Task 2: Create docs/concepts.md (AC: 4)
+  - [x] 2.1: Message lifecycle diagram
+  - [x] 2.2: Fairness groups and DRR scheduling
+  - [x] 2.3: Token bucket throttling
+  - [x] 2.4: Lua hooks (on_enqueue, on_failure)
+  - [x] 2.5: Dead letter queue and redrive
+  - [x] 2.6: Runtime configuration
+- [x] Task 3: Create docs/api-reference.md (AC: 2)
+  - [x] 3.1: Hot-path RPCs (Enqueue, Consume, Ack, Nack)
+  - [x] 3.2: Admin RPCs (CreateQueue, DeleteQueue, SetConfig, GetConfig, ListConfig, GetStats, Redrive, ListQueues)
+  - [x] 3.3: Message types and structures
+- [x] Task 4: Create docs/configuration.md (AC: 5)
+  - [x] 4.1: TOML config reference with all sections and defaults
+  - [x] 4.2: Environment variables
+- [x] Task 5: Create llms.txt (AC: 3)
+  - [x] 5.1: Project context and API surface for LLM consumption
+
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Opus 4.6
+
+### Completion Notes List
+
+- Rewrote README.md with comprehensive project overview, 3 install options, fair scheduling demo, SDK table
+- Created docs/concepts.md — message lifecycle, DRR fairness, throttling, Lua hooks, DLQ, runtime config, visibility timeout
+- Created docs/api-reference.md — full gRPC API reference for both services with all types documented
+- Created docs/configuration.md — complete TOML config reference with OTel metrics table
+- Created llms.txt — structured project summary for LLM agent consumption
+- Cubic found 2 issues: DLQ naming inconsistency (orders::dlq vs orders.dlq) and install script pipe safety — both fixed
+- 278/278 tests pass, no regressions
+
+### Change Log
+
+- **Modified** `README.md` — comprehensive rewrite with quickstart, demos, SDK table
+- **Added** `docs/concepts.md` — core concepts deep dive
+- **Added** `docs/api-reference.md` — full gRPC API reference
+- **Added** `docs/configuration.md` — server configuration reference
+- **Added** `llms.txt` — LLM-optimized project summary
+
+### File List
+
+- `README.md` (modified)
+- `docs/concepts.md` (new)
+- `docs/api-reference.md` (new)
+- `docs/configuration.md` (new)
+- `llms.txt` (new)
+- `_bmad-output/implementation-artifacts/10-4-core-documentation.md` (new)
 
 ## Dev Notes
 
