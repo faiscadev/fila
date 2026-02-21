@@ -1,13 +1,41 @@
-epic: "Rust Client SDK"
-epicNumber: 7
-startedAt: "2026-02-19"
-completedAt: "2026-02-19"
-currentPrIndex: 1
+epic: "Client SDKs"
+epicNumber: 9
+startedAt: "2026-02-21"
+completedAt: "2026-02-21"
+currentPrIndex: 5
 prChain:
-  - storyId: "7.1"
-    storyKey: "7-1-rust-client-sdk"
-    title: "Rust Client SDK"
-    branch: "feat/7.1-rust-client-sdk"
-    pr: 30
+  - storyId: "9.1"
+    storyKey: "9-1-go-client-sdk"
+    title: "Go Client SDK"
+    branch: "feat/9.1-go-client-sdk"
+    pr: 34
+    baseBranch: "main"
+    status: merged
+  - storyId: "9.2"
+    storyKey: "9-2-python-client-sdk"
+    title: "Python Client SDK"
+    branch: "feat/9.2-python-client-sdk"
+    pr: 35
+    baseBranch: "main"
+    status: merged
+  - storyId: "9.3"
+    storyKey: "9-3-javascript-nodejs-client-sdk"
+    title: "JavaScript/Node.js Client SDK"
+    branch: "feat/9.3-js-client-sdk"
+    pr: 36
+    baseBranch: "main"
+    status: merged
+  - storyId: "9.4"
+    storyKey: "9-4-ruby-client-sdk"
+    title: "Ruby Client SDK"
+    branch: "feat/9.4-ruby-client-sdk"
+    pr: 37
+    baseBranch: "main"
+    status: merged
+  - storyId: "9.5"
+    storyKey: "9-5-java-client-sdk"
+    title: "Java Client SDK"
+    branch: "feat/9.5-java-client-sdk"
+    pr: 38
     baseBranch: "main"
     status: merged
