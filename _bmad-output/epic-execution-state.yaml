@@ -32,9 +32,9 @@ stories:
     dependsOn: []
   - id: "10.5"
     title: "Tutorials, Examples & Lua Patterns"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "implementation"
+    branch: "feat/10.5-tutorials-examples"
     pr: null
     dependsOn: ["10.4"]
 skippedIssues: []
