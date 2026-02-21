@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "10.2"
     title: "SDK Package Publishing"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/10.2-sdk-package-publishing"
-    pr: null
+    pr: 40
     dependsOn: ["10.1"]
   - id: "10.3"
     title: "Binary Distribution & Installation"
