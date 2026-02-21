@@ -25,10 +25,10 @@ stories:
     dependsOn: ["10.1"]
   - id: "10.4"
     title: "Core Documentation & API Reference"
-    status: in-progress
-    currentPhase: "implementation"
+    status: completed
+    currentPhase: ""
     branch: "feat/10.4-core-documentation"
-    pr: null
+    pr: 42
     dependsOn: []
   - id: "10.5"
     title: "Tutorials, Examples & Lua Patterns"
