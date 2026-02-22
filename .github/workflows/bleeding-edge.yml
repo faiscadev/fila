@@ -2,7 +2,7 @@ name: Bleeding Edge
 
 on:
   push:
-    branches: [main, feat/10.1-release-pipeline-docker]
+    branches: [main]
 
 concurrency:
   group: bleeding-edge
