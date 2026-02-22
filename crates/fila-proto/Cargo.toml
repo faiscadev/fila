@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Generated protobuf and gRPC types for Fila"
+include = ["src/**/*", "proto/**/*", "build.rs", "Cargo.toml", "LICENSE"]
 
 [dependencies]
 tonic.workspace = true

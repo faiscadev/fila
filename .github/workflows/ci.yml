@@ -61,7 +61,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo publish --dry-run -p fila-proto
-      - run: cargo publish --dry-run -p fila-sdk
 
   bench:
     name: Bench

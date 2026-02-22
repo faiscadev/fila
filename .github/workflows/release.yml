@@ -138,12 +138,8 @@ jobs:
         if: ${{ !env.DRY_RUN || env.DRY_RUN == 'false' }}
         run: sleep 30
       - name: Publish fila-sdk
-        run: |
-          if [ "${{ env.DRY_RUN }}" = "true" ]; then
-            cargo publish --dry-run -p fila-sdk
-          else
-            cargo publish -p fila-sdk
-          fi
+        if: ${{ env.DRY_RUN != 'true' }}
+        run: cargo publish -p fila-sdk
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

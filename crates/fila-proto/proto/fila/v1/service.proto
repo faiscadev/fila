@@ -1,0 +1,45 @@
+syntax = "proto3";
+package fila.v1;
+
+import "fila/v1/messages.proto";
+
+// Hot-path RPCs for producers and consumers.
+service FilaService {
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+  rpc Consume(ConsumeRequest) returns (stream ConsumeResponse);
+  rpc Ack(AckRequest) returns (AckResponse);
+  rpc Nack(NackRequest) returns (NackResponse);
+}
+
+message EnqueueRequest {
+  string queue = 1;
+  map<string, string> headers = 2;
+  bytes payload = 3;
+}
+
+message EnqueueResponse {
+  string message_id = 1;
+}
+
+message ConsumeRequest {
+  string queue = 1;
+}
+
+message ConsumeResponse {
+  Message message = 1;
+}
+
+message AckRequest {
+  string queue = 1;
+  string message_id = 2;
+}
+
+message AckResponse {}
+
+message NackRequest {
+  string queue = 1;
+  string message_id = 2;
+  string error = 3;
+}
+
+message NackResponse {}
