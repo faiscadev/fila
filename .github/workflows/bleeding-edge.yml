@@ -89,21 +89,11 @@ jobs:
           SHA="${GITHUB_SHA::7}"
           TAG="dev-${SHA}"
 
-          # Delete existing 'latest' release and tag if present
-          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-
-          # Create the commit-specific release
+          # Create the commit-specific pre-release
           gh release create "${TAG}" artifacts/* \
             --title "Dev build ${TAG}" \
             --notes "Bleeding-edge build from commit ${GITHUB_SHA}" \
             --prerelease
-
-          # Create the rolling 'latest' release pointing to same commit
-          gh release create latest artifacts/* \
-            --title "Latest dev build" \
-            --notes "Rolling pre-release tracking the latest build from main. Currently: ${GITHUB_SHA}" \
-            --prerelease \
-            --target "${GITHUB_SHA}"
 
   docker:
     name: Docker
