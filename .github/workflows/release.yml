@@ -31,6 +31,7 @@ jobs:
       - uses: taiki-e/install-action@34ac9396e2ddcdd0baa9d56f88b84e09f95c0c77 # cargo-nextest
       - run: cargo fmt --check
       - run: cargo clippy -- -D warnings
+      - run: cargo build --workspace
       - run: cargo nextest run
       - run: cargo bench
         continue-on-error: true
