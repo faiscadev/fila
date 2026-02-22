@@ -20,24 +20,21 @@ jobs:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: linux-amd64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            use-cross: false
           - name: linux-arm64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            use-cross: true
           - name: darwin-amd64
             runner: macos-14
             target: x86_64-apple-darwin
-            use-cross: false
           - name: darwin-arm64
             runner: macos-14
             target: aarch64-apple-darwin
-            use-cross: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@stable
@@ -52,17 +49,8 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install cross
-        if: matrix.use-cross
-        uses: taiki-e/install-action@1b3bc86acdfdec1fb87c2f1d07e7d21780962619 # cross
-
       - name: Build
-        run: |
-          BUILD_CMD="cargo"
-          if [ "${{ matrix.use-cross }}" = "true" ]; then
-            BUILD_CMD="cross"
-          fi
-          $BUILD_CMD build --release --locked --target ${{ matrix.target }} --bin fila-server --bin fila
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin fila-server --bin fila
 
       - name: Package
         shell: bash
