@@ -1,41 +1,40 @@
-epic: "Client SDKs"
-epicNumber: 9
-startedAt: "2026-02-21"
-completedAt: "2026-02-21"
-currentPrIndex: 5
+epic: "Epic 10: Distribution & Documentation"
+epicNumber: 10
+startedAt: "2026-02-21T23:30:00Z"
+currentPrIndex: 1
 prChain:
-  - storyId: "9.1"
-    storyKey: "9-1-go-client-sdk"
-    title: "Go Client SDK"
-    branch: "feat/9.1-go-client-sdk"
-    pr: 34
+  - storyId: "10.1"
+    storyKey: "10-1-release-pipeline-docker"
+    title: "Server & CLI Release Pipeline + Docker Image"
+    branch: "feat/10.1-release-pipeline-docker"
+    pr: 39
     baseBranch: "main"
     status: merged
-  - storyId: "9.2"
-    storyKey: "9-2-python-client-sdk"
-    title: "Python Client SDK"
-    branch: "feat/9.2-python-client-sdk"
-    pr: 35
-    baseBranch: "main"
-    status: merged
-  - storyId: "9.3"
-    storyKey: "9-3-javascript-nodejs-client-sdk"
-    title: "JavaScript/Node.js Client SDK"
-    branch: "feat/9.3-js-client-sdk"
-    pr: 36
-    baseBranch: "main"
-    status: merged
-  - storyId: "9.4"
-    storyKey: "9-4-ruby-client-sdk"
-    title: "Ruby Client SDK"
-    branch: "feat/9.4-ruby-client-sdk"
-    pr: 37
-    baseBranch: "main"
-    status: merged
-  - storyId: "9.5"
-    storyKey: "9-5-java-client-sdk"
-    title: "Java Client SDK"
-    branch: "feat/9.5-java-client-sdk"
-    pr: 38
-    baseBranch: "main"
-    status: merged
+  - storyId: "10.2"
+    storyKey: "10-2-sdk-package-publishing"
+    title: "SDK Package Publishing"
+    branch: "feat/10.2-sdk-package-publishing"
+    pr: 40
+    baseBranch: "feat/10.1-release-pipeline-docker"
+    status: pending
+  - storyId: "10.3"
+    storyKey: "10-3-binary-distribution"
+    title: "Binary Distribution & Installation"
+    branch: "feat/10.3-binary-distribution"
+    pr: 41
+    baseBranch: "feat/10.2-sdk-package-publishing"
+    status: pending
+  - storyId: "10.4"
+    storyKey: "10-4-core-documentation"
+    title: "Core Documentation & API Reference"
+    branch: "feat/10.4-core-documentation"
+    pr: 42
+    baseBranch: "feat/10.3-binary-distribution"
+    status: pending
+  - storyId: "10.5"
+    storyKey: "10-5-tutorials-examples"
+    title: "Tutorials, Examples & Lua Patterns"
+    branch: "feat/10.5-tutorials-examples"
+    pr: 43
+    baseBranch: "feat/10.4-core-documentation"
+    status: pending

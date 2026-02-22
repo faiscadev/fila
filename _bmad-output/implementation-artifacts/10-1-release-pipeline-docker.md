@@ -1,6 +1,6 @@
 # Story 10.1: Server & CLI Release Pipeline + Docker Image
 
-Status: review
+Status: done
 
 ## Story
 
