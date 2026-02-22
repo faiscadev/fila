@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: [feat/10.2-sdk-package-publishing] # TEMPORARY: validate workflow, remove before merge
 
 permissions:
   contents: write
@@ -10,6 +11,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # TEMPORARY: detect if running from branch (no tag) for dry-run mode
+  DRY_RUN: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   check:
@@ -72,7 +75,11 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
+          if [ "${{ env.DRY_RUN }}" = "true" ]; then
+            TAG="dry-run"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
           DIR="fila-${TAG}-${{ matrix.name }}"
           mkdir -p "${DIR}"
           cp "target/${{ matrix.target }}/release/fila-server" "${DIR}/"
@@ -90,6 +97,7 @@ jobs:
   release:
     name: Release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -117,19 +125,31 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish fila-proto
-        run: cargo publish -p fila-proto
+        run: |
+          if [ "${{ env.DRY_RUN }}" = "true" ]; then
+            cargo publish --dry-run -p fila-proto
+          else
+            cargo publish -p fila-proto
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for crates.io index
+        if: ${{ !env.DRY_RUN || env.DRY_RUN == 'false' }}
         run: sleep 30
       - name: Publish fila-sdk
-        run: cargo publish -p fila-sdk
+        run: |
+          if [ "${{ env.DRY_RUN }}" = "true" ]; then
+            cargo publish --dry-run -p fila-sdk
+          else
+            cargo publish -p fila-sdk
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   docker:
     name: Docker
     needs: check
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
