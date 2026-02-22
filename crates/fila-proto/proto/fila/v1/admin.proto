@@ -1,0 +1,114 @@
+syntax = "proto3";
+package fila.v1;
+
+// Admin RPCs for operators and the CLI.
+service FilaAdmin {
+  rpc CreateQueue(CreateQueueRequest) returns (CreateQueueResponse);
+  rpc DeleteQueue(DeleteQueueRequest) returns (DeleteQueueResponse);
+  rpc SetConfig(SetConfigRequest) returns (SetConfigResponse);
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+  rpc Redrive(RedriveRequest) returns (RedriveResponse);
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
+}
+
+message CreateQueueRequest {
+  string name = 1;
+  QueueConfig config = 2;
+}
+
+message QueueConfig {
+  string on_enqueue_script = 1;
+  string on_failure_script = 2;
+  uint64 visibility_timeout_ms = 3;
+}
+
+message CreateQueueResponse {
+  string queue_id = 1;
+}
+
+message DeleteQueueRequest {
+  string queue = 1;
+}
+
+message DeleteQueueResponse {}
+
+message SetConfigRequest {
+  string key = 1;
+  string value = 2;
+}
+
+message SetConfigResponse {}
+
+message GetConfigRequest {
+  string key = 1;
+}
+
+message GetConfigResponse {
+  string value = 1;
+}
+
+message ConfigEntry {
+  string key = 1;
+  string value = 2;
+}
+
+message ListConfigRequest {
+  string prefix = 1;
+}
+
+message ListConfigResponse {
+  repeated ConfigEntry entries = 1;
+  uint32 total_count = 2;
+}
+
+message GetStatsRequest {
+  string queue = 1;
+}
+
+message PerFairnessKeyStats {
+  string key = 1;
+  uint64 pending_count = 2;
+  int64 current_deficit = 3;
+  uint32 weight = 4;
+}
+
+message PerThrottleKeyStats {
+  string key = 1;
+  double tokens = 2;
+  double rate_per_second = 3;
+  double burst = 4;
+}
+
+message GetStatsResponse {
+  uint64 depth = 1;
+  uint64 in_flight = 2;
+  uint64 active_fairness_keys = 3;
+  uint32 active_consumers = 4;
+  uint32 quantum = 5;
+  repeated PerFairnessKeyStats per_key_stats = 6;
+  repeated PerThrottleKeyStats per_throttle_stats = 7;
+}
+
+message RedriveRequest {
+  string dlq_queue = 1;
+  uint64 count = 2;
+}
+
+message RedriveResponse {
+  uint64 redriven = 1;
+}
+
+message ListQueuesRequest {}
+
+message QueueInfo {
+  string name = 1;
+  uint64 depth = 2;
+  uint64 in_flight = 3;
+  uint32 active_consumers = 4;
+}
+
+message ListQueuesResponse {
+  repeated QueueInfo queues = 1;
+}

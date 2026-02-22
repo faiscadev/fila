@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let proto_root = manifest_dir.join("../../proto");
+    let proto_root = manifest_dir.join("proto");
 
     let proto_files = [
         proto_root.join("fila/v1/messages.proto"),
