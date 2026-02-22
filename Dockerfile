@@ -1,6 +1,6 @@
 FROM rust:latest AS builder
 WORKDIR /build
-RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y protobuf-compiler clang libclang-dev && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN cargo build --release --bin fila-server --bin fila
 
