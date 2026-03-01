@@ -1,7 +1,8 @@
 epic: "Epic 10: Distribution & Documentation"
 epicNumber: 10
 startedAt: "2026-02-21T23:30:00Z"
-currentPrIndex: 1
+currentPrIndex: 5
+completedAt: "2026-03-01T19:49:30Z"
 prChain:
   - storyId: "10.1"
     storyKey: "10-1-release-pipeline-docker"
@@ -16,25 +17,25 @@ prChain:
     branch: "feat/10.2-sdk-package-publishing"
     pr: 40
     baseBranch: "feat/10.1-release-pipeline-docker"
-    status: pending
+    status: merged
   - storyId: "10.3"
     storyKey: "10-3-binary-distribution"
     title: "Binary Distribution & Installation"
     branch: "feat/10.3-binary-distribution"
     pr: 41
     baseBranch: "feat/10.2-sdk-package-publishing"
-    status: pending
+    status: merged
   - storyId: "10.4"
     storyKey: "10-4-core-documentation"
     title: "Core Documentation & API Reference"
     branch: "feat/10.4-core-documentation"
     pr: 42
     baseBranch: "feat/10.3-binary-distribution"
-    status: pending
+    status: merged
   - storyId: "10.5"
     storyKey: "10-5-tutorials-examples"
     title: "Tutorials, Examples & Lua Patterns"
     branch: "feat/10.5-tutorials-examples"
     pr: 43
     baseBranch: "feat/10.4-core-documentation"
-    status: pending
+    status: merged

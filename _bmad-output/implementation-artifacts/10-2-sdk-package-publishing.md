@@ -1,6 +1,6 @@
 # Story 10.2: SDK Package Publishing
 
-Status: review
+Status: done
 
 ## Story
 
