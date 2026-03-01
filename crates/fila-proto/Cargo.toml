@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Generated protobuf and gRPC types for Fila"
+homepage.workspace = true
+keywords = ["message-broker", "queue", "grpc", "protobuf"]
+categories = ["network-programming"]
 include = ["src/**/*", "proto/**/*", "build.rs", "Cargo.toml", "LICENSE"]
 
 [dependencies]

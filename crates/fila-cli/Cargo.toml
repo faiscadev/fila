@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Command-line interface for Fila"
+homepage.workspace = true
+keywords = ["message-broker", "queue", "cli"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "fila"

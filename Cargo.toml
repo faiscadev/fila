@@ -12,7 +12,8 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/faisca/fila"
+repository = "https://github.com/faiscadev/fila"
+homepage = "https://github.com/faiscadev/fila"
 rust-version = "1.75"
 
 [workspace.dependencies]
