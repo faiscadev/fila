@@ -1,6 +1,6 @@
 # Story 11.1: Verify Release Pipeline End-to-End
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -19,23 +19,23 @@ So that SDK CIs can download pre-built binaries and users can pull Docker images
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Trigger and verify bleeding-edge.yml (AC: 1, 2, 3, 4)
-  - [ ] 1.1: Temporarily broaden bleeding-edge.yml trigger to include the feature branch
-  - [ ] 1.2: Push and verify the workflow runs successfully
-  - [ ] 1.3: Verify binaries are produced for all 4 platforms (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64)
-  - [ ] 1.4: Verify GitHub Release `dev-{sha}` is created with all assets + SHA256 checksums
-  - [ ] 1.5: Verify rolling `dev-latest` pre-release tag points to the newest build
-  - [ ] 1.6: Verify Docker image pushed to `ghcr.io/faisca/fila` with `dev` and `dev-{sha}` tags
-  - [ ] 1.7: Revert trigger broadening — narrow back to `main` only
-- [ ] Task 2: Verify SDK CIs download and test against the binary (AC: 5, 6)
-  - [ ] 2.1: Verify Go SDK CI downloads binary and integration tests execute + pass
-  - [ ] 2.2: Verify Python SDK CI downloads binary and integration tests execute + pass
-  - [ ] 2.3: Verify JS SDK CI downloads binary and integration tests execute + pass
-  - [ ] 2.4: Verify Ruby SDK CI downloads binary and integration tests execute + pass
-  - [ ] 2.5: Verify Java SDK CI downloads binary and integration tests execute + pass
-- [ ] Task 3: Fix any issues found during verification
-  - [ ] 3.1: Fix build failures, workflow bugs, or missing secrets as discovered
-  - [ ] 3.2: Re-run and confirm fixes resolve the issues
+- [x] Task 1: Trigger and verify bleeding-edge.yml (AC: 1, 2, 3, 4)
+  - [x] 1.1: Temporarily broaden bleeding-edge.yml trigger to include the feature branch
+  - [x] 1.2: Push and verify the workflow runs successfully
+  - [x] 1.3: Verify binaries are produced for all 4 platforms (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64)
+  - [x] 1.4: Verify GitHub Release `dev-{sha}` is created with all assets + SHA256 checksums
+  - [x] 1.5: Verify rolling `dev-latest` pre-release tag points to the newest build
+  - [x] 1.6: Verify Docker image pushed to `ghcr.io/faisca/fila` with `dev` and `dev-{sha}` tags
+  - [x] 1.7: Revert trigger broadening — narrow back to `main` only
+- [x] Task 2: Verify SDK CIs download and test against the binary (AC: 5, 6)
+  - [x] 2.1: Verify Go SDK CI downloads binary and integration tests execute + pass
+  - [x] 2.2: Verify Python SDK CI downloads binary and integration tests execute + pass
+  - [x] 2.3: Verify JS SDK CI downloads binary and integration tests execute + pass
+  - [x] 2.4: Verify Ruby SDK CI downloads binary and integration tests execute + pass
+  - [x] 2.5: Verify Java SDK CI downloads binary and integration tests execute + pass
+- [x] Task 3: Fix any issues found during verification
+  - [x] 3.1: Fix build failures, workflow bugs, or missing secrets as discovered
+  - [x] 3.2: Re-run and confirm fixes resolve the issues
 
 ## Dev Notes
 
@@ -109,10 +109,37 @@ Recent commits are all Epic 10 wrap-up: retro, tracking updates, doc fixes. The 
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
+
+- Bleeding-edge workflow run 22553079395 (feature branch): all 5 jobs passed
+- Previous main run 22552806480: already passing before this story
+- Go SDK CI re-run 22268465968: 3/3 tests PASSED
+- Python SDK CI run 22553425770: 4/4 tests PASSED (after grpcio fix)
+- JS SDK CI re-run 22270068296: 3/3 tests PASSED
+- Ruby SDK CI re-run 22270062388: 3 runs, 15 assertions, 0 failures
+- Java SDK CI re-run 22270073392: 3/3 tests PASSED, BUILD SUCCESSFUL
 
 ### Completion Notes List
 
+- Bleeding-edge.yml pipeline verified end-to-end on feature branch: 4 build jobs (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64) + release + Docker all pass
+- GitHub Release `dev-3511a30` created with 8 assets (4 tarballs + 4 SHA256 checksums)
+- Rolling `dev-latest` tag correctly points to newest build
+- Docker image pushed to `ghcr.io/faiscadev/fila` with `dev` and `dev-3511a30...` tags
+- All 5 SDK CIs download binary via `gh release download dev-latest` and integration tests execute and pass
+- Fixed fila-python grpcio version mismatch: generated stubs required grpcio>=1.78.1 but that version was yanked from PyPI; downgraded version check to 1.78.0
+- Trigger broadening reverted — bleeding-edge.yml is back to `main` only
+- No cross-compilation issues, no tag conflicts, no Docker build failures, no auth issues
+- 278/278 local tests pass, zero regressions
+
 ### Change Log
 
+- 2026-03-01: Verified bleeding-edge pipeline end-to-end. Fixed fila-python grpcio 1.78.1 yanked version issue. All 5 SDK CIs green.
+
 ### File List
+
+- .github/workflows/bleeding-edge.yml (temporarily modified then reverted — net: no change)
+- _bmad-output/implementation-artifacts/sprint-status.yaml (modified: status tracking)
+- _bmad-output/implementation-artifacts/11-1-verify-release-pipeline.md (modified: story tracking)
+- (external) faiscadev/fila-python: pyproject.toml, fila/v1/service_pb2_grpc.py, fila/v1/admin_pb2_grpc.py, fila/v1/messages_pb2_grpc.py (fixed grpcio version)
