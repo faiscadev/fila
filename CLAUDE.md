@@ -60,6 +60,17 @@ CI pipelines must not silently skip integration tests. If a test suite includes 
 
 Tests that use `skip-if-not-found` patterns are acceptable for **local development** but not for CI. In CI, the agent must verify that integration tests actually ran (not just existed). A CI pipeline where integration tests are silently skipped provides false confidence and is considered incomplete.
 
+## CI Workflow Verification
+
+When a story creates or modifies a CI workflow (GitHub Actions, etc.), the workflow **MUST** be triggered at least once on the feature branch to verify it works before the story is marked done. Building a pipeline is not the same as testing it.
+
+**Process:**
+1. Temporarily broaden the workflow trigger to include the feature branch (e.g., add `push: branches: [feat/my-branch]`)
+2. Push and verify the workflow runs successfully and produces the expected artifacts
+3. Narrow the trigger back to its intended scope (e.g., `main` only) before merge
+
+This applies to all workflow types: release pipelines, publish workflows, Docker builds, etc. A workflow that has never been triggered is untested code.
+
 ## PR Review — Cubic Automated Review
 
 This project uses **Cubic**, an automated AI reviewer that runs on every PR. You MUST check Cubic's findings before considering a story complete.

@@ -1181,6 +1181,51 @@ So that I can implement common use cases without starting from scratch.
 
 ---
 
+## Epic 11: Release Activation
+
+Verify that the release infrastructure from Epic 10 actually works end-to-end: bleeding-edge releases fire on merge, SDK CIs download pre-built binaries, and packages are published to all registries. This is operational verification, not new engineering.
+
+**Added in:** Epic 10 Retrospective (2026-03-01). Lucas flagged that Epic 10 built pipelines but never verified them. Operational tasks tracked here instead of memory files.
+
+### Story 11.1: Verify Release Pipeline End-to-End
+
+As a maintainer,
+I want to verify that the bleeding-edge release pipeline actually works,
+So that SDK CIs can download pre-built binaries and users can pull Docker images.
+
+**Acceptance Criteria:**
+
+**Given** Epic 10 code is merged to main
+**When** the bleeding-edge workflow triggers
+**Then** binaries are produced for all 4 platforms (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64)
+**And** a GitHub Release tagged `dev-{sha}` is created with all assets
+**And** the rolling `latest` pre-release tag points to the newest build
+**And** the Docker image is published to `ghcr.io/faisca/fila` with `dev` and `dev-{sha}` tags
+**And** all 5 external SDK CIs (Go, Python, JS, Ruby, Java) successfully download the binary via `gh release download latest`
+**And** integration tests in all 5 SDK CIs actually execute and pass against the downloaded binary
+
+### Story 11.2: Package Registry Publishing
+
+As a maintainer,
+I want all SDKs published to their respective package registries,
+So that users can install Fila and its SDKs via standard package managers.
+
+**Acceptance Criteria:**
+
+**Given** the publish workflows exist in each SDK repo
+**When** secrets are configured and a publish is triggered
+**Then** `fila-proto` and `fila-sdk` are published to crates.io
+**And** `fila-go` has a dev version tag accessible via `go get`
+**And** `fila-python` is published to PyPI (OIDC trusted publisher configured)
+**And** `@fila/client` is published to npm
+**And** `fila-client` gem is published to RubyGems
+**And** `dev.faisca:fila-client` is published to Maven Central
+**And** `fila-server` and `fila-cli` are installable via `cargo install`
+**And** DNS for `get.fila.dev` is configured (or install.sh updated to use raw GitHub URL)
+**And** `curl -fsSL <install-url> | bash` successfully installs the correct binary
+
+---
+
 ## Future Work
 
 - Authentication and authorization (API keys, mTLS)

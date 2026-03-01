@@ -119,4 +119,10 @@ development_status:
   10-3-binary-distribution-installation: done
   10-4-core-documentation-api-reference: done
   10-5-tutorials-examples-lua-patterns: done
-  epic-10-retrospective: optional
+  epic-10-retrospective: done
+
+  # Epic 11: Release Activation (added in Epic 10 retro)
+  epic-11: backlog
+  11-1-verify-release-pipeline: backlog
+  11-2-package-registry-publishing: backlog
+  epic-11-retrospective: optional
