@@ -123,6 +123,6 @@ development_status:
 
   # Epic 11: Release Activation (added in Epic 10 retro)
   epic-11: in-progress
-  11-1-verify-release-pipeline: review
+  11-1-verify-release-pipeline: done
   11-2-package-registry-publishing: backlog
   epic-11-retrospective: optional

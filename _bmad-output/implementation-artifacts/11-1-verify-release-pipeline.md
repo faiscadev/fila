@@ -1,6 +1,6 @@
 # Story 11.1: Verify Release Pipeline End-to-End
 
-Status: review
+Status: done
 
 ## Story
 
