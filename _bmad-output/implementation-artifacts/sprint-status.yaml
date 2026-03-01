@@ -1,4 +1,4 @@
-# generated: 2026-02-17
+# generated: 2026-03-01
 # project: fila
 # project_key: NOKEY
 # tracking_system: file-system
@@ -33,7 +33,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-02-17
+generated: 2026-03-01
 project: fila
 project_key: NOKEY
 tracking_system: file-system
@@ -122,7 +122,7 @@ development_status:
   epic-10-retrospective: done
 
   # Epic 11: Release Activation (added in Epic 10 retro)
-  epic-11: backlog
-  11-1-verify-release-pipeline: backlog
+  epic-11: in-progress
+  11-1-verify-release-pipeline: in-progress
   11-2-package-registry-publishing: backlog
   epic-11-retrospective: optional
