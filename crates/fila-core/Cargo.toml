@@ -6,9 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Core library for Fila: scheduler, storage, domain types"
-homepage.workspace = true
-keywords = ["message-broker", "queue", "fair-scheduling", "storage"]
-categories = ["network-programming", "asynchronous"]
+publish = false
 
 [dependencies]
 fila-proto.workspace = true

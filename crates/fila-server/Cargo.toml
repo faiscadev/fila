@@ -6,9 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "gRPC server binary for Fila"
-homepage.workspace = true
-keywords = ["message-broker", "queue", "fair-scheduling", "grpc"]
-categories = ["network-programming", "asynchronous"]
+publish = false
 
 [dependencies]
 fila-proto.workspace = true
