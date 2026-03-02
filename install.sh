@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fila installer — downloads pre-built binaries from GitHub Releases.
-# Usage: curl -fsSL https://get.fila.dev | bash
-#    or: curl -fsSL https://get.fila.dev | bash -s -- --version v0.1.0
+# Usage: curl -fsSL https://raw.githubusercontent.com/faiscadev/fila/main/install.sh | bash
+#    or: curl -fsSL https://raw.githubusercontent.com/faiscadev/fila/main/install.sh | bash -s -- --version v0.1.0
 
 set -eu
 
