@@ -1,6 +1,6 @@
 # Story 11.2: Package Registry Publishing
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -28,36 +28,36 @@ So that users can install Fila and its SDKs via standard package managers.
   - [x] 1.3: Fix `workspace.package.repository` in root `Cargo.toml`: change `https://github.com/faisca/fila` → `https://github.com/faiscadev/fila`
   - [x] 1.4: Add `homepage` and `keywords` to all 5 publishable crates (fila-proto, fila-core, fila-sdk, fila-server, fila-cli)
   - [x] 1.5: Run `cargo publish --dry-run -p fila-proto`, then fila-core, fila-sdk, fila-server, fila-cli — fix any issues
-- [ ] Task 2: Configure secrets and publish Rust crates to crates.io (AC: 1, 7) — **human (Lucas)**
-  - [ ] 2.1: Create crates.io API token and add as `CARGO_REGISTRY_TOKEN` repo secret on faiscadev/fila
-  - [ ] 2.2: Trigger the `publish-crates` job (either via release.yml on a v* tag, or run manually) and verify fila-proto + fila-core + fila-sdk + fila-server + fila-cli are on crates.io
-  - [ ] 2.3: Verify `cargo install fila-server` and `cargo install fila-cli` work (requires protoc + C/C++ compiler — see note below)
-- [ ] Task 3: Verify Go SDK dev tags (AC: 2) — **human (Lucas)**
-  - [ ] 3.1: Trigger the fila-go publish workflow (push to main or manual dispatch)
-  - [ ] 3.2: Verify a `v0.1.0-dev.{N}` tag is created
-  - [ ] 3.3: Verify `go get github.com/faiscadev/fila-go@v0.1.0-dev.{N}` works
-- [ ] Task 4: Configure and publish Python SDK to PyPI (AC: 3) — **human (Lucas)**
-  - [ ] 4.1: Configure OIDC trusted publisher on PyPI for the faiscadev/fila-python repo
-  - [ ] 4.2: Trigger the dev-publish workflow (push to main) and verify package appears on TestPyPI
-  - [ ] 4.3: Create a v* tag to trigger the publish workflow and verify `fila-python` appears on PyPI
-  - [ ] 4.4: Verify `pip install fila-python` installs the published version
-- [ ] Task 5: Configure and publish JS SDK to npm (AC: 4) — **human (Lucas)**
-  - [ ] 5.1: Create npm org/scope `@fila` if not exists, generate NPM_TOKEN, add as repo secret on faiscadev/fila-js
-  - [ ] 5.2: Trigger the publish workflow (v* tag) and verify `@fila/client` appears on npm
-  - [ ] 5.3: Verify `npm install @fila/client` installs the published version
-- [ ] Task 6: Configure and publish Ruby SDK to RubyGems (AC: 5) — **human (Lucas)**
-  - [ ] 6.1: Create RubyGems API key and add as `RUBYGEMS_API_KEY` repo secret on faiscadev/fila-ruby
-  - [ ] 6.2: Trigger the publish workflow (v* tag) and verify `fila-client` gem appears on RubyGems
-  - [ ] 6.3: Verify `gem install fila-client` installs the published version
-- [ ] Task 7: Configure and publish Java SDK to Maven Central (AC: 6) — **human (Lucas)**
-  - [ ] 7.1: Set up Sonatype OSSRH account for `dev.faisca` group ID
-  - [ ] 7.2: Generate GPG key pair for artifact signing
-  - [ ] 7.3: Add secrets: `OSSRH_USERNAME`, `OSSRH_PASSWORD`, `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` to faiscadev/fila-java
-  - [ ] 7.4: Trigger the publish workflow (v* tag) and verify `dev.faisca:fila-client` appears on Maven Central
-  - [ ] 7.5: Verify the artifact is resolvable via Gradle/Maven dependency declaration
-- [ ] Task 8: Configure DNS / install URL (AC: 8) — **human (Lucas)** / **dev-agent** for install.sh update
-  - [ ] 8.1: Either configure DNS for `get.fila.dev` pointing to raw GitHub content, OR update install.sh to use `https://raw.githubusercontent.com/faiscadev/fila/main/install.sh`
-  - [ ] 8.2: Verify `curl -fsSL <install-url> | bash` downloads and installs the correct binary for the host platform
+- [x] Task 2: Configure secrets and publish Rust crates to crates.io (AC: 1, 7) — **human (Lucas)**
+  - [x] 2.1: Create crates.io API token and add as `CARGO_REGISTRY_TOKEN` repo secret on faiscadev/fila
+  - [x] 2.2: Trigger the `publish-crates` job (either via release.yml on a v* tag, or run manually) and verify fila-proto + fila-sdk + fila-cli are on crates.io (fila-core and fila-server set to publish=false)
+  - [x] 2.3: Verify `cargo install fila-cli` works (fila-server set to publish=false)
+- [x] Task 3: Verify Go SDK dev tags (AC: 2) — **human (Lucas)**
+  - [x] 3.1: Trigger the fila-go publish workflow (push to main or manual dispatch)
+  - [x] 3.2: Verify a `v0.1.0-dev.{N}` tag is created — v0.1.0-dev.1, v0.1.0-dev.2 exist
+  - [x] 3.3: Verify `go get github.com/faiscadev/fila-go@v0.1.0-dev.{N}` works
+- [x] Task 4: Configure and publish Python SDK to PyPI (AC: 3) — **human (Lucas)**
+  - [x] 4.1: Configure OIDC trusted publisher on PyPI for the faiscadev/fila-python repo
+  - [x] 4.2: Trigger the dev-publish workflow (push to main) and verify package appears on TestPyPI
+  - [x] 4.3: Create a v* tag to trigger the publish workflow and verify `fila-python` appears on PyPI
+  - [x] 4.4: Verify `pip install fila-python` installs the published version (requires Python >=3.10)
+- [x] Task 5: Configure and publish JS SDK to npm (AC: 4) — **human (Lucas)**
+  - [x] 5.1: Create npm org/scope `@fila` if not exists, generate NPM_TOKEN, add as repo secret on faiscadev/fila-js
+  - [x] 5.2: Trigger the publish workflow (v* tag) and verify `fila-client` appears on npm
+  - [x] 5.3: Verify `npm install fila-client` installs the published version
+- [x] Task 6: Configure and publish Ruby SDK to RubyGems (AC: 5) — **human (Lucas)**
+  - [x] 6.1: Create RubyGems API key and add as `RUBYGEMS_API_KEY` repo secret on faiscadev/fila-ruby
+  - [x] 6.2: Trigger the publish workflow (v* tag) and verify `fila-client` gem appears on RubyGems
+  - [x] 6.3: Verify `gem install fila-client` installs the published version
+- [x] Task 7: Configure and publish Java SDK to Maven Central (AC: 6) — **human (Lucas)** + **dev-agent**
+  - [x] 7.1: Set up Sonatype Central Portal account, verify `dev.faisca` namespace
+  - [x] 7.2: Generate GPG key pair for artifact signing (RSA 4096, uploaded to keyserver.ubuntu.com)
+  - [x] 7.3: Add secrets: `OSSRH_USERNAME`, `OSSRH_PASSWORD`, `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` to faiscadev/fila-java
+  - [x] 7.4: Trigger the publish workflow (v0.1.0 tag) — publish succeeded via Central Portal OSSRH Staging API
+  - [x] 7.5: Verify the artifact is resolvable via Gradle/Maven dependency declaration
+- [x] Task 8: Configure DNS / install URL (AC: 8) — **human (Lucas)** / **dev-agent** for install.sh update
+  - [x] 8.1: Updated install.sh to use `https://raw.githubusercontent.com/faiscadev/fila/main/install.sh`
+  - [x] 8.2: Verify `curl -fsSL <install-url> | bash` downloads and installs the correct binary for the host platform
 
 ## Dev Notes
 
@@ -201,19 +201,24 @@ Claude Opus 4.6
 ### Completion Notes List
 
 - Task 1 complete: Fixed release.yml duplicate `publish-crates` job (second shorter block removed, first complete chain retained). Verified publish chain: fila-proto → fila-core → fila-sdk → fila-server → fila-cli with correct sleep intervals. Fixed workspace repository URL from `faisca/fila` to `faiscadev/fila`. Added `homepage` (workspace-level), `keywords`, and `categories` to all 5 publishable crates. `cargo publish --dry-run` passes for fila-proto; others fail only because dependencies aren't on crates.io yet (expected). 278/278 tests pass, zero regressions.
-- Tasks 2–7 are human (Lucas) tasks requiring registry account creation, secret configuration, and workflow triggering.
-- Task 8 depends on Lucas's DNS decision for `get.fila.dev` vs raw GitHub URL.
+- Tasks 2–6, 8 completed by Lucas in remote session (2026-03-02): Rust crates published (fila-proto, fila-sdk, fila-cli — fila-core and fila-server set to publish=false). Go dev tags created. Python published to PyPI. JS published to npm as fila-client. Ruby published to RubyGems. install.sh updated to raw GitHub URL.
+- Task 7 completed (2026-03-03): Fixed Java SDK publish — added signing plugin, POM developers/scm sections, migrated from dead OSSRH endpoint to Central Portal OSSRH Staging API via gradle-nexus/publish-plugin. Generated GPG key (RSA 4096), uploaded to keyserver, configured 4 secrets via gh CLI. Publish workflow succeeded on v0.1.0 tag.
 
 ### Change Log
 
 - 2026-03-01: Task 1 — Fixed release.yml duplicate publish-crates job, fixed repository URL, added crate metadata (homepage, keywords, categories)
+- 2026-03-02: Tasks 2–6, 8 — Lucas published all SDKs except Java, updated install.sh, set fila-core/fila-server to publish=false
+- 2026-03-03: Task 7 — Fixed Java SDK: added signing plugin, POM metadata, migrated to Central Portal, generated GPG key, published dev.faisca:fila-client to Maven Central
 
 ### File List
 
-- .github/workflows/release.yml (modified — removed duplicate publish-crates block)
+- .github/workflows/release.yml (modified — removed duplicate publish-crates block, removed fila-core/fila-server from chain)
 - Cargo.toml (modified — fixed repository URL, added homepage)
 - crates/fila-proto/Cargo.toml (modified — added homepage, keywords, categories)
-- crates/fila-core/Cargo.toml (modified — added homepage, keywords, categories)
+- crates/fila-core/Cargo.toml (modified — added homepage, keywords, categories, publish=false)
 - crates/fila-sdk/Cargo.toml (modified — added homepage, keywords, categories)
-- crates/fila-server/Cargo.toml (modified — added homepage, keywords, categories)
+- crates/fila-server/Cargo.toml (modified — added homepage, keywords, categories, publish=false)
 - crates/fila-cli/Cargo.toml (modified — added homepage, keywords, categories)
+- install.sh (modified — updated URL to raw GitHub URL)
+- [external] faiscadev/fila-java: build.gradle (added signing plugin, nexus-publish-plugin, POM developers/scm)
+- [external] faiscadev/fila-java: .github/workflows/publish.yml (migrated to Central Portal staging API)
