@@ -1,6 +1,6 @@
 # Story 11.2: Package Registry Publishing
 
-Status: review
+Status: done
 
 ## Story
 
@@ -13,10 +13,10 @@ So that users can install Fila and its SDKs via standard package managers.
 1. **Given** the publish workflows exist in each SDK repo, **When** secrets are configured and a publish is triggered, **Then** `fila-proto` and `fila-sdk` are published to crates.io.
 2. **Given** the Go SDK repo exists, **Then** `fila-go` has a dev version tag accessible via `go get`.
 3. **Given** the Python SDK repo exists, **When** the publish workflow is triggered, **Then** `fila-python` is published to PyPI (OIDC trusted publisher configured).
-4. **Given** the JS SDK repo exists, **When** the publish workflow is triggered, **Then** `@fila/client` is published to npm.
+4. **Given** the JS SDK repo exists, **When** the publish workflow is triggered, **Then** `fila-client` is published to npm.
 5. **Given** the Ruby SDK repo exists, **When** the publish workflow is triggered, **Then** `fila-client` gem is published to RubyGems.
 6. **Given** the Java SDK repo exists, **When** the publish workflow is triggered, **Then** `dev.faisca:fila-client` is published to Maven Central.
-7. **Given** the Rust crates are published, **Then** `fila-server` and `fila-cli` are installable via `cargo install`.
+7. **Given** the Rust crates are published, **Then** `fila-cli` is installable via `cargo install fila-cli` (fila-server is not published to crates.io — use install.sh or Docker instead).
 8. **Given** `install.sh` exists, **Then** DNS for `get.fila.dev` is configured (or install.sh updated to use raw GitHub URL), and `curl -fsSL <install-url> | bash` successfully installs the correct binary.
 9. **Given** each publish workflow must be verified, **Then** each workflow is triggered at least once (on feature branch or via manual dispatch) and produces a successful publish before marking complete.
 
@@ -203,6 +203,7 @@ Claude Opus 4.6
 - Task 1 complete: Fixed release.yml duplicate `publish-crates` job (second shorter block removed, first complete chain retained). Verified publish chain: fila-proto → fila-core → fila-sdk → fila-server → fila-cli with correct sleep intervals. Fixed workspace repository URL from `faisca/fila` to `faiscadev/fila`. Added `homepage` (workspace-level), `keywords`, and `categories` to all 5 publishable crates. `cargo publish --dry-run` passes for fila-proto; others fail only because dependencies aren't on crates.io yet (expected). 278/278 tests pass, zero regressions.
 - Tasks 2–6, 8 completed by Lucas in remote session (2026-03-02): Rust crates published (fila-proto, fila-sdk, fila-cli — fila-core and fila-server set to publish=false). Go dev tags created. Python published to PyPI. JS published to npm as fila-client. Ruby published to RubyGems. install.sh updated to raw GitHub URL.
 - Task 7 completed (2026-03-03): Fixed Java SDK publish — added signing plugin, POM developers/scm sections, migrated from dead OSSRH endpoint to Central Portal OSSRH Staging API via gradle-nexus/publish-plugin. Generated GPG key (RSA 4096), uploaded to keyserver, configured 4 secrets via gh CLI. Publish workflow succeeded on v0.1.0 tag.
+- Code review (2026-03-03): 1 HIGH, 2 MEDIUM, 2 LOW findings. Fixed all HIGH/MEDIUM: updated AC7 (fila-server not on crates.io — intentional), updated AC4 (npm package is `fila-client` not `@fila/client`), fixed File List descriptions for fila-core/fila-server. LOW items noted (no fila-proto README, GPG key without passphrase).
 
 ### Change Log
 
@@ -215,9 +216,9 @@ Claude Opus 4.6
 - .github/workflows/release.yml (modified — removed duplicate publish-crates block, removed fila-core/fila-server from chain)
 - Cargo.toml (modified — fixed repository URL, added homepage)
 - crates/fila-proto/Cargo.toml (modified — added homepage, keywords, categories)
-- crates/fila-core/Cargo.toml (modified — added homepage, keywords, categories, publish=false)
+- crates/fila-core/Cargo.toml (modified — set publish=false, removed homepage/keywords/categories)
 - crates/fila-sdk/Cargo.toml (modified — added homepage, keywords, categories)
-- crates/fila-server/Cargo.toml (modified — added homepage, keywords, categories, publish=false)
+- crates/fila-server/Cargo.toml (modified — set publish=false, removed homepage/keywords/categories)
 - crates/fila-cli/Cargo.toml (modified — added homepage, keywords, categories)
 - install.sh (modified — updated URL to raw GitHub URL)
 - [external] faiscadev/fila-java: build.gradle (added signing plugin, nexus-publish-plugin, POM developers/scm)
