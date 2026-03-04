@@ -5,9 +5,9 @@ stories:
   - id: "12.1"
     title: "Benchmark Harness & Self-Benchmarking"
     status: in-progress
-    currentPhase: "code-review"
+    currentPhase: "pr-ci"
     branch: "feat/12.1-benchmark-harness"
-    pr: null
+    pr: 45
     dependsOn: []
   - id: "12.2"
     title: "CI Regression Detection"
