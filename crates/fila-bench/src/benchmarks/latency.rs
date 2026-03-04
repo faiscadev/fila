@@ -84,11 +84,7 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
             let mut drain = client.consume(&queue).await.expect("consume drain");
             let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
-                let next = tokio::time::timeout(
-                    Duration::from_millis(200),
-                    drain.next(),
-                )
-                .await;
+                let next = tokio::time::timeout(Duration::from_millis(200), drain.next()).await;
                 match next {
                     Ok(Some(Ok(msg))) => {
                         let _ = client.ack(&queue, &msg.id).await;

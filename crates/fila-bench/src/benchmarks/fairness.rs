@@ -1,4 +1,5 @@
 use crate::measurement::ThroughputMeter;
+use crate::progress::Progress;
 use crate::report::BenchResult;
 use crate::server::{create_queue_cli, create_queue_with_lua_cli, BenchServer};
 use std::collections::HashMap;
@@ -75,6 +76,8 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
 
     // Enqueue messages for all keys
     let payload = vec![0u8; PAYLOAD_SIZE];
+    let total_messages = messages_per_key * weights.len();
+    let mut enq_progress = Progress::new("fairness enqueue", total_messages as u64);
     for (tenant, weight) in &weights {
         for _ in 0..messages_per_key {
             let headers: HashMap<String, String> = [
@@ -87,20 +90,24 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
                 .enqueue(queue, headers, payload.clone())
                 .await
                 .expect("enqueue");
+            enq_progress.inc();
         }
     }
+    enq_progress.finish();
 
     // Consume all and track delivery order per key
     let mut stream = client.consume(queue).await.expect("consume");
-    let total_messages = messages_per_key * weights.len();
     let mut delivery_counts: HashMap<String, u64> = HashMap::new();
+    let mut consume_progress = Progress::new("fairness consume", total_messages as u64);
 
     for _ in 0..total_messages {
         if let Some(Ok(msg)) = stream.next().await {
             *delivery_counts.entry(msg.fairness_key.clone()).or_insert(0) += 1;
             client.ack(queue, &msg.id).await.expect("ack");
+            consume_progress.inc();
         }
     }
+    consume_progress.finish();
 
     // Calculate accuracy
     let mut results = Vec::new();

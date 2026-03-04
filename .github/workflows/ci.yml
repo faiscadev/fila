@@ -74,5 +74,6 @@ jobs:
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo build --workspace
+      - name: Build server and CLI binaries (needed by fila-bench at runtime)
+        run: cargo build -p fila-server -p fila-cli
       - run: cargo bench

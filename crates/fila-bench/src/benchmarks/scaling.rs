@@ -1,4 +1,5 @@
 use crate::measurement::ThroughputMeter;
+use crate::progress::Progress;
 use crate::report::BenchResult;
 use crate::server::{create_queue_with_lua_cli, BenchServer};
 use std::collections::HashMap;
@@ -25,19 +26,14 @@ pub async fn bench_queue_depth_scaling(server: &BenchServer) -> Vec<BenchResult>
         let headers: HashMap<String, String> = HashMap::new();
 
         // Pre-load messages
-        eprintln!("  Pre-loading {depth} messages for depth scaling benchmark...");
-        let batch_size = 10_000;
-        for batch in 0..(depth / batch_size as u64) {
-            for _ in 0..batch_size {
-                let _ = client
-                    .enqueue(&queue, headers.clone(), payload.clone())
-                    .await;
-            }
-            if batch % 100 == 0 && batch > 0 {
-                eprintln!("    ...{} messages loaded", batch * batch_size as u64);
-            }
+        let mut progress = Progress::new(&format!("depth {depth_label} pre-load"), depth);
+        for _ in 0..depth {
+            let _ = client
+                .enqueue(&queue, headers.clone(), payload.clone())
+                .await;
+            progress.inc();
         }
-        eprintln!("  Pre-load complete for {depth_label}.");
+        progress.finish();
 
         // Measure enqueue throughput with full queue
         let mut meter = ThroughputMeter::start();
@@ -153,12 +149,16 @@ pub async fn bench_consumer_concurrency(server: &BenchServer) -> Vec<BenchResult
         let headers: HashMap<String, String> = HashMap::new();
 
         // Pre-load messages so consumers have work
-        let pre_load = 100_000;
+        let pre_load: u64 = 100_000;
+        let mut progress =
+            Progress::new(&format!("concurrency {consumer_count} pre-load"), pre_load);
         for _ in 0..pre_load {
             let _ = client
                 .enqueue(&queue, headers.clone(), payload.clone())
                 .await;
+            progress.inc();
         }
+        progress.finish();
 
         // Spawn consumers
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

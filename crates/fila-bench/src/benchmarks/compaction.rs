@@ -1,4 +1,5 @@
 use crate::measurement::LatencySampler;
+use crate::progress::Progress;
 use crate::report::BenchResult;
 use crate::server::{create_queue_cli, BenchServer};
 use std::collections::HashMap;
@@ -40,20 +41,25 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
 
     // Phase 2: Create compaction pressure by writing+acking a large batch
     // This creates many dead entries that RocksDB needs to compact.
-    eprintln!("  Creating compaction pressure with {COMPACTION_TRIGGER_MESSAGES} messages...");
+    let mut enq_progress = Progress::new("compaction enqueue", COMPACTION_TRIGGER_MESSAGES);
     for _ in 0..COMPACTION_TRIGGER_MESSAGES {
         let _ = client
             .enqueue(queue, headers.clone(), payload.clone())
             .await;
+        enq_progress.inc();
     }
+    enq_progress.finish();
 
     // Consume and ack all (creates tombstones)
     let mut stream = client.consume(queue).await.expect("consume");
+    let mut ack_progress = Progress::new("compaction consume+ack", COMPACTION_TRIGGER_MESSAGES);
     for _ in 0..COMPACTION_TRIGGER_MESSAGES {
         if let Some(Ok(msg)) = stream.next().await {
             let _ = client.ack(queue, &msg.id).await;
+            ack_progress.inc();
         }
     }
+    ack_progress.finish();
     drop(stream);
 
     // Phase 3: Immediately measure latency while compaction is likely active

@@ -1,4 +1,5 @@
 use crate::measurement::process_rss_bytes;
+use crate::progress::Progress;
 use crate::report::BenchResult;
 use crate::server::{create_queue_cli, BenchServer};
 use std::collections::HashMap;
@@ -33,11 +34,14 @@ pub async fn bench_memory_footprint(server: &BenchServer) -> Vec<BenchResult> {
     let payload = vec![0u8; PAYLOAD_SIZE];
     let headers: HashMap<String, String> = HashMap::new();
 
+    let mut progress = Progress::new("enqueue", MESSAGES_TO_LOAD);
     for _ in 0..MESSAGES_TO_LOAD {
         let _ = client
             .enqueue(queue, headers.clone(), payload.clone())
             .await;
+        progress.inc();
     }
+    progress.finish();
 
     // Measure loaded RSS
     // Give the server a moment to stabilize
