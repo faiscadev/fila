@@ -111,12 +111,10 @@ pub async fn bench_key_cardinality(server: &BenchServer) -> Vec<BenchResult> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(MEASURE_SECS);
         let mut key_idx = 0u64;
         while tokio::time::Instant::now() < deadline {
-            let headers: HashMap<String, String> = [(
-                "fk".to_string(),
-                format!("key-{}", key_idx % key_count),
-            )]
-            .into_iter()
-            .collect();
+            let headers: HashMap<String, String> =
+                [("fk".to_string(), format!("key-{}", key_idx % key_count))]
+                    .into_iter()
+                    .collect();
             if client
                 .enqueue(&queue, headers, payload.clone())
                 .await

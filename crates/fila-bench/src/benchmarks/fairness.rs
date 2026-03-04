@@ -20,15 +20,11 @@ pub async fn bench_fairness_overhead(server: &BenchServer) -> Vec<BenchResult> {
     let fair_queue = "bench-fairness-fair";
     let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" return { fairness_key = key, weight = 1, throttle_keys = {} } end"#;
     create_queue_with_lua_cli(server.addr(), fair_queue, Some(on_enqueue), None);
-    let fair_throughput = measure_enqueue_throughput_with_headers(
-        server,
-        fair_queue,
-        || {
-            let mut h = HashMap::new();
-            h.insert("tenant_id".to_string(), "tenant-1".to_string());
-            h
-        },
-    )
+    let fair_throughput = measure_enqueue_throughput_with_headers(server, fair_queue, || {
+        let mut h = HashMap::new();
+        h.insert("tenant_id".to_string(), "tenant-1".to_string());
+        h
+    })
     .await;
 
     let overhead_pct = if fifo_throughput > 0.0 {
@@ -73,9 +69,7 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
 
     // Weights: tenant-1=1, tenant-2=2, tenant-3=3, tenant-4=4, tenant-5=5
     // Total weight = 15. Expected share: 1/15, 2/15, 3/15, 4/15, 5/15
-    let weights: Vec<(String, u32)> = (1..=5)
-        .map(|i| (format!("tenant-{i}"), i as u32))
-        .collect();
+    let weights: Vec<(String, u32)> = (1..=5).map(|i| (format!("tenant-{i}"), i as u32)).collect();
     let total_weight: u32 = weights.iter().map(|(_, w)| *w).sum();
     let messages_per_key = 200;
 
@@ -103,9 +97,7 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
 
     for _ in 0..total_messages {
         if let Some(Ok(msg)) = stream.next().await {
-            *delivery_counts
-                .entry(msg.fairness_key.clone())
-                .or_insert(0) += 1;
+            *delivery_counts.entry(msg.fairness_key.clone()).or_insert(0) += 1;
             client.ack(queue, &msg.id).await.expect("ack");
         }
     }
@@ -127,7 +119,10 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
             unit: "% deviation".to_string(),
             metadata: [
                 ("weight".to_string(), serde_json::json!(weight)),
-                ("expected_share".to_string(), serde_json::json!(expected_share)),
+                (
+                    "expected_share".to_string(),
+                    serde_json::json!(expected_share),
+                ),
                 ("actual_share".to_string(), serde_json::json!(actual_share)),
                 ("actual_count".to_string(), serde_json::json!(actual_count)),
             ]
@@ -169,9 +164,7 @@ where
     // Warmup
     let warmup_deadline = tokio::time::Instant::now() + Duration::from_secs(WARMUP_SECS);
     while tokio::time::Instant::now() < warmup_deadline {
-        let _ = client
-            .enqueue(queue, headers_fn(), payload.clone())
-            .await;
+        let _ = client.enqueue(queue, headers_fn(), payload.clone()).await;
     }
 
     // Measure

@@ -98,14 +98,8 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
 
         if let Some((p50, p95, p99)) = sampler.percentiles() {
             let meta: HashMap<String, serde_json::Value> = [
-                (
-                    "producers".to_string(),
-                    serde_json::json!(level.producers),
-                ),
-                (
-                    "samples".to_string(),
-                    serde_json::json!(SAMPLES_PER_LEVEL),
-                ),
+                ("producers".to_string(), serde_json::json!(level.producers)),
+                ("samples".to_string(), serde_json::json!(SAMPLES_PER_LEVEL)),
             ]
             .into_iter()
             .collect();

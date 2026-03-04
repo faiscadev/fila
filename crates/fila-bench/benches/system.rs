@@ -1,6 +1,4 @@
-use fila_bench::benchmarks::{
-    compaction, fairness, latency, lua, memory, scaling, throughput,
-};
+use fila_bench::benchmarks::{compaction, fairness, latency, lua, memory, scaling, throughput};
 use fila_bench::report::BenchReport;
 use fila_bench::server::BenchServer;
 

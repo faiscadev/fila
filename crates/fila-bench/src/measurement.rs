@@ -103,9 +103,6 @@ pub fn current_process_rss_bytes() -> Option<u64> {
 pub fn process_rss_bytes(pid: u32) -> Option<u64> {
     let mut sys = sysinfo::System::new();
     let sysinfo_pid = sysinfo::Pid::from_u32(pid);
-    sys.refresh_processes(
-        sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]),
-        true,
-    );
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]), true);
     sys.process(sysinfo_pid).map(|p| p.memory())
 }

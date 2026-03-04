@@ -83,22 +83,16 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
             name: "compaction_idle_p99".to_string(),
             value: idle_p99,
             unit: "ms".to_string(),
-            metadata: [(
-                "samples".to_string(),
-                serde_json::json!(LATENCY_SAMPLES),
-            )]
-            .into_iter()
-            .collect(),
+            metadata: [("samples".to_string(), serde_json::json!(LATENCY_SAMPLES))]
+                .into_iter()
+                .collect(),
         },
         BenchResult {
             name: "compaction_active_p99".to_string(),
             value: compaction_p99,
             unit: "ms".to_string(),
             metadata: [
-                (
-                    "samples".to_string(),
-                    serde_json::json!(LATENCY_SAMPLES),
-                ),
+                ("samples".to_string(), serde_json::json!(LATENCY_SAMPLES)),
                 (
                     "trigger_messages".to_string(),
                     serde_json::json!(COMPACTION_TRIGGER_MESSAGES),

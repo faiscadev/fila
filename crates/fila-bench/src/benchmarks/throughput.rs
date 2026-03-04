@@ -51,11 +51,11 @@ pub async fn bench_enqueue_throughput(server: &BenchServer) -> Vec<BenchResult> 
             unit: "msg/s".to_string(),
             metadata: [
                 ("payload_size".to_string(), serde_json::json!(PAYLOAD_SIZE)),
+                ("duration_secs".to_string(), serde_json::json!(MEASURE_SECS)),
                 (
-                    "duration_secs".to_string(),
-                    serde_json::json!(MEASURE_SECS),
+                    "total_messages".to_string(),
+                    serde_json::json!(meter.count()),
                 ),
-                ("total_messages".to_string(), serde_json::json!(meter.count())),
             ]
             .into_iter()
             .collect(),

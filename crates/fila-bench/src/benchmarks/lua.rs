@@ -57,10 +57,7 @@ pub async fn bench_lua_latency(server: &BenchServer) -> Vec<BenchResult> {
                     "lua_throughput".to_string(),
                     serde_json::json!(lua_throughput),
                 ),
-                (
-                    "nfr4_target".to_string(),
-                    serde_json::json!("< 50us p99"),
-                ),
+                ("nfr4_target".to_string(), serde_json::json!("< 50us p99")),
             ]
             .into_iter()
             .collect(),

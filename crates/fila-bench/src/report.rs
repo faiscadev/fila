@@ -58,7 +58,10 @@ impl BenchReport {
         println!("========================================\n");
 
         for result in &self.benchmarks {
-            println!("  {:<50} {:>12.2} {}", result.name, result.value, result.unit);
+            println!(
+                "  {:<50} {:>12.2} {}",
+                result.name, result.value, result.unit
+            );
         }
         println!("\n  Results written to: {path}");
         println!("========================================\n");
