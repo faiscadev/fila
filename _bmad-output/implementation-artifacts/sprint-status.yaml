@@ -125,4 +125,4 @@ development_status:
   epic-11: done
   11-1-verify-release-pipeline: done
   11-2-package-registry-publishing: done
-  epic-11-retrospective: optional
+  epic-11-retrospective: done
