@@ -5,7 +5,7 @@ stories:
   - id: "12.1"
     title: "Benchmark Harness & Self-Benchmarking"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "code-review"
     branch: "feat/12.1-benchmark-harness"
     pr: null
     dependsOn: []
