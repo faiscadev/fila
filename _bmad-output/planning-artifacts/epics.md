@@ -8,1227 +8,604 @@ status: complete
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/planning-artifacts/architecture.md'
+  - '_bmad-output/planning-artifacts/research/market-message-broker-infrastructure-research-2026-03-04.md'
+  - '_bmad-output/brainstorming/brainstorming-session-2026-03-04.md'
+  - '_bmad-output/planning-artifacts/epics.md (existing epics 1-11)'
 ---
 
-# Fila - Epic Breakdown
+# Fila - Epic Breakdown (Phase 2+)
 
 ## Overview
 
-This document provides the complete epic and story breakdown for Fila, decomposing the requirements from the PRD and Architecture into implementable stories.
+This document provides the epic and story breakdown for Fila's post-v1 roadmap (Epics 12+), decomposing the Phase 2+ requirements from the updated PRD, Architecture, market research, and brainstorming session into implementable stories. Epics 1-11 (Phase 1 MVP) are complete and documented separately.
 
 ## Requirements Inventory
 
 ### Functional Requirements
 
-FR1: Producers can enqueue messages with arbitrary headers and opaque byte payloads
-FR2: Consumers can receive ready messages via a persistent server-streaming connection
-FR3: Consumers can acknowledge successful message processing
-FR4: Consumers can negatively acknowledge failed processing, triggering failure handling logic
-FR5: The broker automatically re-makes available messages whose visibility timeout has expired
-FR6: The broker routes failed messages to a dead-letter queue based on failure handling rules
-FR7: Operators can redrive messages from a dead-letter queue back to the source queue
-FR8: The broker assigns messages to fairness groups based on message properties
-FR9: The broker schedules delivery using Deficit Round Robin across fairness groups
-FR10: Higher-weighted fairness groups receive proportionally more throughput
-FR11: Only active fairness groups (those with pending messages) participate in scheduling
-FR12: Each fairness group's actual throughput stays within 5% of its fair share under sustained load
-FR13: The broker enforces per-key rate limits using token bucket rate limiting
-FR14: Messages can be subject to multiple independent throttle keys simultaneously
-FR15: The broker skips throttled keys during scheduling and serves the next ready key
-FR16: Operators can set and update throttle rates at runtime without restart
-FR17: Hierarchical throttling via multiple throttle key assignment
-FR18: Operators can attach Lua scripts to queues that execute on message enqueue
-FR19: `on_enqueue` computes and assigns fairness key, weight, and throttle keys from message headers
-FR20: Operators can attach Lua scripts that execute on message failure
-FR21: `on_failure` decides between retry (with delay) and dead-letter based on properties and attempt count
-FR22: Lua scripts can read runtime configuration values via `fila.get()`
-FR23: The broker enforces execution timeouts and memory limits on Lua scripts
-FR24: Circuit breaker falls back to safe defaults on Lua error or timeout
-FR25: Lua scripts are pre-compiled and cached for repeated execution
-FR26: External systems can set key-value config entries via the API
-FR27: Lua scripts read config at execution time via `fila.get()`
-FR28: Config changes take effect on subsequent enqueues without restart
-FR29: Operators can view current configuration state
-FR30: Operators can create named queues with Lua scripts and configuration
-FR31: Operators can delete queues and their messages
-FR32: The broker auto-creates a dead-letter queue for each queue
-FR33: Operators can view queue stats: depth, per-key throughput, scheduling state
-FR34: All queue management available through `fila-cli`
-FR35: The broker exports OpenTelemetry-compatible metrics for all operations
-FR36: Per-fairness-key throughput metrics (actual vs fair share)
-FR37: Per-throttle-key hit/pass rate metrics and token bucket state
-FR38: DRR scheduling round metrics
-FR39: Lua execution time histograms and error counters
-FR40: Tracing spans for enqueue, lease, ack, and nack
-FR41: Operators can diagnose "why was key X delayed?" from broker metrics alone
-FR42: Go client SDK
-FR43: Python client SDK
-FR44: JavaScript/Node.js client SDK
-FR45: Ruby client SDK
-FR46: Rust client SDK
-FR47: Java client SDK
-FR48: All SDKs support enqueue, streaming consume, ack, and nack
-FR49: Single binary process
-FR50: Docker image
-FR51: `cargo install` installation
-FR52: Shell script installation (`curl | bash`)
-FR53: Full crash recovery with zero message loss
-FR54: Comprehensive, example-rich documentation for all fila concepts
-FR55: Working code examples for every SDK in every supported language
-FR56: Guided tutorials for common use cases (multi-tenant fairness, per-provider throttling, retry policies)
-FR57: API reference generated from Protobuf definitions
-FR58: Structured `llms.txt` for LLM agent consumption
-FR59: Copy-paste Lua hook examples for common patterns
-FR60: Documentation as the primary onboarding experience (docs-as-product)
+FR63: Developers can run a continuous benchmark suite on every PR that detects performance regressions
+FR64: Evaluators can compare published benchmark results of Fila against Kafka, RabbitMQ, and NATS for queue workloads
+FR65: Operators can view a benchmark dashboard tracking throughput, latency percentiles, and resource usage over time
+FR66: The broker can persist messages using a purpose-built storage engine optimized for queue access patterns, replacing RocksDB
+FR67: Operators can deploy multi-node clusters with embedded Raft consensus
+FR68: Operators can create queues without managing partitions — Fila distributes and rebalances automatically
+FR69: Consumers can connect to any node and be routed to the correct partition transparently
+FR70: Operators can view cluster-wide queue stats aggregated from all nodes
+FR71: Operators can enable mTLS for transport-level security between clients and broker
+FR72: Operators can authenticate clients via API keys
+FR73: Operators can define per-queue access control policies
+FR74: Developers can consult an SDK-server compatibility matrix with documented guarantees
+FR75: Operators can deploy stability release branches with backported fixes
+FR76: Operators can monitor queues and visualize scheduling state via a web-based management GUI
+FR77: Consumers can join broker-managed consumer groups with automatic rebalancing
+FR78: Script authors can use built-in Lua helpers for common patterns (exponential backoff, tenant routing)
 
 ### NonFunctional Requirements
 
-NFR1: 100,000+ msg/s single-node throughput on commodity hardware
-NFR2: < 5% throughput cost for fair scheduling vs raw FIFO
-NFR3: Fairness accuracy within 5% of fair share under sustained load
-NFR4: Lua `on_enqueue` < 50μs p99
-NFR5: Lua `on_failure` < 50μs p99
-NFR6: Enqueue-to-lease latency < 1ms p50 when consumer is waiting
-NFR7: Token bucket decisions < 1μs overhead per scheduling loop iteration
-NFR8: Full state recovery after crash, zero message loss
-NFR9: Atomic enqueue persistence (RocksDB WriteBatch)
-NFR10: Expired visibility timeouts resolved within one scheduling cycle
-NFR11: Lua circuit breaker activates within 3 consecutive failures
-NFR12: At-least-once delivery under all failure conditions
-NFR13: Single engineer can deploy, configure, and monitor without tribal knowledge
-NFR14: Download to fair-scheduling demo in under 10 minutes
-NFR15: Single binary, no external runtime dependencies
-NFR16: All state queryable via `fila-cli` or OTel metrics
-NFR17: Runtime config changes without restart or downtime
-NFR18: OTel-compatible metrics exportable to Prometheus, Grafana, Datadog
-NFR19: gRPC best practices (status codes, metadata propagation, deadlines)
-NFR20: Protobuf backward compatibility across minor versions
-NFR21: Idiomatic SDK conventions per target language
+NFR22: Linear throughput scaling: 2 nodes >= 1.8x single-node throughput
+NFR23: Automatic failover within 10 seconds of node failure detection
+NFR24: Zero message loss during planned node additions and removals
+NFR25: Consumer reconnection to healthy nodes within 5 seconds of partition
+NFR26: Cluster state convergence within 30 seconds of membership change
+NFR27: mTLS handshake < 5ms overhead per connection
+NFR28: API key validation < 100us per request
+NFR29: Secure defaults — authentication required unless explicitly disabled
+NFR30: Queue-optimized write throughput >= 2x RocksDB for append-heavy workloads
+NFR31: Predictable latency — no compaction-induced latency spikes > 10ms p99
+NFR32: Efficient TTL expiry without full-table scans
+NFR33: Storage footprint < 1.5x raw message data (overhead from indexing and metadata)
 
 ### Additional Requirements
 
-- Architecture specifies a Cargo workspace foundation with 4 crates: fila-proto, fila-core, fila-server, fila-cli — this is the starter/greenfield template (impacts Epic 1, Story 1)
-- Redis-inspired single-threaded scheduler core with lock-free crossbeam IO channels — concurrency model is a critical architectural decision
-- RocksDB with 6 column families (default, messages, leases, lease_expiry, queues, state) — specific key encoding scheme with big-endian composite keys
-- gRPC only via tonic — single protocol for hot path and admin operations
-- Protobuf organized in 3 files: messages.proto, service.proto, admin.proto
-- mlua (Lua 5.4) with pre-compiled scripts, execution timeouts, memory limits, and circuit breaker
-- Two-layer configuration: static TOML file + runtime gRPC key-value store in RocksDB state CF
-- thiserror for typed errors in fila-core, mapped to gRPC status codes at server boundary
-- Four-layer testing: unit tests, integration tests (cargo nextest), property-based (proptest), benchmarks (criterion)
-- CI/CD via GitHub Actions: PR checks (fmt, clippy, test, bench) + Docker builds + release binaries
-- Distribution channels: Docker (ghcr.io), cargo install, curl|bash shell script, GitHub Releases
-- UUIDv7 for message IDs — time-ordered, globally unique, no coordination
-- Graceful shutdown sequence: stop accepting connections → drain scheduler → flush RocksDB WAL → exit
-- In-memory state rebuilt on startup: DRR state, token buckets, consumer registry, Lua VMs
-- AGPLv3 license required; all dependencies must be AGPL-compatible
-- Startup recovery sequence: open RocksDB → load queues → rebuild active keys → restore leases → reclaim expired leases
+- Storage engine and clustering are a coupled workstream — must be designed together. Storage abstraction should be partition-aware from day 1. Build single-node first, extend to multi-node.
+- "Zero graduation" positioning requires published benchmark data — teams consume published benchmarks during evaluation, rarely run their own.
+- Benchmark yourself first (throughput ceiling, latency percentiles, RocksDB compaction impact, memory footprint), competitive comparison second.
+- Continuous benchmarks on PRs — shift-left, not just per-release.
+- Single binary must stay single binary — embedded Raft, no external consensus dependencies. Follows etcd/CockroachDB precedent.
+- Queue semantics never leak the log — no offsets, no rebalancing exposed to users. Invisible partitioning.
+- Auth minimum viable — mTLS + API keys. Not full RBAC from day one.
+- Release engineering — versioning scheme TBD (semver vs calver). SDK compatibility contract needed. Distribution channels: Homebrew, apt beyond existing curl|bash/cargo install/Docker.
+- DX items (web dashboard, consumer groups, Lua helpers) are lower priority.
+- Memphis cautionary tale — "simpler than Kafka" alone is not durable. Fairness + Lua scripting are the differentiators.
 
 ### FR Coverage Map
 
-FR1: Epic 1 — Enqueue messages with headers and payload
-FR2: Epic 1 — Receive ready messages via streaming lease
-FR3: Epic 1 — Acknowledge successful processing
-FR4: Epic 2 — Negatively acknowledge failed processing
-FR5: Epic 2 — Visibility timeout expiry and redelivery
-FR6: Epic 3 — Route failed messages to dead-letter queue
-FR7: Epic 5 — Redrive messages from DLQ to source queue
-FR8: Epic 2 — Assign messages to fairness groups
-FR9: Epic 2 — Deficit Round Robin scheduling across fairness groups
-FR10: Epic 2 — Weighted throughput for fairness groups
-FR11: Epic 2 — Only active groups participate in scheduling
-FR12: Epic 2 — Fairness accuracy within 5% of fair share
-FR13: Epic 4 — Per-key token bucket rate limiting
-FR14: Epic 4 — Multiple simultaneous throttle keys
-FR15: Epic 4 — Skip throttled keys during scheduling
-FR16: Epic 4 — Runtime throttle rate updates
-FR17: Epic 4 — Hierarchical throttling via multiple keys
-FR18: Epic 3 — Attach Lua scripts for on_enqueue
-FR19: Epic 3 — on_enqueue computes fairness key, weight, throttle keys
-FR20: Epic 3 — Attach Lua scripts for on_failure
-FR21: Epic 3 — on_failure decides retry vs dead-letter
-FR22: Epic 3 — Lua reads runtime config via fila.get()
-FR23: Epic 3 — Execution timeouts and memory limits on Lua
-FR24: Epic 3 — Circuit breaker with safe defaults
-FR25: Epic 3 — Pre-compiled and cached Lua scripts
-FR26: Epic 5 — Set key-value config entries via API
-FR27: Epic 5 — Lua reads config at execution time
-FR28: Epic 5 — Config changes without restart
-FR29: Epic 5 — View current configuration state
-FR30: Epic 1 — Create named queues with config
-FR31: Epic 1 — Delete queues and messages
-FR32: Epic 3 — Auto-create dead-letter queue per queue
-FR33: Epic 5 — View queue stats and scheduling state
-FR34: Epic 5 — All queue management via fila-cli
-FR35: Epic 6 — OTel-compatible metrics for all operations
-FR36: Epic 6 — Per-fairness-key throughput metrics
-FR37: Epic 6 — Per-throttle-key hit/pass rate metrics
-FR38: Epic 6 — DRR scheduling round metrics
-FR39: Epic 6 — Lua execution time histograms and error counters
-FR40: Epic 6 — Tracing spans for enqueue, lease, ack, nack
-FR41: Epic 6 — Diagnose "why was key X delayed?" from metrics
-FR42: Epic 9 — Go client SDK
-FR43: Epic 9 — Python client SDK
-FR44: Epic 9 — JavaScript/Node.js client SDK
-FR45: Epic 9 — Ruby client SDK
-FR46: Epic 7 — Rust client SDK
-FR47: Epic 9 — Java client SDK
-FR48: Epic 7 + Epic 9 — All SDKs support enqueue, streaming consume, ack, nack
-FR49: Epic 1 — Single binary process
-FR50: Epic 10 — Docker image
-FR51: Epic 10 — cargo install installation
-FR52: Epic 10 — Shell script installation
-FR53: Epic 1 — Full crash recovery with zero message loss
-FR54: Epic 10 — Comprehensive, example-rich documentation
-FR55: Epic 10 — Working code examples per SDK per language
-FR56: Epic 10 — Guided tutorials for common use cases
-FR57: Epic 10 — API reference generated from Protobuf
-FR58: Epic 10 — Structured llms.txt for LLM agents
-FR59: Epic 10 — Copy-paste Lua hook examples
-FR60: Epic 10 — Documentation as primary onboarding experience
+FR63: Epic 12 — Continuous benchmark suite on every PR
+FR64: Epic 12 — Published competitive benchmarks vs Kafka/RabbitMQ/NATS
+FR65: Epic 12 — Benchmark dashboard — throughput, latency, resources over time
+FR66: Epic 13 — Purpose-built storage engine replacing RocksDB
+FR67: Epic 14 — Multi-node clusters with embedded Raft
+FR68: Epic 14 — Invisible partitioning — automatic queue distribution
+FR69: Epic 14 — Transparent consumer routing to correct partition
+FR70: Epic 14 — Cluster-wide aggregated queue stats
+FR71: Epic 15 — mTLS for transport security
+FR72: Epic 15 — API key authentication
+FR73: Epic 15 — Per-queue access control policies
+FR74: Epic 16 — SDK-server compatibility matrix
+FR75: Epic 16 — Stability release branches with backported fixes
+FR76: Epic 17 — Web-based management GUI
+FR77: Epic 17 — Broker-managed consumer groups
+FR78: Epic 17 — Built-in Lua helpers for common patterns
 
 ## Epic List
 
-### Epic 1: Foundation & End-to-End Messaging
-Producers can enqueue messages and consumers can receive and acknowledge them through gRPC. The broker runs as a single binary with persistent RocksDB storage, crash recovery, and basic queue management. This establishes the end-to-end skeleton that all subsequent epics build upon.
-**FRs covered:** FR1, FR2, FR3, FR30, FR31, FR49, FR53
+### Epic 12: Benchmarks & Competitive Positioning
+Developers get automatic performance regression detection on every PR. Evaluators can compare Fila's published benchmark data against Kafka, RabbitMQ, and NATS for queue workloads. Operators can track throughput, latency percentiles, and resource usage over time. This is the data-driven foundation — you can't improve what you can't measure.
+**FRs covered:** FR63, FR64, FR65
 
-### Epic 2: Fair Scheduling & Message Reliability
-The broker delivers messages fairly across groups using Deficit Round Robin. Consumers can nack failed messages, and visibility timeouts enable at-least-once delivery. This is the core differentiator — the scheduling primitive that no other open-source broker provides.
-**FRs covered:** FR4, FR5, FR8, FR9, FR10, FR11, FR12
+### Epic 13: Purpose-Built Storage Engine
+Operators get predictable latency and higher throughput from a storage engine optimized for queue access patterns — sequential writes, TTL expiry, consumer cursors, high-throughput append. Replaces RocksDB with a purpose-built engine. The storage abstraction is designed with partition-awareness from day 1 (enabling Epic 14) but delivers standalone value: no compaction stalls, better write throughput, efficient TTL expiry.
+**FRs covered:** FR66
+**NFRs addressed:** NFR30, NFR31, NFR32, NFR33
 
-### Epic 3: Lua Rules Engine & Dead-Letter Handling
-Users define scheduling policy through Lua scripts. `on_enqueue` assigns fairness keys, weights, and throttle keys from message headers. `on_failure` controls retry behavior and routes exhausted messages to dead-letter queues. Scripts are sandboxed with timeouts, memory limits, and circuit breaker fallback.
-**FRs covered:** FR6, FR18, FR19, FR20, FR21, FR22, FR23, FR24, FR25, FR32
+### Epic 14: Clustering & Horizontal Scaling
+Operators can deploy multi-node Fila clusters with embedded Raft consensus — zero external dependencies, single binary stays single binary. Users create queues; Fila distributes and rebalances partitions automatically. Consumers connect to any node and are transparently routed. Queue semantics never leak the log — no offsets, no rebalancing exposed to users. The "zero graduation" vision realized: scales like Kafka, works like a queue.
+**FRs covered:** FR67, FR68, FR69, FR70
+**NFRs addressed:** NFR22, NFR23, NFR24, NFR25, NFR26
 
-### Epic 4: Throttling & Rate Limiting
-Per-key token bucket rate limiting integrated into the scheduler. The broker skips throttled keys during DRR scheduling and serves the next ready key. Messages can have multiple simultaneous throttle keys for hierarchical rate limiting. Zero wasted work — consumers never receive throttled messages.
-**FRs covered:** FR13, FR14, FR15, FR16, FR17
+### Epic 15: Authentication & Security
+Operators can deploy Fila in real production environments with transport security and client authentication. mTLS secures the wire, API keys authenticate clients, per-queue ACLs control access. Secure defaults — authentication required unless explicitly disabled.
+**FRs covered:** FR71, FR72, FR73
+**NFRs addressed:** NFR27, NFR28, NFR29
 
-### Epic 5: Operator Experience (Admin, Config & CLI)
-Operators manage runtime configuration via the gRPC API, redrive DLQ messages, inspect queue stats and per-key metrics, and perform all admin tasks through `fila-cli`. Config changes take effect without restart, enabling live operational adjustments.
-**FRs covered:** FR7, FR26, FR27, FR28, FR29, FR33, FR34
+### Epic 16: Release Engineering & SDK Compatibility
+Teams get stability guarantees and version compatibility contracts. An SDK-server compatibility matrix documents which SDK versions work with which server versions. Operators can deploy stability release branches with backported fixes. Versioning scheme (semver/calver) formalized.
+**FRs covered:** FR74, FR75
 
-### Epic 6: Observability & Diagnostics
-Full observability via OpenTelemetry metrics and distributed tracing. Per-fairness-key throughput, per-throttle-key hit rates, DRR scheduling rounds, Lua execution histograms. Operators can answer "why was key X delayed?" from broker metrics alone.
-**FRs covered:** FR35, FR36, FR37, FR38, FR39, FR40, FR41
-
-### Epic 7: Rust Client SDK
-Developers integrate Fila into Rust applications using an idiomatic client SDK built as a thin wrapper over tonic gRPC client. This SDK also serves as the client for the blackbox e2e test suite in Epic 8.
-**FRs covered:** FR46, FR48 (partial — Rust only)
-
-### Epic 8: E2E Tests & Scheduler Refactoring
-Build a true blackbox e2e test suite using the Rust SDK (for producer/consumer operations) and the `fila` CLI binary (for admin operations), then use it as a safety net to decompose the monolithic `scheduler.rs` (6,800+ lines) into focused submodules. The observability layer from Epic 6 provides runtime verification during restructuring.
-
-### Epic 9: Client SDKs
-Developers integrate Fila into applications using idiomatic client SDKs in five additional languages: Go, Python, JavaScript/Node.js, Ruby, and Java. All SDKs support the full hot-path API: enqueue, streaming consume, ack, and nack.
-**FRs covered:** FR42, FR43, FR44, FR45, FR47, FR48 (partial — 5 languages)
-
-### Epic 10: Distribution & Documentation
-Users install Fila via Docker, `cargo install`, or `curl | bash` shell script. Comprehensive documentation — tutorials, API reference, Lua hook examples, and `llms.txt` — enables onboarding in under 10 minutes. Documentation is the primary adoption driver.
-**FRs covered:** FR50, FR51, FR52, FR54, FR55, FR56, FR57, FR58, FR59, FR60
+### Epic 17: Developer Experience
+Operators can monitor queues and visualize real-time scheduling state via a web-based management GUI. Consumers can join broker-managed consumer groups with automatic rebalancing. Script authors get built-in Lua helpers for common patterns — exponential backoff, tenant routing — reducing boilerplate.
+**FRs covered:** FR76, FR77, FR78
 
 ---
 
-## Epic 1: Foundation & End-to-End Messaging
+## Epic 12: Benchmarks & Competitive Positioning
 
-Producers can enqueue messages and consumers can receive and acknowledge them through gRPC. The broker runs as a single binary with persistent RocksDB storage, crash recovery, and basic queue management. This establishes the end-to-end skeleton that all subsequent epics build upon.
+Developers get automatic performance regression detection on every PR. Evaluators can compare Fila's published benchmark data against Kafka, RabbitMQ, and NATS for queue workloads. Operators can track throughput, latency percentiles, and resource usage over time. This is the data-driven foundation — you can't improve what you can't measure.
 
-### Story 1.1: Cargo Workspace & Protobuf Definitions
+### Story 12.1: Benchmark Harness & Self-Benchmarking
 
 As a developer,
-I want the project workspace and protobuf API definitions to be established,
-So that all crates have a shared foundation and generated types to build upon.
+I want a comprehensive benchmark suite that measures Fila's single-node performance across all critical dimensions,
+So that we have a quantified baseline for optimization and can validate Phase 1 NFR targets.
 
 **Acceptance Criteria:**
 
-**Given** no project structure exists
-**When** the workspace is initialized
-**Then** a Cargo workspace root exists with four member crates: `fila-proto`, `fila-core`, `fila-server`, `fila-cli`
-**And** `proto/fila/v1/messages.proto` defines the `Message` envelope with id, headers, payload, timestamps, and metadata fields
-**And** `proto/fila/v1/service.proto` defines `FilaService` with `Enqueue`, `Lease`, `Ack`, and `Nack` RPCs
-**And** `proto/fila/v1/admin.proto` defines `FilaAdmin` with `CreateQueue`, `DeleteQueue`, `SetConfig`, `GetConfig`, `GetStats`, and `Redrive` RPCs
-**And** `fila-proto` has a `build.rs` that runs `prost-build` and `tonic-build` to generate Rust types and gRPC service/client code
-**And** `fila-proto/src/lib.rs` re-exports all generated types and services
-**And** all four crates compile successfully with `cargo build`
-**And** the workspace `Cargo.toml` uses workspace-level dependency management
-**And** a `LICENSE` file with AGPLv3 text is present at the workspace root
+**Given** the Fila server is running
+**When** the benchmark suite executes
+**Then** it measures single-node enqueue throughput (msg/s) for 1KB payload messages
+**And** it measures enqueue-to-consume latency at p50/p95/p99 under varying load levels (light, moderate, saturated)
+**And** it measures throughput with fair scheduling enabled vs raw FIFO to validate NFR2 (<5% overhead)
+**And** it measures fairness accuracy under sustained load across 5+ keys with varying weights to validate NFR3 (within 5%)
+**And** it measures Lua `on_enqueue` execution latency at p99 to validate NFR4 (<50us)
+**And** it measures queue depth scaling: enqueue/consume throughput at 1M and 10M queued messages
+**And** it measures fairness key cardinality impact: 10, 1K, 10K, and 100K active keys
+**And** it measures consumer concurrency impact: 1, 10, and 100 simultaneous consumers
+**And** it measures memory footprint under load (RSS)
+**And** it measures RocksDB compaction impact on tail latency (p99 during active compaction vs idle)
+**And** benchmark results are output in machine-readable format (JSON) for CI consumption
+**And** the benchmark crate is added to the Cargo workspace as `fila-bench`
+**And** `cargo bench -p fila-bench` runs the full suite
+**And** CI pipeline is updated to include the new crate (build + clippy)
 
-### Story 1.2: CI/CD Pipeline
+### Story 12.2: CI Regression Detection
 
 As a developer,
-I want automated CI for every PR from the start of the project,
-So that code quality is enforced continuously and regressions are caught immediately.
+I want automatic performance regression detection on every PR,
+So that performance degradation is caught before merge.
 
 **Acceptance Criteria:**
 
-**Given** the Cargo workspace compiles successfully
-**When** a GitHub Actions CI workflow is created
-**Then** `.github/workflows/ci.yml` runs on every pull request and push to main
-**And** the workflow runs `cargo fmt --check` to verify code formatting
-**And** the workflow runs `cargo clippy` with warnings as errors
-**And** the workflow runs `cargo nextest run` to execute all tests
-**And** the workflow runs `cargo bench` (informational, no regression gate)
-**And** the CI pipeline passes on the initial workspace with all four crates
+**Given** a PR is opened against the repository
+**When** the CI benchmark workflow runs
+**Then** the benchmark suite from Story 12.1 executes on the PR branch
+**And** results are compared against stored baselines from the main branch
+**And** if any key metric regresses beyond a configurable threshold (default: 10%), the CI check fails
+**And** the PR gets a comment with a summary table showing metric changes (improved / regressed / unchanged)
+**And** baseline results are automatically updated when PRs merge to main
+**And** baseline storage uses GitHub Actions cache or artifact storage
+**And** the workflow uses statistical methods (multiple runs, median of N) to reduce CI environment variance
+**And** developers can manually update baselines via workflow dispatch when intentional trade-offs are made
+**And** the benchmark workflow is triggered on the feature branch to verify it works before merge (per CLAUDE.md CI workflow verification rule)
 
-**Given** a commit is merged to main
-**When** the main CI runs
-**Then** all PR checks run (fmt, clippy, test, bench)
+### Story 12.3: Competitive Benchmarks
 
-**Given** a version tag is pushed
-**When** the release workflow runs
-**Then** all checks pass
-**And** release binaries are built for all target platforms (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64)
-**And** a GitHub Release is created with the binaries and changelog
-**And** Docker image is tagged with the version and pushed
-
-### Story 1.3: Core Domain Types & Storage Layer
-
-As a developer,
-I want message domain types and a persistent storage layer with RocksDB,
-So that messages can be durably stored and retrieved with correct ordering guarantees.
+As an evaluator,
+I want to compare Fila's benchmark results against Kafka, RabbitMQ, and NATS for queue workloads,
+So that I can make informed adoption decisions based on data.
 
 **Acceptance Criteria:**
 
-**Given** the fila-proto crate provides generated protobuf types
-**When** the storage layer is implemented in fila-core
-**Then** a `Storage` trait is defined with methods for message CRUD, lease management, queue config, and state operations
-**And** a `RocksDbStorage` implementation opens RocksDB with column families: `default`, `messages`, `leases`, `lease_expiry`, `queues`, `state`
-**And** message keys in the `messages` CF use the format `{queue_id}:{fairness_key}:{enqueue_ts_ns}:{msg_id}` with big-endian numeric encoding
-**And** lease keys use `{queue_id}:{msg_id}` format in the `leases` CF
-**And** lease expiry keys use `{expiry_ts_ns}:{queue_id}:{msg_id}` format in the `lease_expiry` CF for efficient timeout scanning
-**And** message IDs are UUIDv7 (time-ordered, globally unique)
-**And** all multi-key mutations use RocksDB `WriteBatch` for atomicity
-**And** a `FilaError` enum using `thiserror` is defined with variants: `QueueNotFound`, `MessageNotFound`, `LuaError`, `StorageError`, `InvalidConfig`, `QueueAlreadyExists`
-**And** unit tests verify key encoding produces correct lexicographic ordering
-**And** unit tests verify WriteBatch atomicity (all-or-nothing writes)
+**Given** Docker Compose configurations exist for each competitor (Kafka, RabbitMQ, NATS)
+**When** the competitive benchmark suite runs
+**Then** each broker is tested with identical workloads: single-producer/single-consumer throughput, fan-out (1 producer / N consumers), multi-producer, and varying message sizes (64B, 1KB, 64KB)
+**And** queue-specific workloads are tested: enqueue → consume → ack lifecycle throughput, visibility timeout / redelivery overhead
+**And** Fila-only workloads are included: fair scheduling overhead, throttle-aware delivery (no equivalent in competitors)
+**And** latency is measured at p50/p95/p99 for each broker under identical load
+**And** the methodology is documented: hardware specs, broker configuration, warmup period, measurement window, number of runs
+**And** results are reproducible: a single make target (e.g., `make bench-competitive`) runs the full suite locally
+**And** competitor configurations use recommended production settings (not default development settings)
+**And** results include resource utilization: CPU, memory, disk I/O per broker during the benchmark
 
-### Story 1.4: Broker Core & Scheduler Loop
+### Story 12.4: Published Results & Benchmark Dashboard
 
-As a developer,
-I want the single-threaded scheduler core with channel-based communication,
-So that all state mutations happen on a dedicated thread without lock contention.
+As an evaluator,
+I want to view Fila's benchmark results and competitive positioning in published form,
+So that I can reference performance data during architecture evaluation.
 
 **Acceptance Criteria:**
 
-**Given** the storage layer is available
-**When** the broker core is implemented
-**Then** a `Broker` struct spawns a dedicated `std::thread` for the scheduler core
-**And** `crossbeam-channel` bounded channels connect IO threads (inbound) to the scheduler (outbound)
-**And** a `SchedulerCommand` enum defines all commands: `Enqueue`, `Ack`, `Nack`, `RegisterConsumer`, `UnregisterConsumer`, `Admin`
-**And** each command variant includes a `oneshot::Sender` for request-response patterns (where applicable)
-**And** the scheduler core runs a tight event loop: drain inbound commands (non-blocking `try_recv`), then park with timeout if idle
-**And** the scheduler loop contains no async code and never blocks on IO
-**And** the `Broker` provides a public API for sending commands that internally sends via the crossbeam channel
-**And** `BrokerConfig` struct deserializes from TOML with sections for server, scheduler, lua, and telemetry
-**And** graceful shutdown is supported: signal → stop accepting commands → drain in-flight → flush RocksDB WAL → exit
-**And** a `tracing` subscriber is configured for structured stdout logging (JSON in release, pretty-print in debug) so all subsequent code can use `tracing::info!`, `tracing::warn!`, etc. from day one
-**And** all public functions in the broker module use `#[tracing::instrument]` or manual spans per the Architecture enforcement guidelines
-**And** unit tests verify the scheduler processes commands in order
+**Given** benchmark results exist from Stories 12.1 and 12.3
+**When** the results are published
+**Then** a `docs/benchmarks.md` page presents self-benchmark results with formatted tables for throughput, latency percentiles, and scaling curves
+**And** the competitive comparison is presented as tables with clear methodology links
+**And** the README includes a performance summary line linking to the full benchmarks page
+**And** historical benchmark results are tracked in the repository (CI updates results on each release)
+**And** the benchmark methodology page is detailed enough for external reproduction: exact commands, hardware specs, configuration files
+**And** the page acknowledges limitations: hardware-specific results, configuration choices, workload representativeness
+**And** results include the Fila version and commit hash for traceability
 
-### Story 1.5: gRPC Server & Queue Management
+---
+
+## Epic 13: Purpose-Built Storage Engine
+
+Operators get predictable latency and higher throughput from a storage engine optimized for queue access patterns — sequential writes, TTL expiry, consumer cursors, high-throughput append. Replaces RocksDB with a purpose-built engine. The storage abstraction is designed with partition-awareness from day 1 (enabling Epic 14) but delivers standalone value: no compaction stalls, better write throughput, efficient TTL expiry.
+
+### Story 13.1: Storage Trait Abstraction & RocksDB Adapter
+
+As a developer,
+I want a clean storage engine trait that abstracts away the storage backend,
+So that the storage implementation can be swapped without changing broker logic.
+
+**Acceptance Criteria:**
+
+**Given** the existing codebase uses RocksDB directly throughout fila-core
+**When** the storage abstraction is implemented
+**Then** a `StorageEngine` trait is defined with methods covering all current storage operations: message CRUD, lease management, queue config, state/config operations, expiry scanning
+**And** the trait design is partition-namespace-aware: all operations accept a partition identifier (initially a single default partition, extensible to multi-partition for Epic 14)
+**And** a `RocksDbEngine` struct implements the `StorageEngine` trait, wrapping all existing RocksDB logic
+**And** all broker and scheduler code is migrated from direct RocksDB calls to `StorageEngine` trait methods
+**And** all existing unit and integration tests pass without modification to test assertions (only internal wiring changes)
+**And** the e2e test suite (11 tests) passes with the RocksDB adapter
+**And** the trait is defined in fila-core with no RocksDB-specific types in the trait interface (RocksDB is an implementation detail)
+**And** the partition namespace parameter has a default single-partition implementation that preserves current key encoding
+
+### Story 13.2: Write Path — WAL & Segment Log
+
+As a developer,
+I want a write-ahead log and segment-based storage engine optimized for queue write patterns,
+So that append-heavy workloads achieve higher throughput than RocksDB.
+
+**Acceptance Criteria:**
+
+**Given** the `StorageEngine` trait exists from Story 13.1
+**When** the new write path is implemented
+**Then** an append-only WAL accepts writes (enqueue, ack, nack, lease, config) as serialized entries
+**And** the WAL is fsync'd at configurable intervals (default: per batch or every N ms) for durability guarantees
+**And** WAL entries are grouped into segments of configurable size (default: 64MB)
+**And** write batching groups multiple operations into a single WAL append for throughput
+**And** completed segments are immutable and available for background processing
+**And** crash recovery replays the WAL from the last checkpoint to rebuild state
+**And** the write path implements the `StorageEngine` trait's write methods
+**And** unit tests verify WAL crash recovery: write N entries, simulate crash, replay, verify all entries recovered
+**And** unit tests verify segment rotation: write beyond segment size, verify new segment created, old segment sealed
+
+### Story 13.3: Read Path & Indexing
+
+As a developer,
+I want efficient index structures for queue read patterns,
+So that message retrieval, TTL expiry, and consumer cursor tracking are fast without full scans.
+
+**Acceptance Criteria:**
+
+**Given** the WAL and segment log exist from Story 13.2
+**When** the read path and index structures are implemented
+**Then** an in-memory message index maps `(queue, fairness_key)` to ordered message references for O(1) next-message lookup
+**And** the message index is rebuilt from segments + WAL on startup (crash recovery)
+**And** a TTL expiry index tracks message expiration times, supporting efficient range queries without full-table scans (NFR32)
+**And** a lease tracking index maps active leases to expiry times for visibility timeout scanning
+**And** consumer cursor state tracks per-consumer delivery position for streaming
+**And** the read path implements the `StorageEngine` trait's read and scan methods
+**And** all index structures are maintained incrementally on writes (not rebuilt per-read)
+**And** unit tests verify: message retrieval by queue+fairness_key ordering, TTL expiry scanning returns only expired messages, lease expiry scanning correctness
+**And** the read path handles segment boundaries transparently (messages spanning multiple segments)
+
+### Story 13.4: Background Maintenance & Compaction
 
 As an operator,
-I want to start the broker and create/delete queues via gRPC,
-So that I can set up the message infrastructure for my application.
+I want background storage maintenance that doesn't cause latency spikes,
+So that the broker maintains predictable performance under sustained load.
 
 **Acceptance Criteria:**
 
-**Given** the broker core is running with the scheduler thread
-**When** the gRPC server starts
-**Then** a tonic gRPC server listens on the configured address (default `0.0.0.0:5555`)
-**And** `CreateQueue` RPC accepts a queue name and configuration, persists it to the `queues` CF, and returns success
-**And** `CreateQueue` returns `ALREADY_EXISTS` status if the queue name is taken
-**And** `DeleteQueue` RPC removes the queue definition and all its messages from storage
-**And** `DeleteQueue` returns `NOT_FOUND` status if the queue does not exist
-**And** gRPC handlers send `SchedulerCommand::Admin` variants to the scheduler via crossbeam channel
-**And** the scheduler processes admin commands and replies via oneshot channel
-**And** gRPC error responses use standard status codes: `NOT_FOUND`, `ALREADY_EXISTS`, `INVALID_ARGUMENT`, `INTERNAL`
-**And** the server binary (`fila-server`) reads config from `fila.toml` or `/etc/fila/fila.toml`, with env var overrides (`FILA_SERVER__LISTEN_ADDR`)
-**And** an integration test creates a queue, verifies it exists, deletes it, and verifies it is gone
+**Given** the WAL, segment log, and index structures exist from Stories 13.2–13.3
+**When** background maintenance runs
+**Then** acknowledged messages are compacted from segments (dead entry removal) without blocking the write or read path
+**And** compaction is rate-limited to prevent I/O spikes that affect foreground latency (NFR31: no spikes > 10ms p99)
+**And** TTL-expired messages are reclaimed during compaction without requiring full-segment scans
+**And** storage footprint stays below 1.5x raw message data after compaction (NFR33)
+**And** compaction runs on a background thread with configurable scheduling (interval or threshold-based)
+**And** compaction progress is observable via OTel metrics: segments compacted, bytes reclaimed, compaction duration
+**And** unit tests verify: compaction removes acknowledged messages, compaction does not affect in-flight reads, storage footprint stays within bounds after compaction cycle
+**And** latency benchmarks during active compaction verify p99 stays under 10ms (NFR31)
 
-### Story 1.6: Message Enqueue
+### Story 13.5: Integration, Cutover & Validation
 
-As a producer,
-I want to enqueue messages with headers and payload to a named queue,
-So that my messages are durably stored and available for consumers.
+As an operator,
+I want the new storage engine to replace RocksDB as the default backend,
+So that I get better performance and predictable latency without changing my deployment.
 
 **Acceptance Criteria:**
 
-**Given** a queue has been created
-**When** a producer calls the `Enqueue` RPC with a queue name, headers map, and payload bytes
-**Then** the scheduler assigns a UUIDv7 message ID and a default fairness key (value `"default"`)
-**And** the message is persisted to the `messages` CF via WriteBatch with the composite key format
-**And** the `EnqueueResponse` returns the assigned message ID
-**And** calling `Enqueue` on a non-existent queue returns `NOT_FOUND` status
-**And** headers can contain arbitrary string key-value pairs
-**And** payload is stored as opaque bytes (broker never inspects content)
-**And** an integration test enqueues 100 messages and verifies all are persisted with unique, time-ordered IDs
+**Given** the new storage engine implements the full `StorageEngine` trait from Stories 13.2–13.4
+**When** the engine is wired as the default storage backend
+**Then** all existing unit and integration tests pass with the new engine
+**And** all e2e blackbox tests pass with the new engine
+**And** a configuration option selects the storage backend: `storage.engine = "fila"` (default) or `storage.engine = "rocksdb"` (legacy)
+**And** RocksDB remains available as a fallback for one release cycle
+**And** a benchmark comparison (using the suite from Epic 12) shows the new engine meets NFR30 (>= 2x write throughput), NFR31 (no p99 spikes > 10ms), NFR32 (efficient TTL), NFR33 (< 1.5x footprint)
+**And** the migration path for existing deployments is documented: new installations use the new engine by default, existing RocksDB deployments continue working with `storage.engine = "rocksdb"`
+**And** no data migration tool is needed — engine selection is per-deployment, not per-upgrade
 
-### Story 1.7: Consumer Lease & Message Delivery
+---
+
+## Epic 14: Clustering & Horizontal Scaling
+
+Operators can deploy multi-node Fila clusters with embedded Raft consensus — zero external dependencies, single binary stays single binary. Users create queues; Fila distributes and rebalances partitions automatically. Consumers connect to any node and are transparently routed. Queue semantics never leak the log — no offsets, no rebalancing exposed to users. The "zero graduation" vision realized: scales like Kafka, works like a queue.
+
+### Story 14.1: Raft Consensus & Cluster Bootstrap
+
+As an operator,
+I want to bootstrap a multi-node Fila cluster using embedded Raft consensus,
+So that I can deploy highly available message infrastructure without external dependencies.
+
+**Acceptance Criteria:**
+
+**Given** Fila runs as a single binary
+**When** cluster mode is configured
+**Then** Fila embeds a Raft consensus implementation (e.g., openraft) compiled into the same binary — no external consensus service required
+**And** cluster configuration is specified via `fila.toml`: `cluster.enabled`, `cluster.node_id`, `cluster.peers` (initial peer list), `cluster.bind_addr` (intra-cluster communication)
+**And** a single-node cluster can be bootstrapped with `cluster.bootstrap = true`
+**And** additional nodes join an existing cluster by specifying seed peers
+**And** leader election completes within the Raft election timeout (configurable, default 1 second)
+**And** cluster membership changes (add/remove node) are committed via Raft log entries
+**And** the Raft state machine manages cluster metadata: node membership, partition assignments, queue-to-partition mapping
+**And** intra-cluster communication uses a dedicated gRPC service (separate from client-facing RPCs)
+**And** single-node mode (`cluster.enabled = false`, the default) continues to work exactly as before — zero behavior change for existing deployments
+**And** integration tests verify: 3-node cluster bootstrap, leader election, membership change (add 4th node, remove a node)
+
+### Story 14.2: Partitioned Queue Management
+
+As an operator,
+I want queues to be automatically distributed across cluster nodes,
+So that I don't have to manually manage partitions or data placement.
+
+**Acceptance Criteria:**
+
+**Given** a Fila cluster is running with multiple nodes (from Story 14.1)
+**When** an operator creates a queue
+**Then** the queue is assigned to one or more partitions based on a configurable partition count (default: number of nodes)
+**And** partitions are distributed across nodes for balanced load
+**And** the partition assignment is stored in Raft-replicated cluster metadata
+**And** when a node is added, partitions are rebalanced automatically across the new topology
+**And** when a node is removed, its partitions are reassigned to remaining nodes
+**And** rebalancing is gradual (one partition at a time) to minimize disruption
+**And** partition data is migrated as part of rebalancing — the source node streams partition data to the destination node
+**And** queue creation, deletion, and management RPCs work from any node (forwarded to leader if needed)
+**And** operators never interact with partitions directly — `CreateQueue` and `DeleteQueue` RPCs are unchanged (FR68)
+**And** integration tests verify: create queue on 3-node cluster, verify partitions distributed, add 4th node, verify rebalance, remove a node, verify reassignment
+
+### Story 14.3: Request Routing & Transparent Consumer Delivery
 
 As a consumer,
-I want to receive ready messages from a queue via a streaming connection,
-So that I can process messages as they become available without polling.
+I want to connect to any Fila node and have my requests served correctly,
+So that I don't need to know which node owns which partition.
 
 **Acceptance Criteria:**
 
-**Given** messages have been enqueued to a queue
-**When** a consumer calls the `Lease` RPC with a queue name
-**Then** a server-streaming gRPC connection is established
-**And** the scheduler registers the consumer with a per-consumer `mpsc::Sender`
-**And** pending messages are delivered to the consumer through the stream
-**And** each delivered message includes: message ID, headers, payload, metadata (fairness_key, attempt count)
-**And** a lease is created in the `leases` CF with `{queue_id}:{msg_id}` → `{consumer_id}:{expiry_ts_ns}`
-**And** a lease expiry entry is created in the `lease_expiry` CF with `{expiry_ts_ns}:{queue_id}:{msg_id}`
-**And** the visibility timeout is configurable per queue (default 30 seconds)
-**And** when the consumer disconnects, the scheduler unregisters the consumer
-**And** multiple consumers can lease from the same queue simultaneously (each gets different messages)
-**And** an integration test enqueues 10 messages, opens a lease stream, and receives all 10 messages
+**Given** a multi-node cluster with partitioned queues (from Story 14.2)
+**When** a client sends an Enqueue request to any node
+**Then** the receiving node routes the request to the node owning the target partition
+**And** routing is transparent — the client receives a normal response regardless of which node it connected to
+**And** the routing layer uses the partition assignment table from Raft metadata for lookup
 
-### Story 1.8: Message Acknowledgment
+**Given** a client opens a Consume stream on any node
+**When** the queue has partitions on multiple nodes
+**Then** the consuming node merges streams from all partition owners and applies DRR scheduling across them (FR69)
+**And** Ack and Nack requests are routed to the correct partition owner based on message ID
+**And** routing adds minimal latency overhead (one network hop for cross-node requests)
+**And** clients that connect directly to the partition owner get zero routing overhead
+**And** SDK connection strings accept multiple node addresses for automatic failover
+**And** integration tests verify: producer enqueues via node A, consumer receives via node B, ack via node C — full lifecycle across nodes
+
+### Story 14.4: Replication & Failover
+
+As an operator,
+I want automatic failover when a node goes down,
+So that message processing continues without manual intervention or data loss.
+
+**Acceptance Criteria:**
+
+**Given** a multi-node cluster with partitioned queues (from Stories 14.1–14.3)
+**When** partition data is written
+**Then** each partition is replicated to a configurable number of replicas (default: replication factor = 3)
+**And** replication uses the Raft log — partition writes are committed only after a quorum of replicas acknowledge
+**And** zero messages are lost during planned node additions and removals (NFR24)
+
+**Given** a node fails unexpectedly
+**When** the Raft leader detects the failure via heartbeat timeout
+**Then** partitions owned by the failed node are reassigned to replica nodes within 10 seconds (NFR23)
+**And** consumer streams connected to the failed node receive a disconnection
+**And** consumers reconnect to healthy nodes within 5 seconds (NFR25) — SDKs handle reconnection automatically
+**And** in-flight messages on the failed node are governed by their visibility timeout (at-least-once delivery preserved)
+
+**Given** the failed node recovers
+**When** it rejoins the cluster
+**Then** it catches up from the Raft log
+**And** cluster state converges within 30 seconds of membership change (NFR26)
+**And** integration tests verify: 3-node cluster, kill one node, verify failover < 10s, verify zero message loss, restart node, verify rejoin and convergence
+
+### Story 14.5: Cluster-Wide Observability & Scaling Validation
+
+As an operator,
+I want to view aggregated stats across all cluster nodes and verify linear scaling,
+So that I can monitor the cluster as a single system and trust that adding nodes increases capacity.
+
+**Acceptance Criteria:**
+
+**Given** a multi-node cluster is operational (from Stories 14.1–14.4)
+**When** an operator calls GetStats
+**Then** the response includes cluster-wide aggregated metrics: total queue depth, total throughput, per-node breakdown (FR70)
+**And** per-queue stats are aggregated across all partitions
+**And** cluster health is reported: node count, leader node, partition distribution, replication status
+**And** OTel metrics include cluster-level dimensions: `node_id` labels on existing metrics, cluster-level rollup metrics
+**And** the CLI `fila stats` shows cluster-wide summary when connected to any node
+
+**Given** a 2-node cluster is benchmarked using the Epic 12 benchmark suite
+**When** throughput is measured
+**Then** throughput is >= 1.8x single-node throughput (NFR22: linear scaling)
+**And** the benchmark methodology documents how to reproduce the scaling test
+**And** integration tests verify: GetStats returns correct aggregated counts across a 3-node cluster
+
+---
+
+## Epic 15: Authentication & Security
+
+Operators can deploy Fila in real production environments with transport security and client authentication. mTLS secures the wire, API keys authenticate clients, per-queue ACLs control access. Secure defaults — authentication required unless explicitly disabled.
+
+### Story 15.1: mTLS Transport Security
+
+As an operator,
+I want to enable mutual TLS on the Fila server,
+So that all client-broker communication is encrypted and mutually authenticated.
+
+**Acceptance Criteria:**
+
+**Given** a Fila server is configured with TLS certificates
+**When** mTLS is enabled via configuration
+**Then** `fila.toml` accepts TLS configuration: `tls.enabled`, `tls.cert_file`, `tls.key_file`, `tls.ca_file` (for client certificate verification)
+**And** the gRPC server listens on TLS-secured connections using the configured certificates
+**And** clients must present a valid certificate signed by the configured CA
+**And** connections without valid client certificates are rejected at the TLS handshake
+**And** mTLS handshake adds < 5ms overhead per connection establishment (NFR27)
+**And** intra-cluster gRPC communication (from Epic 14) also uses mTLS when TLS is enabled
+**And** all 6 SDKs support TLS configuration: CA cert, client cert, client key
+**And** the CLI supports TLS flags: `--tls-cert`, `--tls-key`, `--ca-cert`
+**And** when TLS is disabled (default for backward compatibility), the server behaves exactly as before
+**And** integration tests verify: TLS connection succeeds with valid certs, connection rejected with invalid cert, connection rejected without cert when mTLS is required
+
+### Story 15.2: API Key Authentication
+
+As an operator,
+I want to authenticate clients using API keys,
+So that I can control which clients can access the broker.
+
+**Acceptance Criteria:**
+
+**Given** a Fila server has API key authentication enabled
+**When** API key auth is configured
+**Then** `fila.toml` accepts: `auth.enabled`, `auth.type = "api_key"`
+**And** API keys are managed via admin RPCs: `CreateApiKey` (returns key + key_id), `RevokeApiKey`, `ListApiKeys`
+**And** API keys are stored hashed (SHA-256) in the broker's persistent state
+**And** clients include the API key in gRPC metadata (`authorization: Bearer <key>`)
+**And** every RPC validates the API key before processing — invalid or missing keys return `UNAUTHENTICATED` status
+**And** API key validation adds < 100us overhead per request (NFR28)
+**And** API keys have an optional expiration time
+**And** key creation and revocation are audit-logged
+**And** all 6 SDKs accept an `api_key` parameter in their connection configuration
+**And** the CLI accepts `--api-key` flag
+**And** when auth is disabled (default), no authentication is required — backward compatible
+**And** integration tests verify: request succeeds with valid key, request rejected with invalid key, request rejected without key when auth enabled, revoked key is rejected
+
+### Story 15.3: Per-Queue Access Control
+
+As an operator,
+I want to define access control policies per queue,
+So that I can restrict which clients can produce to or consume from specific queues.
+
+**Acceptance Criteria:**
+
+**Given** API key authentication is enabled (from Story 15.2)
+**When** ACL policies are configured
+**Then** each API key can be associated with a set of permissions: `produce:<queue_pattern>`, `consume:<queue_pattern>`, `admin:<queue_pattern>`
+**And** queue patterns support wildcards: `*` matches any queue, `orders.*` matches `orders.us`, `orders.eu`, etc.
+**And** permissions are checked on every RPC: Enqueue checks `produce`, Consume checks `consume`, admin RPCs check `admin`
+**And** unauthorized operations return `PERMISSION_DENIED` status with a descriptive message
+**And** ACL policies are managed via admin RPCs: `SetAcl` (associate permissions with a key_id), `GetAcl`
+**And** a superadmin key type bypasses ACL checks (for operators)
+**And** ACL changes take effect immediately — no restart required
+**And** secure defaults: when auth is enabled, new API keys have no permissions until explicitly granted (NFR29)
+**And** integration tests verify: key with produce-only can enqueue but not consume, key with consume-only can consume but not enqueue, admin-only key can manage queues, superadmin bypasses all checks
+
+---
+
+## Epic 16: Release Engineering & SDK Compatibility
+
+Teams get stability guarantees and version compatibility contracts. An SDK-server compatibility matrix documents which SDK versions work with which server versions. Operators can deploy stability release branches with backported fixes. Versioning scheme formalized.
+
+### Story 16.1: Versioning Scheme & SDK Compatibility Matrix
+
+As a developer,
+I want to consult an SDK-server compatibility matrix with documented guarantees,
+So that I know which SDK versions work with which server versions.
+
+**Acceptance Criteria:**
+
+**Given** Fila server and 6 SDKs are independently versioned
+**When** the versioning scheme is formalized
+**Then** the server adopts semantic versioning (semver): MAJOR.MINOR.PATCH
+**And** MAJOR bumps indicate breaking proto/API changes
+**And** MINOR bumps indicate new features (backward compatible)
+**And** PATCH bumps indicate bug fixes
+**And** a `docs/compatibility.md` documents the SDK-server compatibility matrix: minimum server version per SDK version, supported proto versions, deprecation policy
+**And** the server exposes a `GetServerInfo` RPC returning: server version, proto version, supported features
+**And** SDKs can query `GetServerInfo` at connection time for optional compatibility verification
+**And** the compatibility document is published alongside release notes
+**And** the proto backward compatibility policy is formalized: field additions only within a MAJOR version, no field removals or type changes
+
+### Story 16.2: Stability Release Branches & Backport Workflow
+
+As an operator,
+I want to deploy stability release branches with backported fixes,
+So that I can get bug fixes without adopting new features or risking regressions.
+
+**Acceptance Criteria:**
+
+**Given** the server follows semantic versioning (from Story 16.1)
+**When** a new MINOR version is released (e.g., 1.2.0)
+**Then** a `release/1.x` branch is created from the release tag
+**And** critical bug fixes and security patches can be cherry-picked from main into the release branch
+**And** a PATCH release (e.g., 1.2.1) is tagged from the release branch
+**And** the release CI pipeline builds release binaries and Docker images for PATCH releases
+**And** `CHANGELOG.md` documents which fixes are backported to which release branches
+**And** a `docs/release-policy.md` documents: release cadence, support window (N-1 minor versions receive patches), backport criteria (security, data loss, critical bugs only)
+**And** the bleeding-edge release workflow (existing) continues unchanged for the main branch
+**And** at least the 2 most recent minor release branches receive security and critical bug fixes
+**And** the workflow is verified by creating a test release branch, cherry-picking a fix, tagging a patch release, and confirming CI builds artifacts
+
+---
+
+## Epic 17: Developer Experience
+
+Operators can monitor queues and visualize real-time scheduling state via a web-based management GUI. Consumers can join broker-managed consumer groups with automatic rebalancing. Script authors get built-in Lua helpers for common patterns — exponential backoff, tenant routing — reducing boilerplate.
+
+### Story 17.1: Built-in Lua Helpers
+
+As a script author,
+I want built-in Lua helper functions for common patterns,
+So that I can implement standard scheduling policies without writing boilerplate.
+
+**Acceptance Criteria:**
+
+**Given** the Lua sandbox provides `fila.get()` and standard libraries
+**When** built-in helpers are loaded
+**Then** the Lua environment includes a `fila.helpers` module available to all scripts
+**And** `fila.helpers.exponential_backoff(attempts, base_ms, max_ms)` returns delay in milliseconds with jitter
+**And** `fila.helpers.tenant_route(msg, header_name)` extracts a header value as fairness_key with safe defaults for missing headers
+**And** `fila.helpers.rate_limit_keys(msg, patterns)` generates throttle key arrays from header patterns
+**And** `fila.helpers.max_retries(attempts, max)` returns `{action = "retry"}` or `{action = "dlq"}` based on attempt count
+**And** helpers are documented in `docs/lua-patterns.md` (update existing doc with helper API reference)
+**And** helpers are unit tested in Rust (via mlua) with edge cases: nil headers, missing keys, zero attempts, overflow values
+**And** existing user scripts continue to work unchanged — helpers are additive, not replacing any existing API
+
+### Story 17.2: Broker-Managed Consumer Groups
 
 As a consumer,
-I want to acknowledge successfully processed messages,
-So that they are permanently removed from the queue.
+I want to join a consumer group with automatic rebalancing,
+So that multiple instances of my service share the workload without manual coordination.
 
 **Acceptance Criteria:**
 
-**Given** a consumer has leased a message
-**When** the consumer calls the `Ack` RPC with the queue name and message ID
-**Then** the message is removed from the `messages` CF
-**And** the lease is removed from the `leases` CF
-**And** the lease expiry entry is removed from the `lease_expiry` CF
-**And** all three removals happen atomically via WriteBatch
-**And** acknowledging an unknown message ID returns `NOT_FOUND` status (idempotent — no side effects)
-**And** acknowledging a message on a non-existent queue returns `NOT_FOUND` status
-**And** an integration test verifies the full lifecycle: enqueue → lease → ack → verify message is gone
-**And** an integration test verifies that acking the same message twice returns `NOT_FOUND` on the second call
+**Given** consumers can connect via the Consume RPC
+**When** a consumer specifies a `consumer_group` parameter in the Consume request
+**Then** the broker tracks group membership: which consumers belong to which group for which queue
+**And** messages from the queue are distributed across group members — each message goes to exactly one member
+**And** the distribution respects fairness scheduling (DRR) — the group as a whole receives fairly-scheduled messages, then the broker round-robins within the group
+**And** when a consumer joins or leaves a group, the broker rebalances: redistributes assignment among remaining members
+**And** rebalancing is seamless — in-flight messages are governed by visibility timeout, no message loss
+**And** a consumer that disconnects is removed from the group after its session timeout (configurable, default 30 seconds)
+**And** consumer groups work in both single-node and clustered modes
+**And** the admin API includes `GetConsumerGroups` to inspect group membership and assignment
+**And** consumers without a `consumer_group` parameter behave as before — independent consumers (backward compatible)
+**And** integration tests verify: 3 consumers in a group each receive ~33% of messages, one consumer disconnects and remaining 2 each receive ~50%, new consumer joins and rebalancing redistributes
 
-### Story 1.9: Crash Recovery & Graceful Shutdown
+### Story 17.3: Web Management GUI
 
 As an operator,
-I want the broker to recover all state after a crash with zero message loss,
-So that I can trust the system to be durable without manual intervention.
+I want a web-based management interface to monitor queues and scheduling state,
+So that I can visualize broker behavior without setting up external monitoring.
 
 **Acceptance Criteria:**
 
-**Given** the broker has messages, leases, and queue definitions persisted in RocksDB
-**When** the broker process is killed and restarted
-**Then** all queue definitions are loaded from the `queues` CF
-**And** the scheduler rebuilds its in-memory state by scanning the `messages` CF (active keys, pending message counts)
-**And** in-flight leases are restored from the `leases` CF
-**And** already-expired leases (identified by scanning `lease_expiry` CF) are reclaimed immediately — messages re-enter the ready pool
-**And** the broker is ready to accept gRPC connections after recovery completes
-**And** no messages are lost during the recovery process
-**And** graceful shutdown flushes the RocksDB WAL before exit
-**And** an integration test enqueues messages, kills the broker process, restarts, and verifies all messages are still available for leasing
-
----
-
-## Epic 2: Fair Scheduling & Message Reliability
-
-The broker delivers messages fairly across groups using Deficit Round Robin. Consumers can nack failed messages, and visibility timeouts enable at-least-once delivery. This is the core differentiator — the scheduling primitive that no other open-source broker provides.
-
-### Story 2.1: Deficit Round Robin Scheduler
-
-As a platform engineer,
-I want the broker to schedule message delivery fairly across fairness groups using DRR,
-So that no single high-volume tenant starves other tenants of throughput.
-
-**Acceptance Criteria:**
-
-**Given** messages are enqueued with fairness keys assigned (currently defaulting to `"default"`, but supporting distinct keys via message metadata)
-**When** the DRR scheduler runs its scheduling round
-**Then** each active fairness key receives a deficit allocation of `weight * quantum` per round
-**And** messages are delivered from each key until its deficit is exhausted, then the scheduler moves to the next key
-**And** only active keys (those with pending messages) participate in scheduling rounds (FR11)
-**And** when a key's pending messages are exhausted, it is removed from the active set
-**And** when new messages arrive for an inactive key, it is added back to the active set
-**And** the DRR data structures (active keys, deficit counters, round position) are stored in-memory on the scheduler thread
-**And** unit tests verify round-robin behavior: with 3 keys of equal weight, each gets ~33% of delivered messages
-**And** a benchmark compares DRR scheduling throughput vs raw FIFO to verify <5% overhead (NFR2)
-
-### Story 2.2: Weighted Fairness & Accuracy Verification
-
-As a platform engineer,
-I want higher-weighted fairness groups to receive proportionally more throughput,
-So that I can prioritize important tenants while still guaranteeing fair shares for all.
-
-**Acceptance Criteria:**
-
-**Given** messages are enqueued across multiple fairness keys with different weights
-**When** the DRR scheduler operates under sustained load
-**Then** a key with weight 2 receives approximately 2x the throughput of a key with weight 1
-**And** each key's actual throughput stays within 5% of its calculated fair share (FR12)
-**And** the default weight for keys without explicit assignment is 1
-**And** weight changes take effect on the next scheduling round
-**And** property-based tests (proptest) verify the fairness invariant: for any combination of keys and weights under sustained load, each key receives within 5% of `(key_weight / total_weight) * total_throughput`
-**And** the fairness accuracy test runs with at least 10,000 messages across 5+ keys with varying weights
-
-### Story 2.3: Nack & Message Retry
-
-As a consumer,
-I want to negatively acknowledge a message that I failed to process,
-So that it is retried and not lost.
-
-**Acceptance Criteria:**
-
-**Given** a consumer has leased a message
-**When** the consumer calls the `Nack` RPC with the queue name, message ID, and an error description
-**Then** the message's attempt count is incremented
-**And** the message re-enters the ready pool for the same fairness key
-**And** the lease is removed from the `leases` CF
-**And** the lease expiry entry is removed from the `lease_expiry` CF
-**And** the updated message (with new attempt count) is written atomically via WriteBatch
-**And** nacking an unknown message ID returns `NOT_FOUND` status (idempotent)
-**And** the default retry behavior (without Lua) is immediate requeue with no maximum attempt limit
-**And** an integration test verifies: enqueue → lease → nack → lease again → verify attempt count is incremented
-
-### Story 2.4: Visibility Timeout & Lease Expiry
-
-As an operator,
-I want messages with expired visibility timeouts to automatically become available again,
-So that stuck or crashed consumers don't block message processing.
-
-**Acceptance Criteria:**
-
-**Given** a message has been leased to a consumer
-**When** the visibility timeout expires without an ack or nack
-**Then** the scheduler's expiry check (scanning `lease_expiry` CF from earliest) identifies the expired lease
-**And** the message re-enters the ready pool for its fairness key
-**And** the expired lease and lease expiry entries are removed via WriteBatch
-**And** expired leases are resolved within one scheduling cycle (NFR10)
-**And** the visibility timeout is configurable per queue via `CreateQueue` configuration
-**And** the scheduler checks for expired leases on every loop iteration using the timestamp-ordered `lease_expiry` CF
-**And** at-least-once delivery is guaranteed: no message is lost due to consumer failure (NFR12)
-**And** an integration test leases a message, waits for timeout expiry, and verifies the message is available for re-lease
-
----
-
-## Epic 3: Lua Rules Engine & Dead-Letter Handling
-
-Users define scheduling policy through Lua scripts. `on_enqueue` assigns fairness keys, weights, and throttle keys from message headers. `on_failure` controls retry behavior and routes exhausted messages to dead-letter queues. Scripts are sandboxed with timeouts, memory limits, and circuit breaker fallback.
-
-### Story 3.1: Lua Sandbox & on_enqueue Hook
-
-As a platform engineer,
-I want to write Lua scripts that assign fairness keys, weights, and throttle keys from message headers at enqueue time,
-So that I can define custom scheduling policy without modifying the broker.
-
-**Acceptance Criteria:**
-
-**Given** a queue is created with an `on_enqueue` Lua script
-**When** a message is enqueued to that queue
-**Then** the Lua script receives a `msg` table with: `msg.headers` (read-only table), `msg.payload_size` (number), `msg.queue` (string)
-**And** the script returns a table with: `fairness_key` (string), `weight` (number, optional, default 1), `throttle_keys` (array of strings, optional)
-**And** the broker uses the returned values to assign scheduling metadata to the message
-**And** the Lua sandbox has access to `fila.get(key)` for reading runtime config from the `state` CF
-**And** the sandbox provides standard Lua string, math, and table libraries
-**And** the sandbox does NOT provide IO, OS, filesystem, or network access
-**And** scripts are pre-compiled to bytecode at queue creation time and cached (FR25)
-**And** pre-compiled scripts are reused for every message — no parse overhead per enqueue
-**And** an integration test creates a queue with an on_enqueue script that reads `msg.headers["tenant_id"]` and assigns it as the fairness key, then verifies messages are assigned the correct keys
-
-### Story 3.2: Lua Safety: Timeouts, Memory Limits & Circuit Breaker
-
-As an operator,
-I want Lua scripts to be safely sandboxed with execution limits and automatic fallback,
-So that a buggy script cannot crash or slow down the broker.
-
-**Acceptance Criteria:**
-
-**Given** a queue has a Lua script attached
-**When** the script exceeds its execution timeout
-**Then** the script is terminated via mlua instruction count hook
-**And** the circuit breaker counter is incremented
-**And** the default timeout is 10ms, configurable per queue (FR23)
-
-**Given** a queue has a Lua script attached
-**When** the script exceeds its memory limit
-**Then** the script is terminated via mlua allocator hook
-**And** the circuit breaker counter is incremented
-**And** the default memory limit is 1MB, configurable per queue (FR23)
-
-**Given** a Lua script has failed 3 consecutive times (configurable threshold)
-**When** the next message is enqueued
-**Then** the circuit breaker is active: Lua is bypassed entirely
-**And** safe defaults are applied: `fairness_key = "default"`, `weight = 1`, no throttle keys (FR24)
-**And** a warning is logged and an error counter is incremented
-**And** the circuit breaker remains active for a configurable cooldown period (default 10 seconds)
-**And** after the cooldown, the next enqueue attempts Lua execution again
-**And** a successful Lua execution resets the consecutive failure counter
-**And** unit tests verify circuit breaker activation at exactly the threshold count
-**And** unit tests verify the cooldown period behavior
-
-### Story 3.3: on_failure Hook & Retry Decisions
-
-As a platform engineer,
-I want to write a Lua script that decides whether a failed message should be retried or dead-lettered,
-So that I can implement custom retry policies like exponential backoff with max attempts.
-
-**Acceptance Criteria:**
-
-**Given** a queue is created with an `on_failure` Lua script
-**When** a consumer nacks a message
-**Then** the Lua script receives: `msg.headers` (table), `msg.id` (string), `msg.attempts` (number), `msg.queue` (string), and `error` (string)
-**And** the script returns a table with: `action` ("retry" or "dlq") and `delay_ms` (number, optional, for delayed retry)
-**And** if action is "retry": the message is requeued with incremented attempt count and optional delay
-**And** if action is "dlq": the message is moved to the queue's dead-letter queue
-**And** if no on_failure script is attached, the default behavior is immediate retry (backward compatible with Epic 2)
-**And** the same safety limits (timeout, memory, circuit breaker) apply to on_failure as to on_enqueue
-**And** on circuit breaker fallback for on_failure, the default action is "retry" with no delay
-**And** an integration test creates a queue with on_failure that dead-letters after 3 attempts, enqueues a message, nacks it 3 times, and verifies it appears in the DLQ
-
-### Story 3.4: Dead-Letter Queue
-
-As an operator,
-I want failed messages to be automatically routed to a dead-letter queue,
-So that I can inspect and potentially redrive unprocessable messages.
-
-**Acceptance Criteria:**
-
-**Given** a queue is created
-**When** queue creation completes
-**Then** a corresponding dead-letter queue is automatically created with the name `{queue_name}.dlq` (FR32)
-**And** the DLQ queue ID is stored in the parent queue's configuration
-
-**Given** the on_failure Lua script returns `action = "dlq"` for a nacked message
-**When** the scheduler processes the nack
-**Then** the message is moved from the source queue to its DLQ via WriteBatch
-**And** the original message metadata (headers, payload, all attempt history) is preserved
-**And** the message is removed from the source queue's messages CF
-**And** the lease and lease expiry entries are removed
-
-**Given** a DLQ contains messages
-**When** a consumer leases from the DLQ
-**Then** DLQ messages are delivered like any other queue's messages (DLQ is a regular queue)
-**And** an integration test verifies the full flow: enqueue → nack with dlq action → verify message in DLQ → lease from DLQ
-
----
-
-## Epic 4: Throttling & Rate Limiting
-
-Per-key token bucket rate limiting integrated into the scheduler. The broker skips throttled keys during DRR scheduling and serves the next ready key. Messages can have multiple simultaneous throttle keys for hierarchical rate limiting. Zero wasted work — consumers never receive throttled messages.
-
-### Story 4.1: Token Bucket Implementation
-
-As a developer,
-I want a token bucket rate limiter implementation,
-So that per-key rate limits can be enforced in the scheduler.
-
-**Acceptance Criteria:**
-
-**Given** a token bucket is configured with a rate (tokens per second) and burst size
-**When** the bucket is checked for token availability
-**Then** tokens are refilled based on elapsed time since last refill
-**And** `try_consume(n)` returns true and decrements tokens if sufficient tokens are available
-**And** `try_consume(n)` returns false without modification if insufficient tokens are available
-**And** tokens never exceed the burst size (max capacity)
-**And** token bucket decisions execute in <1μs (NFR7)
-**And** a `ThrottleManager` struct owns all token buckets keyed by throttle key string
-**And** the manager supports creating, removing, and updating bucket configurations at runtime
-**And** unit tests verify: refill timing accuracy, burst cap, consume/reject behavior, rate accuracy over 1-second windows
-
-### Story 4.2: Throttle-Aware Scheduling
-
-As a platform engineer,
-I want the scheduler to skip throttled keys and deliver only ready messages,
-So that consumers never receive messages they cannot process due to rate limits.
-
-**Acceptance Criteria:**
-
-**Given** messages have been assigned throttle keys via Lua on_enqueue (from Epic 3)
-**When** the DRR scheduler evaluates a fairness key for delivery
-**Then** the scheduler checks all throttle keys associated with the next message
-**And** if ANY throttle key's bucket is exhausted, that message is skipped (FR15)
-**And** the scheduler moves to the next fairness key in the DRR round
-**And** a message can have multiple simultaneous throttle keys (FR14) — ALL must have available tokens
-**And** hierarchical throttling works: a message with keys `["provider:aws", "region:us-east-1"]` is throttled if either bucket is empty (FR17)
-**And** token buckets are refilled in the scheduler loop before each DRR round
-**And** skipped keys remain in the active set (they still have pending messages)
-**And** the O(n²) message scan in `drr_deliver_queue` is replaced with a per-fairness-key in-memory pending message index, eliminating quadratic scanning during delivery (technical debt from Epic 2, deferred from Epic 3)
-**And** the previously `#[ignore]`d 10k fairness test runs in CI after the scan optimization
-**And** an integration test creates a queue with Lua assigning throttle keys, sets a low rate limit, enqueues rapidly, and verifies consumers receive messages at the throttled rate
-
-### Story 4.3: Runtime Throttle Rate Management
-
-As an operator,
-I want to set and update throttle rates at runtime without restarting the broker,
-So that I can respond to production conditions by adjusting rate limits.
-
-**Acceptance Criteria:**
-
-**Given** the broker is running with active throttle keys
-**When** an operator sets a throttle rate via the admin API (using `SetConfig` with a throttle-specific key convention)
-**Then** the ThrottleManager creates or updates the token bucket for that throttle key
-**And** the new rate takes effect on the next scheduler refill cycle
-**And** no restart is required (FR16)
-**And** removing a throttle rate config removes the token bucket (messages with that key become unthrottled)
-**And** throttle rates are persisted in the `state` CF so they survive restart
-**And** Lua scripts can read throttle config via `fila.get()` for dynamic decisions
-**And** an integration test sets a throttle rate, verifies it is enforced, updates the rate, and verifies the new rate takes effect
-
----
-
-## Epic 5: Operator Experience (Admin, Config & CLI)
-
-Operators manage runtime configuration via the gRPC API, redrive DLQ messages, inspect queue stats and per-key metrics, and perform all admin tasks through `fila-cli`. Config changes take effect without restart, enabling live operational adjustments.
-
-### Story 5.1: Configuration Listing & Operator Visibility
-
-As an operator,
-I want to list and inspect all runtime configuration entries,
-So that I can understand the current broker configuration state without guessing key names.
-
-**Note:** Core `SetConfig`/`GetConfig` RPCs were implemented in Epic 4, Story 4.3 (including persistence to state CF, Lua `fila.get()` integration, throttle-prefix side effects, and crash recovery). This story covers the remaining operator visibility gaps.
-
-**Acceptance Criteria:**
-
-**Given** the broker has runtime configuration entries (set via `SetConfig` in Story 4.3)
-**When** an operator calls `ListConfig` RPC with an optional prefix filter
-**Then** all matching key-value pairs from the `state` CF are returned
-**And** if no prefix is specified, all config entries are returned
-**And** if a prefix is specified (e.g., `throttle.`), only matching entries are returned
-**And** the response includes the total count of matching entries
-**And** calling `ListConfig` with no entries returns an empty list (not an error)
-**And** an integration test sets multiple config values (throttle and non-throttle), lists all, lists by prefix, and verifies correct filtering
-**And** an integration test verifies non-throttle config keys are readable by Lua scripts via `fila.get()` (end-to-end: SetConfig → Lua fila.get → verify value)
-
-### Story 5.2: Queue Stats & Inspection
-
-As an operator,
-I want to view queue stats including depth, per-key throughput, and scheduling state,
-So that I can understand the health and behavior of my message infrastructure.
-
-**Acceptance Criteria:**
-
-**Given** a queue has messages and active consumers
-**When** an operator calls `GetStats` RPC for that queue
-**Then** the response includes: total message count (queue depth), number of in-flight leases, number of active fairness keys
-**And** per-fairness-key stats are included: pending message count, delivered count, current deficit
-**And** throttle state is included: per-throttle-key token count, hit rate, pass rate
-**And** DRR scheduling state is included: current round position, quantum, active keys count
-**And** calling GetStats on a non-existent queue returns `NOT_FOUND` status
-**And** an integration test enqueues messages across multiple fairness keys, leases some, and verifies GetStats returns accurate counts
-
-### Story 5.3: DLQ Redrive
-
-As an operator,
-I want to move messages from a dead-letter queue back to the source queue,
-So that I can reprocess messages after fixing the underlying issue.
-
-**Acceptance Criteria:**
-
-**Given** a DLQ contains failed messages
-**When** an operator calls `Redrive` RPC with the DLQ name and an optional count limit
-**Then** messages are moved from the DLQ back to the source queue
-**And** each message's attempt count is reset to 0
-**And** messages are moved atomically via WriteBatch (per message)
-**And** if a count is specified, only that many messages are redriven (oldest first)
-**And** if no count is specified, all DLQ messages are redriven
-**And** the response includes the number of messages redriven
-**And** calling Redrive on a non-DLQ queue returns `INVALID_ARGUMENT` status
-**And** an integration test dead-letters messages, redrives them, and verifies they are available for lease from the source queue
-**And** redrive only moves pending (non-leased) messages — currently leased DLQ messages are not moved to avoid confusing active consumers
-
-### Story 5.4: fila-cli
-
-As an operator,
-I want a command-line interface for all admin operations,
-So that I can manage the broker from the terminal without writing code.
-
-**Acceptance Criteria:**
-
-**Given** the broker is running
-**When** an operator uses `fila-cli` (binary name: `fila`)
-**Then** the following commands are available:
-**And** `fila queue create <name> [--on-enqueue <script>] [--on-failure <script>] [--visibility-timeout <ms>]` creates a queue
-**And** `fila queue delete <name>` deletes a queue
-**And** `fila queue list` lists all queues with basic stats
-**And** `fila queue inspect <name>` shows detailed queue stats (same as GetStats)
-**And** `fila config set <key> <value>` sets a runtime config value
-**And** `fila config get <key>` reads a runtime config value
-**And** `fila stats <queue>` shows queue statistics
-**And** `fila redrive <dlq-name> [--count <n>]` redrives DLQ messages
-**And** all commands connect to the broker via gRPC (default `localhost:5555`, configurable via `--addr` flag)
-**And** error messages are human-friendly (translated from gRPC status codes to actionable messages, e.g., `NOT_FOUND` → `Error: queue "foo" does not exist`, `INVALID_ARGUMENT` → `Error: "bar" is not a dead-letter queue`)
-**And** successful operations produce concise confirmation output (e.g., `Created queue "orders"`, `Redrived 42 messages from "orders.dlq" to "orders"`)
-**And** `fila queue list` and `fila queue inspect` output is formatted as aligned tables for terminal readability
-**And** `fila --help` shows usage for all commands with brief descriptions and examples
-**And** each subcommand supports `--help` with detailed usage (e.g., `fila queue create --help`)
-**And** the CLI binary compiles as `fila` (distinct from `fila-server`)
-
----
-
-## Epic 6: Observability & Diagnostics
-
-Full observability via OpenTelemetry metrics and distributed tracing. Per-fairness-key throughput, per-throttle-key hit rates, DRR scheduling rounds, Lua execution histograms. Operators can answer "why was key X delayed?" from broker metrics alone.
-
-### Story 6.1: OTel Infrastructure & Core Metrics
-
-As an operator,
-I want the broker to export OpenTelemetry-compatible metrics and traces,
-So that I can monitor broker health in Prometheus, Grafana, or Datadog.
-
-**Acceptance Criteria:**
-
-**Given** the broker is configured with an OTLP endpoint
-**When** the broker processes messages
-**Then** metrics are exported via OTLP protocol to the configured endpoint (NFR18)
-**And** core counters are emitted: `fila.messages.enqueued`, `fila.messages.leased`, `fila.messages.acked`, `fila.messages.nacked`
-**And** gauge metrics are emitted: `fila.queue.depth` (per queue), `fila.leases.active` (per queue)
-**And** tracing spans are created for all RPC operations: Enqueue, Lease, Ack, Nack (FR40)
-**And** spans include structured fields: `queue_id`, `msg_id`, `fairness_key`
-**And** trace context is propagated via gRPC metadata headers
-**And** the telemetry setup uses `tracing` + `tracing-opentelemetry` + `opentelemetry-otlp` crates
-**And** OTLP endpoint and service name are configurable via `fila.toml` `[telemetry]` section
-**And** metrics export interval is configurable (default 10 seconds)
-**And** log levels follow the convention: ERROR for unrecoverable, WARN for circuit breaker, INFO for lifecycle, DEBUG for per-message, TRACE for scheduler internals
-**And** message payloads and potentially sensitive headers are NEVER logged
-**And** OTel crate versions are verified for compatibility before implementation begins (`opentelemetry` + `opentelemetry-otlp` + `tracing-opentelemetry` — pin versions that work together)
-**And** a test-harness for asserting on emitted metrics is established (in-memory exporter or mock collector) so Stories 6.2 and 6.3 can reuse it
-**And** the `[telemetry]` section in `BrokerConfig` is implemented (OTLP endpoint, service name, metrics interval) if not already present
-
-### Story 6.2: Scheduler & Fairness Metrics
-
-As an operator,
-I want per-fairness-key throughput and DRR scheduling metrics,
-So that I can verify fair share allocation and identify scheduling anomalies.
-
-**Acceptance Criteria:**
-
-**Given** the DRR scheduler is delivering messages across multiple fairness keys
-**When** metrics are exported
-**Then** `fila.fairness.throughput` counter is emitted per fairness key with labels `queue_id` and `fairness_key` (FR36)
-**And** `fila.fairness.fair_share_ratio` gauge shows each key's actual throughput divided by its fair share target
-**And** `fila.scheduler.drr.rounds` counter tracks completed DRR rounds (FR38)
-**And** `fila.scheduler.drr.active_keys` gauge shows the current number of active fairness keys
-**And** `fila.scheduler.drr.keys_processed` counter tracks keys processed per round
-**And** metrics are labeled to enable "why was key X delayed?" queries (FR41)
-**And** an integration test verifies that per-key throughput metrics are emitted and directionally correct
-
-### Story 6.3: Throttle, Lua & Diagnostic Metrics
-
-As an operator,
-I want per-throttle-key hit rates and Lua execution metrics,
-So that I can diagnose throttling behavior and script performance.
-
-**Acceptance Criteria:**
-
-**Given** throttling and Lua hooks are active
-**When** metrics are exported
-**Then** `fila.throttle.decisions` counter is emitted per throttle key with labels `throttle_key` and `result` (hit/pass) (FR37)
-**And** `fila.throttle.tokens_remaining` gauge shows current token count per throttle key
-**And** `fila.lua.execution_duration_us` histogram tracks Lua hook execution time with labels `queue_id` and `hook` (on_enqueue/on_failure) (FR39)
-**And** `fila.lua.errors` counter tracks Lua execution errors per queue
-**And** `fila.lua.circuit_breaker.activations` counter tracks circuit breaker activations per queue
-**And** all metric names follow the `fila.*` naming convention with `snake_case` labels
-**And** structured JSON logging is used in production mode; pretty-print in development mode
-**And** the combination of fairness, throttle, and scheduling metrics enables an operator to answer "why was key X delayed?" from metrics alone without reading code or logs (FR41)
-
----
-
-## Epic 7: Rust Client SDK
-
-Developers integrate Fila into Rust applications using an idiomatic client SDK built as a thin wrapper over tonic gRPC client. This SDK also serves as the client for the blackbox e2e test suite in Epic 8.
-
-**FRs covered:** FR46, FR48 (partial — Rust only)
-
-**Prerequisite:** Epic 6 complete.
-
-### Story 7.1: Rust Client SDK
-
-As a Rust developer,
-I want an idiomatic Rust client SDK for Fila,
-So that I can integrate message enqueue, lease, ack, and nack into my Rust application.
-
-**Acceptance Criteria:**
-
-**Given** the Fila proto definitions are available
-**When** the Rust SDK is built
-**Then** the SDK is published as a crate (e.g., `fila-client`) using tonic gRPC client
-**And** the API provides: `client.enqueue(queue, headers, payload) -> Result<MessageId>`
-**And** the API provides: `client.lease(queue) -> Result<Stream<LeaseMessage>>` for streaming consumption
-**And** the API provides: `client.ack(queue, msg_id) -> Result<()>`
-**And** the API provides: `client.nack(queue, msg_id, error) -> Result<()>`
-**And** connection configuration accepts address, optional TLS config, and timeouts
-**And** the SDK follows Rust conventions: `Result<T, E>` errors, async/await, `Send + Sync` types
-**And** integration tests verify all four operations against a running broker
-
----
-
-## Epic 8: E2E Tests & Scheduler Refactoring
-
-Build a true blackbox e2e test suite using the Rust SDK (for producer/consumer operations) and the `fila` CLI binary (for admin operations), then use it as a safety net to decompose the monolithic `scheduler.rs` (6,800+ lines) into focused submodules. The observability layer from Epic 6 provides runtime verification during restructuring.
-
-**Identified in:** Epic 4 Retrospective (2026-02-13). **Restructured by:** Sprint Change Proposal (2026-02-17) — Rust SDK pulled forward as prerequisite for meaningful e2e tests.
-
-**Prerequisite:** Epic 7 (Rust Client SDK) complete. Epic 6 complete (metrics provide runtime verification during refactoring).
-
-### Story 8.1: Blackbox End-to-End Test Suite
-
-As a developer,
-I want a comprehensive blackbox e2e test suite that exercises the full system through the SDK and CLI,
-So that I can refactor scheduler internals safely with behavioral regression coverage.
-
-**Acceptance Criteria:**
-
-**Given** a running `fila-server` instance started as a subprocess in the test harness
-**When** the e2e test suite runs
-**Then** producer/consumer operations use the `fila-client` Rust SDK (no raw gRPC calls)
-**And** admin operations use the `fila` CLI binary executed as a subprocess (no raw gRPC calls)
-**And** the test crate (`fila-e2e`) depends only on `fila-client` and `fila-proto` — no internal server or core types
-**And** the following flows are tested end-to-end:
-- Enqueue → Lease → Ack lifecycle (basic message flow via SDK)
-- Enqueue → Lease → Nack → re-Lease (retry with attempt count increment via SDK)
-- Lua `on_enqueue` assigns fairness key, weight, and throttle keys from headers
-- Lua `on_failure` decides retry vs DLQ based on attempt count
-- DLQ flow: nack to exhaustion → message in DLQ → Redrive via CLI → re-Lease from source queue
-- DRR fairness: multi-key weighted delivery (higher-weight key gets proportionally more)
-- Throttle: rate-limited key skipped, unthrottled keys served immediately
-- Config: `fila config set` → `fila config get` → ListConfig with prefix filter → Lua `fila.get()` reads value
-- Queue management: `fila queue create` → `fila queue list` → `fila queue inspect` → `fila queue delete`
-- Crash recovery: enqueue messages → kill server → restart → verify all messages available for lease
-- Visibility timeout: lease message → wait for expiry → message available for re-lease
-**And** tests are independent and can run in parallel (separate ports, separate temp data dirs)
-**And** a shared test helper starts/stops `fila-server` instances and creates SDK clients
-**And** all existing unit/integration tests continue to pass alongside the new e2e tests
-
-### Story 8.2: Scheduler Decomposition
-
-As a developer,
-I want `scheduler.rs` decomposed into focused submodules,
-So that each module is under 500 lines and has a clear single responsibility.
-
-**Acceptance Criteria:**
-
-**Given** the blackbox e2e test suite from Story 8.1 is passing
-**When** the scheduler is decomposed
-**Then** `scheduler.rs` is split into submodules under `broker/scheduler/`:
-- `mod.rs` — Scheduler struct, event loop, command dispatch
-- `delivery.rs` — DRR delivery logic, `drr_deliver_queue`, consumer management
-- `handlers.rs` — Command handlers: enqueue, ack, nack, config, stats, redrive, list_queues, list_config
-- `recovery.rs` — Startup recovery, lease expiry scanning, state rebuild
-- `leasing.rs` — Lease creation, expiry tracking, visibility timeout
-- `metrics_recording.rs` — `record_gauges`, fairness delivery tracking, all metric recording logic
-**And** no submodule exceeds ~500 lines (architecture guideline)
-**And** all existing tests (unit, integration, metric, e2e) pass with zero changes to test assertions
-**And** the public API of `Scheduler` remains unchanged (internal restructure only)
-**And** `cargo clippy` and `cargo fmt` pass cleanly
-
-### Story 8.3: Cleanup & Deferred Items
-
-As a developer,
-I want accumulated structural debt and deferred items addressed,
-So that the codebase is clean for the remaining SDK epics.
-
-**Acceptance Criteria:**
-
-**Given** the scheduler decomposition from Story 8.2 is complete
-**When** cleanup is performed
-**Then** the deferred tonic interceptor for trace context extraction is wired (Story 6.1 Task 7 completion)
-**And** incoming gRPC requests with W3C `traceparent` metadata have their trace context propagated to scheduler spans
-**And** any dead code, unused imports, or stale comments identified during decomposition are removed
-**And** all tests pass, clippy clean, fmt clean
-
----
-
-## Epic 9: Client SDKs
-
-Developers integrate Fila into applications using idiomatic client SDKs in five additional languages: Go, Python, JavaScript/Node.js, Ruby, and Java. All SDKs support the full hot-path API: enqueue, streaming consume, ack, and nack.
-
-**FRs covered:** FR42, FR43, FR44, FR45, FR47, FR48 (partial — 5 languages)
-
-### Story 9.1: Go Client SDK
-
-As a Go developer,
-I want an idiomatic Go client SDK for Fila,
-So that I can integrate Fila into my Go services with minimal effort.
-
-**Acceptance Criteria:**
-
-**Given** the Fila proto definitions are available
-**When** the Go SDK is built
-**Then** the SDK lives in a separate repository (`fila-go`)
-**And** proto files are copied into the repo and generated Go code is committed (no submodules, no Buf)
-**And** gRPC stubs are generated from proto files using `protoc-gen-go-grpc`
-**And** an ergonomic Go wrapper provides: `client.Enqueue(ctx, queue, headers, payload) (string, error)`
-**And** `client.Consume(ctx, queue) (<-chan *ConsumeMessage, error)` returns a channel for streaming consumption
-**And** `ConsumeMessage` includes: `ID`, `Headers`, `Payload`, `FairnessKey`, `AttemptCount`, `Queue`
-**And** `client.Ack(ctx, queue, msgID) error` and `client.Nack(ctx, queue, msgID, errMsg) error`
-**And** all methods accept `context.Context` for cancellation and deadlines
-**And** per-operation error types are defined (e.g., `ErrQueueNotFound`, `ErrMessageNotFound`) checkable via `errors.Is`
-**And** the SDK follows Go conventions: exported types, error returns, godoc comments
-**And** integration tests verify all four operations against a running `fila-server` binary
-**And** GitHub Actions CI runs lint (`golangci-lint`), test, and build on every PR
-**And** a README with usage examples is included (FR55)
-
-### Story 9.2: Python Client SDK
-
-As a Python developer,
-I want an idiomatic Python client SDK for Fila,
-So that I can integrate Fila into my Python applications.
-
-**Acceptance Criteria:**
-
-**Given** the Fila proto definitions are available
-**When** the Python SDK is built
-**Then** the SDK lives in a separate repository (`fila-python`)
-**And** proto files are copied into the repo and generated Python code is committed (no submodules, no Buf)
-**And** gRPC stubs are generated from proto files using `grpcio-tools`
-**And** an ergonomic Python wrapper provides: `client.enqueue(queue, headers, payload) -> str`
-**And** `client.consume(queue)` returns an async iterator of `ConsumeMessage` objects
-**And** `ConsumeMessage` includes: `id`, `headers`, `payload`, `fairness_key`, `attempt_count`, `queue`
-**And** `client.ack(queue, msg_id)` and `client.nack(queue, msg_id, error)`
-**And** both sync and async interfaces are supported
-**And** per-operation exception classes are defined (e.g., `QueueNotFoundError`, `MessageNotFoundError`)
-**And** the SDK follows Python conventions: snake_case methods, type hints, docstrings
-**And** the package is installable via `pip install fila-client`
-**And** integration tests verify all four operations against a running `fila-server` binary
-**And** GitHub Actions CI runs lint, type check, and test on every PR
-**And** a README with usage examples is included (FR55)
-
-### Story 9.3: JavaScript/Node.js Client SDK
-
-As a JavaScript/Node.js developer,
-I want an idiomatic JS/TS client SDK for Fila,
-So that I can integrate Fila into my Node.js services.
-
-**Acceptance Criteria:**
-
-**Given** the Fila proto definitions are available
-**When** the JS SDK is built
-**Then** the SDK lives in a separate repository (`fila-js`)
-**And** proto files are copied into the repo and generated TypeScript code is committed (no submodules, no Buf)
-**And** gRPC stubs are generated using `@grpc/proto-loader` or `grpc-js`
-**And** the SDK provides: `client.enqueue(queue, headers, payload): Promise<string>`
-**And** `client.consume(queue)` returns an async iterable of `ConsumeMessage` objects
-**And** `ConsumeMessage` includes: `id`, `headers`, `payload`, `fairnessKey`, `attemptCount`, `queue`
-**And** `client.ack(queue, msgId): Promise<void>` and `client.nack(queue, msgId, error): Promise<void>`
-**And** per-operation error classes are defined (e.g., `QueueNotFoundError`, `MessageNotFoundError`)
-**And** TypeScript type definitions are included
-**And** the SDK follows JS/TS conventions: Promise-based API, camelCase methods
-**And** the package is installable via `npm install @fila/client`
-**And** integration tests verify all four operations against a running `fila-server` binary
-**And** GitHub Actions CI runs lint, type check, and test on every PR
-**And** a README with usage examples is included (FR55)
-
-### Story 9.4: Ruby Client SDK
-
-As a Ruby developer,
-I want an idiomatic Ruby client SDK for Fila,
-So that I can integrate Fila into my Ruby applications.
-
-**Acceptance Criteria:**
-
-**Given** the Fila proto definitions are available
-**When** the Ruby SDK is built
-**Then** the SDK lives in a separate repository (`fila-ruby`)
-**And** proto files are copied into the repo and generated Ruby code is committed (no submodules, no Buf)
-**And** gRPC stubs are generated using `grpc-tools` gem
-**And** the SDK provides: `client.enqueue(queue:, headers:, payload:)` returning the message ID
-**And** `client.consume(queue:)` yields `ConsumeMessage` objects via block or returns an Enumerator
-**And** `ConsumeMessage` includes: `id`, `headers`, `payload`, `fairness_key`, `attempt_count`, `queue`
-**And** `client.ack(queue:, msg_id:)` and `client.nack(queue:, msg_id:, error:)`
-**And** per-operation error classes are defined (e.g., `Fila::QueueNotFoundError`, `Fila::MessageNotFoundError`)
-**And** the SDK follows Ruby conventions: keyword arguments, snake_case methods, block patterns
-**And** the gem is installable via `gem install fila-client`
-**And** integration tests verify all four operations against a running `fila-server` binary
-**And** GitHub Actions CI runs lint (`rubocop`), and test on every PR
-**And** a README with usage examples is included (FR55)
-
-### Story 9.5: Java Client SDK
-
-As a Java developer,
-I want an idiomatic Java client SDK for Fila,
-So that I can integrate Fila into my Java applications.
-
-**Acceptance Criteria:**
-
-**Given** the Fila proto definitions are available
-**When** the Java SDK is built
-**Then** the SDK lives in a separate repository (`fila-java`)
-**And** proto files are copied into the repo and generated Java code is committed (no submodules, no Buf)
-**And** gRPC stubs are generated using `protoc-gen-grpc-java`
-**And** the SDK provides a `FilaClient` class with builder pattern for configuration
-**And** `client.enqueue(queue, headers, payload)` returns the message ID
-**And** `client.consume(queue, observer)` accepts a `StreamObserver<ConsumeMessage>` for streaming consumption
-**And** `ConsumeMessage` includes: `id`, `headers`, `payload`, `fairnessKey`, `attemptCount`, `queue`
-**And** `client.ack(queue, msgId)` and `client.nack(queue, msgId, error)` for acknowledgment
-**And** per-operation exception classes are defined (e.g., `QueueNotFoundException`, `MessageNotFoundException`)
-**And** the SDK follows Java conventions: Builder pattern, checked exceptions, Javadoc
-**And** the artifact is publishable to Maven Central
-**And** integration tests verify all four operations against a running `fila-server` binary
-**And** GitHub Actions CI runs build, test, and lint on every PR
-**And** a README with usage examples is included (FR55)
-
----
-
-## Epic 10: Distribution & Documentation
-
-Users install Fila via Docker, `cargo install`, or `curl | bash` shell script. Bleeding-edge releases from main enable SDK CIs and early adopters. Comprehensive documentation — tutorials, API reference, Lua hook examples, and `llms.txt` — enables onboarding in under 10 minutes. Documentation is the primary adoption driver.
-
-**FRs covered:** FR50, FR51, FR52, FR54, FR55, FR56, FR57, FR58, FR59, FR60
-
-**Reshaped in:** Epic 9 Retrospective (2026-02-21). Release pipeline front-loaded as Story 10.1 to unblock SDK CIs, binary distribution, and documentation. SDK package publishing added as Story 10.2.
-
-### Story 10.1: Server & CLI Release Pipeline + Docker Image
-
-As a developer and user,
-I want bleeding-edge releases of fila-server and fila CLI from every push to main, plus a Docker image,
-So that SDK CIs can download pre-built binaries, and users can try Fila with a single Docker command.
-
-**Acceptance Criteria:**
-
-**Given** a commit is pushed to main
-**When** the bleeding-edge release workflow runs
-**Then** cross-compiled binaries are built for: linux-amd64, linux-arm64, darwin-amd64, darwin-arm64
-**And** both `fila-server` and `fila` (CLI) binaries are included for each platform
-**And** a GitHub Release is created, tagged with the short commit hash (e.g., `dev-abc1234`), marked as pre-release
-**And** binaries are uploaded as GitHub Release assets with checksums
-**And** a `latest` pre-release tag is updated to always point to the most recent build
-**And** SDK CI workflows can download the latest pre-built binary instead of building from source
-
-**Given** the release workflow produces binaries
-**When** a Docker image is created
-**Then** a multi-stage Dockerfile builds from `rust:latest` and produces a `debian:bookworm-slim` runtime image
-**And** the image contains both `fila-server` and `fila` (CLI) binaries
-**And** the image exposes port 5555
-**And** `docker run ghcr.io/faisca/fila` starts the broker with default configuration
-**And** the image is published to `ghcr.io/faisca/fila` with `dev` and commit-hash tags
-**And** data directory is configurable via volume mount (`-v /data:/var/lib/fila`)
-**And** environment variables can override config (`-e FILA_SERVER__LISTEN_ADDR=0.0.0.0:6666`)
-**And** the image size is minimized (no build tools in runtime layer)
-
-### Story 10.2: SDK Package Publishing
-
-As a developer,
-I want all Fila SDKs published to their respective package registries with bleeding-edge versions,
-So that users can install them via standard package managers and SDK CIs use real published artifacts.
-
-**Acceptance Criteria:**
-
-**Given** the SDK repositories exist (fila-go, fila-python, fila-js, fila-ruby, fila-java, fila-sdk)
-**When** a publish workflow is configured for each
-**Then** the Rust SDK (`fila-sdk`) is published to crates.io
-**And** the Go SDK (`fila-go`) is available via `go get` (Go modules use git tags, no registry publish needed)
-**And** the Python SDK (`fila-python`) is published to PyPI as `fila-python`
-**And** the JS SDK (`fila-js`) is published to npm as `@fila/client`
-**And** the Ruby SDK (`fila-ruby`) is published to RubyGems as `fila-client`
-**And** the Java SDK (`fila-java`) is published to Maven Central as `dev.faisca:fila-client`
-**And** each SDK uses dev/pre-release versioning appropriate to its ecosystem
-**And** each SDK's CI workflow is updated to download the fila-server pre-built binary from Story 10.1 (replacing build-from-source)
-**And** integration tests in all SDK CIs actually execute against the downloaded binary (no silent skips)
-
-### Story 10.3: Binary Distribution & Installation
-
-As a user,
-I want to install Fila via cargo or a shell script,
-So that I can run it natively on my machine without Docker.
-
-**Acceptance Criteria:**
-
-**Given** the Fila crates are published
-**When** a user installs via cargo
-**Then** `cargo install fila-server` installs the broker binary
-**And** `cargo install fila-cli` installs the CLI binary as `fila`
-
-**Given** release binaries are available from Story 10.1
-**When** a user installs via shell script
-**Then** `curl -fsSL https://get.fila.dev | bash` downloads and installs the correct binary for the platform
-**And** the script detects OS (linux/darwin) and architecture (amd64/arm64)
-**And** binaries are placed in a standard location (`/usr/local/bin` or `~/.local/bin`)
-
-**Given** a semver version is tagged
-**When** the release workflow runs
-**Then** a stable GitHub Release is created (not pre-release) with the version tag
-**And** checksums are generated for verification
-
-### Story 10.4: Core Documentation & API Reference
-
-As a user evaluating Fila,
-I want comprehensive documentation that explains concepts, architecture, and API,
-So that I can understand and adopt Fila quickly.
-
-**Acceptance Criteria:**
-
-**Given** Fila is ready for public use
-**When** documentation is created
-**Then** `README.md` includes: project overview, problem statement, quickstart (Docker + CLI), key concepts (fairness, throttling, Lua hooks), and links to detailed docs
-**And** API reference documentation is generated from `.proto` files (FR57)
-**And** a `llms.txt` file is structured for LLM agent consumption with project context, API surface, and usage patterns (FR58)
-**And** documentation covers all core concepts: message lifecycle, fairness groups, DRR scheduling, token bucket throttling, Lua hooks, DLQ, runtime config (FR54)
-**And** documentation uses a docs-as-product approach — the primary onboarding experience (FR60)
-**And** download to fair-scheduling demo is achievable in under 10 minutes following the docs (NFR14)
-
-### Story 10.5: Tutorials, Examples & Lua Patterns
-
-As a developer adopting Fila,
-I want guided tutorials, working code examples, and copy-paste Lua patterns,
-So that I can implement common use cases without starting from scratch.
-
-**Acceptance Criteria:**
-
-**Given** the documentation exists
-**When** tutorials and examples are created
-**Then** guided tutorials cover: multi-tenant fair scheduling, per-provider throttling, exponential backoff retry (FR56)
-**And** working `examples/fair_scheduling.rs` demonstrates multi-tenant fairness with Lua hooks
-**And** working `examples/throttling.rs` demonstrates per-key rate limiting
-**And** each SDK has a working code example showing enqueue → consume → ack flow (FR55)
-**And** copy-paste Lua hook examples are provided for common patterns: tenant fairness, provider throttling, exponential backoff, header-based routing (FR59)
-**And** each example is tested in CI to prevent documentation rot
-
----
-
-## Epic 11: Release Activation
-
-Verify that the release infrastructure from Epic 10 actually works end-to-end: bleeding-edge releases fire on merge, SDK CIs download pre-built binaries, and packages are published to all registries. This is operational verification, not new engineering.
-
-**Added in:** Epic 10 Retrospective (2026-03-01). Lucas flagged that Epic 10 built pipelines but never verified them. Operational tasks tracked here instead of memory files.
-
-### Story 11.1: Verify Release Pipeline End-to-End
-
-As a maintainer,
-I want to verify that the bleeding-edge release pipeline actually works,
-So that SDK CIs can download pre-built binaries and users can pull Docker images.
-
-**Acceptance Criteria:**
-
-**Given** Epic 10 code is merged to main
-**When** the bleeding-edge workflow triggers
-**Then** binaries are produced for all 4 platforms (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64)
-**And** a GitHub Release tagged `dev-{sha}` is created with all assets
-**And** the rolling `latest` pre-release tag points to the newest build
-**And** the Docker image is published to `ghcr.io/faisca/fila` with `dev` and `dev-{sha}` tags
-**And** all 5 external SDK CIs (Go, Python, JS, Ruby, Java) successfully download the binary via `gh release download latest`
-**And** integration tests in all 5 SDK CIs actually execute and pass against the downloaded binary
-
-### Story 11.2: Package Registry Publishing
-
-As a maintainer,
-I want all SDKs published to their respective package registries,
-So that users can install Fila and its SDKs via standard package managers.
-
-**Acceptance Criteria:**
-
-**Given** the publish workflows exist in each SDK repo
-**When** secrets are configured and a publish is triggered
-**Then** `fila-proto` and `fila-sdk` are published to crates.io
-**And** `fila-go` has a dev version tag accessible via `go get`
-**And** `fila-python` is published to PyPI (OIDC trusted publisher configured)
-**And** `@fila/client` is published to npm
-**And** `fila-client` gem is published to RubyGems
-**And** `dev.faisca:fila-client` is published to Maven Central
-**And** `fila-server` and `fila-cli` are installable via `cargo install`
-**And** DNS for `get.fila.dev` is configured (or install.sh updated to use raw GitHub URL)
-**And** `curl -fsSL <install-url> | bash` successfully installs the correct binary
-
----
-
-## Future Work
-
-- Authentication and authorization (API keys, mTLS)
-- Distributed clustering (multi-node horizontal scalability)
-- Consumer groups (broker-managed consumer coordination)
-- Management GUI (web interface for monitoring)
+**Given** the Fila server exposes metrics and stats via gRPC
+**When** the web GUI is enabled
+**Then** the server serves a built-in web interface on a configurable HTTP port (default: 8080, configured via `gui.enabled`, `gui.listen_addr`)
+**And** the dashboard shows real-time queue list with depth, throughput, and consumer count per queue
+**And** per-queue detail view shows: fairness key distribution (DRR state), throttle key status (bucket fill levels), consumer connections, DLQ depth
+**And** a scheduling visualization shows live DRR rounds — which fairness keys are being served, deficit states, skip events
+**And** message throughput is graphed over time (last 1h, 6h, 24h)
+**And** the GUI is a single-page application bundled into the server binary (no external dependencies to serve)
+**And** the GUI communicates with the broker via a lightweight HTTP/JSON API (thin wrapper over existing gRPC stats)
+**And** the GUI is read-only — no administrative actions (create/delete queues, config changes) to minimize security surface
+**And** the GUI is optional — disabled by default, zero overhead when disabled
+**And** in clustered mode, the GUI shows cluster-wide view: node list, partition distribution, replication status
+**And** integration tests verify: GUI serves on configured port, dashboard returns queue data matching gRPC GetStats
