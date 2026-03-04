@@ -15,17 +15,13 @@ const WARMUP_SECS: u64 = 3;
 pub async fn bench_lua_latency(server: &BenchServer) -> Vec<BenchResult> {
     // Baseline: no Lua
     let no_lua_queue = "bench-lua-baseline";
-    create_queue_cli(server.host_port(), no_lua_queue);
+    create_queue_cli(server.addr(), no_lua_queue);
     let baseline_throughput = measure_throughput(server, no_lua_queue, HashMap::new()).await;
 
     // With Lua on_enqueue
     let lua_queue = "bench-lua-overhead";
-    let on_enqueue = r#"
-        local key = msg.headers["tenant_id"] or "default"
-        local w = tonumber(msg.headers["weight"]) or 1
-        return { fairness_key = key, weight = w, throttle_keys = {} }
-    "#;
-    create_queue_with_lua_cli(server.host_port(), lua_queue, Some(on_enqueue), None);
+    let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" local w = tonumber(msg.headers["weight"]) or 1 return { fairness_key = key, weight = w, throttle_keys = {} } end"#;
+    create_queue_with_lua_cli(server.addr(), lua_queue, Some(on_enqueue), None);
     let headers: HashMap<String, String> = [
         ("tenant_id".to_string(), "t1".to_string()),
         ("weight".to_string(), "1".to_string()),

@@ -13,16 +13,13 @@ const WARMUP_SECS: u64 = 3;
 pub async fn bench_fairness_overhead(server: &BenchServer) -> Vec<BenchResult> {
     // Baseline: FIFO queue (no Lua, single implicit fairness key)
     let fifo_queue = "bench-fairness-fifo";
-    create_queue_cli(server.host_port(), fifo_queue);
+    create_queue_cli(server.addr(), fifo_queue);
     let fifo_throughput = measure_enqueue_throughput(server, fifo_queue).await;
 
     // Fair scheduling: queue with Lua assigning fairness_key from header
     let fair_queue = "bench-fairness-fair";
-    let on_enqueue = r#"
-        local key = msg.headers["tenant_id"] or "default"
-        return { fairness_key = key, weight = 1 }
-    "#;
-    create_queue_with_lua_cli(server.host_port(), fair_queue, Some(on_enqueue), None);
+    let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" return { fairness_key = key, weight = 1, throttle_keys = {} } end"#;
+    create_queue_with_lua_cli(server.addr(), fair_queue, Some(on_enqueue), None);
     let fair_throughput = measure_enqueue_throughput_with_headers(
         server,
         fair_queue,
@@ -67,12 +64,8 @@ pub async fn bench_fairness_overhead(server: &BenchServer) -> Vec<BenchResult> {
 /// Measure fairness accuracy across keys with varying weights (NFR3: within 5%).
 pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
     let queue = "bench-fairness-accuracy";
-    let on_enqueue = r#"
-        local key = msg.headers["tenant_id"] or "default"
-        local w = tonumber(msg.headers["weight"]) or 1
-        return { fairness_key = key, weight = w }
-    "#;
-    create_queue_with_lua_cli(server.host_port(), queue, Some(on_enqueue), None);
+    let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" local w = tonumber(msg.headers["weight"]) or 1 return { fairness_key = key, weight = w, throttle_keys = {} } end"#;
+    create_queue_with_lua_cli(server.addr(), queue, Some(on_enqueue), None);
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await

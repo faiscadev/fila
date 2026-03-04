@@ -34,7 +34,7 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
 
     for level in LOAD_LEVELS {
         let queue = format!("bench-latency-{}", level.name);
-        create_queue_cli(server.host_port(), &queue);
+        create_queue_cli(server.addr(), &queue);
 
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await

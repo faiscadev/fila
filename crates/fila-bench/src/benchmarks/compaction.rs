@@ -11,7 +11,7 @@ const COMPACTION_TRIGGER_MESSAGES: u64 = 100_000;
 /// Measure RocksDB compaction impact on tail latency (p99 idle vs during compaction).
 pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
     let queue = "bench-compaction";
-    create_queue_cli(server.host_port(), queue);
+    create_queue_cli(server.addr(), queue);
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await

@@ -53,7 +53,7 @@ otlp_endpoint = ""
                 data_dir.path().join("data").to_str().unwrap(),
             )
             .current_dir(data_dir.path())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("start fila-server");
