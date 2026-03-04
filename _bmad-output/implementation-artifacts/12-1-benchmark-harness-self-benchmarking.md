@@ -274,6 +274,13 @@ None — clean implementation, no debug issues.
 - All 278 existing tests pass, zero regressions
 - `cargo clippy --workspace` clean
 
+### Code Review Findings (fixed)
+
+- **CLI address format** — all `create_queue_cli`/`create_queue_with_lua_cli` calls used `server.host_port()` (bare `host:port`) instead of `server.addr()` (with `http://` scheme). CLI's tonic connect requires a valid URI with scheme. Would have caused runtime failure on every queue creation.
+- **Lua script wrappers** — all Lua scripts were bare function bodies instead of `function on_enqueue(msg) ... end` format. The Lua sandbox expects a global `on_enqueue` function definition. Would have caused runtime failure on all Lua-enabled benchmarks.
+- **Unused dependencies** — `fila-proto` and `tonic` were listed in Cargo.toml but not imported by any source file. Removed.
+- **Stdout pipe not drained** — BenchServer piped stdout but never drained it, risking process deadlock. Changed to `Stdio::null()` since server logs go to stderr.
+
 ### File List
 
 - `crates/fila-bench/Cargo.toml` (new)
