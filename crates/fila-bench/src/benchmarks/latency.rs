@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 
 const PAYLOAD_SIZE: usize = 1024;
-const SAMPLES_PER_LEVEL: usize = 100;
+const SAMPLES_PER_LEVEL: usize = 1000;
 
 struct LoadLevel {
     name: &'static str,
