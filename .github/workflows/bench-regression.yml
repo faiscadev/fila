@@ -57,6 +57,7 @@ jobs:
 
       - name: Compare against baseline
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         run: |
           if [ -f bench-baseline.json ]; then
             ./target/release/bench-compare bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD
@@ -93,7 +94,7 @@ jobs:
   bench-comment:
     name: Post Bench Results
     needs: bench
-    if: github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request' && needs.bench.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
