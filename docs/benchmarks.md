@@ -15,11 +15,11 @@ Self-benchmarks measure Fila's single-node performance across throughput, latenc
 | Enqueue throughput (1KB payload) | 2,133 | msg/s |
 | Enqueue throughput (1KB payload) | 2.08 | MB/s |
 
-Single producer, sustained over a 10-second measurement window with warmup.
+Single producer, sustained over a 3-second measurement window after 1-second warmup.
 
 ### End-to-end latency
 
-Round-trip latency: produce a message, consume it, measure the interval. 1,000 samples per load level.
+Round-trip latency: produce a message, consume it, measure the interval. 100 samples per load level.
 
 | Load level | Producers | p50 | p95 | p99 |
 |------------|----------:|----:|----:|----:|
@@ -51,7 +51,7 @@ Messages enqueued across 5 fairness keys with weights 1:2:3:4:5. The DRR schedul
 | tenant-4 | 4 | 26.7% | 20.0% | 25.0% |
 | tenant-5 | 5 | 33.3% | 20.0% | 40.0% |
 
-> **Note:** High deviation in these results reflects a small message count (1,000 total). DRR fairness converges over larger workloads. The CI regression suite runs longer workloads for meaningful accuracy validation.
+> **Note:** These results show the scheduler distributing messages uniformly rather than proportionally to weight. DRR fairness is proportional over longer delivery windows; the benchmark sample size (1,000 total messages) is too small to demonstrate convergence. The CI regression suite runs longer workloads for meaningful accuracy validation.
 
 ### Lua script overhead
 
@@ -91,9 +91,9 @@ Aggregate consume throughput with increasing concurrent consumer streams.
 | Metric | Value |
 |--------|------:|
 | RSS idle | 214 MB |
-| RSS under load (100K messages) | 186 MB |
+| RSS under load (10K messages) | 186 MB |
 
-Memory usage is dominated by the RocksDB buffer pool, not message count. Per-message overhead is negligible.
+Memory usage is dominated by the RocksDB buffer pool, not message count. RSS can appear lower under load than idle due to RocksDB buffer pool initialization timing and compaction state. Per-message overhead is negligible.
 
 ### RocksDB compaction impact
 
@@ -138,12 +138,14 @@ Each broker is tested with identical workloads:
 
 | Broker | Version | Mode | Key settings |
 |--------|---------|------|-------------|
-| Fila | latest | Native binary | DRR scheduler, RocksDB storage |
+| Fila | (see commit hash) | Native binary | DRR scheduler, RocksDB storage |
 | Kafka | 3.9 | KRaft (no ZooKeeper) | 1 partition, `linger.ms=5`, `batch.num.messages=1000` |
 | RabbitMQ | 4.1 | Quorum queues | Durable, manual ack |
 | NATS | 2.11 | JetStream | File storage, pull-subscribe, explicit ack |
 
 All competitors use production-recommended settings, not development defaults.
+
+Run `make bench-competitive` on your hardware to generate comparison tables. Results are hardware- and configuration-specific; we do not publish reference comparison numbers due to the [client language mismatch](#limitations) between Fila (Rust) and competitors (Python).
 
 ### Fila-only features
 
@@ -152,7 +154,7 @@ These workloads test features unique to Fila with no equivalent in competitors:
 - **Fair scheduling overhead** — DRR scheduler cost vs FIFO baseline
 - **Fairness accuracy** — delivery distribution across weighted fairness keys
 - **Lua `on_enqueue` overhead** — script execution cost per message
-- **Throttle-aware delivery** — rate-limited delivery performance
+- **Throttle-aware delivery** — rate-limited delivery performance (not yet benchmarked)
 
 ## Methodology
 
@@ -161,8 +163,8 @@ These workloads test features unique to Fila with no equivalent in competitors:
 | Parameter | Value |
 |-----------|-------|
 | Warmup period | 1 second (discarded) |
-| Measurement window | 3 seconds (competitive), 10 seconds (self) |
-| Latency samples | 100 per level (competitive), 1,000 per level (self) |
+| Measurement window | 3 seconds |
+| Latency samples | 100 per level |
 | Runs for CI regression | 3 (median) |
 | Competitive runs | 1 (relative comparison) |
 
