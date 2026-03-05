@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "12.2"
     title: "CI Regression Detection"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/12.2-ci-regression-detection"
-    pr: null
+    pr: 46
     dependsOn: ["12.1"]
   - id: "12.3"
     title: "Competitive Benchmarks"

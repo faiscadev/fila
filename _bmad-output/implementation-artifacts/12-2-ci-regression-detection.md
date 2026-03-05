@@ -1,6 +1,6 @@
 # Story 12.2: CI Regression Detection
 
-Status: in-progress
+Status: done
 
 ## Story
 
