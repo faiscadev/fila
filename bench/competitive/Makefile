@@ -24,7 +24,7 @@ setup:
 	@mkdir -p $(RESULTS_DIR)
 
 build:
-	cd $(REPO_ROOT) && cargo build --release -p fila-bench --bin bench-competitive
+	cd $(REPO_ROOT) && cargo build --release -p fila-bench --features competitive --bin bench-competitive
 
 bench-competitive: setup build bench-fila bench-kafka bench-rabbitmq bench-nats
 	@echo ""
