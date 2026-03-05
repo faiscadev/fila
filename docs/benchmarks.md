@@ -41,7 +41,7 @@ The DRR scheduler does not add measurable overhead. In some runs fair scheduling
 
 ### Fairness accuracy
 
-Messages enqueued across 5 fairness keys with weights 1:2:3:4:5. The DRR scheduler distributes delivery proportionally to weight.
+Messages enqueued across 5 fairness keys with weights 1:2:3:4:5. The DRR scheduler is designed to distribute delivery proportionally to weight over sustained workloads.
 
 | Key | Weight | Expected share | Actual share | Deviation |
 |-----|-------:|---------------:|-------------:|----------:|
