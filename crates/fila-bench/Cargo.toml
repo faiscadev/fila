@@ -16,6 +16,14 @@ serde_json = { workspace = true }
 tempfile = "3"
 sysinfo = "0.34"
 
+[[bin]]
+name = "bench-compare"
+path = "src/bin/bench-compare.rs"
+
+[[bin]]
+name = "bench-aggregate"
+path = "src/bin/bench-aggregate.rs"
+
 [[bench]]
 name = "system"
 harness = false
