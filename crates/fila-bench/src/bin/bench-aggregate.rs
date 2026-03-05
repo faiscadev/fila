@@ -35,6 +35,9 @@ fn main() {
 
     println!("Aggregated {} reports → {output_path}", reports.len());
     for metric in &aggregated.benchmarks {
-        println!("  {:<50} {:>12.2} {}", metric.name, metric.value, metric.unit);
+        println!(
+            "  {:<50} {:>12.2} {}",
+            metric.name, metric.value, metric.unit
+        );
     }
 }
