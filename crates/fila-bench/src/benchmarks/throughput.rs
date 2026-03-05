@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 const PAYLOAD_SIZE: usize = 1024; // 1KB
-const WARMUP_SECS: u64 = 3;
-const MEASURE_SECS: u64 = 10;
+const WARMUP_SECS: u64 = 1;
+const MEASURE_SECS: u64 = 3;
 
 /// Measure single-producer enqueue throughput with 1KB payloads.
 pub async fn bench_enqueue_throughput(server: &BenchServer) -> Vec<BenchResult> {

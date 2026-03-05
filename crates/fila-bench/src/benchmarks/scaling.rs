@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio_stream::StreamExt;
 
 const PAYLOAD_SIZE: usize = 1024;
-const MEASURE_SECS: u64 = 10;
+const MEASURE_SECS: u64 = 3;
 
 /// Measure enqueue/consume throughput at 1M and 10M queued messages (queue depth scaling).
 pub async fn bench_queue_depth_scaling(server: &BenchServer) -> Vec<BenchResult> {
@@ -87,12 +87,11 @@ pub async fn bench_queue_depth_scaling(server: &BenchServer) -> Vec<BenchResult>
 pub async fn bench_key_cardinality(server: &BenchServer) -> Vec<BenchResult> {
     let mut results = Vec::new();
 
-    for key_count in [10u64, 1_000, 10_000, 100_000] {
+    for key_count in [10u64, 1_000, 10_000] {
         let key_label = match key_count {
             10 => "10",
             1_000 => "1k",
             10_000 => "10k",
-            100_000 => "100k",
             _ => unreachable!(),
         };
         let queue = format!("bench-cardinality-{key_label}");
@@ -151,7 +150,7 @@ pub async fn bench_consumer_concurrency(server: &BenchServer) -> Vec<BenchResult
         let headers: HashMap<String, String> = HashMap::new();
 
         // Pre-load messages so consumers have work
-        let pre_load: u64 = 100_000;
+        let pre_load: u64 = 10_000;
         let mut progress =
             Progress::new(&format!("concurrency {consumer_count} pre-load"), pre_load);
         for _ in 0..pre_load {
