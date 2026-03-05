@@ -1,0 +1,139 @@
+# Competitive Benchmark Methodology
+
+## Overview
+
+This benchmark suite compares Fila against Kafka, RabbitMQ, and NATS on queue-oriented workloads. The goal is a fair, reproducible comparison that helps evaluators make informed adoption decisions.
+
+## Broker Configurations
+
+### Fila
+
+- Runs as a native binary (not containerized) on the host machine
+- Default configuration (DRR scheduler, RocksDB storage)
+- Uses the built-in benchmark harness from `crates/fila-bench`
+
+### Apache Kafka 3.9 (KRaft Mode)
+
+- **Mode**: KRaft (combined controller + broker) — no ZooKeeper
+- **Partitions**: 1 per topic (matches Fila's single-queue semantics)
+- **Replication factor**: 1 (single-node benchmark)
+- **Producer tuning**: `linger.ms=5`, `batch.num.messages=1000` for throughput tests; `linger.ms=0` for latency tests
+- **Why KRaft**: Recommended for all new Kafka deployments since 3.3+; ZooKeeper is deprecated
+
+### RabbitMQ 4.1
+
+- **Queue type**: Quorum queues (`x-queue-type: quorum`) — production-recommended since 3.8+
+- **Durability**: Durable queues with manual ack
+- **Why quorum queues**: They are RabbitMQ's recommended queue type for data safety. Classic queues are legacy.
+
+### NATS 2.11 (JetStream)
+
+- **Persistence**: JetStream enabled with file-based storage
+- **Memory limit**: 256MB in-memory store, 1GB file store
+- **Consumer**: Pull-subscribe with explicit ack
+- **Why JetStream**: Required for persistent messaging, message acknowledgment, and replay — features needed for queue-style workloads
+
+## Workloads
+
+### 1. Throughput (Producer)
+
+Measures sustained message production rate over a fixed time window.
+
+- **Message sizes**: 64B, 1KB, 64KB
+- **Warmup**: 1 second (discarded)
+- **Measurement window**: 3 seconds
+- **Metric**: messages/second
+
+### 2. End-to-End Latency
+
+Measures round-trip time: produce a single message, consume it, measure the interval.
+
+- **Message size**: 1KB
+- **Samples**: 100
+- **Metrics**: p50, p95, p99 (milliseconds)
+- **Method**: Sequential produce→consume pairs (not pipelined)
+
+### 3. Lifecycle Throughput (Produce → Consume → Ack)
+
+Measures the full message lifecycle: pre-load 1,000 messages, then consume and acknowledge each one.
+
+- **Message size**: 1KB
+- **Messages**: 1,000
+- **Metric**: messages/second for the consume+ack phase
+
+### 4. Resource Utilization
+
+Captures CPU and memory usage of each broker's Docker container during benchmarks.
+
+- **Method**: `docker stats --no-stream` after workload completes
+- **Metrics**: CPU percentage, memory (MB)
+- **Note**: Fila runs natively, not in Docker; its resource metrics come from the built-in benchmark suite
+
+## Fila-Only Workloads
+
+These workloads test Fila-specific features with no equivalent in the competitors:
+
+- **Fair scheduling overhead**: DRR scheduler overhead vs FIFO baseline
+- **Fairness accuracy**: How accurately the DRR scheduler distributes messages across fairness keys
+- **Lua on_enqueue overhead**: Script execution overhead per message
+- **Throttle-aware delivery**: Rate-limited delivery performance
+
+These results are included in Fila's self-benchmark report but have no competitor counterpart.
+
+## Measurement Notes
+
+### Warmup
+
+All throughput benchmarks include a warmup period (default: 1 second) where messages are produced but not counted. This ensures the broker is in a steady state before measurement begins.
+
+### Multiple Runs
+
+For CI regression detection, the benchmark suite runs 3 times and uses the median. For competitive benchmarks, a single run is typically sufficient since the focus is relative comparison (all brokers experience the same CI environment variance).
+
+### Python vs Rust Client
+
+Competitor benchmarks use Python client libraries (confluent-kafka, pika, nats-py) while Fila uses its native Rust benchmark harness. This means Fila's absolute numbers may be faster partly due to Rust client efficiency. The comparison is still valid for relative positioning: "how does Fila compare to Kafka when each uses its standard client?"
+
+For a strictly apples-to-apples comparison, one could benchmark all brokers using the same language. However, this would penalize Fila (whose Rust SDK is its primary client) or require maintaining Rust clients for Kafka/RabbitMQ/NATS.
+
+### Hardware
+
+Results are hardware-specific. When publishing results, always include:
+
+- CPU model and core count
+- Memory (total and available)
+- Disk type (SSD/NVMe/HDD)
+- OS and kernel version
+- Docker version
+
+The `bench.py` script records the git commit hash and timestamp for traceability.
+
+## Limitations
+
+- **Single-node only**: All brokers run as single instances. Clustering performance is not tested.
+- **No network latency**: Brokers run on localhost. Real-world deployments have network overhead.
+- **Client language mismatch**: Python clients for competitors vs Rust for Fila (see note above).
+- **Configuration sensitivity**: Results depend on broker configuration. We use production-recommended defaults but not every possible tuning option.
+- **Docker overhead**: Competitors run in Docker while Fila runs natively. Docker adds ~1-3% overhead for I/O-intensive workloads.
+
+## Reproducing Results
+
+```bash
+# Prerequisites
+pip install -r requirements.txt
+
+# Run everything
+cd bench/competitive
+make bench-competitive
+
+# Or run individual brokers
+make bench-kafka
+make bench-rabbitmq
+make bench-nats
+make bench-fila
+
+# Clean up
+make bench-clean
+```
+
+Results are written to `bench/competitive/results/bench-{broker}.json`.

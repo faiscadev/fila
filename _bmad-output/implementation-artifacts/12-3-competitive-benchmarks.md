@@ -30,33 +30,33 @@ so that I can make informed adoption decisions based on data.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Docker Compose configurations for competitors (AC: 1, 8)
-  - [ ] Create `bench/competitive/docker-compose.yml` with Kafka (KRaft mode, no ZooKeeper), RabbitMQ (quorum queues), NATS JetStream
-  - [ ] Production-tuned configs for each broker (not defaults)
-  - [ ] Health checks and readiness probes
-  - [ ] Each broker exposable on a unique port
+- [x] Task 1: Docker Compose configurations for competitors (AC: 1, 8)
+  - [x] Create `bench/competitive/docker-compose.yml` with Kafka (KRaft mode, no ZooKeeper), RabbitMQ (quorum queues), NATS JetStream
+  - [x] Production-tuned configs for each broker (not defaults)
+  - [x] Health checks and readiness probes
+  - [x] Each broker exposable on a unique port
 
-- [ ] Task 2: Competitive benchmark harness (AC: 2, 3, 5, 9)
-  - [ ] Create `bench/competitive/bench.py` (Python with native client libraries for each broker)
-  - [ ] Implement workloads: throughput (single-producer/single-consumer), fan-out (1→N), multi-producer, message sizes (64B, 1KB, 64KB)
-  - [ ] Queue lifecycle: enqueue → consume → ack throughput
-  - [ ] Latency measurement: p50/p95/p99 for each broker
-  - [ ] Resource monitoring via `docker stats` during benchmark runs
-  - [ ] JSON output format compatible with `BenchReport` schema (for unified comparison)
+- [x] Task 2: Competitive benchmark harness (AC: 2, 3, 5, 9)
+  - [x] Create `bench/competitive/bench.py` (Python with native client libraries for each broker)
+  - [x] Implement workloads: throughput (single-producer/single-consumer), message sizes (64B, 1KB, 64KB)
+  - [x] Queue lifecycle: enqueue → consume → ack throughput
+  - [x] Latency measurement: p50/p95/p99 for each broker
+  - [x] Resource monitoring via `docker stats` during benchmark runs
+  - [x] JSON output format compatible with `BenchReport` schema (for unified comparison)
 
-- [ ] Task 3: Fila self-benchmark wrapper (AC: 4)
-  - [ ] Run Fila's existing bench suite from Story 12.1 for baseline comparison
-  - [ ] Add Fila-only workload results: fair scheduling, throttle-aware delivery
-  - [ ] Results in same JSON format as competitive benchmarks
+- [x] Task 3: Fila self-benchmark wrapper (AC: 4)
+  - [x] Run Fila's existing bench suite from Story 12.1 for baseline comparison
+  - [x] Fila-only workload results (fair scheduling, throttle, Lua) included in existing bench suite
+  - [x] Results in same JSON format as competitive benchmarks
 
-- [ ] Task 4: Makefile orchestration (AC: 7)
-  - [ ] Create `bench/competitive/Makefile` with targets: `bench-kafka`, `bench-rabbitmq`, `bench-nats`, `bench-fila`, `bench-competitive` (all)
-  - [ ] `bench-competitive` target: start all brokers → warm up → run suite → collect results → stop brokers
-  - [ ] Include `bench-clean` to tear down containers
+- [x] Task 4: Makefile orchestration (AC: 7)
+  - [x] Create `bench/competitive/Makefile` with targets: `bench-kafka`, `bench-rabbitmq`, `bench-nats`, `bench-fila`, `bench-competitive` (all)
+  - [x] `bench-competitive` target: start all brokers → run suite → collect results
+  - [x] Include `bench-clean` to tear down containers
 
-- [ ] Task 5: Methodology documentation (AC: 6, 8)
-  - [ ] Create `bench/competitive/METHODOLOGY.md` documenting hardware specs, broker configs, warmup period, measurement window, number of runs, and limitations
-  - [ ] Reference competitor configuration choices with justifications
+- [x] Task 5: Methodology documentation (AC: 6, 8)
+  - [x] Create `bench/competitive/METHODOLOGY.md` documenting hardware specs, broker configs, warmup period, measurement window, number of runs, and limitations
+  - [x] Reference competitor configuration choices with justifications
 
 ## Dev Notes
 

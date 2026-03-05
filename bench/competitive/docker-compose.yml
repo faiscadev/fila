@@ -1,0 +1,70 @@
+# Competitive benchmark broker configurations.
+# Each broker uses production-recommended settings (not defaults).
+#
+# Usage:
+#   docker compose up -d kafka rabbitmq nats    # start all
+#   docker compose up -d kafka                  # start one
+#   docker compose down -v                      # teardown + volumes
+
+services:
+  # Kafka in KRaft mode (no ZooKeeper) — production-recommended since Kafka 3.3+
+  kafka:
+    image: apache/kafka:3.9.0
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode (combined controller + broker)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Production tuning
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 1
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      CLUSTER_ID: benchmark-cluster-00001
+    healthcheck:
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # RabbitMQ with quorum queues (production-recommended since RabbitMQ 3.8+)
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: bench
+      RABBITMQ_DEFAULT_PASS: bench
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # NATS with JetStream enabled (production-recommended for persistent messaging)
+  nats:
+    image: nats:2.11
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: >
+      --jetstream
+      --store_dir /data
+      --max_mem_store 256MB
+      --max_file_store 1GB
+      -m 8222
+    healthcheck:
+      test: wget -qO- http://localhost:8222/healthz || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 10
