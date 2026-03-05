@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "12.2"
     title: "CI Regression Detection"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/12.2-ci-regression-detection"
     pr: null
     dependsOn: ["12.1"]
   - id: "12.3"
