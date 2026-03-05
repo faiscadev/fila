@@ -63,7 +63,11 @@ mod kafka {
         let _ = rt.block_on(admin.delete_topics(&[name], &AdminOptions::new()));
     }
 
-    fn throughput_producer(broker: &str, linger_ms: &str, batch_size: &str) -> ThreadedProducer<DefaultProducerContext> {
+    fn throughput_producer(
+        broker: &str,
+        linger_ms: &str,
+        batch_size: &str,
+    ) -> ThreadedProducer<DefaultProducerContext> {
         ClientConfig::new()
             .set("bootstrap.servers", broker)
             .set("linger.ms", linger_ms)
@@ -76,7 +80,11 @@ mod kafka {
         let adm = admin();
 
         // Throughput benchmarks
-        for (size_name, payload_size) in [("64b", PAYLOAD_64B), ("1kb", PAYLOAD_1KB), ("64kb", PAYLOAD_64KB)] {
+        for (size_name, payload_size) in [
+            ("64b", PAYLOAD_64B),
+            ("1kb", PAYLOAD_1KB),
+            ("64kb", PAYLOAD_64KB),
+        ] {
             let topic = format!("bench-throughput-{size_name}");
             create_topic(&adm, &topic);
             let payload = vec![0u8; payload_size];
@@ -96,7 +104,10 @@ mod kafka {
             let mut meter = ThroughputMeter::start();
             let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
             while Instant::now() < measure_deadline {
-                if producer.send(BaseRecord::<(), [u8]>::to(&topic).payload(&payload)).is_ok() {
+                if producer
+                    .send(BaseRecord::<(), [u8]>::to(&topic).payload(&payload))
+                    .is_ok()
+                {
                     meter.increment();
                 }
             }
@@ -140,7 +151,10 @@ mod kafka {
                 // Poll until we get a message
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while Instant::now() < deadline {
-                    if let Some(Ok(_msg)) = consumer.poll(Duration::from_millis(100)).map(|r| r.map(|_m: BorrowedMessage<'_>| ())) {
+                    if let Some(Ok(_msg)) = consumer
+                        .poll(Duration::from_millis(100))
+                        .map(|r| r.map(|_m: BorrowedMessage<'_>| ()))
+                    {
                         sampler.record(start.elapsed());
                         break;
                     }
@@ -197,8 +211,13 @@ mod kafka {
             let mut count = 0u64;
             let start = Instant::now();
             while count < LIFECYCLE_MESSAGES as u64 {
-                if let Some(Ok(_)) = consumer.poll(Duration::from_secs(5)).map(|r| r.map(|_m: BorrowedMessage<'_>| ())) {
-                    consumer.commit_consumer_state(rdkafka::consumer::CommitMode::Sync).ok();
+                if let Some(Ok(_)) = consumer
+                    .poll(Duration::from_secs(5))
+                    .map(|r| r.map(|_m: BorrowedMessage<'_>| ()))
+                {
+                    consumer
+                        .commit_consumer_state(rdkafka::consumer::CommitMode::Sync)
+                        .ok();
                     count += 1;
                 }
             }
@@ -220,37 +239,47 @@ mod kafka {
             create_topic(&adm, topic);
             let payload = vec![0u8; PAYLOAD_1KB];
 
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> =
-                (0..MULTI_PRODUCERS).map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))).collect();
+            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..MULTI_PRODUCERS)
+                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+                .collect();
 
-            let handles: Vec<_> = (0..MULTI_PRODUCERS).map(|i| {
-                let topic = topic.to_string();
-                let payload = payload.clone();
-                let count = counts[i].clone();
-                std::thread::spawn(move || {
-                    let producer = throughput_producer(BROKER, "5", "1000");
-                    // Warmup
-                    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
-                    while Instant::now() < warmup_deadline {
-                        let _ = producer.send(BaseRecord::<(), [u8]>::to(&topic).payload(&payload));
-                    }
-                    producer.flush(Duration::from_secs(5)).ok();
-                    // Measure
-                    let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
-                    while Instant::now() < measure_deadline {
-                        if producer.send(BaseRecord::<(), [u8]>::to(&topic).payload(&payload)).is_ok() {
-                            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let handles: Vec<_> = (0..MULTI_PRODUCERS)
+                .map(|i| {
+                    let topic = topic.to_string();
+                    let payload = payload.clone();
+                    let count = counts[i].clone();
+                    std::thread::spawn(move || {
+                        let producer = throughput_producer(BROKER, "5", "1000");
+                        // Warmup
+                        let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
+                        while Instant::now() < warmup_deadline {
+                            let _ =
+                                producer.send(BaseRecord::<(), [u8]>::to(&topic).payload(&payload));
                         }
-                    }
-                    producer.flush(Duration::from_secs(5)).ok();
+                        producer.flush(Duration::from_secs(5)).ok();
+                        // Measure
+                        let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
+                        while Instant::now() < measure_deadline {
+                            if producer
+                                .send(BaseRecord::<(), [u8]>::to(&topic).payload(&payload))
+                                .is_ok()
+                            {
+                                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                        producer.flush(Duration::from_secs(5)).ok();
+                    })
                 })
-            }).collect();
+                .collect();
 
             for h in handles {
                 h.join().unwrap();
             }
 
-            let total: u64 = counts.iter().map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).sum();
+            let total: u64 = counts
+                .iter()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .sum();
             report.add(BenchResult {
                 name: "kafka_multi_producer_throughput".to_string(),
                 value: total as f64 / MEASURE_SECS as f64,
@@ -274,34 +303,45 @@ mod kafka {
             producer.flush(Duration::from_secs(10)).ok();
             std::thread::sleep(Duration::from_millis(500));
 
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> =
-                (0..FAN_OUT_CONSUMERS).map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))).collect();
+            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..FAN_OUT_CONSUMERS)
+                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+                .collect();
 
             let start = Instant::now();
-            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS).map(|i| {
-                let count = counts[i].clone();
-                std::thread::spawn(move || {
-                    let consumer: BaseConsumer<DefaultConsumerContext> = ClientConfig::new()
-                        .set("bootstrap.servers", BROKER)
-                        .set("group.id", format!("bench-fanout-group-{i}"))
-                        .set("auto.offset.reset", "earliest")
-                        .set("enable.auto.commit", "true")
-                        .create()
-                        .expect("kafka consumer");
-                    consumer.subscribe(&[topic]).expect("subscribe");
-                    while count.load(std::sync::atomic::Ordering::Relaxed) < FAN_OUT_MESSAGES as u64 {
-                        if let Some(Ok(_)) = consumer.poll(Duration::from_secs(5)).map(|r| r.map(|_m: BorrowedMessage<'_>| ())) {
-                            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS)
+                .map(|i| {
+                    let count = counts[i].clone();
+                    std::thread::spawn(move || {
+                        let consumer: BaseConsumer<DefaultConsumerContext> = ClientConfig::new()
+                            .set("bootstrap.servers", BROKER)
+                            .set("group.id", format!("bench-fanout-group-{i}"))
+                            .set("auto.offset.reset", "earliest")
+                            .set("enable.auto.commit", "true")
+                            .create()
+                            .expect("kafka consumer");
+                        consumer.subscribe(&[topic]).expect("subscribe");
+                        while count.load(std::sync::atomic::Ordering::Relaxed)
+                            < FAN_OUT_MESSAGES as u64
+                        {
+                            if let Some(Ok(_)) = consumer
+                                .poll(Duration::from_secs(5))
+                                .map(|r| r.map(|_m: BorrowedMessage<'_>| ()))
+                            {
+                                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
                         }
-                    }
+                    })
                 })
-            }).collect();
+                .collect();
 
             for h in handles {
                 h.join().unwrap();
             }
             let elapsed = start.elapsed().as_secs_f64();
-            let total: u64 = counts.iter().map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).sum();
+            let total: u64 = counts
+                .iter()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .sum();
             report.add(BenchResult {
                 name: "kafka_fanout_throughput".to_string(),
                 value: total as f64 / elapsed,
@@ -334,8 +374,7 @@ mod kafka {
 mod rabbitmq {
     use super::*;
     use lapin::{
-        options::*, types::FieldTable, BasicProperties, Channel, Connection,
-        ConnectionProperties,
+        options::*, types::FieldTable, BasicProperties, Channel, Connection, ConnectionProperties,
     };
 
     const ADDR: &str = "amqp://bench:bench@localhost:5672";
@@ -348,9 +387,19 @@ mod rabbitmq {
 
     async fn declare_queue(channel: &Channel, name: &str) {
         let mut args = FieldTable::default();
-        args.insert("x-queue-type".into(), lapin::types::AMQPValue::LongString("quorum".into()));
+        args.insert(
+            "x-queue-type".into(),
+            lapin::types::AMQPValue::LongString("quorum".into()),
+        );
         channel
-            .queue_declare(name, QueueDeclareOptions { durable: true, ..Default::default() }, args)
+            .queue_declare(
+                name,
+                QueueDeclareOptions {
+                    durable: true,
+                    ..Default::default()
+                },
+                args,
+            )
             .await
             .expect("declare queue");
         channel
@@ -361,7 +410,11 @@ mod rabbitmq {
 
     pub async fn bench(report: &mut BenchReport) {
         // Throughput benchmarks
-        for (size_name, payload_size) in [("64b", PAYLOAD_64B), ("1kb", PAYLOAD_1KB), ("64kb", PAYLOAD_64KB)] {
+        for (size_name, payload_size) in [
+            ("64b", PAYLOAD_64B),
+            ("1kb", PAYLOAD_1KB),
+            ("64kb", PAYLOAD_64KB),
+        ] {
             let queue = format!("bench-throughput-{size_name}");
             let conn = connect().await;
             let channel = conn.create_channel().await.expect("channel");
@@ -373,7 +426,13 @@ mod rabbitmq {
             let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
             while Instant::now() < warmup_deadline {
                 let _ = channel
-                    .basic_publish("", &queue, BasicPublishOptions::default(), &payload, BasicProperties::default())
+                    .basic_publish(
+                        "",
+                        &queue,
+                        BasicPublishOptions::default(),
+                        &payload,
+                        BasicProperties::default(),
+                    )
                     .await;
             }
 
@@ -383,7 +442,13 @@ mod rabbitmq {
             let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
             while Instant::now() < measure_deadline {
                 if channel
-                    .basic_publish("", &queue, BasicPublishOptions::default(), &payload, BasicProperties::default())
+                    .basic_publish(
+                        "",
+                        &queue,
+                        BasicPublishOptions::default(),
+                        &payload,
+                        BasicProperties::default(),
+                    )
                     .await
                     .is_ok()
                 {
@@ -397,7 +462,10 @@ mod rabbitmq {
                 unit: "msg/s".to_string(),
                 metadata: HashMap::new(),
             });
-            channel.queue_delete(&queue, QueueDeleteOptions::default()).await.ok();
+            channel
+                .queue_delete(&queue, QueueDeleteOptions::default())
+                .await
+                .ok();
             conn.close(200, "done").await.ok();
         }
 
@@ -414,9 +482,18 @@ mod rabbitmq {
             for _ in 0..LATENCY_SAMPLES {
                 let start = Instant::now();
                 let _ = channel
-                    .basic_publish("", queue, BasicPublishOptions::default(), &payload, BasicProperties::default())
+                    .basic_publish(
+                        "",
+                        queue,
+                        BasicPublishOptions::default(),
+                        &payload,
+                        BasicProperties::default(),
+                    )
                     .await;
-                if let Ok(Some(delivery)) = channel.basic_get(queue, BasicGetOptions { no_ack: false }).await {
+                if let Ok(Some(delivery)) = channel
+                    .basic_get(queue, BasicGetOptions { no_ack: false })
+                    .await
+                {
                     delivery.acker.ack(BasicAckOptions::default()).await.ok();
                     sampler.record(start.elapsed());
                 }
@@ -442,7 +519,10 @@ mod rabbitmq {
                     metadata: HashMap::new(),
                 });
             }
-            channel.queue_delete(queue, QueueDeleteOptions::default()).await.ok();
+            channel
+                .queue_delete(queue, QueueDeleteOptions::default())
+                .await
+                .ok();
             conn.close(200, "done").await.ok();
         }
 
@@ -457,14 +537,23 @@ mod rabbitmq {
 
             for _ in 0..LIFECYCLE_MESSAGES {
                 let _ = channel
-                    .basic_publish("", queue, BasicPublishOptions::default(), &payload, BasicProperties::default())
+                    .basic_publish(
+                        "",
+                        queue,
+                        BasicPublishOptions::default(),
+                        &payload,
+                        BasicProperties::default(),
+                    )
                     .await;
             }
 
             let mut count = 0u64;
             let start = Instant::now();
             while count < LIFECYCLE_MESSAGES as u64 {
-                match channel.basic_get(queue, BasicGetOptions { no_ack: false }).await {
+                match channel
+                    .basic_get(queue, BasicGetOptions { no_ack: false })
+                    .await
+                {
                     Ok(Some(delivery)) => {
                         delivery.acker.ack(BasicAckOptions::default()).await.ok();
                         count += 1;
@@ -480,7 +569,10 @@ mod rabbitmq {
                 unit: "msg/s".to_string(),
                 metadata: HashMap::new(),
             });
-            channel.queue_delete(queue, QueueDeleteOptions::default()).await.ok();
+            channel
+                .queue_delete(queue, QueueDeleteOptions::default())
+                .await
+                .ok();
             conn.close(200, "done").await.ok();
         }
 
@@ -494,37 +586,61 @@ mod rabbitmq {
             conn.close(200, "setup done").await.ok();
 
             let payload = vec![0u8; PAYLOAD_1KB];
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> =
-                (0..MULTI_PRODUCERS).map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))).collect();
+            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..MULTI_PRODUCERS)
+                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+                .collect();
 
-            let handles: Vec<_> = (0..MULTI_PRODUCERS).map(|i| {
-                let queue = queue.to_string();
-                let payload = payload.clone();
-                let count = counts[i].clone();
-                tokio::spawn(async move {
-                    let conn = connect().await;
-                    let ch = conn.create_channel().await.expect("channel");
-                    // Warmup
-                    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
-                    while Instant::now() < warmup_deadline {
-                        let _ = ch.basic_publish("", &queue, BasicPublishOptions::default(), &payload, BasicProperties::default()).await;
-                    }
-                    // Measure
-                    let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
-                    while Instant::now() < measure_deadline {
-                        if ch.basic_publish("", &queue, BasicPublishOptions::default(), &payload, BasicProperties::default()).await.is_ok() {
-                            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let handles: Vec<_> = (0..MULTI_PRODUCERS)
+                .map(|i| {
+                    let queue = queue.to_string();
+                    let payload = payload.clone();
+                    let count = counts[i].clone();
+                    tokio::spawn(async move {
+                        let conn = connect().await;
+                        let ch = conn.create_channel().await.expect("channel");
+                        // Warmup
+                        let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
+                        while Instant::now() < warmup_deadline {
+                            let _ = ch
+                                .basic_publish(
+                                    "",
+                                    &queue,
+                                    BasicPublishOptions::default(),
+                                    &payload,
+                                    BasicProperties::default(),
+                                )
+                                .await;
                         }
-                    }
-                    conn.close(200, "done").await.ok();
+                        // Measure
+                        let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
+                        while Instant::now() < measure_deadline {
+                            if ch
+                                .basic_publish(
+                                    "",
+                                    &queue,
+                                    BasicPublishOptions::default(),
+                                    &payload,
+                                    BasicProperties::default(),
+                                )
+                                .await
+                                .is_ok()
+                            {
+                                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                        conn.close(200, "done").await.ok();
+                    })
                 })
-            }).collect();
+                .collect();
 
             for h in handles {
                 h.await.unwrap();
             }
 
-            let total: u64 = counts.iter().map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).sum();
+            let total: u64 = counts
+                .iter()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .sum();
             report.add(BenchResult {
                 name: "rabbitmq_multi_producer_throughput".to_string(),
                 value: total as f64 / MEASURE_SECS as f64,
@@ -534,7 +650,10 @@ mod rabbitmq {
 
             let conn = connect().await;
             let channel = conn.create_channel().await.expect("channel");
-            channel.queue_delete(queue, QueueDeleteOptions::default()).await.ok();
+            channel
+                .queue_delete(queue, QueueDeleteOptions::default())
+                .await
+                .ok();
             conn.close(200, "done").await.ok();
         }
 
@@ -544,49 +663,86 @@ mod rabbitmq {
             let conn = connect().await;
             let channel = conn.create_channel().await.expect("channel");
             let exchange = "bench-fanout";
-            channel.exchange_declare(exchange, lapin::ExchangeKind::Fanout,
-                ExchangeDeclareOptions { durable: true, ..Default::default() }, FieldTable::default()).await.expect("declare exchange");
+            channel
+                .exchange_declare(
+                    exchange,
+                    lapin::ExchangeKind::Fanout,
+                    ExchangeDeclareOptions {
+                        durable: true,
+                        ..Default::default()
+                    },
+                    FieldTable::default(),
+                )
+                .await
+                .expect("declare exchange");
 
             let mut fanout_queues = Vec::new();
             for i in 0..FAN_OUT_CONSUMERS {
                 let q = format!("bench-fanout-{i}");
                 declare_queue(&channel, &q).await;
-                channel.queue_bind(&q, exchange, "", QueueBindOptions::default(), FieldTable::default()).await.expect("bind");
+                channel
+                    .queue_bind(
+                        &q,
+                        exchange,
+                        "",
+                        QueueBindOptions::default(),
+                        FieldTable::default(),
+                    )
+                    .await
+                    .expect("bind");
                 fanout_queues.push(q);
             }
 
             let payload = vec![0u8; PAYLOAD_1KB];
             for _ in 0..FAN_OUT_MESSAGES {
-                let _ = channel.basic_publish(exchange, "", BasicPublishOptions::default(), &payload, BasicProperties::default()).await;
+                let _ = channel
+                    .basic_publish(
+                        exchange,
+                        "",
+                        BasicPublishOptions::default(),
+                        &payload,
+                        BasicProperties::default(),
+                    )
+                    .await;
             }
             conn.close(200, "preload done").await.ok();
             tokio::time::sleep(Duration::from_millis(500)).await;
 
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> =
-                (0..FAN_OUT_CONSUMERS).map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))).collect();
+            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..FAN_OUT_CONSUMERS)
+                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+                .collect();
 
             let start = Instant::now();
-            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS).map(|i| {
-                let q = fanout_queues[i].clone();
-                let count = counts[i].clone();
-                tokio::spawn(async move {
-                    let conn = connect().await;
-                    let ch = conn.create_channel().await.expect("channel");
-                    while count.load(std::sync::atomic::Ordering::Relaxed) < FAN_OUT_MESSAGES as u64 {
-                        match ch.basic_get(&q, BasicGetOptions { no_ack: true }).await {
-                            Ok(Some(_)) => { count.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
-                            _ => tokio::time::sleep(Duration::from_millis(10)).await,
+            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS)
+                .map(|i| {
+                    let q = fanout_queues[i].clone();
+                    let count = counts[i].clone();
+                    tokio::spawn(async move {
+                        let conn = connect().await;
+                        let ch = conn.create_channel().await.expect("channel");
+                        while count.load(std::sync::atomic::Ordering::Relaxed)
+                            < FAN_OUT_MESSAGES as u64
+                        {
+                            match ch.basic_get(&q, BasicGetOptions { no_ack: true }).await {
+                                Ok(Some(_)) => {
+                                    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
+                                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+                            }
                         }
-                    }
-                    conn.close(200, "done").await.ok();
+                        conn.close(200, "done").await.ok();
+                    })
                 })
-            }).collect();
+                .collect();
 
             for h in handles {
                 h.await.unwrap();
             }
             let elapsed = start.elapsed().as_secs_f64();
-            let total: u64 = counts.iter().map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).sum();
+            let total: u64 = counts
+                .iter()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .sum();
             report.add(BenchResult {
                 name: "rabbitmq_fanout_throughput".to_string(),
                 value: total as f64 / elapsed,
@@ -596,9 +752,15 @@ mod rabbitmq {
 
             let conn = connect().await;
             let channel = conn.create_channel().await.expect("channel");
-            channel.exchange_delete(exchange, ExchangeDeleteOptions::default()).await.ok();
+            channel
+                .exchange_delete(exchange, ExchangeDeleteOptions::default())
+                .await
+                .ok();
             for q in &fanout_queues {
-                channel.queue_delete(q, QueueDeleteOptions::default()).await.ok();
+                channel
+                    .queue_delete(q, QueueDeleteOptions::default())
+                    .await
+                    .ok();
             }
             conn.close(200, "done").await.ok();
         }
@@ -650,7 +812,11 @@ mod nats {
         let js = jetstream::new(client.clone());
 
         // Throughput benchmarks
-        for (size_name, payload_size) in [("64b", PAYLOAD_64B), ("1kb", PAYLOAD_1KB), ("64kb", PAYLOAD_64KB)] {
+        for (size_name, payload_size) in [
+            ("64b", PAYLOAD_64B),
+            ("1kb", PAYLOAD_1KB),
+            ("64kb", PAYLOAD_64KB),
+        ] {
             let stream = format!("bench-tp-{size_name}");
             let subject = format!("bench.tp.{size_name}");
             ensure_stream(&js, &stream, vec![subject.clone()]).await;
@@ -668,7 +834,11 @@ mod nats {
             let mut meter = ThroughputMeter::start();
             let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
             while Instant::now() < measure_deadline {
-                if js.publish(subject.clone(), payload.clone().into()).await.is_ok() {
+                if js
+                    .publish(subject.clone(), payload.clone().into())
+                    .await
+                    .is_ok()
+                {
                     meter.increment();
                 }
             }
@@ -706,7 +876,13 @@ mod nats {
             for _ in 0..LATENCY_SAMPLES {
                 let start = Instant::now();
                 let _ = js.publish(subject, payload.clone().into()).await;
-                if let Ok(mut batch) = consumer.fetch().max_messages(1).expires(Duration::from_secs(5)).messages().await {
+                if let Ok(mut batch) = consumer
+                    .fetch()
+                    .max_messages(1)
+                    .expires(Duration::from_secs(5))
+                    .messages()
+                    .await
+                {
                     if let Some(Ok(msg)) = batch.next().await {
                         let _ = msg.ack().await;
                         sampler.record(start.elapsed());
@@ -764,7 +940,13 @@ mod nats {
             let mut count = 0u64;
             let start = Instant::now();
             while count < LIFECYCLE_MESSAGES as u64 {
-                if let Ok(mut batch) = consumer.fetch().max_messages(10).expires(Duration::from_secs(5)).messages().await {
+                if let Ok(mut batch) = consumer
+                    .fetch()
+                    .max_messages(10)
+                    .expires(Duration::from_secs(5))
+                    .messages()
+                    .await
+                {
                     while let Some(Ok(msg)) = batch.next().await {
                         let _ = msg.ack().await;
                         count += 1;
@@ -790,36 +972,46 @@ mod nats {
             ensure_stream(&js, stream, vec![subject.to_string()]).await;
             let payload = vec![0u8; PAYLOAD_1KB];
 
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> =
-                (0..MULTI_PRODUCERS).map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))).collect();
+            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..MULTI_PRODUCERS)
+                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+                .collect();
 
-            let handles: Vec<_> = (0..MULTI_PRODUCERS).map(|i| {
-                let payload = payload.clone();
-                let count = counts[i].clone();
-                let subject = subject.to_string();
-                tokio::spawn(async move {
-                    let client = connect().await;
-                    let js = jetstream::new(client);
-                    // Warmup
-                    let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
-                    while Instant::now() < warmup_deadline {
-                        let _ = js.publish(subject.clone(), payload.clone().into()).await;
-                    }
-                    // Measure
-                    let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
-                    while Instant::now() < measure_deadline {
-                        if js.publish(subject.clone(), payload.clone().into()).await.is_ok() {
-                            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let handles: Vec<_> = (0..MULTI_PRODUCERS)
+                .map(|i| {
+                    let payload = payload.clone();
+                    let count = counts[i].clone();
+                    let subject = subject.to_string();
+                    tokio::spawn(async move {
+                        let client = connect().await;
+                        let js = jetstream::new(client);
+                        // Warmup
+                        let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
+                        while Instant::now() < warmup_deadline {
+                            let _ = js.publish(subject.clone(), payload.clone().into()).await;
                         }
-                    }
+                        // Measure
+                        let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
+                        while Instant::now() < measure_deadline {
+                            if js
+                                .publish(subject.clone(), payload.clone().into())
+                                .await
+                                .is_ok()
+                            {
+                                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    })
                 })
-            }).collect();
+                .collect();
 
             for h in handles {
                 h.await.unwrap();
             }
 
-            let total: u64 = counts.iter().map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).sum();
+            let total: u64 = counts
+                .iter()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .sum();
             report.add(BenchResult {
                 name: "nats_multi_producer_throughput".to_string(),
                 value: total as f64 / MEASURE_SECS as f64,
@@ -841,42 +1033,56 @@ mod nats {
                 let _ = js.publish(subject, payload.clone().into()).await;
             }
 
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> =
-                (0..FAN_OUT_CONSUMERS).map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))).collect();
+            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..FAN_OUT_CONSUMERS)
+                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+                .collect();
 
             let start = Instant::now();
-            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS).map(|i| {
-                let count = counts[i].clone();
-                tokio::spawn(async move {
-                    let client = connect().await;
-                    let js = jetstream::new(client);
-                    let consumer: jetstream::consumer::PullConsumer = js
-                        .create_consumer_on_stream(
-                            jetstream::consumer::pull::Config {
-                                durable_name: Some(format!("bench-fo-{i}")),
-                                ack_policy: jetstream::consumer::AckPolicy::Explicit,
-                                ..Default::default()
-                            },
-                            stream,
-                        )
-                        .await
-                        .expect("create consumer");
-                    while count.load(std::sync::atomic::Ordering::Relaxed) < FAN_OUT_MESSAGES as u64 {
-                        if let Ok(mut batch) = consumer.fetch().max_messages(10).expires(Duration::from_secs(5)).messages().await {
-                            while let Some(Ok(msg)) = batch.next().await {
-                                let _ = msg.ack().await;
-                                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS)
+                .map(|i| {
+                    let count = counts[i].clone();
+                    tokio::spawn(async move {
+                        let client = connect().await;
+                        let js = jetstream::new(client);
+                        let consumer: jetstream::consumer::PullConsumer = js
+                            .create_consumer_on_stream(
+                                jetstream::consumer::pull::Config {
+                                    durable_name: Some(format!("bench-fo-{i}")),
+                                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                                    ..Default::default()
+                                },
+                                stream,
+                            )
+                            .await
+                            .expect("create consumer");
+                        while count.load(std::sync::atomic::Ordering::Relaxed)
+                            < FAN_OUT_MESSAGES as u64
+                        {
+                            if let Ok(mut batch) = consumer
+                                .fetch()
+                                .max_messages(10)
+                                .expires(Duration::from_secs(5))
+                                .messages()
+                                .await
+                            {
+                                while let Some(Ok(msg)) = batch.next().await {
+                                    let _ = msg.ack().await;
+                                    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
                             }
                         }
-                    }
+                    })
                 })
-            }).collect();
+                .collect();
 
             for h in handles {
                 h.await.unwrap();
             }
             let elapsed = start.elapsed().as_secs_f64();
-            let total: u64 = counts.iter().map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).sum();
+            let total: u64 = counts
+                .iter()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .sum();
             report.add(BenchResult {
                 name: "nats_fanout_throughput".to_string(),
                 value: total as f64 / elapsed,
@@ -909,7 +1115,12 @@ mod nats {
 /// Get CPU% and memory MB from a Docker container via `docker stats`.
 fn container_stats(container_name: &str) -> Option<(f64, f64)> {
     let output = std::process::Command::new("docker")
-        .args(["stats", "--no-stream", "--format", "{{.CPUPerc}}\t{{.MemUsage}}"])
+        .args([
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{.CPUPerc}}\t{{.MemUsage}}",
+        ])
         .arg(container_name)
         .output()
         .ok()?;

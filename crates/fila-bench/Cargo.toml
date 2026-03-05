@@ -7,6 +7,9 @@ repository.workspace = true
 publish = false
 description = "System-level benchmark suite for the Fila message broker"
 
+[features]
+competitive = ["dep:rdkafka", "dep:lapin", "dep:async-nats", "dep:futures-util"]
+
 [dependencies]
 fila-sdk = { workspace = true }
 tokio = { workspace = true }
@@ -15,10 +18,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
 sysinfo = "0.34"
-rdkafka = { version = "0.37", features = ["cmake-build"] }
-lapin = "2"
-async-nats = "0.39"
-futures-util = "0.3"
+rdkafka = { version = "0.37", features = ["cmake-build"], optional = true }
+lapin = { version = "2", optional = true }
+async-nats = { version = "0.39", optional = true }
+futures-util = { version = "0.3", optional = true }
 
 [[bin]]
 name = "bench-compare"
@@ -31,6 +34,7 @@ path = "src/bin/bench-aggregate.rs"
 [[bin]]
 name = "bench-competitive"
 path = "src/bin/bench-competitive.rs"
+required-features = ["competitive"]
 
 [[bench]]
 name = "system"
