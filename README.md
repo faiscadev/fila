@@ -105,6 +105,10 @@ fila queue inspect fair-demo
 
 See [docs/concepts.md](docs/concepts.md) for a deep dive, [docs/tutorials.md](docs/tutorials.md) for guided walkthroughs, and [docs/lua-patterns.md](docs/lua-patterns.md) for copy-paste Lua scripts.
 
+## Performance
+
+Sub-millisecond p50 enqueue-to-consume latency. DRR fair scheduling adds no measurable overhead vs FIFO. The benchmark suite includes self-benchmarks and competitive comparisons against Kafka, RabbitMQ, and NATS. See [docs/benchmarks.md](docs/benchmarks.md) for full results.
+
 ## Client SDKs
 
 | Language | Package | Repository |
