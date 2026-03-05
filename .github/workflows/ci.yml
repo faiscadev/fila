@@ -66,6 +66,8 @@ jobs:
     name: Bench
     runs-on: ubuntu-latest
     continue-on-error: true
+    permissions:
+      pull-requests: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@stable
@@ -77,3 +79,26 @@ jobs:
       - name: Build server and CLI binaries (needed by fila-bench at runtime)
         run: cargo build -p fila-server -p fila-cli
       - run: cargo bench
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bench-results
+          path: bench-results.json
+          if-no-files-found: ignore
+      - name: Post benchmark results to PR
+        if: github.event_name == 'pull_request' && hashFiles('bench-results.json') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## Benchmark Results"
+            echo ""
+            jq -r '"**Commit:** `\(.commit)`  "' bench-results.json
+            jq -r '"**Time:** \(.timestamp)"' bench-results.json
+            echo ""
+            echo "| Benchmark | Value | Unit |"
+            echo "|---|---:|---|"
+            jq -r '.benchmarks[] | "| \(.name) | \(.value | tostring) | \(.unit) |"' bench-results.json
+          } > /tmp/bench-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/bench-comment.md
