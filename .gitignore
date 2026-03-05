@@ -20,3 +20,4 @@
 # Benchmark output
 bench-results.json
 bench/competitive/results/
+bench/competitive/__pycache__/
