@@ -1,6 +1,6 @@
 # Story 12.2: CI Regression Detection
 
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 
@@ -28,31 +28,33 @@ so that performance degradation is caught before merge.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create bench comparison tool (AC: 2, 3, 4)
-  - [ ] Add `src/compare.rs` to `fila-bench` with `compare_reports(baseline: &BenchReport, current: &BenchReport, threshold: f64) -> CompareResult`
-  - [ ] `CompareResult` contains per-metric comparison: baseline value, current value, change_pct, status (improved/regressed/unchanged)
-  - [ ] Print summary table to stdout with aligned columns
-  - [ ] Return exit code 1 if any metric regresses beyond threshold
-  - [ ] Add a `compare` binary target to fila-bench (`src/bin/compare.rs`) that reads two JSON report files and outputs the comparison
+- [x] Task 1: Create bench comparison tool (AC: 2, 3, 4)
+  - [x] Add `src/compare.rs` to `fila-bench` with `compare_reports(baseline: &BenchReport, current: &BenchReport, threshold: f64) -> CompareResult`
+  - [x] `CompareResult` contains per-metric comparison: baseline value, current value, change_pct, status (improved/regressed/unchanged)
+  - [x] Print summary table to stdout with aligned columns
+  - [x] Return exit code 1 if any metric regresses beyond threshold
+  - [x] Add a `compare` binary target to fila-bench (`src/bin/bench-compare.rs`) that reads two JSON report files and outputs the comparison
+  - [x] 8 unit tests covering throughput/latency/memory regression, improvements, new metrics, zero baseline
 
-- [ ] Task 2: Add multi-run median aggregation (AC: 6)
-  - [ ] Add `src/aggregate.rs` with `aggregate_reports(reports: &[BenchReport]) -> BenchReport` that computes median value per metric across runs
-  - [ ] Add an `aggregate` binary target (`src/bin/aggregate.rs`) that reads N JSON files and outputs the aggregated report
+- [x] Task 2: Add multi-run median aggregation (AC: 6)
+  - [x] Add `src/aggregate.rs` with `aggregate_reports(reports: &[BenchReport]) -> BenchReport` that computes median value per metric across runs
+  - [x] Add an `aggregate` binary target (`src/bin/bench-aggregate.rs`) that reads N JSON files and outputs the aggregated report
+  - [x] 5 unit tests covering odd/even counts, single report, empty, multi-metric
 
-- [ ] Task 3: Create CI benchmark workflow (AC: 1, 5, 6, 7, 8)
-  - [ ] Create `.github/workflows/bench-regression.yml` triggered on `pull_request` and `workflow_dispatch`
-  - [ ] On PR: build server+cli, run bench 3 times, aggregate to median, download baseline artifact from main, compare, fail if regression
-  - [ ] On push to main: build server+cli, run bench 3 times, aggregate, upload as `bench-baseline` artifact
-  - [ ] On workflow_dispatch: run bench on current branch, upload as new baseline artifact
-  - [ ] Install protoc in workflow (matches existing CI pattern)
-  - [ ] Use `actions/upload-artifact` and `actions/download-artifact` for baseline storage
+- [x] Task 3: Create CI benchmark workflow (AC: 1, 5, 6, 7, 8)
+  - [x] Create `.github/workflows/bench-regression.yml` triggered on `pull_request`, `push` (main), and `workflow_dispatch`
+  - [x] On PR: build server+cli, run bench 3 times, aggregate to median, restore baseline from cache, compare, fail if regression
+  - [x] On push to main: build server+cli, run bench 3 times, aggregate, save as baseline cache
+  - [x] On workflow_dispatch: run bench on current branch, save as new baseline cache
+  - [x] Install protoc in workflow (matches existing CI pattern)
+  - [x] Use `actions/cache/save` and `actions/cache/restore` for baseline storage
+  - [x] Upload results as artifact for every run
 
-- [ ] Task 4: Remove bench job from ci.yml (AC: 1)
-  - [ ] Remove the `bench` job from `.github/workflows/ci.yml` since it's now handled by the dedicated `bench-regression.yml` workflow
-  - [ ] This avoids running benchmarks twice per PR
+- [x] Task 4: Remove bench job from ci.yml (AC: 1)
+  - [x] Remove the `bench` job from `.github/workflows/ci.yml` since it's now handled by the dedicated `bench-regression.yml` workflow
 
 - [ ] Task 5: Verify workflow on feature branch (AC: 8)
-  - [ ] Temporarily broaden `bench-regression.yml` trigger to include the feature branch
+  - [x] Temporarily broaden `bench-regression.yml` trigger to include the feature branch
   - [ ] Push and verify the workflow runs successfully
   - [ ] Narrow the trigger back to its intended scope before merge
 
