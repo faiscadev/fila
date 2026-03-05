@@ -272,13 +272,11 @@ def bench_kafka(report: BenchReport):
         p.flush()
 
     threads = [threading.Thread(target=kafka_producer_worker, args=(i,)) for i in range(MULTI_PRODUCERS)]
-    start = time.time()
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    elapsed = time.time() - start
-    report.add(BenchResult("kafka_multi_producer_throughput", sum(counts) / elapsed, "msg/s"))
+    report.add(BenchResult("kafka_multi_producer_throughput", sum(counts) / MEASURE_SECS, "msg/s"))
     cleanup_topic(topic)
 
     # Fan-out (1 producer, 3 consumer groups)
@@ -447,13 +445,11 @@ def bench_rabbitmq(report: BenchReport):
         conn.close()
 
     threads = [threading.Thread(target=rmq_producer_worker, args=(i,)) for i in range(MULTI_PRODUCERS)]
-    start = time.time()
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    elapsed = time.time() - start
-    report.add(BenchResult("rabbitmq_multi_producer_throughput", sum(counts) / elapsed, "msg/s"))
+    report.add(BenchResult("rabbitmq_multi_producer_throughput", sum(counts) / MEASURE_SECS, "msg/s"))
 
     connection = pika.BlockingConnection(conn_params)
     channel = connection.channel()
@@ -643,11 +639,8 @@ def bench_nats(report: BenchReport):
             await nc2.close()
             return c
 
-        import asyncio
-        start = time.time()
         results = await asyncio.gather(*[nats_producer_coro() for _ in range(MULTI_PRODUCERS)])
-        elapsed = time.time() - start
-        report.add(BenchResult("nats_multi_producer_throughput", sum(results) / elapsed, "msg/s"))
+        report.add(BenchResult("nats_multi_producer_throughput", sum(results) / MEASURE_SECS, "msg/s"))
         await js.delete_stream(stream)
 
         # Fan-out (1 producer, 3 consumers on same stream)
