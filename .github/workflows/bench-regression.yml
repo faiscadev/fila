@@ -37,7 +37,7 @@ jobs:
           for i in $(seq 1 $BENCH_RUNS); do
             echo "=== Benchmark run $i/$BENCH_RUNS ==="
             cargo bench -p fila-bench
-            mv bench-results.json "bench-run-$i.json"
+            mv crates/fila-bench/bench-results.json "bench-run-$i.json"
           done
 
       - name: Aggregate results (median of runs)
