@@ -128,7 +128,7 @@ development_status:
   epic-11-retrospective: done
 
   # Epic 12: Benchmarks & Competitive Positioning
-  epic-12: in-progress
+  epic-12: done
   12-1-benchmark-harness-self-benchmarking: done
   12-2-ci-regression-detection: done
   12-3-competitive-benchmarks: done
