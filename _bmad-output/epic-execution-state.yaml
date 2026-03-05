@@ -18,10 +18,10 @@ stories:
     dependsOn: ["12.1"]
   - id: "12.3"
     title: "Competitive Benchmarks"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/12.3-competitive-benchmarks"
-    pr: null
+    pr: 47
     dependsOn: []
   - id: "12.4"
     title: "Published Results & Benchmark Dashboard"

@@ -1,6 +1,6 @@
 # Story 12.3: Competitive Benchmarks
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -89,9 +89,23 @@ All results (Fila and competitors) use the same JSON schema. This allows unified
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+- Cubic found 9+1 issues across 2 review cycles; all addressed
 
 ### Completion Notes List
+- Python benchmark harness with Kafka (confluent-kafka), RabbitMQ (pika), NATS (nats-py) clients
+- 6 workloads per broker: throughput (3 sizes), latency (p50/p95/p99), lifecycle, multi-producer, fan-out
+- Docker Compose with production-tuned configs: Kafka KRaft, RabbitMQ quorum queues, NATS JetStream
+- Makefile orchestration with 60s readiness timeouts per broker
+- Pinned dependency versions for reproducibility
+- Resource monitoring via docker stats (CPU%, memory); disk I/O noted as limitation
 
 ### File List
+- `bench/competitive/docker-compose.yml` — broker containers
+- `bench/competitive/bench.py` — Python benchmark harness
+- `bench/competitive/bench-fila.sh` — Fila self-benchmark wrapper
+- `bench/competitive/Makefile` — orchestration targets
+- `bench/competitive/METHODOLOGY.md` — methodology documentation
+- `bench/competitive/requirements.txt` — pinned Python dependencies
