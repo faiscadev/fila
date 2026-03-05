@@ -7,7 +7,7 @@ pub struct BenchResult {
     pub name: String,
     pub value: f64,
     pub unit: String,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, serde_json::Value>,
 }
 

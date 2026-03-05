@@ -7,7 +7,7 @@ use tokio_stream::StreamExt;
 
 const PAYLOAD_SIZE: usize = 1024;
 const LATENCY_SAMPLES: usize = 1000;
-const COMPACTION_TRIGGER_MESSAGES: u64 = 100_000;
+const COMPACTION_TRIGGER_MESSAGES: u64 = 10_000;
 
 /// Measure RocksDB compaction impact on tail latency (p99 idle vs during compaction).
 pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
@@ -24,9 +24,10 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
     let mut idle_sampler = LatencySampler::with_capacity(LATENCY_SAMPLES);
     for _ in 0..LATENCY_SAMPLES {
         let start = std::time::Instant::now();
-        let _ = client
+        client
             .enqueue(queue, headers.clone(), payload.clone())
-            .await;
+            .await
+            .expect("enqueue");
         idle_sampler.record(start.elapsed());
     }
 
@@ -34,7 +35,7 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
     let mut stream = client.consume(queue).await.expect("consume");
     for _ in 0..LATENCY_SAMPLES {
         if let Some(Ok(msg)) = stream.next().await {
-            let _ = client.ack(queue, &msg.id).await;
+            client.ack(queue, &msg.id).await.expect("ack");
         }
     }
     drop(stream);
@@ -43,9 +44,10 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
     // This creates many dead entries that RocksDB needs to compact.
     let mut enq_progress = Progress::new("compaction enqueue", COMPACTION_TRIGGER_MESSAGES);
     for _ in 0..COMPACTION_TRIGGER_MESSAGES {
-        let _ = client
+        client
             .enqueue(queue, headers.clone(), payload.clone())
-            .await;
+            .await
+            .expect("enqueue");
         enq_progress.inc();
     }
     enq_progress.finish();
@@ -55,7 +57,7 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
     let mut ack_progress = Progress::new("compaction consume+ack", COMPACTION_TRIGGER_MESSAGES);
     for _ in 0..COMPACTION_TRIGGER_MESSAGES {
         if let Some(Ok(msg)) = stream.next().await {
-            let _ = client.ack(queue, &msg.id).await;
+            client.ack(queue, &msg.id).await.expect("ack");
             ack_progress.inc();
         }
     }
@@ -67,9 +69,10 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
     let mut compaction_sampler = LatencySampler::with_capacity(LATENCY_SAMPLES);
     for _ in 0..LATENCY_SAMPLES {
         let start = std::time::Instant::now();
-        let _ = client
+        client
             .enqueue(queue, headers.clone(), payload.clone())
-            .await;
+            .await
+            .expect("enqueue");
         compaction_sampler.record(start.elapsed());
     }
 

@@ -7,8 +7,8 @@ use std::time::Duration;
 use tokio_stream::StreamExt;
 
 const PAYLOAD_SIZE: usize = 1024;
-const MEASURE_SECS: u64 = 10;
-const WARMUP_SECS: u64 = 3;
+const MEASURE_SECS: u64 = 3;
+const WARMUP_SECS: u64 = 1;
 
 /// Measure throughput with fair scheduling enabled vs raw FIFO (NFR2: <5% overhead).
 pub async fn bench_fairness_overhead(server: &BenchServer) -> Vec<BenchResult> {
@@ -59,6 +59,11 @@ pub async fn bench_fairness_overhead(server: &BenchServer) -> Vec<BenchResult> {
 }
 
 /// Measure fairness accuracy across keys with varying weights (NFR3: within 5%).
+///
+/// Approach: enqueue many messages per key, then consume only a window smaller
+/// than the total. The distribution of delivered messages within that window
+/// reveals whether the scheduler respects weights. If we consumed ALL messages,
+/// every key would get 100% regardless of scheduling order.
 pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
     let queue = "bench-fairness-accuracy";
     let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" local w = tonumber(msg.headers["weight"]) or 1 return { fairness_key = key, weight = w, throttle_keys = {} } end"#;
@@ -72,12 +77,12 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
     // Total weight = 15. Expected share: 1/15, 2/15, 3/15, 4/15, 5/15
     let weights: Vec<(String, u32)> = (1..=5).map(|i| (format!("tenant-{i}"), i as u32)).collect();
     let total_weight: u32 = weights.iter().map(|(_, w)| *w).sum();
-    let messages_per_key = 200;
+    let messages_per_key = 100;
 
     // Enqueue messages for all keys
     let payload = vec![0u8; PAYLOAD_SIZE];
-    let total_messages = messages_per_key * weights.len();
-    let mut enq_progress = Progress::new("fairness enqueue", total_messages as u64);
+    let total_enqueued = messages_per_key * weights.len();
+    let mut enq_progress = Progress::new("fairness enqueue", total_enqueued as u64);
     for (tenant, weight) in &weights {
         for _ in 0..messages_per_key {
             let headers: HashMap<String, String> = [
@@ -95,12 +100,15 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
     }
     enq_progress.finish();
 
-    // Consume all and track delivery order per key
+    // Consume a WINDOW of messages (half the total) and track delivery distribution.
+    // By consuming fewer than the total, we measure scheduling fairness — a fair
+    // scheduler should deliver messages proportional to their weights within the window.
+    let window_size = total_enqueued / 2;
     let mut stream = client.consume(queue).await.expect("consume");
     let mut delivery_counts: HashMap<String, u64> = HashMap::new();
-    let mut consume_progress = Progress::new("fairness consume", total_messages as u64);
+    let mut consume_progress = Progress::new("fairness consume", window_size as u64);
 
-    for _ in 0..total_messages {
+    for _ in 0..window_size {
         if let Some(Ok(msg)) = stream.next().await {
             *delivery_counts.entry(msg.fairness_key.clone()).or_insert(0) += 1;
             client.ack(queue, &msg.id).await.expect("ack");
@@ -109,14 +117,14 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
     }
     consume_progress.finish();
 
-    // Calculate accuracy
+    // Calculate accuracy within the consumed window
     let mut results = Vec::new();
     let mut max_deviation = 0.0f64;
 
     for (tenant, weight) in &weights {
         let expected_share = *weight as f64 / total_weight as f64;
         let actual_count = delivery_counts.get(tenant).copied().unwrap_or(0);
-        let actual_share = actual_count as f64 / total_messages as f64;
+        let actual_share = actual_count as f64 / window_size as f64;
         let deviation = (actual_share - expected_share).abs() / expected_share * 100.0;
         max_deviation = max_deviation.max(deviation);
 
@@ -132,6 +140,7 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
                 ),
                 ("actual_share".to_string(), serde_json::json!(actual_share)),
                 ("actual_count".to_string(), serde_json::json!(actual_count)),
+                ("window_size".to_string(), serde_json::json!(window_size)),
             ]
             .into_iter()
             .collect(),

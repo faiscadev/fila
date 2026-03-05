@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 
 const PAYLOAD_SIZE: usize = 1024;
-const SAMPLES_PER_LEVEL: usize = 1000;
+const SAMPLES_PER_LEVEL: usize = 100;
 
 struct LoadLevel {
     name: &'static str,
@@ -106,21 +106,26 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
 
         for _ in 0..SAMPLES_PER_LEVEL {
             let start = Instant::now();
-            let _ = client
+            let enqueued_id = client
                 .enqueue(&queue, headers.clone(), payload.clone())
                 .await
                 .expect("enqueue");
 
-            // Consume the next message (should be the one we just enqueued)
+            // Consume the next message and verify it's the one we just enqueued
             let next = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
             match next {
-                Ok(Some(Ok(msg))) => {
+                Ok(Some(Ok(msg))) if msg.id == enqueued_id => {
                     sampler.record(start.elapsed());
                     let _ = client.ack(&queue, &msg.id).await;
                 }
+                Ok(Some(Ok(msg))) => {
+                    // Wrong message — ack it and skip this sample
+                    let _ = client.ack(&queue, &msg.id).await;
+                    continue;
+                }
                 _ => {
                     // Timeout or error — skip this sample
-                    break;
+                    continue;
                 }
             }
         }

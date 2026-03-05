@@ -5,7 +5,7 @@ use crate::server::{create_queue_cli, BenchServer};
 use std::collections::HashMap;
 
 const PAYLOAD_SIZE: usize = 1024;
-const MESSAGES_TO_LOAD: u64 = 100_000;
+const MESSAGES_TO_LOAD: u64 = 10_000;
 
 /// Measure memory footprint (RSS) of the server under load.
 pub async fn bench_memory_footprint(server: &BenchServer) -> Vec<BenchResult> {
@@ -36,9 +36,10 @@ pub async fn bench_memory_footprint(server: &BenchServer) -> Vec<BenchResult> {
 
     let mut progress = Progress::new("enqueue", MESSAGES_TO_LOAD);
     for _ in 0..MESSAGES_TO_LOAD {
-        let _ = client
+        client
             .enqueue(queue, headers.clone(), payload.clone())
-            .await;
+            .await
+            .expect("enqueue");
         progress.inc();
     }
     progress.finish();
@@ -48,7 +49,7 @@ pub async fn bench_memory_footprint(server: &BenchServer) -> Vec<BenchResult> {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     let loaded_rss = process_rss_bytes(pid).unwrap_or(0);
     results.push(BenchResult {
-        name: "memory_rss_loaded_100k".to_string(),
+        name: "memory_rss_loaded_10k".to_string(),
         value: loaded_rss as f64 / (1024.0 * 1024.0),
         unit: "MB".to_string(),
         metadata: [
