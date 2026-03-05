@@ -257,6 +257,13 @@ def bench_kafka(report: BenchReport):
 
     def kafka_producer_worker(idx):
         p = Producer({"bootstrap.servers": broker, "linger.ms": 5, "batch.num.messages": 1000})
+        # Warmup
+        end_warmup = time.time() + WARMUP_SECS
+        while time.time() < end_warmup:
+            p.produce(topic, payload)
+            p.poll(0)
+        p.flush()
+        # Measure
         end_time = time.time() + MEASURE_SECS
         while time.time() < end_time:
             p.produce(topic, payload)
@@ -428,6 +435,11 @@ def bench_rabbitmq(report: BenchReport):
     def rmq_producer_worker(idx):
         conn = pika.BlockingConnection(conn_params)
         ch = conn.channel()
+        # Warmup
+        end_warmup = time.time() + WARMUP_SECS
+        while time.time() < end_warmup:
+            ch.basic_publish(exchange="", routing_key=queue, body=payload)
+        # Measure
         end_time = time.time() + MEASURE_SECS
         while time.time() < end_time:
             ch.basic_publish(exchange="", routing_key=queue, body=payload)
@@ -605,7 +617,6 @@ def bench_nats(report: BenchReport):
         elapsed = time.time() - start
 
         await js.delete_stream(stream)
-        await nc.close()
 
         report.add(BenchResult("nats_lifecycle_throughput", count / elapsed, "msg/s"))
 
@@ -619,6 +630,11 @@ def bench_nats(report: BenchReport):
         async def nats_producer_coro():
             nc2 = await nats.connect("nats://localhost:4222")
             js2 = nc2.jetstream()
+            # Warmup
+            end_warmup = time.time() + WARMUP_SECS
+            while time.time() < end_warmup:
+                await js2.publish(subject, payload)
+            # Measure
             c = 0
             end_time = time.time() + MEASURE_SECS
             while time.time() < end_time:
@@ -673,6 +689,8 @@ def bench_nats(report: BenchReport):
         stats = get_container_stats("competitive-nats-1")
         report.add(BenchResult("nats_cpu_pct", stats["cpu_pct"], "%"))
         report.add(BenchResult("nats_memory_mb", stats["mem_mb"], "MB"))
+
+        await nc.close()
 
     asyncio.run(_bench_nats())
 

@@ -85,10 +85,11 @@ Measures the full message lifecycle: pre-load 1,000 messages, then consume and a
 
 ### 6. Resource Utilization
 
-Captures CPU and memory usage of each broker's Docker container during benchmarks.
+Captures CPU and memory usage of each broker's Docker container after benchmarks.
 
 - **Method**: `docker stats --no-stream` after workload completes
 - **Metrics**: CPU percentage, memory (MB)
+- **Disk I/O**: Not captured via `docker stats`. For disk I/O analysis, use `docker stats` with `--format` including BlockIO, or external monitoring tools (e.g., `iostat`). The current suite focuses on CPU and memory as the primary resource indicators.
 - **Note**: Fila runs natively, not in Docker; its resource metrics come from the built-in benchmark suite
 
 ## Fila-Only Workloads
