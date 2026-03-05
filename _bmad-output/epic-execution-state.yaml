@@ -18,9 +18,9 @@ stories:
     dependsOn: ["12.1"]
   - id: "12.3"
     title: "Competitive Benchmarks"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/12.3-competitive-benchmarks"
     pr: null
     dependsOn: []
   - id: "12.4"
