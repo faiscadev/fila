@@ -1,41 +1,33 @@
-epic: "Epic 10: Distribution & Documentation"
-epicNumber: 10
-startedAt: "2026-02-21T23:30:00Z"
-currentPrIndex: 5
-completedAt: "2026-03-01T19:49:30Z"
+epic: "Epic 12: Benchmarks & Competitive Positioning"
+epicNumber: 12
+startedAt: "2026-03-05T20:00:00Z"
+currentPrIndex: 2
 prChain:
-  - storyId: "10.1"
-    storyKey: "10-1-release-pipeline-docker"
-    title: "Server & CLI Release Pipeline + Docker Image"
-    branch: "feat/10.1-release-pipeline-docker"
-    pr: 39
+  - storyId: "12.1"
+    storyKey: "12-1-benchmark-harness-self-benchmarking"
+    title: "Benchmark Harness & Self-Benchmarking"
+    branch: "feat/12.1-benchmark-harness-self-benchmarking"
+    pr: 45
     baseBranch: "main"
     status: merged
-  - storyId: "10.2"
-    storyKey: "10-2-sdk-package-publishing"
-    title: "SDK Package Publishing"
-    branch: "feat/10.2-sdk-package-publishing"
-    pr: 40
-    baseBranch: "feat/10.1-release-pipeline-docker"
+  - storyId: "12.2"
+    storyKey: "12-2-ci-regression-detection"
+    title: "CI Regression Detection"
+    branch: "feat/12.2-ci-regression-detection"
+    pr: 46
+    baseBranch: "main"
     status: merged
-  - storyId: "10.3"
-    storyKey: "10-3-binary-distribution"
-    title: "Binary Distribution & Installation"
-    branch: "feat/10.3-binary-distribution"
-    pr: 41
-    baseBranch: "feat/10.2-sdk-package-publishing"
-    status: merged
-  - storyId: "10.4"
-    storyKey: "10-4-core-documentation"
-    title: "Core Documentation & API Reference"
-    branch: "feat/10.4-core-documentation"
-    pr: 42
-    baseBranch: "feat/10.3-binary-distribution"
-    status: merged
-  - storyId: "10.5"
-    storyKey: "10-5-tutorials-examples"
-    title: "Tutorials, Examples & Lua Patterns"
-    branch: "feat/10.5-tutorials-examples"
-    pr: 43
-    baseBranch: "feat/10.4-core-documentation"
-    status: merged
+  - storyId: "12.3"
+    storyKey: "12-3-competitive-benchmarks"
+    title: "Competitive Benchmarks"
+    branch: "feat/12.3-competitive-benchmarks"
+    pr: 47
+    baseBranch: "main"
+    status: reviewing
+  - storyId: "12.4"
+    storyKey: "12-4-published-results-benchmark-dashboard"
+    title: "Published Results & Benchmark Dashboard"
+    branch: "feat/12.4-published-results-benchmark-dashboard"
+    pr: 48
+    baseBranch: "feat/12.3-competitive-benchmarks"
+    status: pending

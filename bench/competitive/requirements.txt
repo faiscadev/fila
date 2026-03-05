@@ -1,5 +1,0 @@
-# Competitive benchmark dependencies — pinned for reproducibility
-confluent-kafka==2.6.1
-pika==1.3.2
-nats-py==2.9.0
-psutil==6.1.1

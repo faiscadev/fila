@@ -15,6 +15,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
 sysinfo = "0.34"
+rdkafka = { version = "0.37", features = ["cmake-build"] }
+lapin = "2"
+async-nats = "0.39"
+futures-util = "0.3"
 
 [[bin]]
 name = "bench-compare"
@@ -23,6 +27,10 @@ path = "src/bin/bench-compare.rs"
 [[bin]]
 name = "bench-aggregate"
 path = "src/bin/bench-aggregate.rs"
+
+[[bin]]
+name = "bench-competitive"
+path = "src/bin/bench-competitive.rs"
 
 [[bench]]
 name = "system"

@@ -2,8 +2,7 @@
 #
 # Prerequisites:
 #   - Docker (with compose plugin)
-#   - Python 3.10+ with: pip install -r requirements.txt
-#   - Rust toolchain (for Fila benchmarks)
+#   - Rust toolchain (for all benchmarks)
 #
 # Usage:
 #   make bench-competitive    # run all brokers + Fila
@@ -16,13 +15,18 @@
 RESULTS_DIR := results
 COMPOSE := docker compose
 READY_TIMEOUT := 60
+REPO_ROOT := $(shell cd ../.. && pwd)
+BENCH_BIN := $(REPO_ROOT)/target/release/bench-competitive
 
-.PHONY: bench-competitive bench-kafka bench-rabbitmq bench-nats bench-fila bench-clean setup
+.PHONY: bench-competitive bench-kafka bench-rabbitmq bench-nats bench-fila bench-clean setup build
 
 setup:
 	@mkdir -p $(RESULTS_DIR)
 
-bench-competitive: setup bench-fila bench-kafka bench-rabbitmq bench-nats
+build:
+	cd $(REPO_ROOT) && cargo build --release -p fila-bench --bin bench-competitive
+
+bench-competitive: setup build bench-fila bench-kafka bench-rabbitmq bench-nats
 	@echo ""
 	@echo "============================================================"
 	@echo "  All competitive benchmarks complete."
@@ -30,7 +34,7 @@ bench-competitive: setup bench-fila bench-kafka bench-rabbitmq bench-nats
 	@echo "============================================================"
 	@ls -la $(RESULTS_DIR)/bench-*.json
 
-bench-kafka: setup
+bench-kafka: setup build
 	$(COMPOSE) up -d kafka
 	@echo "Waiting for Kafka to be ready (timeout $(READY_TIMEOUT)s)..."
 	@i=0; while [ $$i -lt $(READY_TIMEOUT) ]; do \
@@ -38,9 +42,9 @@ bench-kafka: setup
 		sleep 1; i=$$((i+1)); \
 	done; \
 	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: Kafka not ready after $(READY_TIMEOUT)s"; exit 1; fi
-	python3 bench.py kafka --output-dir $(RESULTS_DIR)
+	$(BENCH_BIN) kafka $(RESULTS_DIR)
 
-bench-rabbitmq: setup
+bench-rabbitmq: setup build
 	$(COMPOSE) up -d rabbitmq
 	@echo "Waiting for RabbitMQ to be ready (timeout $(READY_TIMEOUT)s)..."
 	@i=0; while [ $$i -lt $(READY_TIMEOUT) ]; do \
@@ -48,9 +52,9 @@ bench-rabbitmq: setup
 		sleep 1; i=$$((i+1)); \
 	done; \
 	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: RabbitMQ not ready after $(READY_TIMEOUT)s"; exit 1; fi
-	python3 bench.py rabbitmq --output-dir $(RESULTS_DIR)
+	$(BENCH_BIN) rabbitmq $(RESULTS_DIR)
 
-bench-nats: setup
+bench-nats: setup build
 	$(COMPOSE) up -d nats
 	@echo "Waiting for NATS to be ready (timeout $(READY_TIMEOUT)s)..."
 	@i=0; while [ $$i -lt $(READY_TIMEOUT) ]; do \
@@ -58,7 +62,7 @@ bench-nats: setup
 		sleep 1; i=$$((i+1)); \
 	done; \
 	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: NATS not ready after $(READY_TIMEOUT)s"; exit 1; fi
-	python3 bench.py nats --output-dir $(RESULTS_DIR)
+	$(BENCH_BIN) nats $(RESULTS_DIR)
 
 bench-fila: setup
 	./bench-fila.sh $(RESULTS_DIR)
