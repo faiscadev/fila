@@ -1,4 +1,4 @@
-# generated: 2026-03-01
+# generated: 2026-03-04
 # project: fila
 # project_key: NOKEY
 # tracking_system: file-system
@@ -33,7 +33,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-01
+generated: 2026-03-04
 project: fila
 project_key: NOKEY
 tracking_system: file-system
@@ -112,7 +112,7 @@ development_status:
   9-5-java-client-sdk: done
   epic-9-retrospective: done
 
-  # Epic 10: Distribution & Documentation (reshaped in Epic 9 retro)
+  # Epic 10: Distribution & Documentation
   epic-10: done
   10-1-release-pipeline-docker: done
   10-2-sdk-package-publishing: done
@@ -121,8 +121,54 @@ development_status:
   10-5-tutorials-examples-lua-patterns: done
   epic-10-retrospective: done
 
-  # Epic 11: Release Activation (added in Epic 10 retro)
+  # Epic 11: Release Activation
   epic-11: done
   11-1-verify-release-pipeline: done
   11-2-package-registry-publishing: done
   epic-11-retrospective: done
+
+  # Epic 12: Benchmarks & Competitive Positioning
+  epic-12: in-progress
+  12-1-benchmark-harness-self-benchmarking: done
+  12-2-ci-regression-detection: backlog
+  12-3-competitive-benchmarks: backlog
+  12-4-published-results-benchmark-dashboard: backlog
+  epic-12-retrospective: optional
+
+  # Epic 13: Purpose-Built Storage Engine
+  epic-13: backlog
+  13-1-storage-trait-abstraction-rocksdb-adapter: backlog
+  13-2-write-path-wal-segment-log: backlog
+  13-3-read-path-indexing: backlog
+  13-4-background-maintenance-compaction: backlog
+  13-5-integration-cutover-validation: backlog
+  epic-13-retrospective: optional
+
+  # Epic 14: Clustering & Horizontal Scaling
+  epic-14: backlog
+  14-1-raft-consensus-cluster-bootstrap: backlog
+  14-2-partitioned-queue-management: backlog
+  14-3-request-routing-transparent-consumer-delivery: backlog
+  14-4-replication-failover: backlog
+  14-5-cluster-wide-observability-scaling-validation: backlog
+  epic-14-retrospective: optional
+
+  # Epic 15: Authentication & Security
+  epic-15: backlog
+  15-1-mtls-transport-security: backlog
+  15-2-api-key-authentication: backlog
+  15-3-per-queue-access-control: backlog
+  epic-15-retrospective: optional
+
+  # Epic 16: Release Engineering & SDK Compatibility
+  epic-16: backlog
+  16-1-versioning-scheme-sdk-compatibility-matrix: backlog
+  16-2-stability-release-branches-backport-workflow: backlog
+  epic-16-retrospective: optional
+
+  # Epic 17: Developer Experience
+  epic-17: backlog
+  17-1-built-in-lua-helpers: backlog
+  17-2-broker-managed-consumer-groups: backlog
+  17-3-web-management-gui: backlog
+  epic-17-retrospective: optional

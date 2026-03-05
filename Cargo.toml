@@ -6,6 +6,7 @@ members = [
     "crates/fila-cli",
     "crates/fila-sdk",
     "crates/fila-e2e",
+    "crates/fila-bench",
 ]
 resolver = "2"
 

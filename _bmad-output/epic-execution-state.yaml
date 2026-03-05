@@ -1,40 +1,33 @@
-epic: "Epic 10: Distribution & Documentation"
+epic: "Epic 12: Benchmarks & Competitive Positioning"
 baseBranch: main
-startedAt: "2026-02-21T12:00:00Z"
+startedAt: "2026-03-04T12:00:00Z"
 stories:
-  - id: "10.1"
-    title: "Server & CLI Release Pipeline + Docker Image"
+  - id: "12.1"
+    title: "Benchmark Harness & Self-Benchmarking"
     status: completed
     currentPhase: ""
-    branch: "feat/10.1-release-pipeline-docker"
-    pr: 39
+    branch: "feat/12.1-benchmark-harness"
+    pr: 45
     dependsOn: []
-  - id: "10.2"
-    title: "SDK Package Publishing"
-    status: completed
+  - id: "12.2"
+    title: "CI Regression Detection"
+    status: pending
     currentPhase: ""
-    branch: "feat/10.2-sdk-package-publishing"
-    pr: 40
-    dependsOn: ["10.1"]
-  - id: "10.3"
-    title: "Binary Distribution & Installation"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: ["12.1"]
+  - id: "12.3"
+    title: "Competitive Benchmarks"
+    status: pending
     currentPhase: ""
-    branch: "feat/10.3-binary-distribution"
-    pr: 41
-    dependsOn: ["10.1"]
-  - id: "10.4"
-    title: "Core Documentation & API Reference"
-    status: completed
-    currentPhase: ""
-    branch: "feat/10.4-core-documentation"
-    pr: 42
+    branch: ""
+    pr: null
     dependsOn: []
-  - id: "10.5"
-    title: "Tutorials, Examples & Lua Patterns"
-    status: completed
+  - id: "12.4"
+    title: "Published Results & Benchmark Dashboard"
+    status: pending
     currentPhase: ""
-    branch: "feat/10.5-tutorials-examples"
-    pr: 43
-    dependsOn: ["10.4"]
+    branch: ""
+    pr: null
+    dependsOn: ["12.1", "12.3"]
 skippedIssues: []
