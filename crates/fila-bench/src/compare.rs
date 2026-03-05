@@ -178,14 +178,16 @@ pub fn print_summary(result: &CompareResult) {
         .filter(|c| c.status == CompareStatus::Improved)
         .count();
 
-    println!("\n  Summary: {} regressed, {} improved, {} unchanged",
+    println!(
+        "\n  Summary: {} regressed, {} improved, {} unchanged",
         regressed_count,
         improved_count,
         result.comparisons.len() - regressed_count - improved_count,
     );
 
     if result.has_regressions {
-        println!("\n  FAIL: {} metric(s) regressed beyond {:.0}% threshold",
+        println!(
+            "\n  FAIL: {} metric(s) regressed beyond {:.0}% threshold",
             regressed_count, result.threshold_pct
         );
     } else {
@@ -291,7 +293,11 @@ mod tests {
     #[test]
     fn zero_baseline_skipped() {
         let baseline = make_report(vec![("consumer_concurrency_100_throughput", 0.0, "msg/s")]);
-        let current = make_report(vec![("consumer_concurrency_100_throughput", 100.0, "msg/s")]);
+        let current = make_report(vec![(
+            "consumer_concurrency_100_throughput",
+            100.0,
+            "msg/s",
+        )]);
 
         let result = compare_reports(&baseline, &current, 10.0);
         assert!(!result.has_regressions);
