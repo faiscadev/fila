@@ -4,8 +4,8 @@ startedAt: "2026-03-04T12:00:00Z"
 stories:
   - id: "12.1"
     title: "Benchmark Harness & Self-Benchmarking"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/12.1-benchmark-harness"
     pr: 45
     dependsOn: []
