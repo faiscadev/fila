@@ -16,3 +16,6 @@
 # Environment
 .env
 .env.local
+
+# Benchmark output
+bench-results.json
