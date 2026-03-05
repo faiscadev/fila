@@ -12,10 +12,13 @@ fn main() {
 
     let baseline_path = &args[1];
     let current_path = &args[2];
-    let threshold: f64 = args
-        .get(3)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10.0);
+    let threshold: f64 = match args.get(3) {
+        Some(s) => s.parse().unwrap_or_else(|_| {
+            eprintln!("Error: invalid threshold value '{s}' — must be a number");
+            process::exit(2);
+        }),
+        None => 10.0,
+    };
 
     let baseline_json = std::fs::read_to_string(baseline_path).unwrap_or_else(|e| {
         eprintln!("Error reading baseline file '{baseline_path}': {e}");
