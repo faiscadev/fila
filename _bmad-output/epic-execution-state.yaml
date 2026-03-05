@@ -26,7 +26,7 @@ stories:
   - id: "12.4"
     title: "Published Results & Benchmark Dashboard"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/12.4-published-results-benchmark-dashboard"
     pr: null
     dependsOn: ["12.1", "12.3"]
