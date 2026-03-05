@@ -57,7 +57,7 @@ Measures round-trip time: produce a single message, consume it, measure the inte
 
 Measures sustained aggregate production rate from multiple concurrent producers.
 
-- **Producers**: 3 concurrent producers (threads for Kafka/RabbitMQ, async tasks for NATS)
+- **Producers**: 3 concurrent producers (threads for Kafka, async tasks for RabbitMQ/NATS)
 - **Message size**: 1KB
 - **Measurement window**: 3 seconds
 - **Metric**: aggregate messages/second across all producers
@@ -113,11 +113,15 @@ All throughput benchmarks include a warmup period (default: 1 second) where mess
 
 For CI regression detection, the benchmark suite runs 3 times and uses the median. For competitive benchmarks, a single run is typically sufficient since the focus is relative comparison (all brokers experience the same CI environment variance).
 
-### Python vs Rust Client
+### Rust Clients for All Brokers
 
-Competitor benchmarks use Python client libraries (confluent-kafka, pika, nats-py) while Fila uses its native Rust benchmark harness. This means Fila's absolute numbers may be faster partly due to Rust client efficiency. The comparison is still valid for relative positioning: "how does Fila compare to Kafka when each uses its standard client?"
+All benchmarks — including competitors — use native Rust client libraries:
+- **Kafka**: `rdkafka` (librdkafka bindings, the standard high-performance Kafka client)
+- **RabbitMQ**: `lapin` (async AMQP 0-9-1 client)
+- **NATS**: `async-nats` (official NATS Rust client)
+- **Fila**: `fila-sdk` (native gRPC client)
 
-For a strictly apples-to-apples comparison, one could benchmark all brokers using the same language. However, this would penalize Fila (whose Rust SDK is its primary client) or require maintaining Rust clients for Kafka/RabbitMQ/NATS.
+This ensures the benchmark measures broker performance, not client language overhead. All clients run in the same Rust async runtime with equivalent optimization levels.
 
 ### Hardware
 
@@ -129,21 +133,20 @@ Results are hardware-specific. When publishing results, always include:
 - OS and kernel version
 - Docker version
 
-The `bench.py` script records the git commit hash and timestamp for traceability.
+The `bench-competitive` binary records the git commit hash and timestamp for traceability.
 
 ## Limitations
 
 - **Single-node only**: All brokers run as single instances. Clustering performance is not tested.
 - **No network latency**: Brokers run on localhost. Real-world deployments have network overhead.
-- **Client language mismatch**: Python clients for competitors vs Rust for Fila (see note above).
+- **Client library maturity**: Different Rust client libraries may have varying levels of optimization (e.g., rdkafka wraps C librdkafka; lapin is pure Rust).
 - **Configuration sensitivity**: Results depend on broker configuration. We use production-recommended defaults but not every possible tuning option.
 - **Docker overhead**: Competitors run in Docker while Fila runs natively. Docker adds ~1-3% overhead for I/O-intensive workloads.
 
 ## Reproducing Results
 
 ```bash
-# Prerequisites
-pip install -r requirements.txt
+# Prerequisites: Docker, Rust toolchain
 
 # Run everything
 cd bench/competitive
