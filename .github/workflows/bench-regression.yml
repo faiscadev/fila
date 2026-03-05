@@ -1,0 +1,92 @@
+name: Bench Regression
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      update_baseline:
+        description: 'Force update baseline from current branch'
+        type: boolean
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+  BENCH_RUNS: 3
+  REGRESSION_THRESHOLD: 10
+
+jobs:
+  bench:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build server, CLI, and bench tools
+        run: cargo build -p fila-server -p fila-cli -p fila-bench --bins
+
+      - name: Run benchmarks (3 runs for median)
+        run: |
+          for i in $(seq 1 $BENCH_RUNS); do
+            echo "=== Benchmark run $i/$BENCH_RUNS ==="
+            cargo bench -p fila-bench
+            mv bench-results.json "bench-run-$i.json"
+          done
+
+      - name: Aggregate results (median of runs)
+        run: |
+          ./target/debug/bench-aggregate bench-aggregated.json \
+            $(for i in $(seq 1 $BENCH_RUNS); do echo "bench-run-$i.json"; done)
+
+      # On PRs: compare against baseline and fail on regression
+      - name: Restore baseline from cache
+        if: github.event_name == 'pull_request'
+        id: baseline-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: bench-baseline.json
+          key: bench-baseline-dummy
+          restore-keys: bench-baseline-
+
+      - name: Compare against baseline
+        if: github.event_name == 'pull_request' && steps.baseline-cache.outputs.cache-hit != ''
+        run: |
+          ./target/debug/bench-compare bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD
+
+      - name: No baseline available (first run)
+        if: github.event_name == 'pull_request' && steps.baseline-cache.outputs.cache-hit == ''
+        run: |
+          echo "No baseline found — this is expected for the first run."
+          echo "Baselines are created when PRs merge to main."
+          echo ""
+          echo "Current results:"
+          cat bench-aggregated.json | python3 -m json.tool
+
+      # On main push or workflow_dispatch: save as new baseline
+      - name: Prepare baseline for save
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.update_baseline)
+        run: cp bench-aggregated.json bench-baseline.json
+
+      - name: Save baseline to cache
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.update_baseline)
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: bench-baseline.json
+          key: bench-baseline-${{ github.sha }}
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bench-results-${{ github.sha }}
+          path: |
+            bench-aggregated.json
+            bench-run-*.json
+          retention-days: 30
