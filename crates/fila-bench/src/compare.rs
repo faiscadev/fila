@@ -144,8 +144,8 @@ pub fn print_summary(result: &CompareResult) {
     println!("========================================\n");
 
     println!(
-        "  {:<50} {:>12} {:>12} {:>8}  {}",
-        "Metric", "Baseline", "Current", "Change", "Status"
+        "  {:<50} {:>12} {:>12} {:>8}  Status",
+        "Metric", "Baseline", "Current", "Change"
     );
     println!("  {}", "-".repeat(95));
 
