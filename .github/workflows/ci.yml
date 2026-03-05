@@ -74,8 +74,8 @@ jobs:
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build server and CLI binaries (fila-bench spawns them from target/debug/)
-        run: cargo build -p fila-server -p fila-cli
+      - name: Build bench suite and runtime binaries in one pass
+        run: cargo build --release -p fila-server -p fila-cli --benches -p fila-bench
       - run: cargo bench --no-fail-fast
       - name: Upload benchmark results
         if: always()

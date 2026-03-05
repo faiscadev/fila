@@ -189,7 +189,7 @@ fn workspace_binary(name: &str) -> PathBuf {
     path.pop(); // crates/
     path.pop(); // workspace root
     path.push("target");
-    path.push("debug");
+    path.push("release");
     path.push(name);
     path
 }
