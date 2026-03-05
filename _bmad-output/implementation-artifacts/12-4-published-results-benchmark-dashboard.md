@@ -61,8 +61,8 @@ so that I can reference performance data during architecture evaluation.
 **Documentation-only story — no Rust code changes.**
 This story creates `docs/benchmarks.md` and adds a performance section to `README.md`. No server, SDK, or tooling changes.
 
-**Placeholder results with realistic structure.**
-Since actual benchmark numbers are hardware-specific, the benchmarks page should use placeholder values marked as "example results" from a reference run. The structure (tables, sections, formatting) is the deliverable — not the specific numbers. When users run `cargo bench -p fila-bench` or `make bench-competitive`, they'll get their own numbers.
+**Actual results from a local reference run.**
+The benchmarks page uses real results from a local development machine run. These are hardware-specific — the structure and methodology documentation are the durable deliverables, while the specific numbers serve as a reference point. Users should run benchmarks on their own hardware for relevant results.
 
 **Link to METHODOLOGY.md for full reproduction details.**
 `docs/benchmarks.md` summarizes methodology but links to `bench/competitive/METHODOLOGY.md` for the complete details (broker configs, measurement windows, warmup, etc.).
