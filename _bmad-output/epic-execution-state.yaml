@@ -31,3 +31,8 @@ stories:
     pr: 48
     dependsOn: ["12.1", "12.3"]
 skippedIssues: []
+completedAt: "2026-03-05T00:30:00Z"
+summary:
+  total: 4
+  completed: 4
+  skipped: 0
