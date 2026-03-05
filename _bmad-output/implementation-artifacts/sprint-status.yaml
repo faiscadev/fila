@@ -130,7 +130,7 @@ development_status:
   # Epic 12: Benchmarks & Competitive Positioning
   epic-12: in-progress
   12-1-benchmark-harness-self-benchmarking: done
-  12-2-ci-regression-detection: ready-for-dev
+  12-2-ci-regression-detection: done
   12-3-competitive-benchmarks: backlog
   12-4-published-results-benchmark-dashboard: backlog
   epic-12-retrospective: optional
