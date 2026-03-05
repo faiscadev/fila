@@ -29,8 +29,8 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build server, CLI, and bench tools
-        run: cargo build -p fila-server -p fila-cli -p fila-bench --bins
+      - name: Build server, CLI, and bench tools in release
+        run: cargo build --release -p fila-server -p fila-cli -p fila-bench --bins
 
       - name: Run benchmarks (3 runs for median)
         run: |
@@ -42,7 +42,7 @@ jobs:
 
       - name: Aggregate results (median of runs)
         run: |
-          ./target/debug/bench-aggregate bench-aggregated.json \
+          ./target/release/bench-aggregate bench-aggregated.json \
             $(for i in $(seq 1 $BENCH_RUNS); do echo "bench-run-$i.json"; done)
 
       # On PRs: compare against baseline and fail on regression
@@ -59,7 +59,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           if [ -f bench-baseline.json ]; then
-            ./target/debug/bench-compare bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD
+            ./target/release/bench-compare bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD
           else
             echo "No baseline found — this is expected for the first run."
             echo "Baselines are created when PRs merge to main."
@@ -89,3 +89,32 @@ jobs:
             bench-aggregated.json
             bench-run-*.json
           retention-days: 30
+
+  bench-comment:
+    name: Post Bench Results
+    needs: bench
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bench-results-${{ github.sha }}
+        continue-on-error: true
+      - name: Post benchmark results to PR
+        if: hashFiles('bench-aggregated.json') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## Benchmark Results (median of 3 runs)"
+            echo ""
+            jq -r '"**Commit:** `\(.commit)`  "' bench-aggregated.json
+            jq -r '"**Time:** \(.timestamp)"' bench-aggregated.json
+            echo ""
+            echo "| Benchmark | Value | Unit |"
+            echo "|---|---:|---|"
+            jq -r '.benchmarks[] | "| \(.name) | \(.value | tostring) | \(.unit) |"' bench-aggregated.json
+          } > /tmp/bench-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/bench-comment.md
