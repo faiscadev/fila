@@ -18,6 +18,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -247,6 +248,71 @@ def bench_kafka(report: BenchReport):
 
     report.add(BenchResult("kafka_lifecycle_throughput", count / elapsed, "msg/s"))
 
+    # Multi-producer throughput (3 producers, 1KB)
+    print("[kafka] Multi-producer throughput...")
+    topic = "bench-multi-producer"
+    create_topic(topic)
+    payload = MESSAGE_SIZES["1KB"]
+    counts = [0] * MULTI_PRODUCERS
+
+    def kafka_producer_worker(idx):
+        p = Producer({"bootstrap.servers": broker, "linger.ms": 5, "batch.num.messages": 1000})
+        end_time = time.time() + MEASURE_SECS
+        while time.time() < end_time:
+            p.produce(topic, payload)
+            p.poll(0)
+            counts[idx] += 1
+        p.flush()
+
+    threads = [threading.Thread(target=kafka_producer_worker, args=(i,)) for i in range(MULTI_PRODUCERS)]
+    start = time.time()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    elapsed = time.time() - start
+    report.add(BenchResult("kafka_multi_producer_throughput", sum(counts) / elapsed, "msg/s"))
+    cleanup_topic(topic)
+
+    # Fan-out (1 producer, 3 consumer groups)
+    print("[kafka] Fan-out throughput...")
+    topic = "bench-fanout"
+    create_topic(topic)
+    payload = MESSAGE_SIZES["1KB"]
+    fanout_counts = [0] * FAN_OUT_CONSUMERS
+
+    def kafka_fanout_consumer(idx):
+        c = Consumer({
+            "bootstrap.servers": broker,
+            "group.id": f"bench-fanout-group-{idx}",
+            "auto.offset.reset": "earliest",
+            "enable.auto.commit": True,
+        })
+        c.subscribe([topic])
+        while fanout_counts[idx] < 500:
+            msg = c.poll(5.0)
+            if msg and not msg.error():
+                fanout_counts[idx] += 1
+        c.close()
+
+    # Pre-load messages
+    p = Producer({"bootstrap.servers": broker, "linger.ms": 5})
+    for _ in range(500):
+        p.produce(topic, payload)
+    p.flush()
+    time.sleep(0.5)
+
+    threads = [threading.Thread(target=kafka_fanout_consumer, args=(i,)) for i in range(FAN_OUT_CONSUMERS)]
+    start = time.time()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    elapsed = time.time() - start
+    total_delivered = sum(fanout_counts)
+    report.add(BenchResult("kafka_fanout_throughput", total_delivered / elapsed, "msg/s"))
+    cleanup_topic(topic)
+
     # Resource stats
     stats = get_container_stats("competitive-kafka-1")
     report.add(BenchResult("kafka_cpu_pct", stats["cpu_pct"], "%"))
@@ -347,6 +413,92 @@ def bench_rabbitmq(report: BenchReport):
     connection.close()
 
     report.add(BenchResult("rabbitmq_lifecycle_throughput", count / elapsed, "msg/s"))
+
+    # Multi-producer throughput (3 producers, 1KB)
+    print("[rabbitmq] Multi-producer throughput...")
+    queue = "bench-multi-producer"
+    connection = pika.BlockingConnection(conn_params)
+    channel = connection.channel()
+    channel.queue_declare(queue=queue, durable=True, arguments={"x-queue-type": "quorum"})
+    channel.queue_purge(queue)
+    connection.close()
+    payload = MESSAGE_SIZES["1KB"]
+    counts = [0] * MULTI_PRODUCERS
+
+    def rmq_producer_worker(idx):
+        conn = pika.BlockingConnection(conn_params)
+        ch = conn.channel()
+        end_time = time.time() + MEASURE_SECS
+        while time.time() < end_time:
+            ch.basic_publish(exchange="", routing_key=queue, body=payload)
+            counts[idx] += 1
+        conn.close()
+
+    threads = [threading.Thread(target=rmq_producer_worker, args=(i,)) for i in range(MULTI_PRODUCERS)]
+    start = time.time()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    elapsed = time.time() - start
+    report.add(BenchResult("rabbitmq_multi_producer_throughput", sum(counts) / elapsed, "msg/s"))
+
+    connection = pika.BlockingConnection(conn_params)
+    channel = connection.channel()
+    channel.queue_delete(queue)
+    connection.close()
+
+    # Fan-out (1 producer, 3 consumers via fanout exchange)
+    print("[rabbitmq] Fan-out throughput...")
+    exchange = "bench-fanout"
+    connection = pika.BlockingConnection(conn_params)
+    channel = connection.channel()
+    channel.exchange_declare(exchange=exchange, exchange_type="fanout", durable=True)
+    fanout_queues = []
+    for i in range(FAN_OUT_CONSUMERS):
+        q = f"bench-fanout-{i}"
+        channel.queue_declare(queue=q, durable=True, arguments={"x-queue-type": "quorum"})
+        channel.queue_purge(q)
+        channel.queue_bind(queue=q, exchange=exchange)
+        fanout_queues.append(q)
+
+    # Pre-load via exchange
+    payload = MESSAGE_SIZES["1KB"]
+    for _ in range(500):
+        channel.basic_publish(exchange=exchange, routing_key="", body=payload)
+    connection.close()
+    time.sleep(0.5)
+
+    fanout_counts = [0] * FAN_OUT_CONSUMERS
+
+    def rmq_fanout_consumer(idx):
+        conn = pika.BlockingConnection(conn_params)
+        ch = conn.channel()
+        q = fanout_queues[idx]
+        while fanout_counts[idx] < 500:
+            method, _, body = ch.basic_get(queue=q, auto_ack=True)
+            if method:
+                fanout_counts[idx] += 1
+            else:
+                time.sleep(0.01)
+        conn.close()
+
+    threads = [threading.Thread(target=rmq_fanout_consumer, args=(i,)) for i in range(FAN_OUT_CONSUMERS)]
+    start = time.time()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    elapsed = time.time() - start
+    total_delivered = sum(fanout_counts)
+    report.add(BenchResult("rabbitmq_fanout_throughput", total_delivered / elapsed, "msg/s"))
+
+    connection = pika.BlockingConnection(conn_params)
+    channel = connection.channel()
+    channel.exchange_delete(exchange)
+    for q in fanout_queues:
+        channel.queue_delete(q)
+    connection.close()
 
     # Resource stats
     stats = get_container_stats("competitive-rabbitmq-1")
@@ -456,6 +608,66 @@ def bench_nats(report: BenchReport):
         await nc.close()
 
         report.add(BenchResult("nats_lifecycle_throughput", count / elapsed, "msg/s"))
+
+        # Multi-producer throughput (3 producers, 1KB)
+        print("[nats] Multi-producer throughput...")
+        stream = "bench-multi-producer"
+        subject = "bench.mp"
+        await ensure_stream(stream, [subject])
+        payload = MESSAGE_SIZES["1KB"]
+
+        async def nats_producer_coro():
+            nc2 = await nats.connect("nats://localhost:4222")
+            js2 = nc2.jetstream()
+            c = 0
+            end_time = time.time() + MEASURE_SECS
+            while time.time() < end_time:
+                await js2.publish(subject, payload)
+                c += 1
+            await nc2.close()
+            return c
+
+        import asyncio
+        start = time.time()
+        results = await asyncio.gather(*[nats_producer_coro() for _ in range(MULTI_PRODUCERS)])
+        elapsed = time.time() - start
+        report.add(BenchResult("nats_multi_producer_throughput", sum(results) / elapsed, "msg/s"))
+        await js.delete_stream(stream)
+
+        # Fan-out (1 producer, 3 consumers on same stream)
+        print("[nats] Fan-out throughput...")
+        stream = "bench-fanout"
+        subject = "bench.fanout"
+        await ensure_stream(stream, [subject])
+        payload = MESSAGE_SIZES["1KB"]
+
+        # Pre-load
+        for _ in range(500):
+            await js.publish(subject, payload)
+
+        # Each consumer reads all 500 messages from their own durable
+        async def nats_fanout_consumer(idx):
+            nc2 = await nats.connect("nats://localhost:4222")
+            js2 = nc2.jetstream()
+            sub = await js2.pull_subscribe(subject, durable=f"bench-fo-{idx}")
+            c = 0
+            while c < 500:
+                try:
+                    msgs = await sub.fetch(10, timeout=5)
+                    for msg in msgs:
+                        await msg.ack()
+                        c += 1
+                except Exception:
+                    pass
+            await nc2.close()
+            return c
+
+        start = time.time()
+        results = await asyncio.gather(*[nats_fanout_consumer(i) for i in range(FAN_OUT_CONSUMERS)])
+        elapsed = time.time() - start
+        total_delivered = sum(results)
+        report.add(BenchResult("nats_fanout_throughput", total_delivered / elapsed, "msg/s"))
+        await js.delete_stream(stream)
 
         # Resource stats
         stats = get_container_stats("competitive-nats-1")

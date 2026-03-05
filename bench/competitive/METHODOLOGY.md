@@ -53,7 +53,29 @@ Measures round-trip time: produce a single message, consume it, measure the inte
 - **Metrics**: p50, p95, p99 (milliseconds)
 - **Method**: Sequential produce→consume pairs (not pipelined)
 
-### 3. Lifecycle Throughput (Produce → Consume → Ack)
+### 3. Multi-Producer Throughput
+
+Measures sustained aggregate production rate from multiple concurrent producers.
+
+- **Producers**: 3 concurrent producers (threads for Kafka/RabbitMQ, async tasks for NATS)
+- **Message size**: 1KB
+- **Measurement window**: 3 seconds
+- **Metric**: aggregate messages/second across all producers
+
+### 4. Fan-Out Throughput
+
+Measures delivery throughput when a single producer's messages are consumed by multiple independent consumers. Each consumer receives a copy of every message.
+
+- **Producers**: 1
+- **Consumers**: 3 (independent consumer groups/durables)
+- **Messages**: 500 pre-loaded, each consumer reads all 500
+- **Broker-specific implementation**:
+  - **Kafka**: 3 separate consumer groups on the same topic
+  - **RabbitMQ**: Fanout exchange with 3 bound queues
+  - **NATS**: 3 separate durable pull subscribers on the same stream
+- **Metric**: total messages delivered/second across all consumers
+
+### 5. Lifecycle Throughput (Produce → Consume → Ack)
 
 Measures the full message lifecycle: pre-load 1,000 messages, then consume and acknowledge each one.
 
@@ -61,7 +83,7 @@ Measures the full message lifecycle: pre-load 1,000 messages, then consume and a
 - **Messages**: 1,000
 - **Metric**: messages/second for the consume+ack phase
 
-### 4. Resource Utilization
+### 6. Resource Utilization
 
 Captures CPU and memory usage of each broker's Docker container during benchmarks.
 

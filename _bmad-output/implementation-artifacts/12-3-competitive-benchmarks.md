@@ -38,7 +38,7 @@ so that I can make informed adoption decisions based on data.
 
 - [x] Task 2: Competitive benchmark harness (AC: 2, 3, 5, 9)
   - [x] Create `bench/competitive/bench.py` (Python with native client libraries for each broker)
-  - [x] Implement workloads: throughput (single-producer/single-consumer), message sizes (64B, 1KB, 64KB)
+  - [x] Implement workloads: throughput (single-producer/single-consumer), fan-out (1→3), multi-producer (3→1), message sizes (64B, 1KB, 64KB)
   - [x] Queue lifecycle: enqueue → consume → ack throughput
   - [x] Latency measurement: p50/p95/p99 for each broker
   - [x] Resource monitoring via `docker stats` during benchmark runs
