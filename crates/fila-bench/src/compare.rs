@@ -18,6 +18,7 @@ pub struct MetricComparison {
     pub change_pct: f64,
     pub unit: String,
     pub status: CompareStatus,
+    pub is_new: bool,
 }
 
 /// Result of comparing two benchmark reports.
@@ -83,6 +84,7 @@ pub fn compare_reports(
                 change_pct: 0.0,
                 unit: metric.unit.clone(),
                 status: CompareStatus::Unchanged,
+                is_new: true,
             });
             continue;
         };
@@ -99,6 +101,7 @@ pub fn compare_reports(
                 change_pct: 0.0,
                 unit: metric.unit.clone(),
                 status: CompareStatus::Unchanged,
+                is_new: false,
             });
             continue;
         }
@@ -126,6 +129,7 @@ pub fn compare_reports(
             change_pct,
             unit: metric.unit.clone(),
             status,
+            is_new: false,
         });
     }
 
@@ -155,8 +159,10 @@ pub fn print_summary(result: &CompareResult) {
             CompareStatus::Regressed => "REGRESSED",
             CompareStatus::Unchanged => "ok",
         };
-        let change_str = if cmp.baseline == 0.0 {
+        let change_str = if cmp.is_new {
             "new".to_string()
+        } else if cmp.baseline == 0.0 {
+            "n/a".to_string()
         } else {
             format!("{:+.1}%", cmp.change_pct)
         };
