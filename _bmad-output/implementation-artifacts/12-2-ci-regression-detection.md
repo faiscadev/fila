@@ -53,10 +53,10 @@ so that performance degradation is caught before merge.
 - [x] Task 4: Remove bench job from ci.yml (AC: 1)
   - [x] Remove the `bench` job from `.github/workflows/ci.yml` since it's now handled by the dedicated `bench-regression.yml` workflow
 
-- [ ] Task 5: Verify workflow on feature branch (AC: 8)
+- [x] Task 5: Verify workflow on feature branch (AC: 8)
   - [x] Temporarily broaden `bench-regression.yml` trigger to include the feature branch
-  - [ ] Push and verify the workflow runs successfully
-  - [ ] Narrow the trigger back to its intended scope before merge
+  - [x] Push and verify the workflow runs successfully (run 22697738577 — passed in 22m15s)
+  - [x] Narrow the trigger back to its intended scope before merge
 
 ## Dev Notes
 
@@ -150,9 +150,25 @@ Story 12.1's `BenchReport` already serializes to JSON with `bench-results.json`.
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+- First workflow run failed: `bench-results.json` path issue (cargo bench writes to crate dir, not repo root). Fixed in commit c6a7582.
+- Second workflow run (22697738577) passed in 22m15s — all steps green.
 
 ### Completion Notes List
+- Compare tool supports metric polarity detection via unit strings (msg/s, MB/s = higher-is-better; ms, us, %, MB, bytes/msg = lower-is-better)
+- Aggregate tool computes median per metric across N runs, adds "runs" count to metadata
+- Workflow uses `actions/cache/save` and `actions/cache/restore` (not artifacts) for baseline storage — cache key includes SHA for immutability, restore-keys prefix matching finds latest
+- Baseline save/compare paths are mutually exclusive: push events save, PR events compare
+- Workflow verified on feature branch (AC 8) — run 22697738577 completed successfully
 
 ### File List
+- `crates/fila-bench/src/compare.rs` — comparison logic + 8 unit tests
+- `crates/fila-bench/src/aggregate.rs` — median aggregation + 5 unit tests (note: 1 extra test vs spec)
+- `crates/fila-bench/src/bin/bench-compare.rs` — CLI binary for comparing two JSON reports
+- `crates/fila-bench/src/bin/bench-aggregate.rs` — CLI binary for aggregating N JSON reports
+- `crates/fila-bench/src/lib.rs` — added `pub mod aggregate` and `pub mod compare`
+- `crates/fila-bench/Cargo.toml` — added two `[[bin]]` targets
+- `.github/workflows/bench-regression.yml` — new CI workflow (PR/push/dispatch)
+- `.github/workflows/ci.yml` — removed `bench` job (now in bench-regression.yml)

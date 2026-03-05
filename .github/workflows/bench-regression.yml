@@ -3,7 +3,7 @@ name: Bench Regression
 on:
   pull_request:
   push:
-    branches: [main, feat/12.2-ci-regression-detection]
+    branches: [main]
   workflow_dispatch:
     inputs:
       update_baseline:
