@@ -60,9 +60,7 @@ mod kafka {
     }
 
     async fn cleanup_topic(admin: &AdminClient<DefaultClientContext>, name: &str) {
-        let _ = admin
-            .delete_topics(&[name], &AdminOptions::new())
-            .await;
+        let _ = admin.delete_topics(&[name], &AdminOptions::new()).await;
     }
 
     fn throughput_producer(
