@@ -4,6 +4,7 @@
 //! producing JSON reports compatible with BenchReport schema.
 //!
 //! Usage:
+//!   bench-competitive fila <output-dir>
 //!   bench-competitive kafka <output-dir>
 //!   bench-competitive rabbitmq <output-dir>
 //!   bench-competitive nats <output-dir>
@@ -19,8 +20,6 @@ const MEASURE_SECS: u64 = 3;
 const LATENCY_SAMPLES: usize = 100;
 const LIFECYCLE_MESSAGES: usize = 1000;
 const MULTI_PRODUCERS: usize = 3;
-const FAN_OUT_CONSUMERS: usize = 3;
-const FAN_OUT_MESSAGES: usize = 500;
 
 const PAYLOAD_64B: usize = 64;
 const PAYLOAD_1KB: usize = 1024;
@@ -283,68 +282,6 @@ mod kafka {
             report.add(BenchResult {
                 name: "kafka_multi_producer_throughput".to_string(),
                 value: total as f64 / MEASURE_SECS as f64,
-                unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
-            });
-            cleanup_topic(&adm, topic).await;
-        }
-
-        // Fan-out
-        println!("[kafka] Fan-out throughput...");
-        {
-            let topic = "bench-fanout";
-            create_topic(&adm, topic).await;
-            let producer = throughput_producer(BROKER, "5", "1000");
-            let payload = vec![0u8; PAYLOAD_1KB];
-
-            for _ in 0..FAN_OUT_MESSAGES {
-                let _ = producer.send(BaseRecord::<(), [u8]>::to(topic).payload(&payload));
-            }
-            producer.flush(Duration::from_secs(10)).ok();
-            std::thread::sleep(Duration::from_millis(500));
-
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..FAN_OUT_CONSUMERS)
-                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
-                .collect();
-
-            let start = Instant::now();
-            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS)
-                .map(|i| {
-                    let count = counts[i].clone();
-                    std::thread::spawn(move || {
-                        let consumer: BaseConsumer<DefaultConsumerContext> = ClientConfig::new()
-                            .set("bootstrap.servers", BROKER)
-                            .set("group.id", format!("bench-fanout-group-{i}"))
-                            .set("auto.offset.reset", "earliest")
-                            .set("enable.auto.commit", "true")
-                            .create()
-                            .expect("kafka consumer");
-                        consumer.subscribe(&[topic]).expect("subscribe");
-                        while count.load(std::sync::atomic::Ordering::Relaxed)
-                            < FAN_OUT_MESSAGES as u64
-                        {
-                            if let Some(Ok(_)) = consumer
-                                .poll(Duration::from_secs(5))
-                                .map(|r| r.map(|_m: BorrowedMessage<'_>| ()))
-                            {
-                                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            }
-                        }
-                    })
-                })
-                .collect();
-
-            for h in handles {
-                h.join().unwrap();
-            }
-            let elapsed = start.elapsed().as_secs_f64();
-            let total: u64 = counts
-                .iter()
-                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                .sum();
-            report.add(BenchResult {
-                name: "kafka_fanout_throughput".to_string(),
-                value: total as f64 / elapsed,
                 unit: "msg/s".to_string(),
                 metadata: HashMap::new(),
             });
@@ -657,114 +594,6 @@ mod rabbitmq {
             conn.close(200, "done").await.ok();
         }
 
-        // Fan-out
-        println!("[rabbitmq] Fan-out throughput...");
-        {
-            let conn = connect().await;
-            let channel = conn.create_channel().await.expect("channel");
-            let exchange = "bench-fanout";
-            channel
-                .exchange_declare(
-                    exchange,
-                    lapin::ExchangeKind::Fanout,
-                    ExchangeDeclareOptions {
-                        durable: true,
-                        ..Default::default()
-                    },
-                    FieldTable::default(),
-                )
-                .await
-                .expect("declare exchange");
-
-            let mut fanout_queues = Vec::new();
-            for i in 0..FAN_OUT_CONSUMERS {
-                let q = format!("bench-fanout-{i}");
-                declare_queue(&channel, &q).await;
-                channel
-                    .queue_bind(
-                        &q,
-                        exchange,
-                        "",
-                        QueueBindOptions::default(),
-                        FieldTable::default(),
-                    )
-                    .await
-                    .expect("bind");
-                fanout_queues.push(q);
-            }
-
-            let payload = vec![0u8; PAYLOAD_1KB];
-            for _ in 0..FAN_OUT_MESSAGES {
-                let _ = channel
-                    .basic_publish(
-                        exchange,
-                        "",
-                        BasicPublishOptions::default(),
-                        &payload,
-                        BasicProperties::default(),
-                    )
-                    .await;
-            }
-            conn.close(200, "preload done").await.ok();
-            tokio::time::sleep(Duration::from_millis(500)).await;
-
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..FAN_OUT_CONSUMERS)
-                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
-                .collect();
-
-            let start = Instant::now();
-            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS)
-                .map(|i| {
-                    let q = fanout_queues[i].clone();
-                    let count = counts[i].clone();
-                    tokio::spawn(async move {
-                        let conn = connect().await;
-                        let ch = conn.create_channel().await.expect("channel");
-                        while count.load(std::sync::atomic::Ordering::Relaxed)
-                            < FAN_OUT_MESSAGES as u64
-                        {
-                            match ch.basic_get(&q, BasicGetOptions { no_ack: true }).await {
-                                Ok(Some(_)) => {
-                                    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                }
-                                _ => tokio::time::sleep(Duration::from_millis(10)).await,
-                            }
-                        }
-                        conn.close(200, "done").await.ok();
-                    })
-                })
-                .collect();
-
-            for h in handles {
-                h.await.unwrap();
-            }
-            let elapsed = start.elapsed().as_secs_f64();
-            let total: u64 = counts
-                .iter()
-                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                .sum();
-            report.add(BenchResult {
-                name: "rabbitmq_fanout_throughput".to_string(),
-                value: total as f64 / elapsed,
-                unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
-            });
-
-            let conn = connect().await;
-            let channel = conn.create_channel().await.expect("channel");
-            channel
-                .exchange_delete(exchange, ExchangeDeleteOptions::default())
-                .await
-                .ok();
-            for q in &fanout_queues {
-                channel
-                    .queue_delete(q, QueueDeleteOptions::default())
-                    .await
-                    .ok();
-            }
-            conn.close(200, "done").await.ok();
-        }
-
         // Resource stats
         if let Some(stats) = container_stats("competitive-rabbitmq-1") {
             report.add(BenchResult {
@@ -1021,77 +850,6 @@ mod nats {
             let _ = js.delete_stream(stream).await;
         }
 
-        // Fan-out
-        println!("[nats] Fan-out throughput...");
-        {
-            let stream = "bench-fanout";
-            let subject = "bench.fanout";
-            ensure_stream(&js, stream, vec![subject.to_string()]).await;
-            let payload = vec![0u8; PAYLOAD_1KB];
-
-            for _ in 0..FAN_OUT_MESSAGES {
-                let _ = js.publish(subject, payload.clone().into()).await;
-            }
-
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..FAN_OUT_CONSUMERS)
-                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
-                .collect();
-
-            let start = Instant::now();
-            let handles: Vec<_> = (0..FAN_OUT_CONSUMERS)
-                .map(|i| {
-                    let count = counts[i].clone();
-                    tokio::spawn(async move {
-                        let client = connect().await;
-                        let js = jetstream::new(client);
-                        let consumer: jetstream::consumer::PullConsumer = js
-                            .create_consumer_on_stream(
-                                jetstream::consumer::pull::Config {
-                                    durable_name: Some(format!("bench-fo-{i}")),
-                                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
-                                    ..Default::default()
-                                },
-                                stream,
-                            )
-                            .await
-                            .expect("create consumer");
-                        while count.load(std::sync::atomic::Ordering::Relaxed)
-                            < FAN_OUT_MESSAGES as u64
-                        {
-                            if let Ok(mut batch) = consumer
-                                .fetch()
-                                .max_messages(10)
-                                .expires(Duration::from_secs(5))
-                                .messages()
-                                .await
-                            {
-                                while let Some(Ok(msg)) = batch.next().await {
-                                    let _ = msg.ack().await;
-                                    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                }
-                            }
-                        }
-                    })
-                })
-                .collect();
-
-            for h in handles {
-                h.await.unwrap();
-            }
-            let elapsed = start.elapsed().as_secs_f64();
-            let total: u64 = counts
-                .iter()
-                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                .sum();
-            report.add(BenchResult {
-                name: "nats_fanout_throughput".to_string(),
-                value: total as f64 / elapsed,
-                unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
-            });
-            let _ = js.delete_stream(stream).await;
-        }
-
         // Resource stats
         if let Some(stats) = container_stats("competitive-nats-1") {
             report.add(BenchResult {
@@ -1106,6 +864,221 @@ mod nats {
                 unit: "MB".to_string(),
                 metadata: HashMap::new(),
             });
+        }
+    }
+}
+
+// --- Fila benchmarks ---
+
+mod fila {
+    use super::*;
+    use fila_bench::measurement::process_rss_bytes;
+    use fila_bench::server::{create_queue_cli, BenchServer};
+    use fila_sdk::FilaClient;
+    use tokio_stream::StreamExt;
+
+    pub async fn bench(report: &mut BenchReport) {
+        let server = BenchServer::start();
+        let addr = server.addr();
+
+        // Throughput benchmarks
+        for (size_name, payload_size) in [
+            ("64b", PAYLOAD_64B),
+            ("1kb", PAYLOAD_1KB),
+            ("64kb", PAYLOAD_64KB),
+        ] {
+            let queue = format!("bench-throughput-{size_name}");
+            create_queue_cli(addr, &queue);
+            let client = FilaClient::connect(addr).await.expect("fila connect");
+            let payload = vec![0u8; payload_size];
+            let headers = HashMap::new();
+
+            // Warmup
+            println!("[fila] Throughput {size_name} warmup...");
+            let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
+            while Instant::now() < warmup_deadline {
+                let _ = client
+                    .enqueue(&queue, headers.clone(), payload.clone())
+                    .await;
+            }
+
+            // Measure
+            println!("[fila] Throughput {size_name} measuring...");
+            let mut meter = ThroughputMeter::start();
+            let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
+            while Instant::now() < measure_deadline {
+                if client
+                    .enqueue(&queue, headers.clone(), payload.clone())
+                    .await
+                    .is_ok()
+                {
+                    meter.increment();
+                }
+            }
+
+            report.add(BenchResult {
+                name: format!("fila_throughput_{size_name}"),
+                value: meter.msg_per_sec(),
+                unit: "msg/s".to_string(),
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Latency benchmark (1KB)
+        println!("[fila] Latency benchmark...");
+        {
+            let queue = "bench-latency";
+            create_queue_cli(addr, queue);
+            let client = FilaClient::connect(addr).await.expect("fila connect");
+            let payload = vec![0u8; PAYLOAD_1KB];
+            let headers = HashMap::new();
+
+            let mut stream = client.consume(queue).await.expect("fila consume");
+            let mut sampler = LatencySampler::with_capacity(LATENCY_SAMPLES);
+
+            for _ in 0..LATENCY_SAMPLES {
+                let start = Instant::now();
+                let enqueued_id = client
+                    .enqueue(queue, headers.clone(), payload.clone())
+                    .await
+                    .expect("enqueue");
+                if let Ok(Some(Ok(msg))) =
+                    tokio::time::timeout(Duration::from_secs(5), stream.next()).await
+                {
+                    if msg.id == enqueued_id {
+                        sampler.record(start.elapsed());
+                        client.ack(queue, &msg.id).await.ok();
+                    }
+                }
+            }
+
+            if let Some((p50, p95, p99)) = sampler.percentiles() {
+                report.add(BenchResult {
+                    name: "fila_latency_p50".to_string(),
+                    value: p50.as_secs_f64() * 1000.0,
+                    unit: "ms".to_string(),
+                    metadata: HashMap::new(),
+                });
+                report.add(BenchResult {
+                    name: "fila_latency_p95".to_string(),
+                    value: p95.as_secs_f64() * 1000.0,
+                    unit: "ms".to_string(),
+                    metadata: HashMap::new(),
+                });
+                report.add(BenchResult {
+                    name: "fila_latency_p99".to_string(),
+                    value: p99.as_secs_f64() * 1000.0,
+                    unit: "ms".to_string(),
+                    metadata: HashMap::new(),
+                });
+            }
+        }
+
+        // Lifecycle throughput
+        println!("[fila] Lifecycle throughput...");
+        {
+            let queue = "bench-lifecycle";
+            create_queue_cli(addr, queue);
+            let client = FilaClient::connect(addr).await.expect("fila connect");
+            let payload = vec![0u8; PAYLOAD_1KB];
+            let headers = HashMap::new();
+
+            // Pre-load
+            for _ in 0..LIFECYCLE_MESSAGES {
+                let _ = client
+                    .enqueue(queue, headers.clone(), payload.clone())
+                    .await;
+            }
+
+            let mut stream = client.consume(queue).await.expect("fila consume");
+            let mut count = 0u64;
+            let start = Instant::now();
+            while count < LIFECYCLE_MESSAGES as u64 {
+                if let Some(Ok(msg)) = stream.next().await {
+                    client.ack(queue, &msg.id).await.ok();
+                    count += 1;
+                }
+            }
+            let elapsed = start.elapsed().as_secs_f64();
+
+            report.add(BenchResult {
+                name: "fila_lifecycle_throughput".to_string(),
+                value: count as f64 / elapsed,
+                unit: "msg/s".to_string(),
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Multi-producer throughput
+        println!("[fila] Multi-producer throughput...");
+        {
+            let queue = "bench-multi-producer";
+            create_queue_cli(addr, queue);
+            let payload = vec![0u8; PAYLOAD_1KB];
+            let addr = addr.to_string();
+
+            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..MULTI_PRODUCERS)
+                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+                .collect();
+
+            let handles: Vec<_> = (0..MULTI_PRODUCERS)
+                .map(|i| {
+                    let queue = queue.to_string();
+                    let payload = payload.clone();
+                    let count = counts[i].clone();
+                    let addr = addr.clone();
+                    tokio::spawn(async move {
+                        let client = FilaClient::connect(&addr).await.expect("fila connect");
+                        let headers = HashMap::new();
+                        // Warmup
+                        let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
+                        while Instant::now() < warmup_deadline {
+                            let _ = client
+                                .enqueue(&queue, headers.clone(), payload.clone())
+                                .await;
+                        }
+                        // Measure
+                        let measure_deadline =
+                            Instant::now() + Duration::from_secs(MEASURE_SECS);
+                        while Instant::now() < measure_deadline {
+                            if client
+                                .enqueue(&queue, headers.clone(), payload.clone())
+                                .await
+                                .is_ok()
+                            {
+                                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    })
+                })
+                .collect();
+
+            for h in handles {
+                h.await.unwrap();
+            }
+
+            let total: u64 = counts
+                .iter()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .sum();
+            report.add(BenchResult {
+                name: "fila_multi_producer_throughput".to_string(),
+                value: total as f64 / MEASURE_SECS as f64,
+                unit: "msg/s".to_string(),
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Resource stats (process-level, not container)
+        if let Some(pid) = server.pid() {
+            if let Some(rss) = process_rss_bytes(pid) {
+                report.add(BenchResult {
+                    name: "fila_memory_mb".to_string(),
+                    value: rss as f64 / (1024.0 * 1024.0),
+                    unit: "MB".to_string(),
+                    metadata: HashMap::new(),
+                });
+            }
         }
     }
 }
@@ -1164,7 +1137,7 @@ fn print_summary(report: &BenchReport, broker: &str) {
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: bench-competitive <kafka|rabbitmq|nats|all> <output-dir>");
+        eprintln!("Usage: bench-competitive <fila|kafka|rabbitmq|nats|all> <output-dir>");
         std::process::exit(1);
     }
 
@@ -1173,7 +1146,7 @@ async fn main() {
     std::fs::create_dir_all(output_dir).expect("create output dir");
 
     let brokers: Vec<&str> = if broker_arg == "all" {
-        vec!["kafka", "rabbitmq", "nats"]
+        vec!["fila", "kafka", "rabbitmq", "nats"]
     } else {
         vec![broker_arg.as_str()]
     };
@@ -1186,11 +1159,12 @@ async fn main() {
         let mut report = BenchReport::new();
 
         match broker {
+            "fila" => fila::bench(&mut report).await,
             "kafka" => kafka::bench(&mut report).await,
             "rabbitmq" => rabbitmq::bench(&mut report).await,
             "nats" => nats::bench(&mut report).await,
             _ => {
-                eprintln!("Unknown broker: {broker}. Choose kafka, rabbitmq, nats, or all.");
+                eprintln!("Unknown broker: {broker}. Choose fila, kafka, rabbitmq, nats, or all.");
                 std::process::exit(1);
             }
         }
