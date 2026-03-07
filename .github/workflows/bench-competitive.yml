@@ -1,0 +1,39 @@
+name: Competitive Bench
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  competitive-bench:
+    name: Competitive Bench
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install system deps for rdkafka
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Run competitive benchmarks
+        working-directory: bench/competitive
+        run: make bench-competitive
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: competitive-bench-results
+          path: bench/competitive/results/
+          if-no-files-found: ignore
+      - name: Teardown containers
+        if: always()
+        working-directory: bench/competitive
+        run: make bench-clean
