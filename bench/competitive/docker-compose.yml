@@ -37,6 +37,7 @@ services:
       retries: 10
 
   # RabbitMQ with quorum queues (production-recommended since RabbitMQ 3.8+)
+  # Uses entrypoint override to fix .erlang.cookie permissions on Docker Desktop for Mac
   rabbitmq:
     image: rabbitmq:3.13-management
     ports:
@@ -45,8 +46,14 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: bench
       RABBITMQ_DEFAULT_PASS: bench
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
+    entrypoint:
+      - bash
+      - -c
+      - |
+        echo 'benchcookie' > /var/lib/rabbitmq/.erlang.cookie
+        chmod 600 /var/lib/rabbitmq/.erlang.cookie
+        chown rabbitmq:rabbitmq /var/lib/rabbitmq/.erlang.cookie
+        exec docker-entrypoint.sh rabbitmq-server
     healthcheck:
       test: rabbitmq-diagnostics -q ping
       interval: 5s
@@ -72,6 +79,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
-
-volumes:
-  rabbitmq-data:
