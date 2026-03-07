@@ -18,6 +18,13 @@ struct DrrQueueState {
     /// but not yet exhausted). Prevents `start_new_round` from being
     /// called multiple times before the current round finishes.
     round_active: bool,
+    /// Number of messages delivered from the current burst key. Each key
+    /// delivers `weight` messages per turn before yielding. Reset to 0
+    /// when advancing to the next key.
+    burst_delivered: u32,
+    /// The key currently being burst-served. When `consume_deficit` is
+    /// called for a different key, the burst resets.
+    current_burst_key: Option<String>,
 }
 
 /// Deficit Round Robin scheduler. Manages per-queue fairness state.
@@ -74,21 +81,35 @@ impl DrrScheduler {
                 if state.active_keys.is_empty() {
                     state.round_position = 0;
                     state.round_active = false;
-                } else if removed_idx < state.round_position {
-                    // Key was before current position — shift back to avoid skipping
-                    state.round_position -= 1;
-                } else if state.round_position >= state.active_keys.len() {
-                    // Position overshot the end — wrap to start
-                    state.round_position = 0;
+                    state.burst_delivered = 0;
+                    state.current_burst_key = None;
+                } else {
+                    if removed_idx < state.round_position {
+                        // Key was before current position — shift back to avoid skipping
+                        state.round_position -= 1;
+                    } else if state.round_position >= state.active_keys.len() {
+                        // Position overshot the end — wrap to start
+                        state.round_position = 0;
+                    }
+
+                    // Reset burst if the removed key was the current burst key
+                    if state.current_burst_key.as_deref() == Some(fairness_key) {
+                        state.burst_delivered = 0;
+                        state.current_burst_key = None;
+                    }
                 }
             }
         }
     }
 
     /// Return the next fairness key that has positive deficit in the current
-    /// round. Advances the round position. Returns `None` when the round is
-    /// exhausted (all remaining keys have non-positive deficit), and marks
-    /// the round as inactive so a new round can be started.
+    /// round. This is an idempotent peek — calling it multiple times without
+    /// `consume_deficit` returns the same key. State advancement (burst
+    /// tracking, round position) happens in `consume_deficit`.
+    ///
+    /// Returns `None` when the round is exhausted (all remaining keys have
+    /// non-positive deficit), and marks the round as inactive so a new
+    /// round can be started.
     pub fn next_key(&mut self, queue_id: &str) -> Option<String> {
         let state = self.queues.get_mut(queue_id)?;
         let len = state.active_keys.len();
@@ -96,13 +117,14 @@ impl DrrScheduler {
             return None;
         }
 
+        // Scan from round_position for the first key with positive deficit.
+        // Does NOT advance state — consume_deficit handles burst progression.
         let start = state.round_position;
         for i in 0..len {
             let idx = (start + i) % len;
             let key = &state.active_keys[idx];
             let deficit = state.deficits.get(key).copied().unwrap_or(0);
             if deficit > 0 {
-                state.round_position = (idx + 1) % len;
                 return Some(key.clone());
             }
         }
@@ -113,21 +135,59 @@ impl DrrScheduler {
     }
 
     /// Decrement the deficit of a fairness key by 1 after delivering a message.
+    /// Also tracks burst progression: each key delivers `weight` messages
+    /// per turn before `round_position` advances to the next key. This
+    /// ensures proportional interleaving within any delivery window.
     pub fn consume_deficit(&mut self, queue_id: &str, fairness_key: &str) {
-        if let Some(state) = self.queues.get_mut(queue_id) {
-            if let Some(d) = state.deficits.get_mut(fairness_key) {
-                *d -= 1;
+        let Some(state) = self.queues.get_mut(queue_id) else {
+            return;
+        };
+
+        if let Some(d) = state.deficits.get_mut(fairness_key) {
+            *d -= 1;
+        }
+
+        // Track burst: if this is a different key than the current burst,
+        // reset the burst counter.
+        if state.current_burst_key.as_deref() != Some(fairness_key) {
+            state.current_burst_key = Some(fairness_key.to_string());
+            state.burst_delivered = 1;
+        } else {
+            state.burst_delivered += 1;
+        }
+
+        // When burst reaches the key's weight, advance to the next key.
+        let weight = state.weights.get(fairness_key).copied().unwrap_or(1);
+        if state.burst_delivered >= weight {
+            state.burst_delivered = 0;
+            state.current_burst_key = None;
+            // Advance round_position past the current key
+            if let Some(idx) = state.active_keys.iter().position(|k| k == fairness_key) {
+                state.round_position = (idx + 1) % state.active_keys.len();
             }
         }
     }
 
     /// Drain all remaining deficit for a fairness key (set to 0).
     /// Used when a key is throttled to skip all its remaining deficit in O(1)
-    /// rather than consuming one at a time.
+    /// rather than consuming one at a time. Also resets burst state and
+    /// advances round_position past the drained key.
     pub fn drain_deficit(&mut self, queue_id: &str, fairness_key: &str) {
-        if let Some(state) = self.queues.get_mut(queue_id) {
-            if let Some(d) = state.deficits.get_mut(fairness_key) {
-                *d = 0;
+        let Some(state) = self.queues.get_mut(queue_id) else {
+            return;
+        };
+        if let Some(d) = state.deficits.get_mut(fairness_key) {
+            *d = 0;
+        }
+        // Reset burst if this was the current burst key
+        if state.current_burst_key.as_deref() == Some(fairness_key) {
+            state.burst_delivered = 0;
+            state.current_burst_key = None;
+        }
+        // Advance past the drained key so next_key skips it
+        if !state.active_keys.is_empty() {
+            if let Some(idx) = state.active_keys.iter().position(|k| k == fairness_key) {
+                state.round_position = (idx + 1) % state.active_keys.len();
             }
         }
     }
@@ -154,6 +214,8 @@ impl DrrScheduler {
 
         state.round_position = 0;
         state.round_active = true;
+        state.burst_delivered = 0;
+        state.current_burst_key = None;
         true
     }
 
@@ -448,6 +510,56 @@ mod tests {
         drr.remove_key("q1", "a");
         assert!(!drr.has_active_keys("q1"));
         assert!(drr.has_active_keys("q2"));
+    }
+
+    #[test]
+    fn weighted_keys_deliver_proportionally_within_window() {
+        // 3 keys with weights 1, 2, 3 (total_weight = 6)
+        // quantum = 60 → deficits: 60, 120, 180 (total = 360)
+        // Deliver only 180 messages (half the round)
+        // Expected: key_1 ≈ 30 (16.7%), key_2 ≈ 60 (33.3%), key_3 ≈ 90 (50%)
+        //
+        // BUG: without weighted burst scheduling, the round-robin gives
+        // each key 1 message per turn → 60 each (33% uniform). This test
+        // catches the bug by asserting proportional delivery in a window.
+        let mut drr = DrrScheduler::new(60);
+        drr.add_key("q1", "key_1", 1);
+        drr.add_key("q1", "key_2", 2);
+        drr.add_key("q1", "key_3", 3);
+
+        drr.start_new_round("q1");
+
+        let window = 180;
+        let mut counts = HashMap::new();
+        for _ in 0..window {
+            let Some(key) = drr.next_key("q1") else {
+                break;
+            };
+            drr.consume_deficit("q1", &key);
+            *counts.entry(key).or_insert(0) += 1;
+        }
+
+        let total: usize = counts.values().sum();
+        assert_eq!(total, 180, "should deliver exactly 180 messages");
+
+        for (key, weight, expected_share) in [
+            ("key_1", 1, 1.0 / 6.0),
+            ("key_2", 2, 2.0 / 6.0),
+            ("key_3", 3, 3.0 / 6.0),
+        ] {
+            let actual = counts.get(key).copied().unwrap_or(0);
+            let actual_share = actual as f64 / total as f64;
+            let diff = (actual_share - expected_share).abs();
+            assert!(
+                diff <= 0.10,
+                "Key {} (weight={}): expected share {:.4}, actual {:.4}, diff {:.4} > 0.10",
+                key,
+                weight,
+                expected_share,
+                actual_share,
+                diff,
+            );
+        }
     }
 
     mod proptests {

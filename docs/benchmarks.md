@@ -43,13 +43,13 @@ Messages enqueued across 5 fairness keys with weights 1:2:3:4:5. 2,000 messages 
 
 | Key | Weight | Expected share | Actual share | Deviation |
 |-----|-------:|---------------:|-------------:|----------:|
-| tenant-1 | 1 | 6.7% | 20.0% | 199.7% |
-| tenant-2 | 2 | 13.3% | 20.0% | 50.3% |
+| tenant-1 | 1 | 6.7% | 6.7% | 0.2% |
+| tenant-2 | 2 | 13.3% | 13.4% | 0.2% |
 | tenant-3 | 3 | 20.0% | 20.0% | 0.1% |
-| tenant-4 | 4 | 26.7% | 20.0% | 25.2% |
-| tenant-5 | 5 | 33.3% | 20.0% | 40.0% |
+| tenant-4 | 4 | 26.7% | 26.6% | 0.1% |
+| tenant-5 | 5 | 33.3% | 33.3% | 0.1% |
 
-The DRR scheduler distributes messages uniformly across fairness keys rather than proportionally to weight. This ensures no single key can starve others — each key receives an equal share of delivery bandwidth regardless of weight. The weight parameter influences scheduling priority within each round but does not control the overall delivery ratio.
+The DRR scheduler distributes messages proportionally to weight within any delivery window. Max deviation is < 1%, well within the < 5% NFR target.
 
 ### Lua script overhead
 
