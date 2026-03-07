@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-OUTPUT_DIR="${1:-.}"
+OUTPUT_DIR="$(cd "${1:-.}" && pwd)"
 
 echo ""
 echo "############################################################"
