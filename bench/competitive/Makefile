@@ -68,8 +68,8 @@ bench-nats: setup build
 	$(BENCH_BIN) nats $(RESULTS_DIR)
 	$(COMPOSE) down -v
 
-bench-fila: setup
-	./bench-fila.sh $(RESULTS_DIR)
+bench-fila: setup build
+	$(BENCH_BIN) fila $(RESULTS_DIR)
 
 bench-clean:
 	$(COMPOSE) down -v
