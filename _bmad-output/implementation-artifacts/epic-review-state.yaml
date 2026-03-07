@@ -1,7 +1,7 @@
 epic: "Epic 12: Benchmarks & Competitive Positioning"
 epicNumber: 12
 startedAt: "2026-03-05T20:00:00Z"
-currentPrIndex: 2
+currentPrIndex: 3
 prChain:
   - storyId: "12.1"
     storyKey: "12-1-benchmark-harness-self-benchmarking"
@@ -23,7 +23,7 @@ prChain:
     branch: "feat/12.3-competitive-benchmarks"
     pr: 47
     baseBranch: "main"
-    status: reviewing
+    status: merged
   - storyId: "12.4"
     storyKey: "12-4-published-results-benchmark-dashboard"
     title: "Published Results & Benchmark Dashboard"

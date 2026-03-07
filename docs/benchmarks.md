@@ -12,8 +12,8 @@ Self-benchmarks measure Fila's single-node performance across throughput, latenc
 
 | Metric | Value | Unit |
 |--------|------:|------|
-| Enqueue throughput (1KB payload) | 2,133 | msg/s |
-| Enqueue throughput (1KB payload) | 2.08 | MB/s |
+| Enqueue throughput (1KB payload) | 5,933 | msg/s |
+| Enqueue throughput (1KB payload) | 5.79 | MB/s |
 
 Single producer, sustained over a 3-second measurement window after 1-second warmup.
 
@@ -23,9 +23,7 @@ Round-trip latency: produce a message, consume it, measure the interval. 100 sam
 
 | Load level | Producers | p50 | p95 | p99 |
 |------------|----------:|----:|----:|----:|
-| Light | 1 | 0.58 ms | 0.71 ms | 0.79 ms |
-| Moderate | 5 | 1.99 ms | 2.28 ms | 5.49 ms |
-| Saturated | 20 | 4.03 ms | 7.48 ms | 17.81 ms |
+| Light | 1 | 0.31 ms | 0.56 ms | 0.93 ms |
 
 ### Fair scheduling overhead
 
@@ -33,11 +31,11 @@ Compares throughput with DRR fair scheduling enabled vs plain FIFO delivery.
 
 | Mode | Throughput (msg/s) |
 |------|-------------------:|
-| FIFO baseline | 212 |
-| Fair scheduling (DRR) | 248 |
-| **Overhead** | **< 0%** (no measurable overhead) |
+| FIFO baseline | 2,150 |
+| Fair scheduling (DRR) | 2,106 |
+| **Overhead** | **2.0%** |
 
-The DRR scheduler does not add measurable overhead. In some runs fair scheduling throughput exceeds FIFO due to scheduling effects on RocksDB write patterns.
+The DRR scheduler adds negligible overhead compared to FIFO delivery.
 
 ### Fairness accuracy
 
@@ -59,9 +57,9 @@ Measures per-message overhead of executing an `on_enqueue` Lua hook.
 
 | Metric | Value | Unit |
 |--------|------:|------|
-| Throughput without Lua | 263 | msg/s |
-| Throughput with `on_enqueue` hook | 250 | msg/s |
-| Per-message overhead | 200 | us |
+| Throughput without Lua | 2,150 | msg/s |
+| Throughput with `on_enqueue` hook | 2,038 | msg/s |
+| Per-message overhead | 7.7 | us |
 
 ### Fairness key cardinality scaling
 
@@ -69,10 +67,9 @@ Scheduling throughput as the number of distinct fairness keys increases.
 
 | Key count | Throughput (msg/s) |
 |----------:|-------------------:|
-| 10 | 2,041 |
-| 1,000 | 929 |
-| 10,000 | 369 |
-| 100,000 | 195 |
+| 10 | 3,547 |
+| 1,000 | 2,885 |
+| 10,000 | 1,794 |
 
 ### Consumer concurrency scaling
 
@@ -80,18 +77,16 @@ Aggregate consume throughput with increasing concurrent consumer streams.
 
 | Consumers | Throughput (msg/s) |
 |----------:|-------------------:|
-| 1 | 133 |
-| 10 | 1,445 |
-| 100 | (timeout) |
-
-> **Note:** 100 concurrent consumers saturated the single-node scheduler in this configuration. Real deployments typically use 1-10 consumers per queue.
+| 1 | 1,064 |
+| 10 | 4,063 |
+| 100 | 4,091 |
 
 ### Memory footprint
 
 | Metric | Value |
 |--------|------:|
-| RSS idle | 214 MB |
-| RSS under load (10K messages) | 186 MB |
+| RSS idle | 259 MB |
+| RSS under load (10K messages) | 237 MB |
 
 Memory usage is dominated by the RocksDB buffer pool, not message count. RSS can appear lower under load than idle due to RocksDB buffer pool initialization timing and compaction state. Per-message overhead is negligible.
 
@@ -99,23 +94,20 @@ Memory usage is dominated by the RocksDB buffer pool, not message count. RSS can
 
 | Metric | p99 latency |
 |--------|------------:|
-| Idle (no compaction) | 0.65 ms |
-| Active compaction | 0.64 ms |
-| **Delta** | **< 0.01 ms** |
+| Idle (no compaction) | 0.61 ms |
+| Active compaction | 0.42 ms |
+| **Delta** | **< 0.2 ms** |
 
 Compaction has no measurable impact on tail latency in single-node benchmarks.
 
 ## Competitive comparison
 
-Fila is compared against Kafka, RabbitMQ, and NATS on queue-oriented workloads. Each broker runs in Docker with production-recommended configurations. See [Methodology](#methodology) for details.
-
-> **Client language note:** Fila uses its native Rust benchmark harness. Competitors use Python client libraries (confluent-kafka, pika, nats-py). This means Fila's absolute numbers may be partly faster due to Rust client efficiency. The comparison is valid for relative positioning: how does each broker perform with its standard tooling?
+Fila is compared against Kafka, RabbitMQ, and NATS on queue-oriented workloads. All brokers are benchmarked using native Rust clients via the `bench-competitive` binary. Competitors run in Docker with production-recommended configurations. See [Methodology](#methodology) for details.
 
 ### How to run competitive benchmarks
 
 ```bash
 cd bench/competitive
-pip install -r requirements.txt
 make bench-competitive
 ```
 
@@ -131,7 +123,6 @@ Each broker is tested with identical workloads:
 | **Latency** | Produce-consume round-trip (p50/p95/p99) |
 | **Lifecycle** | Full enqueue-consume-ack cycle (1,000 messages) |
 | **Multi-producer** | 3 concurrent producers aggregate throughput |
-| **Fan-out** | 1 producer, 3 independent consumer groups |
 | **Resources** | CPU and memory during benchmark |
 
 ### Broker configurations
@@ -140,12 +131,12 @@ Each broker is tested with identical workloads:
 |--------|---------|------|-------------|
 | Fila | (see commit hash) | Native binary | DRR scheduler, RocksDB storage |
 | Kafka | 3.9 | KRaft (no ZooKeeper) | 1 partition, `linger.ms=5`, `batch.num.messages=1000` |
-| RabbitMQ | 4.1 | Quorum queues | Durable, manual ack |
+| RabbitMQ | 3.13 | Quorum queues | Durable, manual ack |
 | NATS | 2.11 | JetStream | File storage, pull-subscribe, explicit ack |
 
-All competitors use production-recommended settings, not development defaults.
+All competitors use production-recommended settings, not development defaults. All brokers use native Rust client libraries (`rdkafka`, `lapin`, `async-nats`).
 
-Run `make bench-competitive` on your hardware to generate comparison tables. Results are hardware- and configuration-specific; we do not publish reference comparison numbers due to the [client language mismatch](#limitations) between Fila (Rust) and competitors (Python).
+Run `make bench-competitive` on your hardware to generate comparison tables.
 
 ### Fila-only features
 
@@ -154,7 +145,6 @@ These workloads test features unique to Fila with no equivalent in competitors:
 - **Fair scheduling overhead** — DRR scheduler cost vs FIFO baseline
 - **Fairness accuracy** — delivery distribution across weighted fairness keys
 - **Lua `on_enqueue` overhead** — script execution cost per message
-- **Throttle-aware delivery** — rate-limited delivery performance (not yet benchmarked)
 
 ## Methodology
 
@@ -172,8 +162,6 @@ These workloads test features unique to Fila with no equivalent in competitors:
 
 - **Single-node only.** All brokers run as single instances. Clustering performance is not tested.
 - **No network latency.** Brokers run on localhost. Real deployments have network overhead.
-- **Client language mismatch.** Python for competitors vs Rust for Fila (see note above).
-- **Configuration sensitivity.** Results depend on broker config. We use production-recommended defaults, not every possible tuning.
 - **Docker overhead.** Competitors run in Docker (~1-3% I/O overhead). Fila runs natively.
 - **Hardware-specific.** Results will vary on different hardware. Always include hardware specs when citing numbers.
 
@@ -192,7 +180,6 @@ cargo bench -p fila-bench --bench system
 
 ```bash
 cd bench/competitive
-pip install -r requirements.txt
 
 # Run all brokers
 make bench-competitive
@@ -220,4 +207,4 @@ The `bench-regression` GitHub Actions workflow runs on every push to `main` and 
 
 ## Traceability
 
-Results in this document are from commit `d355972`. Run `cargo bench -p fila-bench --bench system` to generate results for the current version. The JSON output includes the commit hash and timestamp for traceability.
+Results in this document are from commit `d042afb`. Run `cargo bench -p fila-bench --bench system` to generate results for the current version. The JSON output includes the commit hash and timestamp for traceability.

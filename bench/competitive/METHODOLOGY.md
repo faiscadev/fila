@@ -20,7 +20,7 @@ This benchmark suite compares Fila against Kafka, RabbitMQ, and NATS on queue-or
 - **Producer tuning**: `linger.ms=5`, `batch.num.messages=1000` for throughput tests; `linger.ms=0` for latency tests
 - **Why KRaft**: Recommended for all new Kafka deployments since 3.3+; ZooKeeper is deprecated
 
-### RabbitMQ 4.1
+### RabbitMQ 3.13
 
 - **Queue type**: Quorum queues (`x-queue-type: quorum`) — production-recommended since 3.8+
 - **Durability**: Durable queues with manual ack
@@ -29,7 +29,6 @@ This benchmark suite compares Fila against Kafka, RabbitMQ, and NATS on queue-or
 ### NATS 2.11 (JetStream)
 
 - **Persistence**: JetStream enabled with file-based storage
-- **Memory limit**: 256MB in-memory store, 1GB file store
 - **Consumer**: Pull-subscribe with explicit ack
 - **Why JetStream**: Required for persistent messaging, message acknowledgment, and replay — features needed for queue-style workloads
 
@@ -62,20 +61,7 @@ Measures sustained aggregate production rate from multiple concurrent producers.
 - **Measurement window**: 3 seconds
 - **Metric**: aggregate messages/second across all producers
 
-### 4. Fan-Out Throughput
-
-Measures delivery throughput when a single producer's messages are consumed by multiple independent consumers. Each consumer receives a copy of every message.
-
-- **Producers**: 1
-- **Consumers**: 3 (independent consumer groups/durables)
-- **Messages**: 500 pre-loaded, each consumer reads all 500
-- **Broker-specific implementation**:
-  - **Kafka**: 3 separate consumer groups on the same topic
-  - **RabbitMQ**: Fanout exchange with 3 bound queues
-  - **NATS**: 3 separate durable pull subscribers on the same stream
-- **Metric**: total messages delivered/second across all consumers
-
-### 5. Lifecycle Throughput (Produce → Consume → Ack)
+### 4. Lifecycle Throughput (Produce → Consume → Ack)
 
 Measures the full message lifecycle: pre-load 1,000 messages, then consume and acknowledge each one.
 
@@ -83,7 +69,7 @@ Measures the full message lifecycle: pre-load 1,000 messages, then consume and a
 - **Messages**: 1,000
 - **Metric**: messages/second for the consume+ack phase
 
-### 6. Resource Utilization
+### 5. Resource Utilization
 
 Captures CPU and memory usage of each broker's Docker container after benchmarks.
 
