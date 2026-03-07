@@ -45,6 +45,8 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: bench
       RABBITMQ_DEFAULT_PASS: bench
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: rabbitmq-diagnostics -q ping
       interval: 5s
@@ -70,3 +72,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
+
+volumes:
+  rabbitmq-data:
