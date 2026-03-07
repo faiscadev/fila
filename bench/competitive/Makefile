@@ -39,10 +39,10 @@ bench-kafka: setup build
 	$(COMPOSE) up -d kafka
 	@echo "Waiting for Kafka to be ready (timeout $(READY_TIMEOUT)s)..."
 	@i=0; while [ $$i -lt $(READY_TIMEOUT) ]; do \
-		if $(COMPOSE) exec kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1; then break; fi; \
+		if $(COMPOSE) exec -T kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1; then break; fi; \
 		sleep 1; i=$$((i+1)); \
 	done; \
-	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: Kafka not ready after $(READY_TIMEOUT)s"; exit 1; fi
+	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: Kafka not ready after $(READY_TIMEOUT)s"; $(COMPOSE) logs kafka; exit 1; fi
 	$(BENCH_BIN) kafka $(RESULTS_DIR)
 	$(COMPOSE) down -v
 
@@ -50,10 +50,10 @@ bench-rabbitmq: setup build
 	$(COMPOSE) up -d rabbitmq
 	@echo "Waiting for RabbitMQ to be ready (timeout $(READY_TIMEOUT)s)..."
 	@i=0; while [ $$i -lt $(READY_TIMEOUT) ]; do \
-		if $(COMPOSE) exec rabbitmq rabbitmq-diagnostics -q ping > /dev/null 2>&1; then break; fi; \
+		if $(COMPOSE) exec -T rabbitmq rabbitmq-diagnostics -q ping > /dev/null 2>&1; then break; fi; \
 		sleep 1; i=$$((i+1)); \
 	done; \
-	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: RabbitMQ not ready after $(READY_TIMEOUT)s"; exit 1; fi
+	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: RabbitMQ not ready after $(READY_TIMEOUT)s"; $(COMPOSE) logs rabbitmq; exit 1; fi
 	$(BENCH_BIN) rabbitmq $(RESULTS_DIR)
 	$(COMPOSE) down -v
 
