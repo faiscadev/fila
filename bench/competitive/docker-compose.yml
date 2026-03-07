@@ -61,6 +61,26 @@ services:
       retries: 20
       start_period: 30s
 
+  # Fila — built from the project Dockerfile so all brokers run in Docker
+  # with identical containerisation overhead for a fair comparison.
+  fila:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./fila.toml:/etc/fila/fila.toml:ro
+    working_dir: /etc/fila
+    environment:
+      FILA_DATA_DIR: /data
+    healthcheck:
+      test: ["CMD-SHELL", "fila --addr http://localhost:5555 queue list > /dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 5s
+
   # NATS with JetStream enabled (production-recommended for persistent messaging)
   nats:
     image: nats:2.11

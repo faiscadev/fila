@@ -1,0 +1,4 @@
+target/
+.git/
+bench/competitive/results/
+_bmad-output/

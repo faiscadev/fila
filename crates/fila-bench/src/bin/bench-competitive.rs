@@ -872,14 +872,14 @@ mod nats {
 
 mod fila {
     use super::*;
-    use fila_bench::measurement::process_rss_bytes;
-    use fila_bench::server::{create_queue_cli, BenchServer};
+    use fila_bench::server::create_queue_cli;
     use fila_sdk::FilaClient;
     use tokio_stream::StreamExt;
 
+    const ADDR: &str = "http://localhost:5555";
+
     pub async fn bench(report: &mut BenchReport) {
-        let server = BenchServer::start();
-        let addr = server.addr();
+        let addr = ADDR;
 
         // Throughput benchmarks
         for (size_name, payload_size) in [
@@ -1068,16 +1068,20 @@ mod fila {
             });
         }
 
-        // Resource stats (process-level, not container)
-        if let Some(pid) = server.pid() {
-            if let Some(rss) = process_rss_bytes(pid) {
-                report.add(BenchResult {
-                    name: "fila_memory_mb".to_string(),
-                    value: rss as f64 / (1024.0 * 1024.0),
-                    unit: "MB".to_string(),
-                    metadata: HashMap::new(),
-                });
-            }
+        // Resource stats (container-level, same as other brokers)
+        if let Some(stats) = container_stats("competitive-fila-1") {
+            report.add(BenchResult {
+                name: "fila_cpu_pct".to_string(),
+                value: stats.0,
+                unit: "%".to_string(),
+                metadata: HashMap::new(),
+            });
+            report.add(BenchResult {
+                name: "fila_memory_mb".to_string(),
+                value: stats.1,
+                unit: "MB".to_string(),
+                metadata: HashMap::new(),
+            });
         }
     }
 }

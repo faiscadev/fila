@@ -1,0 +1,6 @@
+# Fila server config for competitive benchmarks (Docker container).
+[server]
+listen_addr = "0.0.0.0:5555"
+
+[telemetry]
+otlp_endpoint = ""

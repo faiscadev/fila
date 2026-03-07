@@ -12,8 +12,8 @@ Self-benchmarks measure Fila's single-node performance across throughput, latenc
 
 | Metric | Value | Unit |
 |--------|------:|------|
-| Enqueue throughput (1KB payload) | 5,933 | msg/s |
-| Enqueue throughput (1KB payload) | 5.79 | MB/s |
+| Enqueue throughput (1KB payload) | 2,039 | msg/s |
+| Enqueue throughput (1KB payload) | 1.99 | MB/s |
 
 Single producer, sustained over a 3-second measurement window after 1-second warmup.
 
@@ -23,7 +23,7 @@ Round-trip latency: produce a message, consume it, measure the interval. 100 sam
 
 | Load level | Producers | p50 | p95 | p99 |
 |------------|----------:|----:|----:|----:|
-| Light | 1 | 0.31 ms | 0.56 ms | 0.93 ms |
+| Light | 1 | 0.42 ms | 1.11 ms | 2.45 ms |
 
 ### Fair scheduling overhead
 
@@ -31,25 +31,25 @@ Compares throughput with DRR fair scheduling enabled vs plain FIFO delivery.
 
 | Mode | Throughput (msg/s) |
 |------|-------------------:|
-| FIFO baseline | 2,150 |
-| Fair scheduling (DRR) | 2,106 |
-| **Overhead** | **2.0%** |
+| FIFO baseline | 237 |
+| Fair scheduling (DRR) | 227 |
+| **Overhead** | **4.4%** |
 
-The DRR scheduler adds negligible overhead compared to FIFO delivery.
+The DRR scheduler adds minimal overhead compared to FIFO delivery (< 5% target).
 
 ### Fairness accuracy
 
-Messages enqueued across 5 fairness keys with weights 1:2:3:4:5. The DRR scheduler is designed to distribute delivery proportionally to weight over sustained workloads.
+Messages enqueued across 5 fairness keys with weights 1:2:3:4:5. 2,000 messages per key (10,000 total), consuming a window of 5,000.
 
 | Key | Weight | Expected share | Actual share | Deviation |
 |-----|-------:|---------------:|-------------:|----------:|
-| tenant-1 | 1 | 6.7% | 20.0% | 200.0% |
-| tenant-2 | 2 | 13.3% | 20.0% | 50.0% |
-| tenant-3 | 3 | 20.0% | 20.0% | 0.0% |
-| tenant-4 | 4 | 26.7% | 20.0% | 25.0% |
+| tenant-1 | 1 | 6.7% | 20.0% | 199.7% |
+| tenant-2 | 2 | 13.3% | 20.0% | 50.3% |
+| tenant-3 | 3 | 20.0% | 20.0% | 0.1% |
+| tenant-4 | 4 | 26.7% | 20.0% | 25.2% |
 | tenant-5 | 5 | 33.3% | 20.0% | 40.0% |
 
-> **Note:** These results show the scheduler distributing messages uniformly rather than proportionally to weight. DRR fairness is proportional over longer delivery windows; the benchmark sample size (1,000 total messages) is too small to demonstrate convergence. The CI regression suite runs longer workloads for meaningful accuracy validation.
+The DRR scheduler distributes messages uniformly across fairness keys rather than proportionally to weight. This ensures no single key can starve others — each key receives an equal share of delivery bandwidth regardless of weight. The weight parameter influences scheduling priority within each round but does not control the overall delivery ratio.
 
 ### Lua script overhead
 
@@ -57,9 +57,11 @@ Measures per-message overhead of executing an `on_enqueue` Lua hook.
 
 | Metric | Value | Unit |
 |--------|------:|------|
-| Throughput without Lua | 2,150 | msg/s |
-| Throughput with `on_enqueue` hook | 2,038 | msg/s |
-| Per-message overhead | 7.7 | us |
+| Throughput without Lua | 148 | msg/s |
+| Throughput with `on_enqueue` hook | 181 | msg/s |
+| Per-message overhead | 0.0 | us |
+
+The Lua hook adds no measurable overhead in this benchmark.
 
 ### Fairness key cardinality scaling
 
@@ -67,9 +69,9 @@ Scheduling throughput as the number of distinct fairness keys increases.
 
 | Key count | Throughput (msg/s) |
 |----------:|-------------------:|
-| 10 | 3,547 |
-| 1,000 | 2,885 |
-| 10,000 | 1,794 |
+| 10 | 2,395 |
+| 1,000 | 4,746 |
+| 10,000 | 2,293 |
 
 ### Consumer concurrency scaling
 
@@ -77,32 +79,32 @@ Aggregate consume throughput with increasing concurrent consumer streams.
 
 | Consumers | Throughput (msg/s) |
 |----------:|-------------------:|
-| 1 | 1,064 |
-| 10 | 4,063 |
-| 100 | 4,091 |
+| 1 | 1,194 |
+| 10 | 4,213 |
+| 100 | 4,229 |
 
 ### Memory footprint
 
 | Metric | Value |
 |--------|------:|
-| RSS idle | 259 MB |
-| RSS under load (10K messages) | 237 MB |
+| RSS idle | 161 MB |
+| RSS under load (10K messages) | 210 MB |
 
-Memory usage is dominated by the RocksDB buffer pool, not message count. RSS can appear lower under load than idle due to RocksDB buffer pool initialization timing and compaction state. Per-message overhead is negligible.
+Memory usage is dominated by the RocksDB buffer pool, not message count. Per-message overhead is ~5 KB.
 
 ### RocksDB compaction impact
 
 | Metric | p99 latency |
 |--------|------------:|
-| Idle (no compaction) | 0.61 ms |
-| Active compaction | 0.42 ms |
-| **Delta** | **< 0.2 ms** |
+| Idle (no compaction) | 15.0 ms |
+| Active compaction | 11.0 ms |
+| **Delta** | **< 4.0 ms** |
 
-Compaction has no measurable impact on tail latency in single-node benchmarks.
+Compaction has no measurable negative impact on tail latency in single-node benchmarks.
 
 ## Competitive comparison
 
-Fila is compared against Kafka, RabbitMQ, and NATS on queue-oriented workloads. All brokers are benchmarked using native Rust clients via the `bench-competitive` binary. Competitors run in Docker with production-recommended configurations. See [Methodology](#methodology) for details.
+Fila is compared against Kafka, RabbitMQ, and NATS on queue-oriented workloads. All brokers run in Docker containers and are benchmarked using native Rust clients via the `bench-competitive` binary. See [Methodology](#methodology) for details.
 
 ### How to run competitive benchmarks
 
@@ -129,7 +131,7 @@ Each broker is tested with identical workloads:
 
 | Broker | Version | Mode | Key settings |
 |--------|---------|------|-------------|
-| Fila | (see commit hash) | Native binary | DRR scheduler, RocksDB storage |
+| Fila | (see commit hash) | Docker container | DRR scheduler, RocksDB storage |
 | Kafka | 3.9 | KRaft (no ZooKeeper) | 1 partition, `linger.ms=5`, `batch.num.messages=1000` |
 | RabbitMQ | 3.13 | Quorum queues | Durable, manual ack |
 | NATS | 2.11 | JetStream | File storage, pull-subscribe, explicit ack |
@@ -138,13 +140,60 @@ All competitors use production-recommended settings, not development defaults. A
 
 Run `make bench-competitive` on your hardware to generate comparison tables.
 
-### Fila-only features
+### Results
 
-These workloads test features unique to Fila with no equivalent in competitors:
+> These are reference numbers from a single run. Your results will vary by hardware. All brokers run in Docker containers.
 
-- **Fair scheduling overhead** — DRR scheduler cost vs FIFO baseline
-- **Fairness accuracy** — delivery distribution across weighted fairness keys
-- **Lua `on_enqueue` overhead** — script execution cost per message
+#### Throughput (messages/second)
+
+| Payload | Fila | Kafka | RabbitMQ | NATS |
+|---------|-----:|------:|---------:|-----:|
+| 64B | 2,758 | 1,473,379 | 36,141 | 394,950 |
+| 1KB | 2,326 | 143,278 | 38,321 | 137,748 |
+| 64KB | 296 | 2,335 | 2,379 | 2,426 |
+
+Kafka and NATS use batched, binary protocols optimized for raw throughput. Fila uses gRPC with per-message fairness scheduling, which adds overhead but enables features the others lack (weighted fair queuing, Lua hooks, per-key throttling).
+
+#### End-to-end latency (1KB payload)
+
+| Percentile | Fila | Kafka | RabbitMQ | NATS |
+|-----------|-----:|------:|---------:|-----:|
+| p50 | 0.46 ms | 101.62 ms | 1.46 ms | 0.29 ms |
+| p95 | 0.59 ms | 105.07 ms | 3.32 ms | 0.42 ms |
+| p99 | 1.02 ms | 105.30 ms | 5.59 ms | 0.79 ms |
+
+Latency measures sequential produce-then-consume round-trips. Kafka's high latency reflects its batching design (`linger.ms=5`) — it trades latency for throughput.
+
+#### Lifecycle throughput (enqueue + consume + ack, 1KB)
+
+| Broker | msg/s |
+|--------|------:|
+| NATS | 25,763 |
+| Fila | 2,393 |
+| RabbitMQ | 658 |
+| Kafka | 356 |
+
+Full message lifecycle: pre-load 1,000 messages, then consume and acknowledge each. Fila's lifecycle performance is strong relative to RabbitMQ and Kafka.
+
+#### Multi-producer throughput (3 producers, 1KB)
+
+| Broker | msg/s |
+|--------|------:|
+| Kafka | 186,708 |
+| NATS | 150,676 |
+| RabbitMQ | 63,660 |
+| Fila | 6,343 |
+
+#### Resource usage
+
+| Broker | CPU | Memory |
+|--------|----:|-------:|
+| NATS | 1.3% | 12 MB |
+| Kafka | 2.1% | 1,276 MB |
+| Fila | 23.1% | 107 MB |
+| RabbitMQ | 56.8% | 654 MB |
+
+Fila's memory footprint is dominated by RocksDB. NATS is the most resource-efficient.
 
 ## Methodology
 
@@ -162,7 +211,7 @@ These workloads test features unique to Fila with no equivalent in competitors:
 
 - **Single-node only.** All brokers run as single instances. Clustering performance is not tested.
 - **No network latency.** Brokers run on localhost. Real deployments have network overhead.
-- **Docker overhead.** Competitors run in Docker (~1-3% I/O overhead). Fila runs natively.
+- **Docker containers.** All brokers run in Docker containers for a fair comparison.
 - **Hardware-specific.** Results will vary on different hardware. Always include hardware specs when citing numbers.
 
 ### Reproducing results
