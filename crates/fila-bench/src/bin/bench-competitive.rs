@@ -1038,8 +1038,7 @@ mod fila {
                                 .await;
                         }
                         // Measure
-                        let measure_deadline =
-                            Instant::now() + Duration::from_secs(MEASURE_SECS);
+                        let measure_deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
                         while Instant::now() < measure_deadline {
                             if client
                                 .enqueue(&queue, headers.clone(), payload.clone())
