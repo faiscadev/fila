@@ -77,7 +77,7 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
     // Total weight = 15. Expected share: 1/15, 2/15, 3/15, 4/15, 5/15
     let weights: Vec<(String, u32)> = (1..=5).map(|i| (format!("tenant-{i}"), i as u32)).collect();
     let total_weight: u32 = weights.iter().map(|(_, w)| *w).sum();
-    let messages_per_key = 100;
+    let messages_per_key = 2000;
 
     // Enqueue messages for all keys
     let payload = vec![0u8; PAYLOAD_SIZE];

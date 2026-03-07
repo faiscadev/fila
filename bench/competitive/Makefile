@@ -18,7 +18,7 @@ READY_TIMEOUT := 120
 REPO_ROOT := $(shell cd ../.. && pwd)
 BENCH_BIN := $(REPO_ROOT)/target/release/bench-competitive
 
-.PHONY: bench-competitive bench-kafka bench-rabbitmq bench-nats bench-fila bench-clean setup build
+.PHONY: bench-competitive bench-kafka bench-rabbitmq bench-nats bench-fila bench-clean setup build build-fila-image
 
 setup:
 	@mkdir -p $(RESULTS_DIR)
@@ -68,8 +68,20 @@ bench-nats: setup build
 	$(BENCH_BIN) nats $(RESULTS_DIR)
 	$(COMPOSE) down -v
 
-bench-fila: setup build
+build-fila-image:
+	@echo "Building Fila Docker image (first build is slow, subsequent builds use cache)..."
+	$(COMPOSE) build fila
+
+bench-fila: setup build build-fila-image
+	$(COMPOSE) up -d fila
+	@echo "Waiting for Fila to be ready (timeout $(READY_TIMEOUT)s)..."
+	@i=0; while [ $$i -lt $(READY_TIMEOUT) ]; do \
+		if $(REPO_ROOT)/target/release/fila --addr http://localhost:5555 queue list > /dev/null 2>&1; then break; fi; \
+		sleep 1; i=$$((i+1)); \
+	done; \
+	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: Fila not ready after $(READY_TIMEOUT)s"; $(COMPOSE) logs fila; exit 1; fi
 	$(BENCH_BIN) fila $(RESULTS_DIR)
+	$(COMPOSE) down -v
 
 bench-clean:
 	$(COMPOSE) down -v

@@ -8,9 +8,9 @@ This benchmark suite compares Fila against Kafka, RabbitMQ, and NATS on queue-or
 
 ### Fila
 
-- Runs as a native binary (not containerized) on the host machine
+- Runs in a Docker container (pre-built binary mounted into `debian:bookworm-slim`)
 - Default configuration (DRR scheduler, RocksDB storage)
-- Uses the built-in benchmark harness from `crates/fila-bench`
+- All brokers use identical containerisation for fair comparison
 
 ### Apache Kafka 3.9 (KRaft Mode)
 
@@ -76,18 +76,6 @@ Captures CPU and memory usage of each broker's Docker container after benchmarks
 - **Method**: `docker stats --no-stream` after workload completes
 - **Metrics**: CPU percentage, memory (MB)
 - **Disk I/O**: Not captured via `docker stats`. For disk I/O analysis, use `docker stats` with `--format` including BlockIO, or external monitoring tools (e.g., `iostat`). The current suite focuses on CPU and memory as the primary resource indicators.
-- **Note**: Fila runs natively, not in Docker; its resource metrics come from the built-in benchmark suite
-
-## Fila-Only Workloads
-
-These workloads test Fila-specific features with no equivalent in the competitors:
-
-- **Fair scheduling overhead**: DRR scheduler overhead vs FIFO baseline
-- **Fairness accuracy**: How accurately the DRR scheduler distributes messages across fairness keys
-- **Lua on_enqueue overhead**: Script execution overhead per message
-- **Throttle-aware delivery**: Rate-limited delivery performance
-
-These results are included in Fila's self-benchmark report but have no competitor counterpart.
 
 ## Measurement Notes
 
@@ -127,7 +115,7 @@ The `bench-competitive` binary records the git commit hash and timestamp for tra
 - **No network latency**: Brokers run on localhost. Real-world deployments have network overhead.
 - **Client library maturity**: Different Rust client libraries may have varying levels of optimization (e.g., rdkafka wraps C librdkafka; lapin is pure Rust).
 - **Configuration sensitivity**: Results depend on broker configuration. We use production-recommended defaults but not every possible tuning option.
-- **Docker overhead**: Competitors run in Docker while Fila runs natively. Docker adds ~1-3% overhead for I/O-intensive workloads.
+- **Docker containers**: All brokers run in Docker. Docker adds ~1-3% overhead for I/O-intensive workloads compared to native execution.
 
 ## Reproducing Results
 

@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y protobuf-compiler clang libclang-dev &&
 COPY . .
 RUN cargo build --release --bin fila-server --bin fila
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/fila-server /usr/local/bin/
 COPY --from=builder /build/target/release/fila /usr/local/bin/
