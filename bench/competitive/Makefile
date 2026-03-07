@@ -14,7 +14,7 @@
 
 RESULTS_DIR := results
 COMPOSE := docker compose
-READY_TIMEOUT := 60
+READY_TIMEOUT := 120
 REPO_ROOT := $(shell cd ../.. && pwd)
 BENCH_BIN := $(REPO_ROOT)/target/release/bench-competitive
 
@@ -44,6 +44,7 @@ bench-kafka: setup build
 	done; \
 	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: Kafka not ready after $(READY_TIMEOUT)s"; exit 1; fi
 	$(BENCH_BIN) kafka $(RESULTS_DIR)
+	$(COMPOSE) down -v
 
 bench-rabbitmq: setup build
 	$(COMPOSE) up -d rabbitmq
@@ -54,6 +55,7 @@ bench-rabbitmq: setup build
 	done; \
 	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: RabbitMQ not ready after $(READY_TIMEOUT)s"; exit 1; fi
 	$(BENCH_BIN) rabbitmq $(RESULTS_DIR)
+	$(COMPOSE) down -v
 
 bench-nats: setup build
 	$(COMPOSE) up -d nats
@@ -64,6 +66,7 @@ bench-nats: setup build
 	done; \
 	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: NATS not ready after $(READY_TIMEOUT)s"; exit 1; fi
 	$(BENCH_BIN) nats $(RESULTS_DIR)
+	$(COMPOSE) down -v
 
 bench-fila: setup
 	./bench-fila.sh $(RESULTS_DIR)

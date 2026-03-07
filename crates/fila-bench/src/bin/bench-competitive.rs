@@ -46,21 +46,23 @@ mod kafka {
             .expect("kafka admin client")
     }
 
-    fn create_topic(admin: &AdminClient<DefaultClientContext>, name: &str) {
-        let rt = tokio::runtime::Handle::current();
+    async fn create_topic(admin: &AdminClient<DefaultClientContext>, name: &str) {
         let opts = AdminOptions::new();
         // Delete if exists (ignore errors)
-        let _ = rt.block_on(admin.delete_topics(&[name], &opts));
-        std::thread::sleep(Duration::from_millis(500));
+        let _ = admin.delete_topics(&[name], &opts).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         let topic = NewTopic::new(name, 1, TopicReplication::Fixed(1));
-        rt.block_on(admin.create_topics(&[topic], &opts))
+        admin
+            .create_topics(&[topic], &opts)
+            .await
             .expect("create topic");
-        std::thread::sleep(Duration::from_millis(500));
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    fn cleanup_topic(admin: &AdminClient<DefaultClientContext>, name: &str) {
-        let rt = tokio::runtime::Handle::current();
-        let _ = rt.block_on(admin.delete_topics(&[name], &AdminOptions::new()));
+    async fn cleanup_topic(admin: &AdminClient<DefaultClientContext>, name: &str) {
+        let _ = admin
+            .delete_topics(&[name], &AdminOptions::new())
+            .await;
     }
 
     fn throughput_producer(
@@ -86,7 +88,7 @@ mod kafka {
             ("64kb", PAYLOAD_64KB),
         ] {
             let topic = format!("bench-throughput-{size_name}");
-            create_topic(&adm, &topic);
+            create_topic(&adm, &topic).await;
             let payload = vec![0u8; payload_size];
 
             let producer = throughput_producer(BROKER, "5", "1000");
@@ -119,14 +121,14 @@ mod kafka {
                 unit: "msg/s".to_string(),
                 metadata: HashMap::new(),
             });
-            cleanup_topic(&adm, &topic);
+            cleanup_topic(&adm, &topic).await;
         }
 
         // Latency benchmark (1KB)
         println!("[kafka] Latency benchmark...");
         {
             let topic = "bench-latency";
-            create_topic(&adm, topic);
+            create_topic(&adm, topic).await;
 
             let producer = throughput_producer(BROKER, "0", "1");
 
@@ -181,14 +183,14 @@ mod kafka {
                     metadata: HashMap::new(),
                 });
             }
-            cleanup_topic(&adm, topic);
+            cleanup_topic(&adm, topic).await;
         }
 
         // Lifecycle throughput
         println!("[kafka] Lifecycle throughput...");
         {
             let topic = "bench-lifecycle";
-            create_topic(&adm, topic);
+            create_topic(&adm, topic).await;
             let producer = throughput_producer(BROKER, "0", "1");
             let payload = vec![0u8; PAYLOAD_1KB];
 
@@ -229,14 +231,14 @@ mod kafka {
                 unit: "msg/s".to_string(),
                 metadata: HashMap::new(),
             });
-            cleanup_topic(&adm, topic);
+            cleanup_topic(&adm, topic).await;
         }
 
         // Multi-producer throughput
         println!("[kafka] Multi-producer throughput...");
         {
             let topic = "bench-multi-producer";
-            create_topic(&adm, topic);
+            create_topic(&adm, topic).await;
             let payload = vec![0u8; PAYLOAD_1KB];
 
             let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..MULTI_PRODUCERS)
@@ -286,14 +288,14 @@ mod kafka {
                 unit: "msg/s".to_string(),
                 metadata: HashMap::new(),
             });
-            cleanup_topic(&adm, topic);
+            cleanup_topic(&adm, topic).await;
         }
 
         // Fan-out
         println!("[kafka] Fan-out throughput...");
         {
             let topic = "bench-fanout";
-            create_topic(&adm, topic);
+            create_topic(&adm, topic).await;
             let producer = throughput_producer(BROKER, "5", "1000");
             let payload = vec![0u8; PAYLOAD_1KB];
 
@@ -348,7 +350,7 @@ mod kafka {
                 unit: "msg/s".to_string(),
                 metadata: HashMap::new(),
             });
-            cleanup_topic(&adm, topic);
+            cleanup_topic(&adm, topic).await;
         }
 
         // Resource stats
