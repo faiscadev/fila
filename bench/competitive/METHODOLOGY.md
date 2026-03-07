@@ -8,7 +8,7 @@ This benchmark suite compares Fila against Kafka, RabbitMQ, and NATS on queue-or
 
 ### Fila
 
-- Runs in a Docker container (pre-built binary mounted into `debian:bookworm-slim`)
+- Runs in a Docker container (multi-stage build from repo Dockerfile, runtime base `debian:trixie-slim`)
 - Default configuration (DRR scheduler, RocksDB storage)
 - All brokers use identical containerisation for fair comparison
 

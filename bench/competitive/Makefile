@@ -79,7 +79,7 @@ bench-fila: setup build build-fila-image
 		if $(REPO_ROOT)/target/release/fila --addr http://localhost:5555 queue list > /dev/null 2>&1; then break; fi; \
 		sleep 1; i=$$((i+1)); \
 	done; \
-	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: Fila not ready after $(READY_TIMEOUT)s"; $(COMPOSE) logs fila; exit 1; fi
+	if [ $$i -ge $(READY_TIMEOUT) ]; then echo "ERROR: Fila not ready after $(READY_TIMEOUT)s"; $(COMPOSE) logs fila; $(COMPOSE) down -v; exit 1; fi
 	$(BENCH_BIN) fila $(RESULTS_DIR)
 	$(COMPOSE) down -v
 
