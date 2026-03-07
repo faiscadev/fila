@@ -55,7 +55,7 @@ services:
         chown rabbitmq:rabbitmq /var/lib/rabbitmq/.erlang.cookie
         exec docker-entrypoint.sh rabbitmq-server
     healthcheck:
-      test: rabbitmq-diagnostics -q ping
+      test: rabbitmq-diagnostics -q check_port_connectivity
       interval: 5s
       timeout: 10s
       retries: 20
@@ -67,12 +67,7 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"
-    command: >
-      --jetstream
-      --store_dir /data
-      --max_mem_store 256MB
-      --max_file_store 1GB
-      -m 8222
+    command: ["--jetstream", "--store_dir", "/data", "-m", "8222"]
     healthcheck:
       test: ["CMD-SHELL", "true"]
       interval: 5s
