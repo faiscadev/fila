@@ -12,8 +12,8 @@ Self-benchmarks measure Fila's single-node performance across throughput, latenc
 
 | Metric | Value | Unit |
 |--------|------:|------|
-| Enqueue throughput (1KB payload) | 2,039 | msg/s |
-| Enqueue throughput (1KB payload) | 1.99 | MB/s |
+| Enqueue throughput (1KB payload) | 5,348 | msg/s |
+| Enqueue throughput (1KB payload) | 5.22 | MB/s |
 
 Single producer, sustained over a 3-second measurement window after 1-second warmup.
 
@@ -23,7 +23,7 @@ Round-trip latency: produce a message, consume it, measure the interval. 100 sam
 
 | Load level | Producers | p50 | p95 | p99 |
 |------------|----------:|----:|----:|----:|
-| Light | 1 | 0.42 ms | 1.11 ms | 2.45 ms |
+| Light | 1 | 0.22 ms | 0.33 ms | 0.50 ms |
 
 ### Fair scheduling overhead
 
@@ -31,9 +31,9 @@ Compares throughput with DRR fair scheduling enabled vs plain FIFO delivery.
 
 | Mode | Throughput (msg/s) |
 |------|-------------------:|
-| FIFO baseline | 237 |
-| Fair scheduling (DRR) | 227 |
-| **Overhead** | **4.4%** |
+| FIFO baseline | 2,140 |
+| Fair scheduling (DRR) | 2,114 |
+| **Overhead** | **1.2%** |
 
 The DRR scheduler adds minimal overhead compared to FIFO delivery (< 5% target).
 
@@ -57,11 +57,11 @@ Measures per-message overhead of executing an `on_enqueue` Lua hook.
 
 | Metric | Value | Unit |
 |--------|------:|------|
-| Throughput without Lua | 148 | msg/s |
-| Throughput with `on_enqueue` hook | 181 | msg/s |
-| Per-message overhead | 0.0 | us |
+| Throughput without Lua | 1,734 | msg/s |
+| Throughput with `on_enqueue` hook | 1,717 | msg/s |
+| Per-message overhead | 5.9 | us |
 
-The Lua hook adds no measurable overhead in this benchmark.
+The Lua hook adds < 6 us per-message overhead, well within the < 50 us NFR target.
 
 ### Fairness key cardinality scaling
 
@@ -69,9 +69,9 @@ Scheduling throughput as the number of distinct fairness keys increases.
 
 | Key count | Throughput (msg/s) |
 |----------:|-------------------:|
-| 10 | 2,395 |
-| 1,000 | 4,746 |
-| 10,000 | 2,293 |
+| 10 | 4,943 |
+| 1,000 | 4,124 |
+| 10,000 | 2,053 |
 
 ### Consumer concurrency scaling
 
@@ -79,26 +79,26 @@ Aggregate consume throughput with increasing concurrent consumer streams.
 
 | Consumers | Throughput (msg/s) |
 |----------:|-------------------:|
-| 1 | 1,194 |
-| 10 | 4,213 |
-| 100 | 4,229 |
+| 1 | 1,012 |
+| 10 | 3,628 |
+| 100 | 3,544 |
 
 ### Memory footprint
 
 | Metric | Value |
 |--------|------:|
-| RSS idle | 161 MB |
-| RSS under load (10K messages) | 210 MB |
+| RSS idle | 239 MB |
+| RSS under load (10K messages) | 232 MB |
 
-Memory usage is dominated by the RocksDB buffer pool, not message count. Per-message overhead is ~5 KB.
+Memory usage is dominated by the RocksDB buffer pool, not message count.
 
 ### RocksDB compaction impact
 
 | Metric | p99 latency |
 |--------|------------:|
-| Idle (no compaction) | 15.0 ms |
-| Active compaction | 11.0 ms |
-| **Delta** | **< 4.0 ms** |
+| Idle (no compaction) | 0.32 ms |
+| Active compaction | 0.29 ms |
+| **Delta** | **< 0.03 ms** |
 
 Compaction has no measurable negative impact on tail latency in single-node benchmarks.
 
@@ -256,4 +256,4 @@ The `bench-regression` GitHub Actions workflow runs on every push to `main` and 
 
 ## Traceability
 
-Results in this document are from commit `d042afb`. Run `cargo bench -p fila-bench --bench system` to generate results for the current version. The JSON output includes the commit hash and timestamp for traceability.
+Results in this document are from commit `4535e4a`. Run `cargo bench -p fila-bench --bench system` to generate results for the current version. The JSON output includes the commit hash and timestamp for traceability.
