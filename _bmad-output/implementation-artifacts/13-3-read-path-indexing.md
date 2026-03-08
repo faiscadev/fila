@@ -1,6 +1,6 @@
 # Story 13.3: Read Path & Indexing
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -59,42 +59,42 @@ so that the Fila storage engine can serve reads efficiently from WAL-replay stat
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Define in-memory index structures (AC: #2-#6)
-  - [ ] Message index: `BTreeMap<Vec<u8>, Message>` — sorted by key for prefix scans
-  - [ ] Lease index: `HashMap<Vec<u8>, Vec<u8>>` — key → value for O(1) lookup
-  - [ ] Lease expiry index: `BTreeMap<Vec<u8>, ()>` — sorted for range queries (list_expired_leases)
-  - [ ] Queue index: `HashMap<String, QueueConfig>` — queue_id → config
-  - [ ] State index: `BTreeMap<String, Vec<u8>>` — sorted for prefix scans
+- [x] Task 1: Define in-memory index structures (AC: #2-#6)
+  - [x] Message index: `BTreeMap<Vec<u8>, Message>` — sorted by key for prefix scans
+  - [x] Lease index: `HashMap<Vec<u8>, Vec<u8>>` — key → value for O(1) lookup
+  - [x] Lease expiry index: `BTreeMap<Vec<u8>, ()>` — sorted for range queries (list_expired_leases)
+  - [x] Queue index: `HashMap<String, QueueConfig>` — queue_id → config
+  - [x] State index: `BTreeMap<String, Vec<u8>>` — sorted for prefix scans
 
-- [ ] Task 2: Implement WAL replay into indexes (AC: #1)
-  - [ ] On `FilaStorage::open()`, after opening WAL writer, replay all entries
-  - [ ] For each WAL op, apply to the appropriate index (put adds, delete removes)
-  - [ ] Batch entries apply atomically (all ops in batch applied together)
+- [x] Task 2: Implement WAL replay into indexes (AC: #1)
+  - [x] On `FilaStorage::open()`, after opening WAL writer, replay all entries
+  - [x] For each WAL op, apply to the appropriate index (put adds, delete removes)
+  - [x] Batch entries apply atomically (all ops in batch applied together)
 
-- [ ] Task 3: Implement incremental index updates (AC: #7)
-  - [ ] After each `write_batch()` WAL append, apply the same ops to indexes
-  - [ ] Ensure index updates happen within the same lock scope as WAL append
+- [x] Task 3: Implement incremental index updates (AC: #7)
+  - [x] After each `write_batch()` WAL append, apply the same ops to indexes
+  - [x] Ensure index updates happen within the same lock scope as WAL append
 
-- [ ] Task 4: Implement read methods (AC: #2-#6)
-  - [ ] `get_message()`: lookup in message BTreeMap
-  - [ ] `list_messages(prefix)`: range scan on message BTreeMap using prefix bounds
-  - [ ] `get_lease()`: lookup in lease HashMap
-  - [ ] `list_expired_leases(up_to_key)`: range scan on lease expiry BTreeMap
-  - [ ] `get_queue()`: lookup in queue HashMap
-  - [ ] `list_queues()`: collect all values from queue HashMap
-  - [ ] `get_state()`: lookup in state BTreeMap
-  - [ ] `list_state_by_prefix()`: range scan on state BTreeMap using prefix bounds with limit
-  - [ ] `delete_message()`, `delete_lease()`, `delete_queue()`, `delete_state()`: remove from index + WAL append
+- [x] Task 4: Implement read methods (AC: #2-#6)
+  - [x] `get_message()`: lookup in message BTreeMap
+  - [x] `list_messages(prefix)`: range scan on message BTreeMap using prefix bounds
+  - [x] `get_lease()`: lookup in lease HashMap
+  - [x] `list_expired_leases(up_to_key)`: range scan on lease expiry BTreeMap
+  - [x] `get_queue()`: lookup in queue HashMap
+  - [x] `list_queues()`: collect all values from queue HashMap
+  - [x] `get_state()`: lookup in state BTreeMap
+  - [x] `list_state_by_prefix()`: range scan on state BTreeMap using prefix bounds with limit
+  - [x] `delete_message()`, `delete_lease()`, `delete_queue()`, `delete_state()`: remove from index + WAL append
 
-- [ ] Task 5: Tests (AC: #1-#7)
-  - [ ] Unit test: put + get roundtrip for messages, leases, queues, state
-  - [ ] Unit test: list_messages with prefix filtering
-  - [ ] Unit test: list_expired_leases range query
-  - [ ] Unit test: list_state_by_prefix with limit
-  - [ ] Unit test: delete removes from index (get returns None after delete)
-  - [ ] Unit test: WAL replay rebuilds indexes (write, close, reopen, verify reads)
-  - [ ] Unit test: write_batch with mixed ops updates all indexes
-  - [ ] Unit test: overwrite (put same key twice, get returns latest)
+- [x] Task 5: Tests (AC: #1-#7)
+  - [x] Unit test: put + get roundtrip for messages, leases, queues, state
+  - [x] Unit test: list_messages with prefix filtering
+  - [x] Unit test: list_expired_leases range query
+  - [x] Unit test: list_state_by_prefix with limit
+  - [x] Unit test: delete removes from index (get returns None after delete)
+  - [x] Unit test: WAL replay rebuilds indexes (write, close, reopen, verify reads)
+  - [x] Unit test: write_batch with mixed ops updates all indexes
+  - [x] Unit test: overwrite (put same key twice, get returns latest)
 
 ## Dev Notes
 
@@ -188,9 +188,19 @@ All changes in `crates/fila-core/src/storage/fila/mod.rs` — the indexes are pa
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+None.
 
 ### Completion Notes List
+- `Indexes` struct with 5 collections: BTreeMap<Vec<u8>, Message>, HashMap<Vec<u8>, Vec<u8>>, BTreeMap<Vec<u8>, ()>, HashMap<String, QueueConfig>, BTreeMap<String, Vec<u8>>
+- WAL replay on `open()` rebuilds all indexes, including delete/tombstone processing
+- `RwLock<Indexes>` for concurrent reads, `Mutex<WalWriter>` for serialized writes
+- `write_batch()` appends to WAL then immediately updates indexes
+- `prefix_upper_bound()` helper for BTreeMap range scans (handles 0xFF edge case)
+- 14 new tests, 321 total tests pass, clippy clean
+- Removed old `fila_storage_read_stubs_return_empty` test (reads now return real data)
 
 ### File List
+- `crates/fila-core/src/storage/fila/mod.rs` — added Indexes struct, WAL replay, all read method implementations, 14 new tests
