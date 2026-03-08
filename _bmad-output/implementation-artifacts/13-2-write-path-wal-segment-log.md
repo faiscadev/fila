@@ -1,6 +1,6 @@
 # Story 13.2: Write Path — WAL & Segment Log
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -63,51 +63,57 @@ so that append-heavy workloads achieve higher throughput than RocksDB with predi
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Define WAL entry format and segment file layout (AC: #1, #3)
-  - [ ] Define `WalEntry` struct: length prefix (u32), CRC32 checksum (u32), operation type tag (u8), payload bytes
-  - [ ] Define `WalBatchEntry`: wraps multiple ops for atomic batches (AC #4)
-  - [ ] Define segment file naming: `segment-{sequence_number:010}.wal` (zero-padded)
-  - [ ] Define segment metadata: header with magic bytes, version, creation timestamp
+- [x] Task 1: Define WAL entry format and segment file layout (AC: #1, #3)
+  - [x] Define `WalEntry` struct with `WalOp` (tag, key, optional value)
+  - [x] Batch entry: `WalEntry` wraps Vec<WalOp> for atomic batches (AC #4)
+  - [x] Segment file naming: `segment-{sequence_number:010}.wal` (zero-padded)
+  - [x] Segment header: magic bytes "FILA", version u16, creation timestamp u64, 14 reserved bytes (32 total)
 
-- [ ] Task 2: Implement WAL writer (AC: #1, #2, #4)
-  - [ ] Create `WalWriter` struct managing the active segment file handle
-  - [ ] Implement `append()` method: serialize entry → compute CRC → write length+CRC+payload → conditional fsync
-  - [ ] Implement `SyncMode` enum: `EveryBatch` | `Interval(u64)` (ms)
-  - [ ] Implement batch writes: multiple ops serialized as single WAL entry with batch header
-  - [ ] Implement `flush()`: force fsync of current segment
+- [x] Task 2: Implement WAL writer (AC: #1, #2, #4)
+  - [x] `WalWriter` struct with active segment file handle, sync mode, size tracking
+  - [x] `append()`: serialize entry → compute CRC32 → write len+CRC+payload → conditional fsync
+  - [x] `SyncMode` enum: `EveryBatch` | `Interval(u64)` (ms)
+  - [x] Batch writes: all ops serialized as single WAL entry (op_count + individual ops)
+  - [x] `fsync()`: force fsync of current segment
 
-- [ ] Task 3: Implement segment rotation (AC: #3)
-  - [ ] Track current segment size in `WalWriter`
-  - [ ] After each write, check if segment exceeds max size → rotate
-  - [ ] `rotate()`: close current file handle, create new segment with next sequence number
-  - [ ] Sealed segments are append-closed (no further writes)
+- [x] Task 3: Implement segment rotation (AC: #3)
+  - [x] Track `current_size` in `WalWriter`
+  - [x] After each write, check if segment exceeds max size → rotate
+  - [x] `rotate()`: fsync current, create new segment with next sequence number
+  - [x] Sealed segments are append-closed (no further writes)
 
-- [ ] Task 4: Implement WAL replay for crash recovery (AC: #5)
-  - [ ] Create `WalReader` that iterates over all segment files in sequence order
-  - [ ] Read entries: parse length → read payload → verify CRC → yield entry
-  - [ ] Handle truncated last entry: detect short read or CRC mismatch → skip and log warning
-  - [ ] Handle corrupt entries mid-segment: skip to next valid entry (scan for next valid length+CRC pair) or treat as end-of-log
-  - [ ] Return iterator of valid `WalEntry` values
+- [x] Task 4: Implement WAL replay for crash recovery (AC: #5)
+  - [x] `WalReader` iterates over all segment files in sequence order
+  - [x] Read entries: parse length → read payload → verify CRC → yield entry
+  - [x] Truncated last entry: detect short read → skip and log warning
+  - [x] CRC mismatch: treat as end-of-log and log warning
+  - [x] Returns Vec<WalEntry> of valid entries
 
-- [ ] Task 5: Implement `FilaStorage` struct with `Storage` trait (AC: #1, #6, #7)
-  - [ ] Create `FilaStorage` in new `storage/fila/` module
-  - [ ] Implement all write methods by delegating to `write_batch()` with single-op batches
-  - [ ] Implement `write_batch()`: serialize ops → WAL append → return Ok
-  - [ ] Stub all read methods with `Ok(None)` / `Ok(vec![])` / appropriate defaults
-  - [ ] Implement `flush()`: delegate to WAL writer flush
+- [x] Task 5: Implement `FilaStorage` struct with `Storage` trait (AC: #1, #6, #7)
+  - [x] `FilaStorage` in `storage/fila/mod.rs` with `Mutex<WalWriter>`
+  - [x] All write methods delegate to `write_batch()` with single-op batches
+  - [x] `write_batch()`: convert WriteBatchOp → WalOp, append to WAL
+  - [x] All read methods stubbed with `Ok(None)` / `Ok(vec![])` + tracing warn
+  - [x] `flush()`: delegates to WAL writer fsync
 
-- [ ] Task 6: Configuration (AC: #2, #3)
-  - [ ] Define `FilaStorageConfig` struct: `data_dir`, `segment_size_bytes` (default 64MB), `sync_mode` (default EveryBatch)
-  - [ ] Implement `FilaStorage::open(config)` constructor
+- [x] Task 6: Configuration (AC: #2, #3)
+  - [x] `FilaStorageConfig`: data_dir, segment_size_bytes (default 64MB), sync_mode (default EveryBatch)
+  - [x] `FilaStorage::open(config)` constructor
 
-- [ ] Task 7: Tests (AC: #1-#6)
-  - [ ] Unit test: WAL append and replay roundtrip (write N entries, close, replay, verify all N)
-  - [ ] Unit test: segment rotation (write entries exceeding segment size, verify multiple segment files created)
-  - [ ] Unit test: crash recovery — truncate last entry, replay, verify N-1 entries recovered
-  - [ ] Unit test: CRC integrity — corrupt a byte in an entry, verify replay skips it
-  - [ ] Unit test: batch atomicity — write a batch entry, replay, verify all ops present
-  - [ ] Unit test: `FilaStorage` implements `Storage` trait — write via trait methods, verify WAL contains entries
-  - [ ] Unit test: segment ordering — verify replay processes segments in correct sequence order
+- [x] Task 7: Tests (AC: #1-#6)
+  - [x] `wal_append_and_replay_roundtrip`: write 10, close, replay, verify all 10
+  - [x] `segment_rotation`: small segment size, verify multiple files, replay all 20
+  - [x] `crash_recovery_truncated_last_entry`: write 5, truncate, replay 4
+  - [x] `crc_integrity_corrupt_byte`: write 3, corrupt, replay 2
+  - [x] `batch_atomicity`: 3-op batch, verify single WAL entry with all ops
+  - [x] `fila_storage_implements_storage_trait`: write via trait, verify WAL
+  - [x] `segment_ordering_across_multiple_segments`: 30 entries, 3+ segments, verify order
+  - [x] `serialization_roundtrip_all_op_types`: all 10 OpTag variants
+  - [x] `empty_directory_replay_returns_nothing`: empty dir
+  - [x] `writer_reopens_existing_segment`: write 3, close, write 2 more, verify 5
+  - [x] `fila_storage_write_batch_atomic`: 3-op batch via Storage trait
+  - [x] `fila_storage_read_stubs_return_empty`: all read methods return empty
+  - [x] `fila_storage_empty_write_batch_is_noop`: empty batch produces no WAL entries
 
 ## Dev Notes
 
@@ -220,9 +226,24 @@ WAL errors map to `StorageError::Backend(String)` — the backend-agnostic varia
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+None — no debug issues encountered.
 
 ### Completion Notes List
+- WAL entry format: len(u32 LE) + crc32(u32 LE) + payload. Payload = op_count(u32 LE) + ops. Each op = tag(u8) + key_len(u32 LE) + key + [value_len(u32 LE) + value]
+- Segment header: 32 bytes (magic "FILA", version u16, timestamp u64, 14 reserved)
+- `FilaStorage` wraps `Mutex<WalWriter>` for thread safety (Send + Sync)
+- Read methods are stubbed with `warn!` logging — will be implemented in Story 13.3
+- Added `crc32fast` crate to workspace dependencies
+- 13 new tests (9 WAL-level, 4 FilaStorage-level), 307 total tests pass
+- No bincode dependency needed — custom compact binary format for WAL entries
 
 ### File List
+- `Cargo.toml` — added crc32fast workspace dependency
+- `crates/fila-core/Cargo.toml` — added crc32fast dependency
+- `crates/fila-core/src/storage/mod.rs` — added fila module, exports FilaStorage + FilaStorageConfig
+- `crates/fila-core/src/storage/fila/mod.rs` — FilaStorage struct, Storage trait impl, tests
+- `crates/fila-core/src/storage/fila/wal.rs` — WalWriter, WalReader, WalEntry, WalOp, OpTag, segment management, tests
+- `crates/fila-core/src/storage/fila/config.rs` — FilaStorageConfig, SyncMode
