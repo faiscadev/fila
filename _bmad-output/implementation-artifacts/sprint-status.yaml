@@ -140,7 +140,7 @@ development_status:
   13-1-storage-trait-abstraction-rocksdb-adapter: done
   13-2-write-path-wal-segment-log: done
   13-3-read-path-indexing: done
-  13-4-background-maintenance-compaction: backlog
+  13-4-background-maintenance-compaction: in-progress
   13-5-integration-cutover-validation: backlog
   epic-13-retrospective: optional
 

@@ -25,9 +25,9 @@ stories:
     dependsOn: ["13.2"]
   - id: "13.4"
     title: "Background Maintenance & Compaction"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/13.4-background-maintenance-compaction"
     pr: null
     dependsOn: ["13.2", "13.3"]
   - id: "13.5"
