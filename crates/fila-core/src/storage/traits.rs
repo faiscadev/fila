@@ -72,11 +72,7 @@ pub trait Storage: Send + Sync {
     ) -> StorageResult<()>;
 
     /// Retrieve a message by its full key.
-    fn get_message(
-        &self,
-        partition: &PartitionId,
-        key: &[u8],
-    ) -> StorageResult<Option<Message>>;
+    fn get_message(&self, partition: &PartitionId, key: &[u8]) -> StorageResult<Option<Message>>;
 
     /// Delete a message by its full key.
     fn delete_message(&self, partition: &PartitionId, key: &[u8]) -> StorageResult<()>;
@@ -91,19 +87,10 @@ pub trait Storage: Send + Sync {
     // --- Lease operations ---
 
     /// Store a lease in the leases CF.
-    fn put_lease(
-        &self,
-        partition: &PartitionId,
-        key: &[u8],
-        value: &[u8],
-    ) -> StorageResult<()>;
+    fn put_lease(&self, partition: &PartitionId, key: &[u8], value: &[u8]) -> StorageResult<()>;
 
     /// Retrieve a lease value by key.
-    fn get_lease(
-        &self,
-        partition: &PartitionId,
-        key: &[u8],
-    ) -> StorageResult<Option<Vec<u8>>>;
+    fn get_lease(&self, partition: &PartitionId, key: &[u8]) -> StorageResult<Option<Vec<u8>>>;
 
     /// Delete a lease by key.
     fn delete_lease(&self, partition: &PartitionId, key: &[u8]) -> StorageResult<()>;
@@ -142,19 +129,10 @@ pub trait Storage: Send + Sync {
     // --- State operations ---
 
     /// Store a state key-value pair.
-    fn put_state(
-        &self,
-        partition: &PartitionId,
-        key: &str,
-        value: &[u8],
-    ) -> StorageResult<()>;
+    fn put_state(&self, partition: &PartitionId, key: &str, value: &[u8]) -> StorageResult<()>;
 
     /// Retrieve a state value by key.
-    fn get_state(
-        &self,
-        partition: &PartitionId,
-        key: &str,
-    ) -> StorageResult<Option<Vec<u8>>>;
+    fn get_state(&self, partition: &PartitionId, key: &str) -> StorageResult<Option<Vec<u8>>>;
 
     /// Delete a state key.
     fn delete_state(&self, partition: &PartitionId, key: &str) -> StorageResult<()>;
@@ -171,11 +149,7 @@ pub trait Storage: Send + Sync {
     // --- Batch operations ---
 
     /// Atomically apply a batch of write operations across column families.
-    fn write_batch(
-        &self,
-        partition: &PartitionId,
-        ops: Vec<WriteBatchOp>,
-    ) -> StorageResult<()>;
+    fn write_batch(&self, partition: &PartitionId, ops: Vec<WriteBatchOp>) -> StorageResult<()>;
 
     // --- Lifecycle ---
 

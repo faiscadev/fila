@@ -11,7 +11,7 @@ fn dlq_auto_created_on_queue_creation() {
     scheduler.run();
 
     // Both the queue and its auto-created DLQ should exist
-    let queue = scheduler.storage().get_queue(P,"my-queue").unwrap();
+    let queue = scheduler.storage().get_queue(P, "my-queue").unwrap();
     assert!(queue.is_some(), "main queue should exist");
     assert_eq!(
         queue.unwrap().dlq_queue_id,
@@ -19,7 +19,7 @@ fn dlq_auto_created_on_queue_creation() {
         "dlq_queue_id should be set"
     );
 
-    let dlq = scheduler.storage().get_queue(P,"my-queue.dlq").unwrap();
+    let dlq = scheduler.storage().get_queue(P, "my-queue.dlq").unwrap();
     assert!(dlq.is_some(), "DLQ should be auto-created");
 }
 
@@ -32,7 +32,7 @@ fn dlq_not_created_for_dlq_queue() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    let queue = scheduler.storage().get_queue(P,"orphan.dlq").unwrap();
+    let queue = scheduler.storage().get_queue(P, "orphan.dlq").unwrap();
     assert!(queue.is_some(), "DLQ queue should exist");
     assert_eq!(
         queue.unwrap().dlq_queue_id,
@@ -41,7 +41,7 @@ fn dlq_not_created_for_dlq_queue() {
     );
 
     // Verify no "orphan.dlq.dlq" was created
-    let nested_dlq = scheduler.storage().get_queue(P,"orphan.dlq.dlq").unwrap();
+    let nested_dlq = scheduler.storage().get_queue(P, "orphan.dlq.dlq").unwrap();
     assert!(nested_dlq.is_none(), "DLQ-of-DLQ should not exist");
 }
 

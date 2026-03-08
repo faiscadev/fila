@@ -67,11 +67,7 @@ impl Storage for RocksDbStorage {
         Ok(())
     }
 
-    fn get_message(
-        &self,
-        _partition: &PartitionId,
-        key: &[u8],
-    ) -> StorageResult<Option<Message>> {
+    fn get_message(&self, _partition: &PartitionId, key: &[u8]) -> StorageResult<Option<Message>> {
         let cf = self.cf(CF_MESSAGES)?;
         match self.db.get_cf(&cf, key)? {
             Some(value) => Ok(Some(serde_json::from_slice(&value)?)),
@@ -106,22 +102,13 @@ impl Storage for RocksDbStorage {
         Ok(results)
     }
 
-    fn put_lease(
-        &self,
-        _partition: &PartitionId,
-        key: &[u8],
-        value: &[u8],
-    ) -> StorageResult<()> {
+    fn put_lease(&self, _partition: &PartitionId, key: &[u8], value: &[u8]) -> StorageResult<()> {
         let cf = self.cf(CF_LEASES)?;
         self.db.put_cf(&cf, key, value)?;
         Ok(())
     }
 
-    fn get_lease(
-        &self,
-        _partition: &PartitionId,
-        key: &[u8],
-    ) -> StorageResult<Option<Vec<u8>>> {
+    fn get_lease(&self, _partition: &PartitionId, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
         let cf = self.cf(CF_LEASES)?;
         Ok(self.db.get_cf(&cf, key)?.map(|v| v.to_vec()))
     }
@@ -192,22 +179,13 @@ impl Storage for RocksDbStorage {
         Ok(results)
     }
 
-    fn put_state(
-        &self,
-        _partition: &PartitionId,
-        key: &str,
-        value: &[u8],
-    ) -> StorageResult<()> {
+    fn put_state(&self, _partition: &PartitionId, key: &str, value: &[u8]) -> StorageResult<()> {
         let cf = self.cf(CF_STATE)?;
         self.db.put_cf(&cf, key.as_bytes(), value)?;
         Ok(())
     }
 
-    fn get_state(
-        &self,
-        _partition: &PartitionId,
-        key: &str,
-    ) -> StorageResult<Option<Vec<u8>>> {
+    fn get_state(&self, _partition: &PartitionId, key: &str) -> StorageResult<Option<Vec<u8>>> {
         let cf = self.cf(CF_STATE)?;
         Ok(self.db.get_cf(&cf, key.as_bytes())?.map(|v| v.to_vec()))
     }
@@ -245,11 +223,7 @@ impl Storage for RocksDbStorage {
         Ok(result)
     }
 
-    fn write_batch(
-        &self,
-        _partition: &PartitionId,
-        ops: Vec<WriteBatchOp>,
-    ) -> StorageResult<()> {
+    fn write_batch(&self, _partition: &PartitionId, ops: Vec<WriteBatchOp>) -> StorageResult<()> {
         let mut batch = WriteBatch::default();
 
         for op in ops {

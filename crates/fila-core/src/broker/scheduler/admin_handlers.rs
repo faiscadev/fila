@@ -48,9 +48,9 @@ impl Scheduler {
         &self,
         prefix: &str,
     ) -> Result<Vec<(String, String)>, crate::error::ConfigError> {
-        let entries = self
-            .storage
-            .list_state_by_prefix(self.p(), prefix, Self::MAX_LIST_CONFIG_ENTRIES)?;
+        let entries =
+            self.storage
+                .list_state_by_prefix(self.p(), prefix, Self::MAX_LIST_CONFIG_ENTRIES)?;
         let count = entries.len();
         debug!(%prefix, %count, "list config");
         entries

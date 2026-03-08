@@ -6,7 +6,11 @@ impl Scheduler {
         mut message: crate::message::Message,
     ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
         // Verify queue exists
-        if self.storage.get_queue(self.p(), &message.queue_id)?.is_none() {
+        if self
+            .storage
+            .get_queue(self.p(), &message.queue_id)?
+            .is_none()
+        {
             return Err(crate::error::EnqueueError::QueueNotFound(
                 message.queue_id.clone(),
             ));
@@ -211,11 +215,14 @@ impl Scheduler {
     ) -> Result<(), crate::error::AckError> {
         // Look up the lease — if it doesn't exist, the message is unknown or already acked
         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-        let lease_value = self.storage.get_lease(self.p(), &lease_key)?.ok_or_else(|| {
-            crate::error::AckError::MessageNotFound(format!(
-                "no lease for message {msg_id} in queue {queue_id}"
-            ))
-        })?;
+        let lease_value = self
+            .storage
+            .get_lease(self.p(), &lease_key)?
+            .ok_or_else(|| {
+                crate::error::AckError::MessageNotFound(format!(
+                    "no lease for message {msg_id} in queue {queue_id}"
+                ))
+            })?;
 
         // Parse expiry timestamp from lease value to construct the lease_expiry key
         let expiry_ns = crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
@@ -254,11 +261,14 @@ impl Scheduler {
     ) -> Result<(), crate::error::NackError> {
         // Look up the lease — if it doesn't exist, the message was never leased or already nacked/acked
         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-        let lease_value = self.storage.get_lease(self.p(), &lease_key)?.ok_or_else(|| {
-            crate::error::NackError::MessageNotFound(format!(
-                "no lease for message {msg_id} in queue {queue_id}"
-            ))
-        })?;
+        let lease_value = self
+            .storage
+            .get_lease(self.p(), &lease_key)?
+            .ok_or_else(|| {
+                crate::error::NackError::MessageNotFound(format!(
+                    "no lease for message {msg_id} in queue {queue_id}"
+                ))
+            })?;
 
         // Parse expiry timestamp from lease value to construct the lease_expiry key
         let expiry_ns = crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
@@ -279,11 +289,14 @@ impl Scheduler {
                     "message {msg_id} not found in queue {queue_id}"
                 ))
             })?;
-        let mut msg = self.storage.get_message(self.p(), &msg_key)?.ok_or_else(|| {
-            crate::error::NackError::MessageNotFound(format!(
-                "message {msg_id} not found in queue {queue_id}"
-            ))
-        })?;
+        let mut msg = self
+            .storage
+            .get_message(self.p(), &msg_key)?
+            .ok_or_else(|| {
+                crate::error::NackError::MessageNotFound(format!(
+                    "message {msg_id} not found in queue {queue_id}"
+                ))
+            })?;
 
         // Increment attempt count and clear lease timestamp
         msg.attempt_count += 1;
@@ -340,9 +353,13 @@ impl Scheduler {
                 .get_queue(self.p(), queue_id)?
                 .and_then(|config| config.dlq_queue_id.clone());
 
-            if let Some(dlq_queue_id) = dlq_queue_id
-                .filter(|id| self.storage.get_queue(self.p(), id).ok().flatten().is_some())
-            {
+            if let Some(dlq_queue_id) = dlq_queue_id.filter(|id| {
+                self.storage
+                    .get_queue(self.p(), id)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            }) {
                 // Move message to DLQ atomically: delete from original queue, put in DLQ
                 msg.queue_id = dlq_queue_id.clone();
                 let dlq_msg_key = crate::storage::keys::message_key(

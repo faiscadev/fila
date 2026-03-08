@@ -32,7 +32,10 @@ fn redrive_moves_messages_from_dlq_to_parent_and_leasable() {
 
     // Verify message is back in parent queue storage
     let parent_prefix = crate::storage::keys::message_prefix("redrive-q");
-    let parent_msgs = scheduler.storage().list_messages(P, &parent_prefix).unwrap();
+    let parent_msgs = scheduler
+        .storage()
+        .list_messages(P, &parent_prefix)
+        .unwrap();
     assert_eq!(parent_msgs.len(), 1);
     assert_eq!(parent_msgs[0].1.id, msg_id);
 
@@ -86,7 +89,10 @@ fn redrive_resets_attempt_count_to_zero() {
 
     // Verify attempt_count reset to 0 in parent queue
     let parent_prefix = crate::storage::keys::message_prefix("redrive-attempt-q");
-    let parent_msgs = scheduler.storage().list_messages(P, &parent_prefix).unwrap();
+    let parent_msgs = scheduler
+        .storage()
+        .list_messages(P, &parent_prefix)
+        .unwrap();
     assert_eq!(parent_msgs[0].1.attempt_count, 0);
 }
 
@@ -309,7 +315,10 @@ fn redrive_skips_leased_messages_in_dlq() {
 
     // The redriven message should be in parent queue
     let parent_prefix = crate::storage::keys::message_prefix("redrive-leased-q");
-    let parent_msgs = scheduler.storage().list_messages(P, &parent_prefix).unwrap();
+    let parent_msgs = scheduler
+        .storage()
+        .list_messages(P, &parent_prefix)
+        .unwrap();
     assert_eq!(parent_msgs.len(), 1);
     // The redriven message should be whichever one was NOT leased
     assert_ne!(parent_msgs[0].1.id, leased.msg_id);

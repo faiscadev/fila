@@ -46,14 +46,22 @@ fn ack_removes_message_lease_and_expiry() {
     // Message should be gone from messages CF
     let msg_key = crate::storage::keys::message_key("ack-queue", "default", 1_000_000_000, &msg_id);
     assert!(
-        scheduler.storage().get_message(P, &msg_key).unwrap().is_none(),
+        scheduler
+            .storage()
+            .get_message(P, &msg_key)
+            .unwrap()
+            .is_none(),
         "message should be deleted after ack"
     );
 
     // Lease should be gone
     let lease_key = crate::storage::keys::lease_key("ack-queue", &msg_id);
     assert!(
-        scheduler.storage().get_lease(P, &lease_key).unwrap().is_none(),
+        scheduler
+            .storage()
+            .get_lease(P, &lease_key)
+            .unwrap()
+            .is_none(),
         "lease should be deleted after ack"
     );
 }
@@ -205,7 +213,11 @@ fn nack_requeues_message_with_incremented_attempt_count() {
     let msg_key =
         crate::storage::keys::message_key("nack-queue", "default", 1_000_000_000, &msg_id);
     assert!(
-        scheduler.storage().get_message(P, &msg_key).unwrap().is_some(),
+        scheduler
+            .storage()
+            .get_message(P, &msg_key)
+            .unwrap()
+            .is_some(),
         "message should still exist after nack (not deleted)"
     );
 }
@@ -258,7 +270,11 @@ fn nack_removes_lease_and_lease_expiry() {
     // Lease should be gone after nack (no re-delivery since consumer unregistered)
     let lease_key = crate::storage::keys::lease_key("nack-lease-queue", &msg_id);
     assert!(
-        scheduler.storage().get_lease(P, &lease_key).unwrap().is_none(),
+        scheduler
+            .storage()
+            .get_lease(P, &lease_key)
+            .unwrap()
+            .is_none(),
         "lease should be deleted after nack"
     );
 
@@ -429,7 +445,11 @@ fn nack_then_ack_completes_message_lifecycle() {
     let msg_key =
         crate::storage::keys::message_key("nack-ack-queue", "default", 1_000_000_000, &msg_id);
     assert!(
-        scheduler.storage().get_message(P, &msg_key).unwrap().is_none(),
+        scheduler
+            .storage()
+            .get_message(P, &msg_key)
+            .unwrap()
+            .is_none(),
         "message should be deleted after ack"
     );
 }

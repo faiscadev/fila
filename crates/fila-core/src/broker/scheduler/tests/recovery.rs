@@ -72,15 +72,18 @@ fn recovery_reclaims_expired_leases() {
     let lease_val = crate::storage::keys::lease_value("old-consumer", 1);
     let expiry_key = crate::storage::keys::lease_expiry_key(1, "reclaim-queue", &msg_id);
     storage
-        .write_batch(P, vec![
-            WriteBatchOp::PutLease {
-                key: lease_key.clone(),
-                value: lease_val,
-            },
-            WriteBatchOp::PutLeaseExpiry {
-                key: expiry_key.clone(),
-            },
-        ])
+        .write_batch(
+            P,
+            vec![
+                WriteBatchOp::PutLease {
+                    key: lease_key.clone(),
+                    value: lease_val,
+                },
+                WriteBatchOp::PutLeaseExpiry {
+                    key: expiry_key.clone(),
+                },
+            ],
+        )
         .unwrap();
 
     // Verify the lease exists before recovery
@@ -152,13 +155,16 @@ fn recovery_does_not_duplicate_reclaimed_messages() {
             let lease_val = crate::storage::keys::lease_value("old-consumer", 1);
             let expiry_key = crate::storage::keys::lease_expiry_key(1 + i, "dup-queue", &msg.id);
             storage
-                .write_batch(P, vec![
-                    WriteBatchOp::PutLease {
-                        key: lease_key,
-                        value: lease_val,
-                    },
-                    WriteBatchOp::PutLeaseExpiry { key: expiry_key },
-                ])
+                .write_batch(
+                    P,
+                    vec![
+                        WriteBatchOp::PutLease {
+                            key: lease_key,
+                            value: lease_val,
+                        },
+                        WriteBatchOp::PutLeaseExpiry { key: expiry_key },
+                    ],
+                )
                 .unwrap();
         }
     }
@@ -278,10 +284,13 @@ fn recovery_skips_corrupt_lease_expiry_key() {
     let lease_key = crate::storage::keys::lease_key("corrupt-queue", &msg_id);
     let lease_val = crate::storage::keys::lease_value("c1", 1);
     storage
-        .write_batch(P, vec![WriteBatchOp::PutLease {
-            key: lease_key.clone(),
-            value: lease_val,
-        }])
+        .write_batch(
+            P,
+            vec![WriteBatchOp::PutLease {
+                key: lease_key.clone(),
+                value: lease_val,
+            }],
+        )
         .unwrap();
 
     // Write a corrupt lease_expiry key (expired, but unparseable)
@@ -291,9 +300,12 @@ fn recovery_skips_corrupt_lease_expiry_key() {
     corrupt_expiry_key.push(b':');
     corrupt_expiry_key.extend_from_slice(&[0xFF; 4]); // garbage
     storage
-        .write_batch(P, vec![WriteBatchOp::PutLeaseExpiry {
-            key: corrupt_expiry_key.clone(),
-        }])
+        .write_batch(
+            P,
+            vec![WriteBatchOp::PutLeaseExpiry {
+                key: corrupt_expiry_key.clone(),
+            }],
+        )
         .unwrap();
 
     // Start scheduler — recovery should skip the corrupt key without panicking
@@ -343,15 +355,18 @@ fn recovery_preserves_non_expired_leases() {
     let expiry_key =
         crate::storage::keys::lease_expiry_key(future_expiry, "active-lease-queue", &msg_id);
     storage
-        .write_batch(P, vec![
-            WriteBatchOp::PutLease {
-                key: lease_key.clone(),
-                value: lease_val,
-            },
-            WriteBatchOp::PutLeaseExpiry {
-                key: expiry_key.clone(),
-            },
-        ])
+        .write_batch(
+            P,
+            vec![
+                WriteBatchOp::PutLease {
+                    key: lease_key.clone(),
+                    value: lease_val,
+                },
+                WriteBatchOp::PutLeaseExpiry {
+                    key: expiry_key.clone(),
+                },
+            ],
+        )
         .unwrap();
 
     // Start scheduler — recovery should NOT reclaim this lease
