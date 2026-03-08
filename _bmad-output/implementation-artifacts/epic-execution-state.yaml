@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "13.2"
     title: "Write Path — WAL & Segment Log"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "setup"
+    branch: "feat/13.2-write-path-wal-segment-log"
     pr: null
     dependsOn: ["13.1"]
   - id: "13.3"
