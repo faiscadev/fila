@@ -12,7 +12,7 @@ stories:
   - id: "13.2"
     title: "Write Path — WAL & Segment Log"
     status: in-progress
-    currentPhase: "setup"
+    currentPhase: "dev"
     branch: "feat/13.2-write-path-wal-segment-log"
     pr: null
     dependsOn: ["13.1"]
