@@ -116,10 +116,7 @@ fn deserialize_entry(data: &[u8]) -> Option<WalEntry> {
 
         let has_value = matches!(
             tag,
-            OpTag::PutMessage
-                | OpTag::PutLease
-                | OpTag::PutQueue
-                | OpTag::PutState
+            OpTag::PutMessage | OpTag::PutLease | OpTag::PutQueue | OpTag::PutState
         );
 
         let value = if has_value {
@@ -651,16 +648,56 @@ mod tests {
     #[test]
     fn serialization_roundtrip_all_op_types() {
         let entry = make_entry(vec![
-            WalOp { tag: OpTag::PutMessage, key: b"k1".to_vec(), value: Some(b"v1".to_vec()) },
-            WalOp { tag: OpTag::DeleteMessage, key: b"k2".to_vec(), value: None },
-            WalOp { tag: OpTag::PutLease, key: b"k3".to_vec(), value: Some(b"v3".to_vec()) },
-            WalOp { tag: OpTag::DeleteLease, key: b"k4".to_vec(), value: None },
-            WalOp { tag: OpTag::PutLeaseExpiry, key: b"k5".to_vec(), value: None },
-            WalOp { tag: OpTag::DeleteLeaseExpiry, key: b"k6".to_vec(), value: None },
-            WalOp { tag: OpTag::PutQueue, key: b"k7".to_vec(), value: Some(b"v7".to_vec()) },
-            WalOp { tag: OpTag::DeleteQueue, key: b"k8".to_vec(), value: None },
-            WalOp { tag: OpTag::PutState, key: b"k9".to_vec(), value: Some(b"v9".to_vec()) },
-            WalOp { tag: OpTag::DeleteState, key: b"k10".to_vec(), value: None },
+            WalOp {
+                tag: OpTag::PutMessage,
+                key: b"k1".to_vec(),
+                value: Some(b"v1".to_vec()),
+            },
+            WalOp {
+                tag: OpTag::DeleteMessage,
+                key: b"k2".to_vec(),
+                value: None,
+            },
+            WalOp {
+                tag: OpTag::PutLease,
+                key: b"k3".to_vec(),
+                value: Some(b"v3".to_vec()),
+            },
+            WalOp {
+                tag: OpTag::DeleteLease,
+                key: b"k4".to_vec(),
+                value: None,
+            },
+            WalOp {
+                tag: OpTag::PutLeaseExpiry,
+                key: b"k5".to_vec(),
+                value: None,
+            },
+            WalOp {
+                tag: OpTag::DeleteLeaseExpiry,
+                key: b"k6".to_vec(),
+                value: None,
+            },
+            WalOp {
+                tag: OpTag::PutQueue,
+                key: b"k7".to_vec(),
+                value: Some(b"v7".to_vec()),
+            },
+            WalOp {
+                tag: OpTag::DeleteQueue,
+                key: b"k8".to_vec(),
+                value: None,
+            },
+            WalOp {
+                tag: OpTag::PutState,
+                key: b"k9".to_vec(),
+                value: Some(b"v9".to_vec()),
+            },
+            WalOp {
+                tag: OpTag::DeleteState,
+                key: b"k10".to_vec(),
+                value: None,
+            },
         ]);
 
         let serialized = serialize_entry(&entry);

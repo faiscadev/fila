@@ -25,9 +25,12 @@ pub struct FilaStorage {
 impl FilaStorage {
     /// Open or create a FilaStorage engine at the configured directory.
     pub fn open(config: &FilaStorageConfig) -> Result<Self, StorageError> {
-        let writer =
-            WalWriter::open(&config.data_dir, config.sync_mode.clone(), config.segment_size_bytes)
-                .map_err(|e| StorageError::Backend(format!("failed to open WAL: {e}")))?;
+        let writer = WalWriter::open(
+            &config.data_dir,
+            config.sync_mode.clone(),
+            config.segment_size_bytes,
+        )
+        .map_err(|e| StorageError::Backend(format!("failed to open WAL: {e}")))?;
 
         Ok(Self {
             writer: Mutex::new(writer),
@@ -118,11 +121,7 @@ impl Storage for FilaStorage {
         )
     }
 
-    fn get_message(
-        &self,
-        _partition: &PartitionId,
-        _key: &[u8],
-    ) -> StorageResult<Option<Message>> {
+    fn get_message(&self, _partition: &PartitionId, _key: &[u8]) -> StorageResult<Option<Message>> {
         warn!("FilaStorage::get_message is not yet implemented (Story 13.3)");
         Ok(None)
     }
@@ -130,9 +129,7 @@ impl Storage for FilaStorage {
     fn delete_message(&self, partition: &PartitionId, key: &[u8]) -> StorageResult<()> {
         self.write_batch(
             partition,
-            vec![WriteBatchOp::DeleteMessage {
-                key: key.to_vec(),
-            }],
+            vec![WriteBatchOp::DeleteMessage { key: key.to_vec() }],
         )
     }
 
@@ -147,12 +144,7 @@ impl Storage for FilaStorage {
 
     // --- Lease operations ---
 
-    fn put_lease(
-        &self,
-        partition: &PartitionId,
-        key: &[u8],
-        value: &[u8],
-    ) -> StorageResult<()> {
+    fn put_lease(&self, partition: &PartitionId, key: &[u8], value: &[u8]) -> StorageResult<()> {
         self.write_batch(
             partition,
             vec![WriteBatchOp::PutLease {
@@ -162,11 +154,7 @@ impl Storage for FilaStorage {
         )
     }
 
-    fn get_lease(
-        &self,
-        _partition: &PartitionId,
-        _key: &[u8],
-    ) -> StorageResult<Option<Vec<u8>>> {
+    fn get_lease(&self, _partition: &PartitionId, _key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
         warn!("FilaStorage::get_lease is not yet implemented (Story 13.3)");
         Ok(None)
     }
@@ -174,9 +162,7 @@ impl Storage for FilaStorage {
     fn delete_lease(&self, partition: &PartitionId, key: &[u8]) -> StorageResult<()> {
         self.write_batch(
             partition,
-            vec![WriteBatchOp::DeleteLease {
-                key: key.to_vec(),
-            }],
+            vec![WriteBatchOp::DeleteLease { key: key.to_vec() }],
         )
     }
 
@@ -233,12 +219,7 @@ impl Storage for FilaStorage {
 
     // --- State operations ---
 
-    fn put_state(
-        &self,
-        partition: &PartitionId,
-        key: &str,
-        value: &[u8],
-    ) -> StorageResult<()> {
+    fn put_state(&self, partition: &PartitionId, key: &str, value: &[u8]) -> StorageResult<()> {
         self.write_batch(
             partition,
             vec![WriteBatchOp::PutState {
@@ -248,11 +229,7 @@ impl Storage for FilaStorage {
         )
     }
 
-    fn get_state(
-        &self,
-        _partition: &PartitionId,
-        _key: &str,
-    ) -> StorageResult<Option<Vec<u8>>> {
+    fn get_state(&self, _partition: &PartitionId, _key: &str) -> StorageResult<Option<Vec<u8>>> {
         warn!("FilaStorage::get_state is not yet implemented (Story 13.3)");
         Ok(None)
     }
@@ -278,11 +255,7 @@ impl Storage for FilaStorage {
 
     // --- Batch operations ---
 
-    fn write_batch(
-        &self,
-        _partition: &PartitionId,
-        ops: Vec<WriteBatchOp>,
-    ) -> StorageResult<()> {
+    fn write_batch(&self, _partition: &PartitionId, ops: Vec<WriteBatchOp>) -> StorageResult<()> {
         if ops.is_empty() {
             return Ok(());
         }
