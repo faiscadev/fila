@@ -4,8 +4,8 @@ startedAt: "2026-03-08T12:00:00Z"
 stories:
   - id: "13.1"
     title: "Storage Trait Abstraction & RocksDB Adapter"
-    status: in-progress
-    currentPhase: "dev"
+    status: review
+    currentPhase: "pr-ci"
     branch: "feat/13.1-storage-trait-rocksdb-adapter"
     pr: null
     dependsOn: []

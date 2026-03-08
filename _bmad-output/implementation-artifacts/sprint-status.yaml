@@ -137,7 +137,7 @@ development_status:
 
   # Epic 13: Purpose-Built Storage Engine
   epic-13: in-progress
-  13-1-storage-trait-abstraction-rocksdb-adapter: in-progress
+  13-1-storage-trait-abstraction-rocksdb-adapter: review
   13-2-write-path-wal-segment-log: backlog
   13-3-read-path-indexing: backlog
   13-4-background-maintenance-compaction: backlog
