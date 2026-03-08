@@ -18,9 +18,9 @@ stories:
     dependsOn: ["13.1"]
   - id: "13.3"
     title: "Read Path & Indexing"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "setup"
+    branch: "feat/13.3-read-path-indexing"
     pr: null
     dependsOn: ["13.2"]
   - id: "13.4"
