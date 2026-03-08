@@ -1,6 +1,6 @@
 # Story 13.3: Read Path & Indexing
 
-Status: review
+Status: done
 
 ## Story
 
