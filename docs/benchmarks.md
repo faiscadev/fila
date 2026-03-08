@@ -131,7 +131,7 @@ Each broker is tested with identical workloads:
 
 | Broker | Version | Mode | Key settings |
 |--------|---------|------|-------------|
-| Fila | (see commit hash) | Docker container | DRR scheduler, RocksDB storage |
+| Fila | `ecfeb19` | Docker container | DRR scheduler, RocksDB storage |
 | Kafka | 3.9 | KRaft (no ZooKeeper) | 1 partition, `linger.ms=5`, `batch.num.messages=1000` |
 | RabbitMQ | 3.13 | Quorum queues | Durable, manual ack |
 | NATS | 2.11 | JetStream | File storage, pull-subscribe, explicit ack |
