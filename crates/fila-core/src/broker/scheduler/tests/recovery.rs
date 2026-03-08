@@ -55,7 +55,7 @@ fn recovery_reclaims_expired_leases() {
     // Phase 1: set up a queue, enqueue a message, and manually create an
     // expired lease (simulating a crash while a message was in-flight)
     let config = crate::queue::QueueConfig::new("reclaim-queue".to_string());
-    storage.put_queue("reclaim-queue", &config).unwrap();
+    storage.put_queue(P, "reclaim-queue", &config).unwrap();
 
     let msg = test_message("reclaim-queue");
     let msg_id = msg.id;
@@ -65,14 +65,14 @@ fn recovery_reclaims_expired_leases() {
         msg.enqueued_at,
         &msg_id,
     );
-    storage.put_message(&msg_key, &msg).unwrap();
+    storage.put_message(P, &msg_key, &msg).unwrap();
 
     // Create a lease with an expiry in the past (1 nanosecond)
     let lease_key = crate::storage::keys::lease_key("reclaim-queue", &msg_id);
     let lease_val = crate::storage::keys::lease_value("old-consumer", 1);
     let expiry_key = crate::storage::keys::lease_expiry_key(1, "reclaim-queue", &msg_id);
     storage
-        .write_batch(vec![
+        .write_batch(P, vec![
             WriteBatchOp::PutLease {
                 key: lease_key.clone(),
                 value: lease_val,
@@ -84,7 +84,7 @@ fn recovery_reclaims_expired_leases() {
         .unwrap();
 
     // Verify the lease exists before recovery
-    assert!(storage.get_lease(&lease_key).unwrap().is_some());
+    assert!(storage.get_lease(P, &lease_key).unwrap().is_some());
 
     // Phase 2: start a new scheduler — recovery should reclaim the expired lease
     let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
@@ -115,7 +115,7 @@ fn recovery_reclaims_expired_leases() {
 
     // The old lease_expiry entry should be gone (recovery deleted it)
     let old_up_to = crate::storage::keys::lease_expiry_key(2, "reclaim-queue", &uuid::Uuid::max());
-    let old_expired = storage.list_expired_leases(&old_up_to).unwrap();
+    let old_expired = storage.list_expired_leases(P, &old_up_to).unwrap();
     assert!(
         old_expired.is_empty(),
         "expired lease_expiry entry at ts=1 should be removed by recovery"
@@ -130,7 +130,7 @@ fn recovery_does_not_duplicate_reclaimed_messages() {
     let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
 
     let config = crate::queue::QueueConfig::new("dup-queue".to_string());
-    storage.put_queue("dup-queue", &config).unwrap();
+    storage.put_queue(P, "dup-queue", &config).unwrap();
 
     // Create 3 messages: 2 with expired leases, 1 unleased (ready)
     let mut msg_ids = Vec::new();
@@ -144,7 +144,7 @@ fn recovery_does_not_duplicate_reclaimed_messages() {
             msg.enqueued_at,
             &msg.id,
         );
-        storage.put_message(&msg_key, &msg).unwrap();
+        storage.put_message(P, &msg_key, &msg).unwrap();
 
         // Add expired leases for first 2 messages
         if i < 2 {
@@ -152,7 +152,7 @@ fn recovery_does_not_duplicate_reclaimed_messages() {
             let lease_val = crate::storage::keys::lease_value("old-consumer", 1);
             let expiry_key = crate::storage::keys::lease_expiry_key(1 + i, "dup-queue", &msg.id);
             storage
-                .write_batch(vec![
+                .write_batch(P, vec![
                     WriteBatchOp::PutLease {
                         key: lease_key,
                         value: lease_val,
@@ -203,7 +203,7 @@ fn recovery_preserves_queue_definitions() {
 
     // Phase 2: reopen storage from disk — queues should survive the restart
     let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
-    let queues = storage.list_queues().unwrap();
+    let queues = storage.list_queues(P).unwrap();
     assert_eq!(
         queues.len(),
         6,
@@ -246,7 +246,7 @@ fn shutdown_flushes_wal() {
     // Phase 2: reopen the database and verify data survived
     let storage2: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
     let prefix = crate::storage::keys::message_prefix("flush-queue");
-    let messages = storage2.list_messages(&prefix).unwrap();
+    let messages = storage2.list_messages(P, &prefix).unwrap();
     assert_eq!(
         messages.len(),
         1,
@@ -262,7 +262,7 @@ fn recovery_skips_corrupt_lease_expiry_key() {
 
     // Set up a queue with a message
     let config = crate::queue::QueueConfig::new("corrupt-queue".to_string());
-    storage.put_queue("corrupt-queue", &config).unwrap();
+    storage.put_queue(P, "corrupt-queue", &config).unwrap();
 
     let msg = test_message("corrupt-queue");
     let msg_id = msg.id;
@@ -272,13 +272,13 @@ fn recovery_skips_corrupt_lease_expiry_key() {
         msg.enqueued_at,
         &msg_id,
     );
-    storage.put_message(&msg_key, &msg).unwrap();
+    storage.put_message(P, &msg_key, &msg).unwrap();
 
     // Create a valid lease pointing at this message
     let lease_key = crate::storage::keys::lease_key("corrupt-queue", &msg_id);
     let lease_val = crate::storage::keys::lease_value("c1", 1);
     storage
-        .write_batch(vec![WriteBatchOp::PutLease {
+        .write_batch(P, vec![WriteBatchOp::PutLease {
             key: lease_key.clone(),
             value: lease_val,
         }])
@@ -291,7 +291,7 @@ fn recovery_skips_corrupt_lease_expiry_key() {
     corrupt_expiry_key.push(b':');
     corrupt_expiry_key.extend_from_slice(&[0xFF; 4]); // garbage
     storage
-        .write_batch(vec![WriteBatchOp::PutLeaseExpiry {
+        .write_batch(P, vec![WriteBatchOp::PutLeaseExpiry {
             key: corrupt_expiry_key.clone(),
         }])
         .unwrap();
@@ -303,7 +303,7 @@ fn recovery_skips_corrupt_lease_expiry_key() {
 
     // The corrupt lease_expiry entry should still be there (skipped, not deleted)
     let up_to = crate::storage::keys::lease_expiry_key(2, "z", &uuid::Uuid::max());
-    let remaining = storage.list_expired_leases(&up_to).unwrap();
+    let remaining = storage.list_expired_leases(P, &up_to).unwrap();
     assert!(
         remaining.contains(&corrupt_expiry_key),
         "corrupt expiry key should be skipped, not deleted"
@@ -312,7 +312,7 @@ fn recovery_skips_corrupt_lease_expiry_key() {
     // The valid lease should also still be there (recovery couldn't match it
     // to the corrupt expiry key, so it wasn't reclaimed)
     assert!(
-        storage.get_lease(&lease_key).unwrap().is_some(),
+        storage.get_lease(P, &lease_key).unwrap().is_some(),
         "lease should survive when expiry key is corrupt"
     );
 }
@@ -324,7 +324,7 @@ fn recovery_preserves_non_expired_leases() {
 
     // Set up a queue with a message
     let config = crate::queue::QueueConfig::new("active-lease-queue".to_string());
-    storage.put_queue("active-lease-queue", &config).unwrap();
+    storage.put_queue(P, "active-lease-queue", &config).unwrap();
 
     let msg = test_message("active-lease-queue");
     let msg_id = msg.id;
@@ -334,7 +334,7 @@ fn recovery_preserves_non_expired_leases() {
         msg.enqueued_at,
         &msg_id,
     );
-    storage.put_message(&msg_key, &msg).unwrap();
+    storage.put_message(P, &msg_key, &msg).unwrap();
 
     // Create a lease with an expiry far in the future
     let future_expiry = u64::MAX;
@@ -343,7 +343,7 @@ fn recovery_preserves_non_expired_leases() {
     let expiry_key =
         crate::storage::keys::lease_expiry_key(future_expiry, "active-lease-queue", &msg_id);
     storage
-        .write_batch(vec![
+        .write_batch(P, vec![
             WriteBatchOp::PutLease {
                 key: lease_key.clone(),
                 value: lease_val,
@@ -377,7 +377,7 @@ fn recovery_preserves_non_expired_leases() {
 
     // Lease and expiry should still exist
     assert!(
-        storage.get_lease(&lease_key).unwrap().is_some(),
+        storage.get_lease(P, &lease_key).unwrap().is_some(),
         "non-expired lease should survive recovery"
     );
 }

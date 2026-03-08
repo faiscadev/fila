@@ -22,7 +22,7 @@ impl Scheduler {
         up_to.extend_from_slice(&now_ns.to_be_bytes());
         up_to.extend_from_slice(&[0xFF; 32]);
 
-        let expired_keys = match self.storage.list_expired_leases(&up_to) {
+        let expired_keys = match self.storage.list_expired_leases(self.p(), &up_to) {
             Ok(keys) => keys,
             Err(e) => {
                 warn!(error = %e, "failed to scan expired leases");
@@ -51,14 +51,17 @@ impl Scheduler {
                 Ok(None) => {
                     // Message not found — orphaned lease entry, just clean up
                     warn!(%queue_id, %msg_id, "orphaned lease_expiry entry, message not found");
-                    let _ = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease {
-                            key: lease_key.clone(),
-                        },
-                        WriteBatchOp::DeleteLeaseExpiry {
-                            key: expiry_key.clone(),
-                        },
-                    ]);
+                    let _ = self.storage.write_batch(
+                        self.p(),
+                        vec![
+                            WriteBatchOp::DeleteLease {
+                                key: lease_key.clone(),
+                            },
+                            WriteBatchOp::DeleteLeaseExpiry {
+                                key: expiry_key.clone(),
+                            },
+                        ],
+                    );
                     reclaimed += 1;
                     continue;
                 }
@@ -68,16 +71,19 @@ impl Scheduler {
                 }
             };
 
-            let msg = match self.storage.get_message(&msg_key) {
+            let msg = match self.storage.get_message(self.p(), &msg_key) {
                 Ok(Some(msg)) => msg,
                 Ok(None) => {
                     warn!(%queue_id, %msg_id, "message key found but message missing");
-                    let _ = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease { key: lease_key },
-                        WriteBatchOp::DeleteLeaseExpiry {
-                            key: expiry_key.clone(),
-                        },
-                    ]);
+                    let _ = self.storage.write_batch(
+                        self.p(),
+                        vec![
+                            WriteBatchOp::DeleteLease { key: lease_key },
+                            WriteBatchOp::DeleteLeaseExpiry {
+                                key: expiry_key.clone(),
+                            },
+                        ],
+                    );
                     reclaimed += 1;
                     continue;
                 }
@@ -99,16 +105,19 @@ impl Scheduler {
                 }
             };
 
-            if let Err(e) = self.storage.write_batch(vec![
-                WriteBatchOp::PutMessage {
-                    key: msg_key.clone(),
-                    value: msg_value,
-                },
-                WriteBatchOp::DeleteLease { key: lease_key },
-                WriteBatchOp::DeleteLeaseExpiry {
-                    key: expiry_key.clone(),
-                },
-            ]) {
+            if let Err(e) = self.storage.write_batch(
+                self.p(),
+                vec![
+                    WriteBatchOp::PutMessage {
+                        key: msg_key.clone(),
+                        value: msg_value,
+                    },
+                    WriteBatchOp::DeleteLease { key: lease_key },
+                    WriteBatchOp::DeleteLeaseExpiry {
+                        key: expiry_key.clone(),
+                    },
+                ],
+            ) {
                 warn!(error = %e, %queue_id, %msg_id, "failed to reclaim expired lease");
                 continue;
             }
@@ -158,7 +167,7 @@ impl Scheduler {
         self.leased_msg_keys.clear();
 
         // Rebuild DRR active keys, known queues, and Lua script cache by scanning queues
-        match self.storage.list_queues() {
+        match self.storage.list_queues(self.p()) {
             Ok(queues) => {
                 for queue in &queues {
                     self.known_queues.insert(queue.name.clone());
@@ -205,7 +214,7 @@ impl Scheduler {
 
                     // Rebuild DRR active keys and pending index by scanning messages
                     let prefix = crate::storage::keys::message_prefix(&queue.name);
-                    match self.storage.list_messages(&prefix) {
+                    match self.storage.list_messages(self.p(), &prefix) {
                         Ok(messages) => {
                             for (key, msg) in messages {
                                 self.drr.add_key(&queue.name, &msg.fairness_key, msg.weight);
@@ -213,7 +222,13 @@ impl Scheduler {
                                 // Only add unleased messages to pending index
                                 let lease_key =
                                     crate::storage::keys::lease_key(&queue.name, &msg.id);
-                                if self.storage.get_lease(&lease_key).ok().flatten().is_some() {
+                                if self
+                                    .storage
+                                    .get_lease(self.p(), &lease_key)
+                                    .ok()
+                                    .flatten()
+                                    .is_some()
+                                {
                                     // Message is leased (in-flight) — track in leased_msg_keys
                                     self.leased_msg_keys.insert(msg.id, key);
                                 } else {
@@ -246,7 +261,7 @@ impl Scheduler {
         // Restore throttle rates from state CF
         match self
             .storage
-            .list_state_by_prefix(Self::THROTTLE_PREFIX, usize::MAX)
+            .list_state_by_prefix(self.p(), Self::THROTTLE_PREFIX, usize::MAX)
         {
             Ok(entries) => {
                 let mut restored = 0;

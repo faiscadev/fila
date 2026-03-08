@@ -11,7 +11,7 @@ fn dlq_auto_created_on_queue_creation() {
     scheduler.run();
 
     // Both the queue and its auto-created DLQ should exist
-    let queue = scheduler.storage().get_queue("my-queue").unwrap();
+    let queue = scheduler.storage().get_queue(P,"my-queue").unwrap();
     assert!(queue.is_some(), "main queue should exist");
     assert_eq!(
         queue.unwrap().dlq_queue_id,
@@ -19,7 +19,7 @@ fn dlq_auto_created_on_queue_creation() {
         "dlq_queue_id should be set"
     );
 
-    let dlq = scheduler.storage().get_queue("my-queue.dlq").unwrap();
+    let dlq = scheduler.storage().get_queue(P,"my-queue.dlq").unwrap();
     assert!(dlq.is_some(), "DLQ should be auto-created");
 }
 
@@ -32,7 +32,7 @@ fn dlq_not_created_for_dlq_queue() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    let queue = scheduler.storage().get_queue("orphan.dlq").unwrap();
+    let queue = scheduler.storage().get_queue(P,"orphan.dlq").unwrap();
     assert!(queue.is_some(), "DLQ queue should exist");
     assert_eq!(
         queue.unwrap().dlq_queue_id,
@@ -41,7 +41,7 @@ fn dlq_not_created_for_dlq_queue() {
     );
 
     // Verify no "orphan.dlq.dlq" was created
-    let nested_dlq = scheduler.storage().get_queue("orphan.dlq.dlq").unwrap();
+    let nested_dlq = scheduler.storage().get_queue(P,"orphan.dlq.dlq").unwrap();
     assert!(nested_dlq.is_none(), "DLQ-of-DLQ should not exist");
 }
 
@@ -71,7 +71,7 @@ fn delete_queue_also_deletes_dlq() {
     assert!(
         scheduler
             .storage()
-            .get_queue("deletable-queue")
+            .get_queue(P, "deletable-queue")
             .unwrap()
             .is_none(),
         "main queue should be deleted"
@@ -79,7 +79,7 @@ fn delete_queue_also_deletes_dlq() {
     assert!(
         scheduler
             .storage()
-            .get_queue("deletable-queue.dlq")
+            .get_queue(P, "deletable-queue.dlq")
             .unwrap()
             .is_none(),
         "DLQ should also be deleted"
@@ -159,7 +159,7 @@ fn dlq_full_flow_enqueue_nack_dlq_lease() {
 
     // Verify original metadata preserved: message should have the tenant header
     let dlq_prefix = crate::storage::keys::message_prefix("flow-queue.dlq");
-    let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
+    let dlq_msgs = scheduler.storage().list_messages(P, &dlq_prefix).unwrap();
     assert_eq!(dlq_msgs.len(), 1);
     let stored_msg = &dlq_msgs[0].1;
     assert_eq!(stored_msg.id, msg_id);
@@ -171,7 +171,7 @@ fn dlq_full_flow_enqueue_nack_dlq_lease() {
 
     // Message should be gone from the original queue
     let main_prefix = crate::storage::keys::message_prefix("flow-queue");
-    let main_msgs = scheduler.storage().list_messages(&main_prefix).unwrap();
+    let main_msgs = scheduler.storage().list_messages(P, &main_prefix).unwrap();
     assert!(
         main_msgs.is_empty(),
         "message should be removed from main queue"
@@ -199,7 +199,7 @@ fn dlq_queue_clears_caller_provided_dlq_queue_id() {
     assert!(reply_rx.try_recv().unwrap().is_ok());
     let queue = scheduler
         .storage()
-        .get_queue("my-queue.dlq")
+        .get_queue(P, "my-queue.dlq")
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -244,7 +244,7 @@ fn delete_queue_does_not_cascade_delete_custom_dlq() {
     assert!(
         scheduler
             .storage()
-            .get_queue("shared.dlq")
+            .get_queue(P, "shared.dlq")
             .unwrap()
             .is_some(),
         "custom/shared DLQ should survive parent queue deletion"

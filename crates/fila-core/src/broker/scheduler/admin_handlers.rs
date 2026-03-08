@@ -14,7 +14,7 @@ impl Scheduler {
 
         if value.is_empty() {
             // Delete the key
-            self.storage.delete_state(key)?;
+            self.storage.delete_state(self.p(), key)?;
 
             // If throttle-prefixed, remove the rate
             if let Some(throttle_key) = key.strip_prefix(Self::THROTTLE_PREFIX) {
@@ -31,10 +31,10 @@ impl Scheduler {
                     ));
                 }
                 let (rate, burst) = Self::parse_throttle_value(value)?;
-                self.storage.put_state(key, value.as_bytes())?;
+                self.storage.put_state(self.p(), key, value.as_bytes())?;
                 self.throttle.set_rate(throttle_key, rate, burst);
             } else {
-                self.storage.put_state(key, value.as_bytes())?;
+                self.storage.put_state(self.p(), key, value.as_bytes())?;
             }
         }
 
@@ -50,7 +50,7 @@ impl Scheduler {
     ) -> Result<Vec<(String, String)>, crate::error::ConfigError> {
         let entries = self
             .storage
-            .list_state_by_prefix(prefix, Self::MAX_LIST_CONFIG_ENTRIES)?;
+            .list_state_by_prefix(self.p(), prefix, Self::MAX_LIST_CONFIG_ENTRIES)?;
         let count = entries.len();
         debug!(%prefix, %count, "list config");
         entries
@@ -70,7 +70,7 @@ impl Scheduler {
         &self,
         key: &str,
     ) -> Result<Option<String>, crate::error::ConfigError> {
-        let value = self.storage.get_state(key)?;
+        let value = self.storage.get_state(self.p(), key)?;
         match value {
             Some(bytes) => {
                 let s = String::from_utf8(bytes).map_err(|_| {
@@ -91,7 +91,7 @@ impl Scheduler {
         use super::super::stats::{FairnessKeyStats, QueueStats, ThrottleKeyStats};
 
         // Verify queue exists
-        if self.storage.get_queue(queue_id)?.is_none() {
+        if self.storage.get_queue(self.p(), queue_id)?.is_none() {
             return Err(crate::error::StatsError::QueueNotFound(
                 queue_id.to_string(),
             ));
@@ -185,7 +185,7 @@ impl Scheduler {
         count: u64,
     ) -> Result<u64, crate::error::RedriveError> {
         // Verify DLQ queue exists
-        if self.storage.get_queue(dlq_queue_id)?.is_none() {
+        if self.storage.get_queue(self.p(), dlq_queue_id)?.is_none() {
             return Err(crate::error::RedriveError::QueueNotFound(
                 dlq_queue_id.to_string(),
             ));
@@ -199,7 +199,7 @@ impl Scheduler {
         };
 
         // Verify parent queue exists
-        if self.storage.get_queue(parent_queue_id)?.is_none() {
+        if self.storage.get_queue(self.p(), parent_queue_id)?.is_none() {
             return Err(crate::error::RedriveError::ParentQueueNotFound(
                 parent_queue_id.to_string(),
             ));
@@ -207,7 +207,7 @@ impl Scheduler {
 
         // Enumerate DLQ messages from storage (ordered by enqueue time)
         let dlq_prefix = crate::storage::keys::message_prefix(dlq_queue_id);
-        let messages = self.storage.list_messages(&dlq_prefix)?;
+        let messages = self.storage.list_messages(self.p(), &dlq_prefix)?;
 
         let limit = if count == 0 { u64::MAX } else { count };
         let mut redriven: u64 = 0;
@@ -250,7 +250,7 @@ impl Scheduler {
                     value: msg_value,
                 },
             ];
-            if let Err(e) = self.storage.write_batch(ops) {
+            if let Err(e) = self.storage.write_batch(self.p(), ops) {
                 warn!(error = %e, msg_id = %msg.id, "write_batch failed during redrive, returning partial count");
                 break;
             }
@@ -301,7 +301,7 @@ impl Scheduler {
     pub(super) fn handle_list_queues(
         &self,
     ) -> Result<Vec<super::super::command::QueueSummary>, crate::error::ListQueuesError> {
-        let queues = self.storage.list_queues()?;
+        let queues = self.storage.list_queues(self.p())?;
 
         // Pre-compute per-queue pending counts in a single pass over the pending map
         let mut pending_by_queue: HashMap<&str, u64> = HashMap::new();

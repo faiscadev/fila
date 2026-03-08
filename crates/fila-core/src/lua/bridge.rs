@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mlua::Lua;
 
-use crate::storage::Storage;
+use crate::storage::{PartitionId, Storage};
 
 /// Register the `fila` namespace table with `fila.get(key)` that reads
 /// runtime config from the storage `state` column family.
@@ -10,11 +10,15 @@ use crate::storage::Storage;
 /// The storage reference is captured by the closure and used for each
 /// `fila.get()` call. Since Lua runs on the scheduler thread which owns
 /// storage access, this is safe without additional synchronization.
-pub fn register_fila_api(lua: &Lua, storage: Arc<dyn Storage>) -> mlua::Result<()> {
+pub fn register_fila_api(
+    lua: &Lua,
+    storage: Arc<dyn Storage>,
+    partition: PartitionId,
+) -> mlua::Result<()> {
     let fila_table = lua.create_table()?;
 
     let get_fn = lua.create_function(move |_, key: String| {
-        match storage.get_state(&key) {
+        match storage.get_state(&partition, &key) {
             Ok(Some(bytes)) => {
                 // Return as string — Lua scripts receive string values
                 let value = String::from_utf8_lossy(&bytes).into_owned();
@@ -40,17 +44,19 @@ mod tests {
     use super::*;
     use crate::storage::RocksDbStorage;
 
+    const P: &PartitionId = &PartitionId::DEFAULT;
+
     #[test]
     fn fila_get_reads_from_state_cf() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
 
         // Pre-populate state CF
-        storage.put_state("max_retries", b"3").unwrap();
-        storage.put_state("queue_name", b"orders").unwrap();
+        storage.put_state(P, "max_retries", b"3").unwrap();
+        storage.put_state(P, "queue_name", b"orders").unwrap();
 
         let lua = crate::lua::sandbox::create_sandbox().unwrap();
-        register_fila_api(&lua, storage).unwrap();
+        register_fila_api(&lua, storage, PartitionId::DEFAULT).unwrap();
 
         // Existing key returns value
         let result: String = lua

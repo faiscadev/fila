@@ -8,7 +8,7 @@ impl Scheduler {
         msg_id: &uuid::Uuid,
     ) -> Result<Option<Vec<u8>>, crate::error::StorageError> {
         let prefix = crate::storage::keys::message_prefix(queue_id);
-        let messages = self.storage.list_messages(&prefix)?;
+        let messages = self.storage.list_messages(self.p(), &prefix)?;
         for (key, msg) in messages {
             if msg.id == *msg_id {
                 return Ok(Some(key));
@@ -89,7 +89,7 @@ impl Scheduler {
 
         let visibility_timeout_ms = self
             .storage
-            .get_queue(queue_id)
+            .get_queue(self.p(), queue_id)
             .ok()
             .flatten()
             .map(|c| c.visibility_timeout_ms)
@@ -140,7 +140,7 @@ impl Scheduler {
             self.pending_by_id.remove(&entry.msg_id);
 
             // Load the full message from storage
-            let msg = match self.storage.get_message(&entry.msg_key) {
+            let msg = match self.storage.get_message(self.p(), &entry.msg_key) {
                 Ok(Some(msg)) => msg,
                 Ok(None) => {
                     warn!(%queue_id, msg_id = %entry.msg_id, "pending message not found in storage, skipping");
@@ -212,6 +212,7 @@ impl Scheduler {
             return false;
         }
 
+        let partition = &self.partition;
         let rr_idx = self
             .consumer_rr_idx
             .entry(queue_id.to_string())
@@ -232,15 +233,18 @@ impl Scheduler {
             let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
             let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
 
-            if let Err(e) = self.storage.write_batch(vec![
-                WriteBatchOp::PutLease {
-                    key: lease_key.to_vec(),
-                    value: lease_val,
-                },
-                WriteBatchOp::PutLeaseExpiry {
-                    key: expiry_key.clone(),
-                },
-            ]) {
+            if let Err(e) = self.storage.write_batch(
+                partition,
+                vec![
+                    WriteBatchOp::PutLease {
+                        key: lease_key.to_vec(),
+                        value: lease_val,
+                    },
+                    WriteBatchOp::PutLeaseExpiry {
+                        key: expiry_key.clone(),
+                    },
+                ],
+            ) {
                 error!(msg_id = %msg.id, error = %e, "failed to write lease");
                 return false;
             }
@@ -265,23 +269,29 @@ impl Scheduler {
                 Ok(()) => return true,
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                     warn!(%cid, msg_id = %msg.id, "consumer channel full, trying next");
-                    if let Err(e) = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease {
-                            key: lease_key.to_vec(),
-                        },
-                        WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
-                    ]) {
+                    if let Err(e) = self.storage.write_batch(
+                        partition,
+                        vec![
+                            WriteBatchOp::DeleteLease {
+                                key: lease_key.to_vec(),
+                            },
+                            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                        ],
+                    ) {
                         error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
                     }
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                     warn!(%cid, msg_id = %msg.id, "consumer channel closed, trying next");
-                    if let Err(e) = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease {
-                            key: lease_key.to_vec(),
-                        },
-                        WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
-                    ]) {
+                    if let Err(e) = self.storage.write_batch(
+                        partition,
+                        vec![
+                            WriteBatchOp::DeleteLease {
+                                key: lease_key.to_vec(),
+                            },
+                            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                        ],
+                    ) {
                         error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
                     }
                 }

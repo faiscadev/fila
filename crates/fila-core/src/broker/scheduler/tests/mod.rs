@@ -1,9 +1,11 @@
 use super::*;
 use crate::broker::config::SchedulerConfig;
 use crate::message::Message;
-use crate::storage::RocksDbStorage;
+use crate::storage::{PartitionId, RocksDbStorage};
 use std::collections::HashMap;
 use uuid::Uuid;
+
+const P: &PartitionId = &PartitionId::DEFAULT;
 
 mod common;
 use common::*;

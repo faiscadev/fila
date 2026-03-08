@@ -47,7 +47,7 @@ fn enqueue_persists_message_to_storage() {
 
     // Verify the message was persisted by reading it back from storage
     let key = crate::storage::keys::message_key("persist-queue", "default", 1_000_000_000, &msg_id);
-    let stored = scheduler.storage().get_message(&key).unwrap();
+    let stored = scheduler.storage().get_message(P, &key).unwrap();
     assert!(stored.is_some(), "message should be persisted in storage");
 
     let stored_msg = stored.unwrap();
@@ -101,6 +101,6 @@ fn enqueue_100_messages_unique_time_ordered_ids() {
 
     // Verify all 100 messages are persisted
     let prefix = crate::storage::keys::message_prefix("bulk-queue");
-    let stored = scheduler.storage().list_messages(&prefix).unwrap();
+    let stored = scheduler.storage().list_messages(P, &prefix).unwrap();
     assert_eq!(stored.len(), 100, "all 100 messages should be persisted");
 }

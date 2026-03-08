@@ -7,7 +7,7 @@ use rocksdb::{
 use crate::error::{StorageError, StorageResult};
 use crate::message::Message;
 use crate::queue::QueueConfig;
-use crate::storage::traits::{Storage, WriteBatchOp};
+use crate::storage::traits::{PartitionId, Storage, WriteBatchOp};
 
 const CF_MESSAGES: &str = "messages";
 const CF_LEASES: &str = "leases";
@@ -55,14 +55,23 @@ impl RocksDbStorage {
 }
 
 impl Storage for RocksDbStorage {
-    fn put_message(&self, key: &[u8], message: &Message) -> StorageResult<()> {
+    fn put_message(
+        &self,
+        _partition: &PartitionId,
+        key: &[u8],
+        message: &Message,
+    ) -> StorageResult<()> {
         let cf = self.cf(CF_MESSAGES)?;
         let value = serde_json::to_vec(message)?;
         self.db.put_cf(&cf, key, &value)?;
         Ok(())
     }
 
-    fn get_message(&self, key: &[u8]) -> StorageResult<Option<Message>> {
+    fn get_message(
+        &self,
+        _partition: &PartitionId,
+        key: &[u8],
+    ) -> StorageResult<Option<Message>> {
         let cf = self.cf(CF_MESSAGES)?;
         match self.db.get_cf(&cf, key)? {
             Some(value) => Ok(Some(serde_json::from_slice(&value)?)),
@@ -70,13 +79,17 @@ impl Storage for RocksDbStorage {
         }
     }
 
-    fn delete_message(&self, key: &[u8]) -> StorageResult<()> {
+    fn delete_message(&self, _partition: &PartitionId, key: &[u8]) -> StorageResult<()> {
         let cf = self.cf(CF_MESSAGES)?;
         self.db.delete_cf(&cf, key)?;
         Ok(())
     }
 
-    fn list_messages(&self, prefix: &[u8]) -> StorageResult<Vec<(Vec<u8>, Message)>> {
+    fn list_messages(
+        &self,
+        _partition: &PartitionId,
+        prefix: &[u8],
+    ) -> StorageResult<Vec<(Vec<u8>, Message)>> {
         let cf = self.cf(CF_MESSAGES)?;
         let iter = self
             .db
@@ -93,24 +106,37 @@ impl Storage for RocksDbStorage {
         Ok(results)
     }
 
-    fn put_lease(&self, key: &[u8], value: &[u8]) -> StorageResult<()> {
+    fn put_lease(
+        &self,
+        _partition: &PartitionId,
+        key: &[u8],
+        value: &[u8],
+    ) -> StorageResult<()> {
         let cf = self.cf(CF_LEASES)?;
         self.db.put_cf(&cf, key, value)?;
         Ok(())
     }
 
-    fn get_lease(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
+    fn get_lease(
+        &self,
+        _partition: &PartitionId,
+        key: &[u8],
+    ) -> StorageResult<Option<Vec<u8>>> {
         let cf = self.cf(CF_LEASES)?;
         Ok(self.db.get_cf(&cf, key)?.map(|v| v.to_vec()))
     }
 
-    fn delete_lease(&self, key: &[u8]) -> StorageResult<()> {
+    fn delete_lease(&self, _partition: &PartitionId, key: &[u8]) -> StorageResult<()> {
         let cf = self.cf(CF_LEASES)?;
         self.db.delete_cf(&cf, key)?;
         Ok(())
     }
 
-    fn list_expired_leases(&self, up_to_key: &[u8]) -> StorageResult<Vec<Vec<u8>>> {
+    fn list_expired_leases(
+        &self,
+        _partition: &PartitionId,
+        up_to_key: &[u8],
+    ) -> StorageResult<Vec<Vec<u8>>> {
         let cf = self.cf(CF_LEASE_EXPIRY)?;
         let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         let mut results = Vec::new();
@@ -124,14 +150,23 @@ impl Storage for RocksDbStorage {
         Ok(results)
     }
 
-    fn put_queue(&self, queue_id: &str, config: &QueueConfig) -> StorageResult<()> {
+    fn put_queue(
+        &self,
+        _partition: &PartitionId,
+        queue_id: &str,
+        config: &QueueConfig,
+    ) -> StorageResult<()> {
         let cf = self.cf(CF_QUEUES)?;
         let value = serde_json::to_vec(config)?;
         self.db.put_cf(&cf, queue_id.as_bytes(), &value)?;
         Ok(())
     }
 
-    fn get_queue(&self, queue_id: &str) -> StorageResult<Option<QueueConfig>> {
+    fn get_queue(
+        &self,
+        _partition: &PartitionId,
+        queue_id: &str,
+    ) -> StorageResult<Option<QueueConfig>> {
         let cf = self.cf(CF_QUEUES)?;
         match self.db.get_cf(&cf, queue_id.as_bytes())? {
             Some(value) => Ok(Some(serde_json::from_slice(&value)?)),
@@ -139,13 +174,13 @@ impl Storage for RocksDbStorage {
         }
     }
 
-    fn delete_queue(&self, queue_id: &str) -> StorageResult<()> {
+    fn delete_queue(&self, _partition: &PartitionId, queue_id: &str) -> StorageResult<()> {
         let cf = self.cf(CF_QUEUES)?;
         self.db.delete_cf(&cf, queue_id.as_bytes())?;
         Ok(())
     }
 
-    fn list_queues(&self) -> StorageResult<Vec<QueueConfig>> {
+    fn list_queues(&self, _partition: &PartitionId) -> StorageResult<Vec<QueueConfig>> {
         let cf = self.cf(CF_QUEUES)?;
         let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         let mut results = Vec::new();
@@ -157,18 +192,27 @@ impl Storage for RocksDbStorage {
         Ok(results)
     }
 
-    fn put_state(&self, key: &str, value: &[u8]) -> StorageResult<()> {
+    fn put_state(
+        &self,
+        _partition: &PartitionId,
+        key: &str,
+        value: &[u8],
+    ) -> StorageResult<()> {
         let cf = self.cf(CF_STATE)?;
         self.db.put_cf(&cf, key.as_bytes(), value)?;
         Ok(())
     }
 
-    fn get_state(&self, key: &str) -> StorageResult<Option<Vec<u8>>> {
+    fn get_state(
+        &self,
+        _partition: &PartitionId,
+        key: &str,
+    ) -> StorageResult<Option<Vec<u8>>> {
         let cf = self.cf(CF_STATE)?;
         Ok(self.db.get_cf(&cf, key.as_bytes())?.map(|v| v.to_vec()))
     }
 
-    fn delete_state(&self, key: &str) -> StorageResult<()> {
+    fn delete_state(&self, _partition: &PartitionId, key: &str) -> StorageResult<()> {
         let cf = self.cf(CF_STATE)?;
         self.db.delete_cf(&cf, key.as_bytes())?;
         Ok(())
@@ -176,6 +220,7 @@ impl Storage for RocksDbStorage {
 
     fn list_state_by_prefix(
         &self,
+        _partition: &PartitionId,
         prefix: &str,
         limit: usize,
     ) -> StorageResult<Vec<(String, Vec<u8>)>> {
@@ -200,7 +245,11 @@ impl Storage for RocksDbStorage {
         Ok(result)
     }
 
-    fn write_batch(&self, ops: Vec<WriteBatchOp>) -> StorageResult<()> {
+    fn write_batch(
+        &self,
+        _partition: &PartitionId,
+        ops: Vec<WriteBatchOp>,
+    ) -> StorageResult<()> {
         let mut batch = WriteBatch::default();
 
         for op in ops {
@@ -245,7 +294,7 @@ impl Storage for RocksDbStorage {
     fn flush(&self) -> StorageResult<()> {
         self.db
             .flush_wal(true)
-            .map_err(|e| StorageError::RocksDb(e.to_string()))?;
+            .map_err(|e| StorageError::Backend(e.to_string()))?;
         Ok(())
     }
 }
@@ -278,6 +327,9 @@ mod tests {
         }
     }
 
+    /// Shorthand for the default partition used throughout tests.
+    const P: &PartitionId = &PartitionId::DEFAULT;
+
     #[test]
     fn open_creates_all_column_families() {
         let (storage, _dir) = test_storage();
@@ -295,12 +347,12 @@ mod tests {
         let msg = test_message("q1", "default");
         let key = keys::message_key(&msg.queue_id, &msg.fairness_key, msg.enqueued_at, &msg.id);
 
-        storage.put_message(&key, &msg).unwrap();
-        let retrieved = storage.get_message(&key).unwrap().unwrap();
+        storage.put_message(P, &key, &msg).unwrap();
+        let retrieved = storage.get_message(P, &key).unwrap().unwrap();
         assert_eq!(retrieved, msg);
 
-        storage.delete_message(&key).unwrap();
-        assert!(storage.get_message(&key).unwrap().is_none());
+        storage.delete_message(P, &key).unwrap();
+        assert!(storage.get_message(P, &key).unwrap().is_none());
     }
 
     #[test]
@@ -308,7 +360,7 @@ mod tests {
         let (storage, _dir) = test_storage();
         let id = Uuid::now_v7();
         let key = keys::message_key("q1", "default", 1000, &id);
-        assert!(storage.get_message(&key).unwrap().is_none());
+        assert!(storage.get_message(P, &key).unwrap().is_none());
     }
 
     #[test]
@@ -342,18 +394,18 @@ mod tests {
             &msg3.id,
         );
 
-        storage.put_message(&k1, &msg1).unwrap();
-        storage.put_message(&k2, &msg2).unwrap();
-        storage.put_message(&k3, &msg3).unwrap();
+        storage.put_message(P, &k1, &msg1).unwrap();
+        storage.put_message(P, &k2, &msg2).unwrap();
+        storage.put_message(P, &k3, &msg3).unwrap();
 
         // List all q1 messages
         let prefix = keys::message_prefix("q1");
-        let results = storage.list_messages(&prefix).unwrap();
+        let results = storage.list_messages(P, &prefix).unwrap();
         assert_eq!(results.len(), 2, "should find 2 messages in q1");
 
         // List q1 + tenant_a messages
         let prefix = keys::message_prefix_with_key("q1", "tenant_a");
-        let results = storage.list_messages(&prefix).unwrap();
+        let results = storage.list_messages(P, &prefix).unwrap();
         assert_eq!(
             results.len(),
             2,
@@ -362,7 +414,7 @@ mod tests {
 
         // List q2 messages
         let prefix = keys::message_prefix("q2");
-        let results = storage.list_messages(&prefix).unwrap();
+        let results = storage.list_messages(P, &prefix).unwrap();
         assert_eq!(results.len(), 1, "should find 1 message in q2");
     }
 
@@ -371,40 +423,40 @@ mod tests {
         let (storage, _dir) = test_storage();
 
         let config = QueueConfig::new("test-queue".to_string());
-        storage.put_queue("test-queue", &config).unwrap();
+        storage.put_queue(P, "test-queue", &config).unwrap();
 
-        let retrieved = storage.get_queue("test-queue").unwrap().unwrap();
+        let retrieved = storage.get_queue(P, "test-queue").unwrap().unwrap();
         assert_eq!(retrieved, config);
 
-        let queues = storage.list_queues().unwrap();
+        let queues = storage.list_queues(P).unwrap();
         assert_eq!(queues.len(), 1);
 
-        storage.delete_queue("test-queue").unwrap();
-        assert!(storage.get_queue("test-queue").unwrap().is_none());
+        storage.delete_queue(P, "test-queue").unwrap();
+        assert!(storage.get_queue(P, "test-queue").unwrap().is_none());
     }
 
     #[test]
     fn state_put_get_delete() {
         let (storage, _dir) = test_storage();
 
-        storage.put_state("config:rate_limit", b"100").unwrap();
-        let val = storage.get_state("config:rate_limit").unwrap().unwrap();
+        storage.put_state(P, "config:rate_limit", b"100").unwrap();
+        let val = storage.get_state(P, "config:rate_limit").unwrap().unwrap();
         assert_eq!(val, b"100");
 
-        storage.delete_state("config:rate_limit").unwrap();
-        assert!(storage.get_state("config:rate_limit").unwrap().is_none());
+        storage.delete_state(P, "config:rate_limit").unwrap();
+        assert!(storage.get_state(P, "config:rate_limit").unwrap().is_none());
     }
 
     #[test]
     fn list_state_by_prefix_returns_matching_entries() {
         let (storage, _dir) = test_storage();
 
-        storage.put_state("throttle.a", b"10,100").unwrap();
-        storage.put_state("throttle.b", b"20,200").unwrap();
-        storage.put_state("app.flag", b"true").unwrap();
+        storage.put_state(P, "throttle.a", b"10,100").unwrap();
+        storage.put_state(P, "throttle.b", b"20,200").unwrap();
+        storage.put_state(P, "app.flag", b"true").unwrap();
 
         let entries = storage
-            .list_state_by_prefix("throttle.", usize::MAX)
+            .list_state_by_prefix(P, "throttle.", usize::MAX)
             .unwrap();
         assert_eq!(entries.len(), 2);
         assert!(entries
@@ -416,7 +468,7 @@ mod tests {
 
         // Non-matching prefix returns empty
         let entries = storage
-            .list_state_by_prefix("nonexistent.", usize::MAX)
+            .list_state_by_prefix(P, "nonexistent.", usize::MAX)
             .unwrap();
         assert!(entries.is_empty());
     }
@@ -429,12 +481,12 @@ mod tests {
         let key = keys::lease_key("q1", &id);
         let value = keys::lease_value("consumer-1", 5_000_000_000);
 
-        storage.put_lease(&key, &value).unwrap();
-        let retrieved = storage.get_lease(&key).unwrap().unwrap();
+        storage.put_lease(P, &key, &value).unwrap();
+        let retrieved = storage.get_lease(P, &key).unwrap().unwrap();
         assert_eq!(retrieved, value);
 
-        storage.delete_lease(&key).unwrap();
-        assert!(storage.get_lease(&key).unwrap().is_none());
+        storage.delete_lease(P, &key).unwrap();
+        assert!(storage.get_lease(P, &key).unwrap().is_none());
     }
 
     #[test]
@@ -450,16 +502,19 @@ mod tests {
         let ek3 = keys::lease_expiry_key(5000, "q1", &id3);
 
         storage
-            .write_batch(vec![
-                WriteBatchOp::PutLeaseExpiry { key: ek1.clone() },
-                WriteBatchOp::PutLeaseExpiry { key: ek2.clone() },
-                WriteBatchOp::PutLeaseExpiry { key: ek3.clone() },
-            ])
+            .write_batch(
+                P,
+                vec![
+                    WriteBatchOp::PutLeaseExpiry { key: ek1.clone() },
+                    WriteBatchOp::PutLeaseExpiry { key: ek2.clone() },
+                    WriteBatchOp::PutLeaseExpiry { key: ek3.clone() },
+                ],
+            )
             .unwrap();
 
         // Query leases expired up to timestamp 3000
         let up_to = keys::lease_expiry_key(3000, "q1", &Uuid::max());
-        let expired = storage.list_expired_leases(&up_to).unwrap();
+        let expired = storage.list_expired_leases(P, &up_to).unwrap();
         assert_eq!(
             expired.len(),
             2,
@@ -481,45 +536,51 @@ mod tests {
 
         // Atomic write: message + lease + lease_expiry
         storage
-            .write_batch(vec![
-                WriteBatchOp::PutMessage {
-                    key: msg_key.clone(),
-                    value: msg_value,
-                },
-                WriteBatchOp::PutLease {
-                    key: lease_key.clone(),
-                    value: lease_val.clone(),
-                },
-                WriteBatchOp::PutLeaseExpiry {
-                    key: expiry_key.clone(),
-                },
-            ])
+            .write_batch(
+                P,
+                vec![
+                    WriteBatchOp::PutMessage {
+                        key: msg_key.clone(),
+                        value: msg_value,
+                    },
+                    WriteBatchOp::PutLease {
+                        key: lease_key.clone(),
+                        value: lease_val.clone(),
+                    },
+                    WriteBatchOp::PutLeaseExpiry {
+                        key: expiry_key.clone(),
+                    },
+                ],
+            )
             .unwrap();
 
         // All three should exist
-        assert!(storage.get_message(&msg_key).unwrap().is_some());
-        assert!(storage.get_lease(&lease_key).unwrap().is_some());
+        assert!(storage.get_message(P, &msg_key).unwrap().is_some());
+        assert!(storage.get_lease(P, &lease_key).unwrap().is_some());
         let up_to = keys::lease_expiry_key(u64::MAX, "q1", &Uuid::max());
-        let expired = storage.list_expired_leases(&up_to).unwrap();
+        let expired = storage.list_expired_leases(P, &up_to).unwrap();
         assert_eq!(expired.len(), 1);
 
         // Atomic delete: message + lease + lease_expiry
         storage
-            .write_batch(vec![
-                WriteBatchOp::DeleteMessage {
-                    key: msg_key.clone(),
-                },
-                WriteBatchOp::DeleteLease {
-                    key: lease_key.clone(),
-                },
-                WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
-            ])
+            .write_batch(
+                P,
+                vec![
+                    WriteBatchOp::DeleteMessage {
+                        key: msg_key.clone(),
+                    },
+                    WriteBatchOp::DeleteLease {
+                        key: lease_key.clone(),
+                    },
+                    WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                ],
+            )
             .unwrap();
 
         // All three should be gone
-        assert!(storage.get_message(&msg_key).unwrap().is_none());
-        assert!(storage.get_lease(&lease_key).unwrap().is_none());
-        let expired = storage.list_expired_leases(&up_to).unwrap();
+        assert!(storage.get_message(P, &msg_key).unwrap().is_none());
+        assert!(storage.get_lease(P, &lease_key).unwrap().is_none());
+        let expired = storage.list_expired_leases(P, &up_to).unwrap();
         assert!(expired.is_empty());
     }
 
@@ -531,16 +592,16 @@ mod tests {
         {
             let storage = RocksDbStorage::open(dir.path()).unwrap();
             let config = QueueConfig::new("persistent-queue".to_string());
-            storage.put_queue("persistent-queue", &config).unwrap();
-            storage.put_state("my-key", b"my-value").unwrap();
+            storage.put_queue(P, "persistent-queue", &config).unwrap();
+            storage.put_state(P, "my-key", b"my-value").unwrap();
         }
 
         // Reopen and verify
         {
             let storage = RocksDbStorage::open(dir.path()).unwrap();
-            let config = storage.get_queue("persistent-queue").unwrap().unwrap();
+            let config = storage.get_queue(P, "persistent-queue").unwrap().unwrap();
             assert_eq!(config.name, "persistent-queue");
-            let val = storage.get_state("my-key").unwrap().unwrap();
+            let val = storage.get_state(P, "my-key").unwrap().unwrap();
             assert_eq!(val, b"my-value");
         }
     }

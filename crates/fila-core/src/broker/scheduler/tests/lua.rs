@@ -27,7 +27,7 @@ fn on_enqueue_assigns_fairness_key_from_header() {
 
     // The message should be stored with fairness_key="acme" from the Lua script
     let key = crate::storage::keys::message_key("lua-fk-queue", "acme", 1_000_000_000, &msg_id);
-    let stored = scheduler.storage().get_message(&key).unwrap();
+    let stored = scheduler.storage().get_message(P, &key).unwrap();
     assert!(
         stored.is_some(),
         "message should be stored with fairness_key='acme' from Lua script"
@@ -64,7 +64,7 @@ fn on_enqueue_assigns_weight_and_throttle_keys() {
     scheduler.run();
 
     let key = crate::storage::keys::message_key("lua-wt-queue", "tenant_x", 1_000_000_000, &msg_id);
-    let stored = scheduler.storage().get_message(&key).unwrap();
+    let stored = scheduler.storage().get_message(P, &key).unwrap();
     assert!(
         stored.is_some(),
         "message should exist with fairness_key='tenant_x'"
@@ -97,7 +97,7 @@ fn queue_without_script_uses_defaults() {
 
     let key =
         crate::storage::keys::message_key("no-script-queue", "default", 1_000_000_000, &msg_id);
-    let stored = scheduler.storage().get_message(&key).unwrap();
+    let stored = scheduler.storage().get_message(P, &key).unwrap();
     assert!(
         stored.is_some(),
         "message should exist with default fairness_key"
@@ -115,7 +115,7 @@ fn on_enqueue_reads_config_via_fila_get() {
     // Write a config value to the state CF that the Lua script will read
     scheduler
         .storage()
-        .put_state("default_tenant", b"megacorp")
+        .put_state(P, "default_tenant", b"megacorp")
         .unwrap();
 
     let script = r#"
@@ -144,7 +144,7 @@ fn on_enqueue_reads_config_via_fila_get() {
 
     let key =
         crate::storage::keys::message_key("lua-fila-get-queue", "megacorp", 1_000_000_000, &msg_id);
-    let stored = scheduler.storage().get_message(&key).unwrap();
+    let stored = scheduler.storage().get_message(P, &key).unwrap();
     assert!(
         stored.is_some(),
         "message should have fairness_key='megacorp' from fila.get()"
@@ -206,7 +206,7 @@ fn on_enqueue_infinite_loop_falls_back_to_defaults() {
     // Message should have default fairness_key
     let key =
         crate::storage::keys::message_key("infinite-loop-queue", "default", 1_000_000_000, &msg_id);
-    let stored = scheduler.storage().get_message(&key).unwrap();
+    let stored = scheduler.storage().get_message(P, &key).unwrap();
     assert!(
         stored.is_some(),
         "message should be stored with default fairness_key after script timeout"
@@ -248,7 +248,7 @@ fn on_enqueue_memory_bomb_falls_back_to_defaults() {
     // Message should have default fairness_key
     let key =
         crate::storage::keys::message_key("memory-bomb-queue", "default", 1_000_000_000, &msg_id);
-    let stored = scheduler.storage().get_message(&key).unwrap();
+    let stored = scheduler.storage().get_message(P, &key).unwrap();
     assert!(
         stored.is_some(),
         "message should be stored with default fairness_key after memory limit"
@@ -290,7 +290,7 @@ fn circuit_breaker_trips_and_bypasses_lua() {
     // All 5 messages should be stored with default fairness_key
     for (i, msg_id) in msg_ids.iter().enumerate() {
         let key = crate::storage::keys::message_key("cb-queue", "default", i as u64, msg_id);
-        let stored = scheduler.storage().get_message(&key).unwrap();
+        let stored = scheduler.storage().get_message(P, &key).unwrap();
         assert!(
             stored.is_some(),
             "message {i} should be stored with default fairness_key"
@@ -343,7 +343,7 @@ fn failed_script_does_not_break_subsequent_good_scripts() {
 
     // Good queue's message should have the correct fairness_key from Lua
     let key = crate::storage::keys::message_key("good-queue", "good", 1_000_000_000, &good_msg_id);
-    let stored = scheduler.storage().get_message(&key).unwrap();
+    let stored = scheduler.storage().get_message(P, &key).unwrap();
     assert!(
         stored.is_some(),
         "good queue's Lua script should work even after bad queue's script failed"
@@ -485,7 +485,7 @@ fn on_failure_dlq_moves_message_to_dead_letter_queue() {
 
     // Verify message is gone from main queue storage
     let main_prefix = crate::storage::keys::message_prefix("main-queue");
-    let main_msgs = scheduler.storage().list_messages(&main_prefix).unwrap();
+    let main_msgs = scheduler.storage().list_messages(P, &main_prefix).unwrap();
     assert!(
         main_msgs.is_empty(),
         "message should be removed from main queue"
@@ -493,7 +493,7 @@ fn on_failure_dlq_moves_message_to_dead_letter_queue() {
 
     // Verify message exists in DLQ storage
     let dlq_prefix = crate::storage::keys::message_prefix("main-queue.dlq");
-    let dlq_msgs = scheduler.storage().list_messages(&dlq_prefix).unwrap();
+    let dlq_msgs = scheduler.storage().list_messages(P, &dlq_prefix).unwrap();
     assert_eq!(dlq_msgs.len(), 1, "message should exist in DLQ");
     assert_eq!(dlq_msgs[0].1.id, msg_id);
 }

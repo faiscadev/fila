@@ -46,14 +46,14 @@ fn ack_removes_message_lease_and_expiry() {
     // Message should be gone from messages CF
     let msg_key = crate::storage::keys::message_key("ack-queue", "default", 1_000_000_000, &msg_id);
     assert!(
-        scheduler.storage().get_message(&msg_key).unwrap().is_none(),
+        scheduler.storage().get_message(P, &msg_key).unwrap().is_none(),
         "message should be deleted after ack"
     );
 
     // Lease should be gone
     let lease_key = crate::storage::keys::lease_key("ack-queue", &msg_id);
     assert!(
-        scheduler.storage().get_lease(&lease_key).unwrap().is_none(),
+        scheduler.storage().get_lease(P, &lease_key).unwrap().is_none(),
         "lease should be deleted after ack"
     );
 }
@@ -205,7 +205,7 @@ fn nack_requeues_message_with_incremented_attempt_count() {
     let msg_key =
         crate::storage::keys::message_key("nack-queue", "default", 1_000_000_000, &msg_id);
     assert!(
-        scheduler.storage().get_message(&msg_key).unwrap().is_some(),
+        scheduler.storage().get_message(P, &msg_key).unwrap().is_some(),
         "message should still exist after nack (not deleted)"
     );
 }
@@ -258,7 +258,7 @@ fn nack_removes_lease_and_lease_expiry() {
     // Lease should be gone after nack (no re-delivery since consumer unregistered)
     let lease_key = crate::storage::keys::lease_key("nack-lease-queue", &msg_id);
     assert!(
-        scheduler.storage().get_lease(&lease_key).unwrap().is_none(),
+        scheduler.storage().get_lease(P, &lease_key).unwrap().is_none(),
         "lease should be deleted after nack"
     );
 
@@ -266,7 +266,7 @@ fn nack_removes_lease_and_lease_expiry() {
     let far_future = crate::storage::keys::lease_expiry_key(u64::MAX, "", &Uuid::nil());
     let expired = scheduler
         .storage()
-        .list_expired_leases(&far_future)
+        .list_expired_leases(P, &far_future)
         .unwrap();
     assert!(
         expired.is_empty(),
@@ -429,7 +429,7 @@ fn nack_then_ack_completes_message_lifecycle() {
     let msg_key =
         crate::storage::keys::message_key("nack-ack-queue", "default", 1_000_000_000, &msg_id);
     assert!(
-        scheduler.storage().get_message(&msg_key).unwrap().is_none(),
+        scheduler.storage().get_message(P, &msg_key).unwrap().is_none(),
         "message should be deleted after ack"
     );
 }
@@ -557,13 +557,13 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
     // After reclaim, lease should be gone
     let lease_key = crate::storage::keys::lease_key("expiry-clean-queue", &msg_id);
     assert!(
-        storage.get_lease(&lease_key).unwrap().is_none(),
+        storage.get_lease(P, &lease_key).unwrap().is_none(),
         "lease should be deleted after expiry reclaim"
     );
 
     // lease_expiry CF should be empty
     let far_future = crate::storage::keys::lease_expiry_key(u64::MAX, "", &Uuid::nil());
-    let expired = storage.list_expired_leases(&far_future).unwrap();
+    let expired = storage.list_expired_leases(P, &far_future).unwrap();
     assert!(
         expired.is_empty(),
         "lease_expiry CF should be empty after reclaim, found {} entries",
@@ -572,7 +572,7 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
 
     // Message should still exist with leased_at cleared (AC#4)
     let prefix = crate::storage::keys::message_prefix("expiry-clean-queue");
-    let messages = storage.list_messages(&prefix).unwrap();
+    let messages = storage.list_messages(P, &prefix).unwrap();
     assert_eq!(
         messages.len(),
         1,

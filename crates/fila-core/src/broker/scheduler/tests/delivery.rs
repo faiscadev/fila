@@ -110,7 +110,7 @@ fn lease_creates_entries_in_storage() {
 
     // Verify a lease was created
     let lease_key = crate::storage::keys::lease_key("lease-cf-queue", &msg_id);
-    let lease = scheduler.storage().get_lease(&lease_key).unwrap();
+    let lease = scheduler.storage().get_lease(P, &lease_key).unwrap();
     assert!(lease.is_some(), "lease entry should exist after delivery");
 }
 
@@ -306,7 +306,7 @@ fn delivery_skips_closed_consumer_and_delivers_to_next() {
     // A lease should exist for the delivered message
     let lease_key = crate::storage::keys::lease_key("closed-queue", &msg_id);
     assert!(
-        scheduler.storage().get_lease(&lease_key).unwrap().is_some(),
+        scheduler.storage().get_lease(P, &lease_key).unwrap().is_some(),
         "lease should exist for the delivered message"
     );
 }
@@ -352,13 +352,13 @@ fn delivery_rolls_back_lease_when_all_consumers_closed() {
     // No lease should remain — both were rolled back
     let lease_key = crate::storage::keys::lease_key("all-closed-queue", &msg_id);
     assert!(
-        scheduler.storage().get_lease(&lease_key).unwrap().is_none(),
+        scheduler.storage().get_lease(P, &lease_key).unwrap().is_none(),
         "lease should be rolled back when all consumers are closed"
     );
 
     // Message should still exist in storage (not lost)
     let prefix = crate::storage::keys::message_prefix("all-closed-queue");
-    let messages = scheduler.storage().list_messages(&prefix).unwrap();
+    let messages = scheduler.storage().list_messages(P, &prefix).unwrap();
     assert_eq!(
         messages.len(),
         1,
@@ -431,7 +431,7 @@ fn delivery_skips_full_consumer_and_delivers_to_next() {
     for msg_id in msg_ids {
         let lease_key = crate::storage::keys::lease_key("full-queue", &msg_id);
         assert!(
-            scheduler.storage().get_lease(&lease_key).unwrap().is_some(),
+            scheduler.storage().get_lease(P, &lease_key).unwrap().is_some(),
             "lease should exist for msg {msg_id}"
         );
     }
@@ -496,13 +496,13 @@ fn delivery_rolls_back_lease_when_all_consumers_full() {
         .expect("one message should be undelivered");
     let lease_key = crate::storage::keys::lease_key("all-full-queue", undelivered_id);
     assert!(
-        scheduler.storage().get_lease(&lease_key).unwrap().is_none(),
+        scheduler.storage().get_lease(P, &lease_key).unwrap().is_none(),
         "undelivered message should have no lease (rolled back)"
     );
 
     // The undelivered message should still be in storage
     let prefix = crate::storage::keys::message_prefix("all-full-queue");
-    let messages = scheduler.storage().list_messages(&prefix).unwrap();
+    let messages = scheduler.storage().list_messages(P, &prefix).unwrap();
     assert_eq!(
         messages.len(),
         3,

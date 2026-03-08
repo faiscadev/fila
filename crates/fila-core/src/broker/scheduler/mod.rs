@@ -11,7 +11,7 @@ use crate::broker::drr::DrrScheduler;
 use crate::broker::metrics::Metrics;
 use crate::broker::throttle::ThrottleManager;
 use crate::lua::LuaEngine;
-use crate::storage::{Storage, WriteBatchOp};
+use crate::storage::{PartitionId, Storage, WriteBatchOp};
 
 mod admin_handlers;
 mod delivery;
@@ -37,6 +37,10 @@ pub(super) struct PendingEntry {
 /// processes commands from IO threads via a crossbeam channel.
 pub struct Scheduler {
     storage: Arc<dyn Storage>,
+    /// The partition this scheduler operates on. In single-node mode, always
+    /// `PartitionId::DEFAULT`. In clustered mode (Epic 14), each scheduler
+    /// instance handles a specific partition.
+    partition: PartitionId,
     inbound: Receiver<SchedulerCommand>,
     idle_timeout: Duration,
     running: bool,
@@ -74,7 +78,7 @@ impl Scheduler {
         config: &SchedulerConfig,
         lua_config: &LuaConfig,
     ) -> Self {
-        let lua_engine = match LuaEngine::new(storage.clone(), lua_config) {
+        let lua_engine = match LuaEngine::new(storage.clone(), PartitionId::DEFAULT, lua_config) {
             Ok(engine) => Some(engine),
             Err(e) => {
                 error!(error = %e, "failed to create Lua engine, scripts will be disabled");
@@ -84,6 +88,7 @@ impl Scheduler {
 
         Self {
             storage,
+            partition: PartitionId::DEFAULT,
             inbound,
             idle_timeout: Duration::from_millis(config.idle_timeout_ms),
             running: true,
@@ -271,10 +276,22 @@ impl Scheduler {
         }
     }
 
+    /// Shorthand for the scheduler's partition ID.
+    pub(super) fn p(&self) -> &PartitionId {
+        &self.partition
+    }
+
     /// Access the storage layer (used by tests).
     #[cfg(test)]
     pub fn storage(&self) -> &dyn Storage {
         self.storage.as_ref()
+    }
+
+    /// Access the partition ID (used by tests).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn partition(&self) -> &PartitionId {
+        &self.partition
     }
 }
 

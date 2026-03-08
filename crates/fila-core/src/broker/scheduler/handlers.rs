@@ -6,7 +6,7 @@ impl Scheduler {
         mut message: crate::message::Message,
     ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
         // Verify queue exists
-        if self.storage.get_queue(&message.queue_id)?.is_none() {
+        if self.storage.get_queue(self.p(), &message.queue_id)?.is_none() {
             return Err(crate::error::EnqueueError::QueueNotFound(
                 message.queue_id.clone(),
             ));
@@ -63,7 +63,7 @@ impl Scheduler {
             &msg_id,
         );
 
-        self.storage.put_message(&key, &message)?;
+        self.storage.put_message(self.p(), &key, &message)?;
 
         self.metrics.record_enqueue(&message.queue_id);
 
@@ -96,7 +96,7 @@ impl Scheduler {
         // only way to enforce uniqueness.
         // TODO(cluster): replace with atomic put-if-absent or distributed lock
         // when moving to a multi-node scheduler.
-        if self.storage.get_queue(&name)?.is_some() {
+        if self.storage.get_queue(self.p(), &name)?.is_some() {
             return Err(crate::error::CreateQueueError::QueueAlreadyExists(name));
         }
 
@@ -143,19 +143,19 @@ impl Scheduler {
         if !name.ends_with(".dlq") {
             let dlq_name = format!("{name}.dlq");
             config.dlq_queue_id = Some(dlq_name.clone());
-            self.storage.put_queue(&name, &config)?;
+            self.storage.put_queue(self.p(), &name, &config)?;
 
             // Only create if it doesn't already exist (idempotent)
-            if self.storage.get_queue(&dlq_name)?.is_none() {
+            if self.storage.get_queue(self.p(), &dlq_name)?.is_none() {
                 let dlq_config = crate::queue::QueueConfig::new(dlq_name.clone());
-                self.storage.put_queue(&dlq_name, &dlq_config)?;
+                self.storage.put_queue(self.p(), &dlq_name, &dlq_config)?;
                 self.known_queues.insert(dlq_name.clone());
                 debug!(queue = %name, dlq = %dlq_name, "auto-created dead-letter queue");
             }
         } else {
             // DLQ queues don't get their own DLQ — clear any caller-provided value
             config.dlq_queue_id = None;
-            self.storage.put_queue(&name, &config)?;
+            self.storage.put_queue(self.p(), &name, &config)?;
         }
 
         self.known_queues.insert(name.clone());
@@ -172,10 +172,10 @@ impl Scheduler {
         // TODO(cluster): same as handle_create_queue — needs atomic operation.
         let queue_config = self
             .storage
-            .get_queue(queue_id)?
+            .get_queue(self.p(), queue_id)?
             .ok_or_else(|| crate::error::DeleteQueueError::QueueNotFound(queue_id.to_string()))?;
 
-        self.storage.delete_queue(queue_id)?;
+        self.storage.delete_queue(self.p(), queue_id)?;
         self.drr.remove_queue(queue_id);
         self.consumer_rr_idx.remove(queue_id);
         self.remove_pending_for_queue(queue_id);
@@ -188,9 +188,9 @@ impl Scheduler {
         // Custom/shared DLQs configured via dlq_queue_id are left untouched.
         let auto_dlq_name = format!("{queue_id}.dlq");
         if queue_config.dlq_queue_id.as_deref() == Some(auto_dlq_name.as_str())
-            && self.storage.get_queue(&auto_dlq_name)?.is_some()
+            && self.storage.get_queue(self.p(), &auto_dlq_name)?.is_some()
         {
-            self.storage.delete_queue(&auto_dlq_name)?;
+            self.storage.delete_queue(self.p(), &auto_dlq_name)?;
             self.drr.remove_queue(&auto_dlq_name);
             self.consumer_rr_idx.remove(&auto_dlq_name);
             self.remove_pending_for_queue(&auto_dlq_name);
@@ -211,7 +211,7 @@ impl Scheduler {
     ) -> Result<(), crate::error::AckError> {
         // Look up the lease — if it doesn't exist, the message is unknown or already acked
         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-        let lease_value = self.storage.get_lease(&lease_key)?.ok_or_else(|| {
+        let lease_value = self.storage.get_lease(self.p(), &lease_key)?.ok_or_else(|| {
             crate::error::AckError::MessageNotFound(format!(
                 "no lease for message {msg_id} in queue {queue_id}"
             ))
@@ -241,7 +241,7 @@ impl Scheduler {
             ops.push(WriteBatchOp::DeleteMessage { key });
         }
 
-        self.storage.write_batch(ops)?;
+        self.storage.write_batch(self.p(), ops)?;
         self.metrics.record_ack(queue_id);
         Ok(())
     }
@@ -254,7 +254,7 @@ impl Scheduler {
     ) -> Result<(), crate::error::NackError> {
         // Look up the lease — if it doesn't exist, the message was never leased or already nacked/acked
         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-        let lease_value = self.storage.get_lease(&lease_key)?.ok_or_else(|| {
+        let lease_value = self.storage.get_lease(self.p(), &lease_key)?.ok_or_else(|| {
             crate::error::NackError::MessageNotFound(format!(
                 "no lease for message {msg_id} in queue {queue_id}"
             ))
@@ -279,7 +279,7 @@ impl Scheduler {
                     "message {msg_id} not found in queue {queue_id}"
                 ))
             })?;
-        let mut msg = self.storage.get_message(&msg_key)?.ok_or_else(|| {
+        let mut msg = self.storage.get_message(self.p(), &msg_key)?.ok_or_else(|| {
             crate::error::NackError::MessageNotFound(format!(
                 "message {msg_id} not found in queue {queue_id}"
             ))
@@ -337,11 +337,11 @@ impl Scheduler {
             // Look up the DLQ queue ID from the queue config
             let dlq_queue_id = self
                 .storage
-                .get_queue(queue_id)?
+                .get_queue(self.p(), queue_id)?
                 .and_then(|config| config.dlq_queue_id.clone());
 
-            if let Some(dlq_queue_id) =
-                dlq_queue_id.filter(|id| self.storage.get_queue(id).ok().flatten().is_some())
+            if let Some(dlq_queue_id) = dlq_queue_id
+                .filter(|id| self.storage.get_queue(self.p(), id).ok().flatten().is_some())
             {
                 // Move message to DLQ atomically: delete from original queue, put in DLQ
                 msg.queue_id = dlq_queue_id.clone();
@@ -363,7 +363,7 @@ impl Scheduler {
                     WriteBatchOp::DeleteLease { key: lease_key },
                     WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
                 ];
-                self.storage.write_batch(ops)?;
+                self.storage.write_batch(self.p(), ops)?;
 
                 // Add the message to the DLQ's DRR active set for delivery
                 self.drr
@@ -410,7 +410,7 @@ impl Scheduler {
             WriteBatchOp::DeleteLease { key: lease_key },
             WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
         ];
-        self.storage.write_batch(ops)?;
+        self.storage.write_batch(self.p(), ops)?;
 
         // Re-add the fairness key to DRR active set so the message can be scheduled
         self.drr.add_key(queue_id, &msg.fairness_key, msg.weight);

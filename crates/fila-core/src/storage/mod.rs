@@ -3,4 +3,4 @@ mod rocksdb;
 mod traits;
 
 pub use self::rocksdb::RocksDbStorage;
-pub use traits::{Storage, WriteBatchOp};
+pub use traits::{PartitionId, Storage, WriteBatchOp};

@@ -14,4 +14,4 @@ pub use error::{
 };
 pub use message::Message;
 pub use queue::QueueConfig;
-pub use storage::{RocksDbStorage, Storage, WriteBatchOp};
+pub use storage::{PartitionId, RocksDbStorage, Storage, WriteBatchOp};

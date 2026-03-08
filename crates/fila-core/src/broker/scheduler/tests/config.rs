@@ -59,7 +59,7 @@ fn set_config_persists_to_state_cf() {
     // Verify persisted in storage
     let stored = scheduler
         .storage()
-        .get_state("throttle.provider_a")
+        .get_state(P,"throttle.provider_a")
         .unwrap()
         .unwrap();
     assert_eq!(stored, b"10.0,100.0");
@@ -115,7 +115,7 @@ fn set_config_non_throttle_key_persists_without_affecting_throttle_manager() {
     // Should be persisted
     let stored = scheduler
         .storage()
-        .get_state("app.feature_flag")
+        .get_state(P,"app.feature_flag")
         .unwrap()
         .unwrap();
     assert_eq!(stored, b"enabled");
@@ -140,7 +140,7 @@ fn set_config_invalid_throttle_value_returns_error() {
     // Verify the invalid value was NOT persisted to storage
     assert!(scheduler
         .storage()
-        .get_state("throttle.provider_a")
+        .get_state(P,"throttle.provider_a")
         .unwrap()
         .is_none());
 }
@@ -161,7 +161,7 @@ fn set_config_rejects_nan_and_infinity() {
         assert!(
             scheduler
                 .storage()
-                .get_state("throttle.bad")
+                .get_state(P,"throttle.bad")
                 .unwrap()
                 .is_none(),
             "rejected value {bad_value} should not be persisted"
@@ -190,13 +190,13 @@ fn recovery_restores_throttle_rates_from_state_cf() {
 
     // Pre-populate throttle rates in state CF
     storage
-        .put_state("throttle.provider_a", b"10.0,100.0")
+        .put_state(P,"throttle.provider_a", b"10.0,100.0")
         .unwrap();
     storage
-        .put_state("throttle.region:us-east-1", b"50.0,200.0")
+        .put_state(P,"throttle.region:us-east-1", b"50.0,200.0")
         .unwrap();
     // Also a non-throttle key to verify it's ignored
-    storage.put_state("app.flag", b"true").unwrap();
+    storage.put_state(P,"app.flag", b"true").unwrap();
 
     // Create a fresh scheduler — recovery happens inside run()
     let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
