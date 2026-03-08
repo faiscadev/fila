@@ -133,7 +133,7 @@ development_status:
   12-2-ci-regression-detection: done
   12-3-competitive-benchmarks: done
   12-4-published-results-benchmark-dashboard: done
-  epic-12-retrospective: optional
+  epic-12-retrospective: done
 
   # Epic 13: Purpose-Built Storage Engine
   epic-13: backlog

@@ -826,12 +826,12 @@ Bob (Scrum Master): "I want specific, achievable actions with clear owners. Not 
 - Relevant: Addresses real issues from retro
 - Time-bound: Has clear deadline
 
-<critical>ENCODE OR DROP RULE: Every action item MUST identify a specific target file where it will be encoded. Action items that live only in the retro document have ~30% follow-through and are effectively ignored. Acceptable targets:
-- **CLAUDE.md** — Project instructions that all agents read every session
-- **Memory files** — Persistent lessons learned across conversations
-- **Workflow files** — Steps added to existing workflows (dev-story, execute-epic, create-story, etc.)
+<critical>ENCODE OR DROP RULE: Every action item MUST identify a specific target file where it will be encoded. Action items that live only in the retro document have ~30% follow-through and are effectively ignored. Acceptable targets (in priority order):
+- **Workflow files** (PREFERRED) — Steps added to existing workflows (dev-story, execute-epic, create-story, retrospective, etc.). Most process learnings belong here — structural enforcement is the most reliable.
 - **Story/epic definitions** — Requirements baked into epics.md or story files
 - **Code changes** — A concrete task/PR to execute before the next epic
+- **CLAUDE.md** (SOMETIMES) — Project instructions that all agents read every session. Only for cross-cutting rules that don't fit in a specific workflow.
+- **Memory files** (RARELY) — Only for epic results tracking and codebase state. Do NOT encode process learnings here — they belong in workflows.
 
 If an action item cannot be mapped to one of these targets, it must be either converted into a concrete file change or explicitly dropped. Do NOT create "team agreements" that exist only in the retro document — they will not be followed.</critical>
 
@@ -1318,12 +1318,12 @@ Bob (Scrum Master): "See you all when prep work is done. Meeting adjourned!"
 
 <critical>EXECUTE ALL ENCODED CHANGES NOW — the retro is not complete until every action item's file change has been written. This is the step where retro commitments become real.</critical>
 
-<action>For each action item with a target file identified in Step 8:</action>
-- If target is CLAUDE.md → Edit the project CLAUDE.md file with the new instruction
-- If target is memory files → Write/update the relevant memory file
-- If target is a workflow file → Edit the workflow instructions to add the new step/rule
+<action>For each action item with a target file identified in Step 8 (in priority order):</action>
+- If target is a workflow file (PREFERRED) → Edit the workflow instructions to add the new step/rule
 - If target is epics.md or a story file → Edit the planning artifact with updated requirements
 - If target is a code change → Note it as a pre-epic task (code changes happen outside the retro)
+- If target is CLAUDE.md (SOMETIMES) → Edit the project CLAUDE.md file with the new instruction
+- If target is memory files (RARELY, epic results only) → Write/update the relevant memory file. Only for epic results tracking and codebase state — never for process learnings
 
 <action>After executing all file changes, list what was changed:</action>
 - File path, what was added/modified, and which action item it addresses
