@@ -1,0 +1,40 @@
+epic: "Epic 13: Purpose-Built Storage Engine"
+baseBranch: main
+startedAt: "2026-03-08T12:00:00Z"
+stories:
+  - id: "13.1"
+    title: "Storage Trait Abstraction & RocksDB Adapter"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/13.1-storage-trait-rocksdb-adapter"
+    pr: null
+    dependsOn: []
+  - id: "13.2"
+    title: "Write Path — WAL & Segment Log"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["13.1"]
+  - id: "13.3"
+    title: "Read Path & Indexing"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["13.2"]
+  - id: "13.4"
+    title: "Background Maintenance & Compaction"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["13.2", "13.3"]
+  - id: "13.5"
+    title: "Integration, Cutover & Validation"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["13.1", "13.2", "13.3", "13.4"]
+skippedIssues: []
