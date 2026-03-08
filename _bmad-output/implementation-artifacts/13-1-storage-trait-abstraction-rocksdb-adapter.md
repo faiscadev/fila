@@ -1,6 +1,6 @@
 # Story 13.1: Storage Trait Abstraction & RocksDB Adapter
 
-Status: review
+Status: done
 
 ## Story
 
