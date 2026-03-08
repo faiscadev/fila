@@ -128,11 +128,11 @@ development_status:
   epic-11-retrospective: done
 
   # Epic 12: Benchmarks & Competitive Positioning
-  epic-12: in-progress
+  epic-12: done
   12-1-benchmark-harness-self-benchmarking: done
   12-2-ci-regression-detection: done
   12-3-competitive-benchmarks: done
-  12-4-published-results-benchmark-dashboard: review
+  12-4-published-results-benchmark-dashboard: done
   epic-12-retrospective: optional
 
   # Epic 13: Purpose-Built Storage Engine
