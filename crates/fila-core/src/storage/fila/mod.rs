@@ -454,27 +454,23 @@ impl Storage for FilaStorage {
         let wal_ops: Vec<WalOp> = ops.into_iter().map(batch_op_to_wal_op).collect();
         let entry = WalEntry { ops: wal_ops };
 
-        // 1. Append to WAL
-        {
-            let mut writer = self
-                .writer
-                .lock()
-                .map_err(|e| StorageError::Backend(format!("WAL writer lock poisoned: {e}")))?;
+        // Hold the writer lock across both WAL append and index update to prevent
+        // concurrent write_batch calls from reordering index updates relative to WAL order.
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|e| StorageError::Backend(format!("WAL writer lock poisoned: {e}")))?;
 
-            writer
-                .append(&entry)
-                .map_err(|e| StorageError::Backend(format!("WAL append failed: {e}")))?;
-        }
+        writer
+            .append(&entry)
+            .map_err(|e| StorageError::Backend(format!("WAL append failed: {e}")))?;
 
-        // 2. Update in-memory indexes
-        {
-            let mut indexes = self
-                .indexes
-                .write()
-                .map_err(|e| StorageError::Backend(format!("index lock poisoned: {e}")))?;
+        let mut indexes = self
+            .indexes
+            .write()
+            .map_err(|e| StorageError::Backend(format!("index lock poisoned: {e}")))?;
 
-            indexes.apply_entry(&entry);
-        }
+        indexes.apply_entry(&entry);
 
         Ok(())
     }

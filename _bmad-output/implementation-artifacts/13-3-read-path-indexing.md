@@ -120,14 +120,13 @@ Using `RwLock<Indexes>` allows concurrent reads while writes hold exclusive lock
 ### Locking Strategy
 
 `write_batch()` flow:
-1. Acquire writer Mutex → append to WAL
-2. Acquire indexes write lock → apply ops to indexes
-3. Release both locks
+1. Acquire writer Mutex → append to WAL → acquire indexes write lock → apply ops to indexes
+2. Release both locks
 
 Read methods:
 1. Acquire indexes read lock → lookup/scan → release
 
-This means writes are serialized (Mutex) but reads can be concurrent (RwLock reader). The WAL append and index update don't need to be in the same lock scope since the WAL is the source of truth — if a crash occurs between WAL write and index update, replay will rebuild the index.
+The writer Mutex is held across both WAL append and index update to prevent concurrent write_batch calls from reordering index updates relative to WAL order. Without this, in-memory state could diverge from what WAL replay produces on restart. (Fixed per Cubic review finding on PR #51.)
 
 ### Prefix Scan with BTreeMap
 
