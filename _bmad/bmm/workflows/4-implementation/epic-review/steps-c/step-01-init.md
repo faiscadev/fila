@@ -58,7 +58,8 @@ To discover the stacked PR chain for the target epic by reading sprint-status, t
 
 Look for an existing review state file at {stateFile}.
 
-- **If the file exists and has PRs with status other than "pending":** A previous review session was interrupted. Load, read entirely, then execute {continueFile} to resume.
+- **If the file exists, has a `completedAt` timestamp, and all PRs are "merged":** The previous review is fully complete. Treat as a fresh start — continue to step 2 to discover a new epic.
+- **If the file exists and has PRs with status other than "pending" but NO `completedAt` (or some PRs are not yet "merged"):** A previous review session was interrupted. Load, read entirely, then execute {continueFile} to resume.
 - **If the file does not exist or all PRs are "pending":** Continue to step 2.
 
 ### 2. Identify Target Epic

@@ -60,13 +60,24 @@ Load {stateFile} and update the current story:
 - **If the story was not skipped:** Set status to "completed"
 - **If the story was skipped:** Status is already "skipped" (set by step-04 or step-05)
 
-Clear currentPhase (set to empty string).
+Clear `currentPhase` (set to empty string).
+Mark the story's status as `completed` in the state file.
 
 ### 1b. Update Sprint Status to "done"
 
 **CRITICAL:** Update sprint-status.yaml to reflect story completion. This is the step that keeps sprint-status in sync — skipping it causes stale tracking.
 
-Load the FULL sprint-status.yaml file. Find the development_status entry for the current story key. Update its value to "done". Save the file, preserving ALL comments and structure including STATUS DEFINITIONS. Commit the change.
+Load the FULL sprint-status.yaml file. Find the development_status entry for the current story key. Update its value to "done". Save the file, preserving ALL comments and structure including STATUS DEFINITIONS. Do NOT commit yet — commit all tracking changes together in step 1d.
+
+### 1c. Sync Story Artifact Status to "done"
+
+**CRITICAL:** Update the story artifact file's `Status:` line to "done". This prevents the status mismatch problem (story artifacts stuck on a previous status while sprint-status says "done") that accumulated across Epics 1-7.
+
+Load the story artifact file (in `_bmad-output/implementation-artifacts/`). Change the `Status:` line to `Status: done` (regardless of its current value). Save but do NOT commit yet — commit all tracking changes together in step 1d.
+
+### 1d. Commit and Push All Tracking Files
+
+**CRITICAL:** Before switching to a new branch for the next story, commit and push ALL tracking file changes (state file, sprint-status, story artifact) on the current branch in a single commit. The state file reverts to main's version when switching branches — if not committed first, progress is lost.
 
 ### 2. Check for Remaining Stories
 

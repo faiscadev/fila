@@ -151,6 +151,13 @@
       <action>Add/update tests as needed</action>
       <action>Update File List in story if files changed</action>
       <action>Update story Dev Agent Record with fixes applied</action>
+      <action>Reply to EVERY Cubic review comment on the PR:
+        - For addressed comments: reply with "Addressed in [commit hash]"
+        - For declined comments: reply with "Not addressing: [reason]"
+        - List automated review comments: `gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --jq '[.[] | select(.user.type == "Bot")]'`
+        - Reply to each: `gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies -f body="..."`
+        - Do NOT leave any review comment without a reply
+      </action>
       <action>Set {{fixed_count}} = number of HIGH and MEDIUM issues fixed</action>
       <action>Set {{action_count}} = 0</action>
     </check>
@@ -168,7 +175,21 @@
     </check>
   </step>
 
-  <step n="5" goal="Update story status and sync sprint tracking">
+  <step n="5" goal="Update story status, document insights, and sync sprint tracking">
+    <!-- Document process insights discovered during review -->
+    <action>Document process insights in the story's "### Completion Notes List" section:
+      - Patterns or anti-patterns observed in the implementation
+      - Reusable solutions discovered that could benefit future stories
+      - Architecture decisions that should be documented
+      - Any technical debt introduced that should be tracked
+    </action>
+
+    <!-- Write CI status to story artifact -->
+    <action>If a PR exists for this story, check CI status and write results to Dev Agent Record:
+      - Run `gh pr checks {pr-number}` to get CI check results
+      - Record pass/fail status and any relevant details in Dev Agent Record → Debug Log References
+    </action>
+
     <!-- Determine new status based on review outcome -->
     <check if="all HIGH and MEDIUM issues fixed AND all ACs implemented">
       <action>Set {{new_status}} = "done"</action>
@@ -212,6 +233,30 @@
 
     <check if="{{current_sprint_status}} == 'no-sprint-tracking'">
       <output>ℹ️ Story status updated (no sprint tracking configured)</output>
+    </check>
+
+    <!-- Retro action items → tracked chores conversion -->
+    <action>If {{current_sprint_status}} != 'no-sprint-tracking' AND the review identified process improvements or recurring issues:
+      1. Check {sprint_status} for existing chore entries
+      2. For each new process improvement identified, add a backlog chore entry to {sprint_status}:
+         `chore-{descriptive-name}: backlog  # Discovered in review of {{story_key}}`
+      3. This converts verbal observations into tracked, executable work items
+    </action>
+
+    <!-- Determine PR merge state for post-merge checks -->
+    <action>If a PR exists for this story, determine its current state and set {{pr_state}}:
+      1. Run `gh pr view {pr-number} --json state -q '.state'` to retrieve the PR state
+      2. Set {{pr_state}} to the returned value (e.g., "open", "merged", or "closed")
+    </action>
+
+    <!-- Post-merge CI verification (if story is done and PR is merged) -->
+    <check if="{{new_status}} == 'done' AND {{pr_state}} == 'merged'">
+      <action>Verify post-merge CI is green on the merge target branch:
+        1. Run `gh pr checks {pr-number}` to confirm all checks passed on the PR
+        2. If checks are not yet reported (e.g., docs-only changes), note that no CI was triggered
+        3. If CI failed post-merge: flag as critical issue requiring immediate attention
+        4. Record final CI status in story Dev Agent Record
+      </action>
     </check>
 
     <output>**✅ Review Complete!**

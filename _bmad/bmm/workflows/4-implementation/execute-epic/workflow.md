@@ -42,6 +42,7 @@ initStep: './steps-c/step-01-init.md'
 - 🔄 **NEVER** halt for user input — this workflow is fully autonomous
 - 📋 **NEVER** create mental todo lists from future steps
 - ⚙️ **TOOL/SUBPROCESS FALLBACK**: If any instruction references a subprocess, subagent, or tool you do not have access to, you MUST still achieve the outcome in your main context thread
+- 🖥️ **CLI OVER SKIP**: When a story involves infrastructure, cloud, or operational tasks (AWS, Kubernetes, Terraform, deployment verification, etc.), you MUST execute them using CLI tools (aws, kubectl, terraform, curl, gh, etc.). NEVER skip a story claiming it "requires human operator access" when CLI tools can accomplish the task.
 
 ---
 

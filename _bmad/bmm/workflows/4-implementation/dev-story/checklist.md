@@ -55,6 +55,10 @@ validation-rules:
 - [ ] **Review Follow-ups:** All review follow-up tasks (marked [AI-Review]) completed and corresponding review items marked resolved (if applicable)
 - [ ] **Story Structure Compliance:** Only permitted sections of story file were modified
 
+## 📏 Scope Expansion Check
+
+- [ ] **Scope Boundary:** Story has no more than 3 unrelated commits beyond its original scope — if exceeded, remaining work must be split into new stories
+
 ## 🔚 Final Status Verification
 
 - [ ] **Story Status Updated:** Story Status set to "review"

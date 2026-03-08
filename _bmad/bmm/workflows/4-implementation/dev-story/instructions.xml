@@ -363,6 +363,17 @@
       </output>
     </check>
 
+    <!-- Reply to Cubic review comments (review continuation only) -->
+    <check if="review_continuation == true AND a PR exists for this story">
+      <action>Reply to EVERY Cubic review comment on the PR before pushing fixes:
+        - For addressed comments: reply with "Addressed in [commit hash]"
+        - For declined comments: reply with "Not addressing: [reason]"
+        - List automated review comments: `gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --jq '[.[] | select(.user.type == "Bot")]'`
+        - Reply to each: `gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies -f body="..."`
+        - Do NOT leave any review comment without a reply
+      </action>
+    </check>
+
     <!-- Final validation gates -->
     <action if="any task is incomplete">HALT - Complete remaining tasks before marking ready for review</action>
     <action if="regression failures exist">HALT - Fix regression issues before completing</action>
@@ -373,6 +384,12 @@
   <step n="10" goal="Completion communication and user support">
     <action>Execute the enhanced definition-of-done checklist using the validation framework</action>
     <action>Prepare a concise summary in Dev Agent Record → Completion Notes</action>
+    <action>Document process insights in the story's "### Completion Notes List" section:
+      - Patterns or anti-patterns observed in the implementation
+      - Reusable solutions discovered that could benefit future stories
+      - Architecture decisions that should be documented
+      - Any technical debt introduced that should be tracked
+    </action>
 
     <action>Communicate to {user_name} that story implementation is complete and ready for review</action>
     <action>Summarize key accomplishments: story ID, story key, title, key changes made, tests added, files modified</action>

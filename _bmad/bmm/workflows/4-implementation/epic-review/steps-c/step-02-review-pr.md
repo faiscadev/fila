@@ -172,11 +172,16 @@ After CI checks pass, examine the Cubic check output. It shows:
 
 **If CI fails OR Cubic has new findings:**
 1. Read the failure details or Cubic findings
-2. Fix the issues in code
-3. Add regression tests for Cubic findings where appropriate
-4. Commit: `fix: address CI/Cubic findings for story {storyId}`
-5. Push: `git push origin {branch-name}`
-6. **Go back to GATE LOOP START**
+2. Reply to EVERY new Cubic review comment on the PR BEFORE pushing fixes:
+   - For addressed comments: reply with "Addressed in [commit hash]"
+   - For declined comments: reply with "Not addressing: [reason]"
+   - List Cubic inline comments: `gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --jq '[.[] | select(.user.login == "cubic-dev-ai[bot]")]'`
+   - Reply to each: `gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies -f body="..."`
+3. Fix the issues in code
+4. Add regression tests for Cubic findings where appropriate
+5. Commit: `fix: address CI/Cubic findings for story {storyId}`
+6. Push: `git push origin {branch-name}`
+7. **Go back to GATE LOOP START**
 
 **If CI passes AND no Cubic findings (or 0 issues):**
 - Gate passes. Exit loop.
@@ -215,13 +220,37 @@ Commit:
 fix: update story {storyId} status to done
 ```
 
-#### 6c. Update Review State
+#### 6c. Write Review Process Notes
+
+**MANDATORY:** After each PR merge, capture process insights for the retrospective.
+
+Append to `{implementation_artifacts}/review-notes-{epicId}.md` (create if it doesn't exist):
+
+```markdown
+## PR #{pr-number}: {story-title}
+
+### Gaps in Dev Process
+- [Things the dev agent should have caught during development]
+
+### Incorrect Decisions During Development
+- [Wrong approach, missing requirements, etc.]
+
+### Deferred Work
+- [Work deferred during review, with rationale]
+
+### Patterns for Future Stories
+- [Patterns that should inform future stories]
+```
+
+This file becomes input for the retrospective workflow, reducing the retro facilitator's reconstruction work.
+
+#### 6d. Update Review State
 
 Update {stateFile}:
 - Set current PR status to "merged"
 - Increment currentPrIndex
 
-#### 6d. Route to Next Step
+#### 6e. Route to Next Step
 
 Check the PR chain:
 

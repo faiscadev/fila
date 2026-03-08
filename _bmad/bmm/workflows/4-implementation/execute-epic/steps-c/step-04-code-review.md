@@ -59,7 +59,32 @@ To perform adversarial code review on the implemented story, iterating fixes unt
 
 **CRITICAL:** Follow this sequence exactly. Do not skip, reorder, or improvise.
 
-### 1. Load Code Review Skill as Reference
+### 1. Check Story Type
+
+Read the story spec file. If this is an **operational story** (no code written, only CLI tasks executed):
+
+1. Verify all tasks are marked complete [x] in the story file
+2. Verify the Dev Agent Record documents execution results
+3. If any tasks are incomplete, go back to step-03 to finish them
+4. **Self-verify using CLI tools:** For each acceptance criterion, re-run the verification commands from the story spec independently to confirm the operational tasks actually succeeded. For example:
+   - If the story deployed a service: verify pods are healthy (`kubectl get pods`), endpoints respond (`curl`), logs show no errors
+   - If the story set secrets: verify they exist (`aws secretsmanager describe-secret`)
+   - If the story ran migrations: verify tables exist or API responds correctly
+   - If the story ran smoke tests: re-run key checks (`curl` endpoints)
+   - If the story modified infrastructure: verify Terraform state is consistent (`terraform plan` shows no drift)
+5. **Stricter deployment story verification:** For stories involving deployment or infrastructure changes, ALL of these must pass:
+   - Service is reachable and responding to health checks
+   - No CrashLoopBackOff or error states in pod status
+   - Recent logs show no error-level entries
+   - If the deployment included data changes: verify data integrity
+6. If verification fails, go back to step-03 to re-execute the failed tasks
+7. If all verified, skip the code review loop — proceed directly to section 5 (Update State and Auto-Proceed)
+
+**Operational stories have no code to review.** The review IS the self-verification using CLI tools to confirm the work was done correctly.
+
+For **code stories**, continue to section 2 below.
+
+### 2. Load Code Review Skill as Reference
 
 Load {codeReviewWorkflow}, {codeReviewInstructions}, and {codeReviewChecklist} as reference documents.
 
@@ -69,11 +94,11 @@ These define:
 - How to verify every acceptance criterion has a corresponding test
 - The review checklist
 
-### 2. Initialize Review Loop
+### 3. Initialize Review Loop
 
 Set iteration counter to 0.
 
-### 3. Execute Code Review (Inner Loop)
+### 4. Execute Code Review (Inner Loop)
 
 **LOOP START:**
 
@@ -108,11 +133,11 @@ Increment iteration counter.
 
 **If review is clean (no issues found):**
 - Exit loop
-- Proceed to step 4
+- Proceed to section 5
 
 **CRITICAL:** Do NOT invoke the code-review skill interactively. Load its documents as reference and execute the equivalent process directly, auto-proceeding through all steps without menus or user prompts.
 
-### 4. Update State and Auto-Proceed
+### 5. Update State and Auto-Proceed
 
 Update {stateFile}:
 - Set currentPhase to "pr-ci"

@@ -67,11 +67,30 @@ Update the story file with final status:
 
 Commit these tracking updates.
 
-### 2. Update Sprint Status
+### 2. Update Sprint Status and State File
+
+**MANDATORY — hard requirement, not optional:**
 
 Update {sprintStatusFile}:
+- Read the FULL sprint-status.yaml file
 - Set the current story's status to "review"
+- Save the file, preserving ALL comments and structure
 - Commit the sprint status update.
+
+Update {stateFile}:
+- Set `currentPhase` to "code-review" for the current story
+
+### 2b. Pre-PR Local Validation Checklist
+
+**For operational stories** (no code changes, only tracking file updates): Skip code-specific validations — proceed directly to step 3.
+
+**For code stories — MANDATORY:** Before opening a PR, run all applicable local validations:
+- `terraform validate` (for Terraform changes)
+- `cargo clippy -- -D warnings` (for Rust changes)
+- `cargo test` (for Rust changes)
+- `cargo fmt --check` (for Rust changes)
+
+Fix any failures before proceeding to step 3.
 
 ### 3. Push Branch and Open PR
 

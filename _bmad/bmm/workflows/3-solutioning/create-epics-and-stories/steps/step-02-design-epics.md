@@ -68,6 +68,29 @@ Load {outputFile} and review:
 - **Non-Functional Requirements:** Review NFRs that need to be addressed
 - **Additional Requirements:** Review technical and UX requirements
 
+### 1b. Discover Retro-Driven Triggers
+
+Before designing epics, surface work items from the most recent retrospective and sprint backlog. Follow the path that applies:
+
+**Path A — Auto-Extract from Retrospective (preferred):**
+
+If a retrospective file exists (search `{implementation_artifacts}/epic-*-retro-*.md` for the most recent), extract:
+
+1. **Action items** — any committed follow-ups from the retro
+2. **Tech debt** — items flagged for resolution
+3. **GitHub issues** — referenced issues that remain open
+4. **Backlog chores** — items listed under backlog/chores in `sprint-status.yaml`
+
+Present the extracted list to the user and ask which items should be folded into the upcoming epic(s) as stories or acceptance criteria.
+
+**Path B — Manual Fallback:**
+
+If no retrospective file exists (first epic, or retro was skipped), ask the user:
+
+- "Are there any action items, tech debt, or backlog chores from prior work that should be addressed in this planning cycle?"
+
+Incorporate confirmed items into the requirements pool before proceeding to epic design.
+
 ### 2. Explain Epic Design Principles
 
 **EPIC DESIGN PRINCIPLES:**
@@ -100,6 +123,11 @@ Organize by USER VALUE, not technical layers:
 - Each epic must deliver COMPLETE functionality for its domain
 - Epic 2 must not require Epic 3 to function
 - Epic 3 can build upon Epic 1 & 2 but must stand alone
+
+**🏗️ STORY ORDERING RULES:**
+
+- CI/CD pipeline must be Story 1 or 2 in every epic — first story with code changes must have CI validation available
+- Infrastructure and deployment stories come before feature stories that depend on them
 
 ### 3. Design Epic Structure Collaboratively
 
