@@ -41,6 +41,7 @@ opentelemetry_sdk = { version = "0.31", features = ["trace", "metrics", "rt-toki
 opentelemetry-otlp = { version = "0.31", features = ["trace", "metrics", "grpc-tonic"] }
 toml = "0.8"
 rocksdb = "0.24"
+crc32fast = "1"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 
 tokio-stream = "0.1"
