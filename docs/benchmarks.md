@@ -152,8 +152,6 @@ Run `make bench-competitive` on your hardware to generate comparison tables.
 | 1KB | 2,326 | 143,278 | 38,321 | 137,748 |
 | 64KB | 296 | 2,335 | 2,379 | 2,426 |
 
-Kafka and NATS use batched, binary protocols optimized for raw throughput. Fila uses gRPC with per-message fairness scheduling, which adds overhead but enables features the others lack (weighted fair queuing, Lua hooks, per-key throttling).
-
 #### End-to-end latency (1KB payload)
 
 | Percentile | Fila | Kafka | RabbitMQ | NATS |
@@ -161,8 +159,6 @@ Kafka and NATS use batched, binary protocols optimized for raw throughput. Fila 
 | p50 | 0.46 ms | 101.62 ms | 1.46 ms | 0.29 ms |
 | p95 | 0.59 ms | 105.07 ms | 3.32 ms | 0.42 ms |
 | p99 | 1.02 ms | 105.30 ms | 5.59 ms | 0.79 ms |
-
-Latency measures sequential produce-then-consume round-trips. Kafka's high latency reflects its batching design (`linger.ms=5`) — it trades latency for throughput.
 
 #### Lifecycle throughput (enqueue + consume + ack, 1KB)
 
@@ -172,8 +168,6 @@ Latency measures sequential produce-then-consume round-trips. Kafka's high laten
 | Fila | 2,393 |
 | RabbitMQ | 658 |
 | Kafka | 356 |
-
-Full message lifecycle: pre-load 1,000 messages, then consume and acknowledge each. Fila's lifecycle performance is strong relative to RabbitMQ and Kafka.
 
 #### Multi-producer throughput (3 producers, 1KB)
 
@@ -192,8 +186,6 @@ Full message lifecycle: pre-load 1,000 messages, then consume and acknowledge ea
 | Kafka | 2.1% | 1,276 MB |
 | Fila | 23.1% | 107 MB |
 | RabbitMQ | 56.8% | 654 MB |
-
-Fila's memory footprint is dominated by RocksDB. NATS is the most resource-efficient.
 
 ## Methodology
 
