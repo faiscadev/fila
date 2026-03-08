@@ -1,6 +1,6 @@
 # Story 13.2: Write Path — WAL & Segment Log
 
-Status: review
+Status: done
 
 ## Story
 
