@@ -3,8 +3,8 @@ name: 'step-04-agents'
 description: 'Create agent placeholder/spec files'
 
 nextStepFile: './step-05-workflows.md'
-agentSpecTemplate: '../../templates/agent-spec-template.md'
-agentArchitectureFile: '../../data/agent-architecture.md'
+agentSpecTemplate: '../data/agent-spec-template.md'
+agentArchitectureFile: '../data/agent-architecture.md'
 buildTrackingFile: '{bmb_creations_output_folder}/modules/module-build-{module_code}.md'
 targetLocation: '{build_tracking_targetLocation}'
 ---

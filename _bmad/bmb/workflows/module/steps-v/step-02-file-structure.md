@@ -3,7 +3,7 @@ name: 'step-02-file-structure'
 description: 'Validate file structure compliance'
 
 nextStepFile: './step-03-module-yaml.md'
-moduleStandardsFile: '../../data/module-standards.md'
+moduleStandardsFile: '../data/module-standards.md'
 validationReportOutput: '{validation_report_output}'
 ---
 

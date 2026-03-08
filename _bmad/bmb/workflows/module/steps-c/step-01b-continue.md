@@ -2,7 +2,7 @@
 name: 'step-01b-continue'
 description: 'Handle workflow continuation for Create mode'
 
-workflowFile: '../workflow.md'
+workflowFile: '../workflow-create-module.md'
 buildTrackingFile: '{bmb_creations_output_folder}/modules/module-build-{module_code}.md'
 ---
 

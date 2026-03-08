@@ -3,7 +3,7 @@ name: 'step-02-structure'
 description: 'Create directory structure based on module type'
 
 nextStepFile: './step-03-config.md'
-moduleStandardsFile: '../../data/module-standards.md'
+moduleStandardsFile: '../data/module-standards.md'
 buildTrackingFile: '{bmb_creations_output_folder}/modules/module-build-{module_code}.md'
 ---
 

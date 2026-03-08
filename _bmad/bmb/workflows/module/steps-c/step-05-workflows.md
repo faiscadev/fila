@@ -3,7 +3,7 @@ name: 'step-05-workflows'
 description: 'Create workflow placeholder/spec files'
 
 nextStepFile: './step-06-docs.md'
-workflowSpecTemplate: '../../templates/workflow-spec-template.md'
+workflowSpecTemplate: '../templates/workflow-spec-template.md'
 buildTrackingFile: '{bmad_creations_output_folder}/modules/module-build-{module_code}.md'
 targetLocation: '{build_tracking_targetLocation}'
 ---
