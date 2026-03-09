@@ -11,13 +11,23 @@ If no file is found, all defaults are used. The broker runs with zero configurat
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FILA_DATA_DIR` | `data` | Path to the RocksDB data directory |
+| `FILA_DATA_DIR` | `data` | Path to the storage data directory |
+| `FILA_STORAGE_ENGINE` | `fila` | Storage engine: `fila` (default) or `rocksdb` (legacy) |
 
 ## Full configuration
 
 ```toml
 [server]
 listen_addr = "0.0.0.0:5555"    # gRPC listen address
+
+[storage]
+engine = "fila"                          # "fila" (default) or "rocksdb" (legacy)
+data_dir = "data"                        # storage data directory
+segment_size_bytes = 67108864            # WAL segment size (64 MB, fila only)
+compaction_enabled = true                # background compaction (fila only)
+compaction_interval_secs = 60            # compaction pass interval (fila only)
+compaction_io_rate_bytes_per_sec = 10485760  # compaction I/O rate limit (fila only)
+message_ttl_ms = 0                       # message TTL in ms, 0 = no TTL (fila only)
 
 [scheduler]
 command_channel_capacity = 10000 # internal command channel buffer size
@@ -43,6 +53,20 @@ metrics_interval_ms = 10000              # metrics export interval (ms)
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `listen_addr` | string | `"0.0.0.0:5555"` | Address and port for the gRPC server |
+
+### `[storage]`
+
+Fila includes two storage engines. The default `fila` engine is a purpose-built WAL-based engine with background compaction. The `rocksdb` engine is retained as a legacy fallback.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `engine` | string | `"fila"` | Storage engine to use. `"fila"` for the built-in engine, `"rocksdb"` for the legacy RocksDB backend. Can be overridden with `FILA_STORAGE_ENGINE` env var. |
+| `data_dir` | string | `"data"` | Directory where storage files are written. Can be overridden with `FILA_DATA_DIR` env var. |
+| `segment_size_bytes` | integer | `67108864` (64 MB) | Maximum WAL segment size before rotation. Fila engine only. |
+| `compaction_enabled` | boolean | `true` | Whether background compaction runs to reclaim space from deleted/acked messages. Fila engine only. |
+| `compaction_interval_secs` | integer | `60` | Seconds between compaction passes. Fila engine only. |
+| `compaction_io_rate_bytes_per_sec` | integer | `10485760` (10 MB/s) | Maximum I/O rate for compaction writes. Prevents compaction from competing with foreground I/O. Fila engine only. |
+| `message_ttl_ms` | integer | `0` | Message time-to-live in milliseconds. Expired messages are removed during compaction. `0` means no TTL. Fila engine only. |
 
 ### `[scheduler]`
 
