@@ -32,9 +32,9 @@ stories:
     dependsOn: ["13.2", "13.3"]
   - id: "13.5"
     title: "Integration, Cutover & Validation"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/13.5-integration-cutover-validation"
     pr: null
     dependsOn: ["13.1", "13.2", "13.3", "13.4"]
 skippedIssues: []
