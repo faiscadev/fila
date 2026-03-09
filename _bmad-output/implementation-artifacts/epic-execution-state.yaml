@@ -37,4 +37,9 @@ stories:
     branch: "feat/13.5-integration-cutover-validation"
     pr: 53
     dependsOn: ["13.1", "13.2", "13.3", "13.4"]
+completedAt: "2026-03-09T01:45:00Z"
+summary:
+  total: 5
+  completed: 5
+  skipped: 0
 skippedIssues: []

@@ -136,7 +136,7 @@ development_status:
   epic-12-retrospective: done
 
   # Epic 13: Purpose-Built Storage Engine
-  epic-13: in-progress
+  epic-13: done
   13-1-storage-trait-abstraction-rocksdb-adapter: done
   13-2-write-path-wal-segment-log: done
   13-3-read-path-indexing: done
