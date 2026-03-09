@@ -21,6 +21,7 @@ pub struct TestServer {
 #[derive(Default)]
 struct TestServerOptions {
     quantum: Option<u32>,
+    storage_engine: Option<String>,
 }
 
 impl TestServer {
@@ -33,6 +34,15 @@ impl TestServer {
     pub fn start_with_quantum(quantum: u32) -> Self {
         Self::start_with_options(TestServerOptions {
             quantum: Some(quantum),
+            ..Default::default()
+        })
+    }
+
+    /// Start a new fila-server instance with a specific storage engine.
+    pub fn start_with_engine(engine: &str) -> Self {
+        Self::start_with_options(TestServerOptions {
+            storage_engine: Some(engine.to_string()),
+            ..Default::default()
         })
     }
 
@@ -64,11 +74,15 @@ otlp_endpoint = ""
             "fila-server binary not found at {binary:?}. Run `cargo build` first."
         );
 
-        let mut child = Command::new(&binary)
-            .env(
-                "FILA_DATA_DIR",
-                data_dir.path().join("data").to_str().unwrap(),
-            )
+        let mut cmd = Command::new(&binary);
+        cmd.env(
+            "FILA_DATA_DIR",
+            data_dir.path().join("data").to_str().unwrap(),
+        );
+        if let Some(engine) = &opts.storage_engine {
+            cmd.env("FILA_STORAGE_ENGINE", engine);
+        }
+        let mut child = cmd
             .current_dir(data_dir.path())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
