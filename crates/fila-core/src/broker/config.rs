@@ -203,6 +203,16 @@ mod tests {
         assert_eq!(config.lua.default_memory_limit_bytes, 1_048_576);
         assert_eq!(config.lua.circuit_breaker_threshold, 3);
         assert_eq!(config.lua.circuit_breaker_cooldown_ms, 10_000);
+        assert_eq!(config.storage.engine, StorageEngine::Fila);
+        assert_eq!(config.storage.data_dir, "data");
+        assert_eq!(config.storage.segment_size_bytes, 64 * 1024 * 1024);
+        assert!(config.storage.compaction_enabled);
+        assert_eq!(config.storage.compaction_interval_secs, 60);
+        assert_eq!(
+            config.storage.compaction_io_rate_bytes_per_sec,
+            10 * 1024 * 1024
+        );
+        assert_eq!(config.storage.message_ttl_ms, 0);
     }
 
     #[test]
@@ -294,5 +304,60 @@ mod tests {
         "#;
         let config: BrokerConfig = toml::from_str(toml_str).unwrap();
         assert!(config.telemetry.otlp_endpoint.is_none());
+    }
+
+    #[test]
+    fn storage_toml_parsing() {
+        let toml_str = r#"
+            [storage]
+            engine = "rocksdb"
+            data_dir = "/var/lib/fila"
+            segment_size_bytes = 134217728
+            compaction_enabled = false
+            compaction_interval_secs = 120
+            compaction_io_rate_bytes_per_sec = 5242880
+            message_ttl_ms = 3600000
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.storage.engine, StorageEngine::Rocksdb);
+        assert_eq!(config.storage.data_dir, "/var/lib/fila");
+        assert_eq!(config.storage.segment_size_bytes, 128 * 1024 * 1024);
+        assert!(!config.storage.compaction_enabled);
+        assert_eq!(config.storage.compaction_interval_secs, 120);
+        assert_eq!(
+            config.storage.compaction_io_rate_bytes_per_sec,
+            5 * 1024 * 1024
+        );
+        assert_eq!(config.storage.message_ttl_ms, 3_600_000);
+    }
+
+    #[test]
+    fn storage_absent_section_uses_defaults() {
+        let config: BrokerConfig = toml::from_str("").unwrap();
+        assert_eq!(config.storage.engine, StorageEngine::Fila);
+        assert!(config.storage.compaction_enabled);
+    }
+
+    #[test]
+    fn to_fila_config_converts_correctly() {
+        let mut storage = StorageConfig::default();
+        storage.segment_size_bytes = 32 * 1024 * 1024;
+        storage.compaction_enabled = false;
+        storage.compaction_interval_secs = 30;
+        storage.message_ttl_ms = 5000;
+
+        let fila = storage.to_fila_config();
+        assert_eq!(fila.segment_size_bytes, 32 * 1024 * 1024);
+        assert!(!fila.compaction_enabled);
+        assert_eq!(fila.compaction_interval_secs, 30);
+        assert_eq!(fila.message_ttl_ms, Some(5000));
+    }
+
+    #[test]
+    fn to_fila_config_zero_ttl_maps_to_none() {
+        let storage = StorageConfig::default();
+        assert_eq!(storage.message_ttl_ms, 0);
+        let fila = storage.to_fila_config();
+        assert_eq!(fila.message_ttl_ms, None);
     }
 }
