@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::Deserialize;
 
 /// Top-level broker configuration, deserializable from TOML.
@@ -8,6 +10,91 @@ pub struct BrokerConfig {
     pub scheduler: SchedulerConfig,
     pub lua: LuaConfig,
     pub telemetry: TelemetryConfig,
+    pub storage: StorageConfig,
+}
+
+/// Storage engine selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageEngine {
+    Fila,
+    Rocksdb,
+}
+
+impl Default for StorageEngine {
+    fn default() -> Self {
+        Self::Fila
+    }
+}
+
+/// Storage configuration section.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct StorageConfig {
+    /// Which storage engine to use: "fila" (default) or "rocksdb" (legacy).
+    pub engine: StorageEngine,
+    /// Data directory for storage files. Overridden by FILA_DATA_DIR env var.
+    pub data_dir: String,
+    /// Maximum WAL segment size in bytes (Fila engine only).
+    pub segment_size_bytes: u64,
+    /// Whether background compaction is enabled (Fila engine only).
+    pub compaction_enabled: bool,
+    /// Interval between compaction passes in seconds (Fila engine only).
+    pub compaction_interval_secs: u64,
+    /// Maximum I/O rate for compaction writes in bytes/sec (Fila engine only).
+    pub compaction_io_rate_bytes_per_sec: u64,
+    /// Message TTL in milliseconds (Fila engine only). 0 = no TTL.
+    pub message_ttl_ms: u64,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            engine: StorageEngine::default(),
+            data_dir: "data".to_string(),
+            segment_size_bytes: 64 * 1024 * 1024,
+            compaction_enabled: true,
+            compaction_interval_secs: 60,
+            compaction_io_rate_bytes_per_sec: 10 * 1024 * 1024,
+            message_ttl_ms: 0,
+        }
+    }
+}
+
+impl StorageConfig {
+    /// Resolved data directory, preferring FILA_DATA_DIR env var over config.
+    pub fn data_dir(&self) -> PathBuf {
+        std::env::var("FILA_DATA_DIR")
+            .unwrap_or_else(|_| self.data_dir.clone())
+            .into()
+    }
+
+    /// Resolved storage engine, preferring FILA_STORAGE_ENGINE env var over config.
+    pub fn engine(&self) -> StorageEngine {
+        if let Ok(val) = std::env::var("FILA_STORAGE_ENGINE") {
+            match val.to_lowercase().as_str() {
+                "rocksdb" => return StorageEngine::Rocksdb,
+                "fila" => return StorageEngine::Fila,
+                _ => {}
+            }
+        }
+        self.engine
+    }
+
+    /// Build a `FilaStorageConfig` from this storage config.
+    pub fn to_fila_config(&self) -> crate::storage::FilaStorageConfig {
+        let mut fila_config = crate::storage::FilaStorageConfig::new(self.data_dir());
+        fila_config.segment_size_bytes = self.segment_size_bytes;
+        fila_config.compaction_enabled = self.compaction_enabled;
+        fila_config.compaction_interval_secs = self.compaction_interval_secs;
+        fila_config.compaction_io_rate_bytes_per_sec = self.compaction_io_rate_bytes_per_sec;
+        fila_config.message_ttl_ms = if self.message_ttl_ms == 0 {
+            None
+        } else {
+            Some(self.message_ttl_ms)
+        };
+        fila_config
+    }
 }
 
 /// Server configuration (gRPC listen address).
