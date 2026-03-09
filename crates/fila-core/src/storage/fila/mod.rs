@@ -135,6 +135,9 @@ impl FilaStorage {
         )
         .map_err(|e| StorageError::Backend(format!("failed to open WAL: {e}")))?;
 
+        // Clean up stale .tmp files from interrupted compaction
+        cleanup_tmp_files(&config.data_dir);
+
         // Replay WAL to rebuild indexes
         let reader = WalReader::new(&config.data_dir);
         let entries = reader
@@ -223,6 +226,21 @@ fn batch_op_to_wal_op(op: WriteBatchOp) -> WalOp {
             key,
             value: None,
         },
+    }
+}
+
+/// Remove stale `.wal.tmp` files left by interrupted compaction.
+fn cleanup_tmp_files(dir: &std::path::Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.ends_with(".wal.tmp") {
+                if let Err(e) = std::fs::remove_file(entry.path()) {
+                    warn!(path = %entry.path().display(), error = %e, "failed to clean up stale tmp file");
+                }
+            }
+        }
     }
 }
 

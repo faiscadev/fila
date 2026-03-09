@@ -16,7 +16,7 @@ use crate::queue::QueueConfig;
 use super::config::FilaStorageConfig;
 use super::wal::{
     read_one_entry, serialize_entry, validate_segment_header, write_segment_header, EntryError,
-    OpTag, WalEntry, WalOp, WalWriter, SEGMENT_HEADER_SIZE,
+    OpTag, WalEntry, WalOp, WalWriter,
 };
 
 /// Metrics for the compaction subsystem.
@@ -344,7 +344,7 @@ fn compact_segment(
         let mut writer = BufWriter::new(file);
         write_segment_header(&mut writer)?;
 
-        let mut bytes_written: u64 = SEGMENT_HEADER_SIZE;
+        let mut bytes_since_last_sleep: u64 = 0;
         for entry in &live_entries {
             let payload = serialize_entry(entry);
             let crc = crc32fast::hash(&payload);
@@ -354,13 +354,16 @@ fn compact_segment(
             writer.write_all(&crc.to_le_bytes())?;
             writer.write_all(&payload)?;
 
-            bytes_written += 4 + 4 + payload.len() as u64;
+            let entry_bytes = 4 + 4 + payload.len() as u64;
+            bytes_since_last_sleep += entry_bytes;
 
-            // Rate-limit: sleep proportionally to bytes written
-            if io_rate > 0 {
-                let sleep_us = (bytes_written as f64 / io_rate as f64 * 1_000_000.0) as u64;
+            // Rate-limit: sleep proportionally to bytes written since last sleep
+            if io_rate > 0 && bytes_since_last_sleep > 0 {
+                let sleep_us =
+                    (bytes_since_last_sleep as f64 / io_rate as f64 * 1_000_000.0) as u64;
                 if sleep_us > 0 {
                     thread::sleep(Duration::from_micros(sleep_us.min(10_000)));
+                    bytes_since_last_sleep = 0;
                 }
             }
         }
