@@ -1,6 +1,6 @@
 # Story 13.4: Background Maintenance & Compaction
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
