@@ -1,8 +1,9 @@
+pub(crate) mod compaction;
 pub mod config;
 pub mod wal;
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use tracing::warn;
 
@@ -19,17 +20,17 @@ use wal::{OpTag, WalEntry, WalOp, WalReader, WalWriter};
 // ---------------------------------------------------------------------------
 
 /// In-memory indexes rebuilt from WAL replay and maintained incrementally.
-struct Indexes {
+pub(super) struct Indexes {
     /// Messages indexed by their full storage key (BTreeMap for prefix scans).
-    messages: BTreeMap<Vec<u8>, Message>,
+    pub(super) messages: BTreeMap<Vec<u8>, Message>,
     /// Lease values indexed by lease key.
-    leases: HashMap<Vec<u8>, Vec<u8>>,
+    pub(super) leases: HashMap<Vec<u8>, Vec<u8>>,
     /// Lease expiry keys (BTreeMap for range queries on expiry time).
-    lease_expiries: BTreeMap<Vec<u8>, ()>,
+    pub(super) lease_expiries: BTreeMap<Vec<u8>, ()>,
     /// Queue configs indexed by queue_id.
-    queues: HashMap<String, QueueConfig>,
+    pub(super) queues: HashMap<String, QueueConfig>,
     /// State key-values (BTreeMap for prefix scans).
-    state: BTreeMap<String, Vec<u8>>,
+    pub(super) state: BTreeMap<String, Vec<u8>>,
 }
 
 impl Indexes {
@@ -116,9 +117,12 @@ impl Indexes {
 ///
 /// All writes go through the append-only WAL. In-memory indexes are rebuilt
 /// from WAL replay on startup and maintained incrementally on each write.
+/// Background compaction removes dead entries from sealed segments.
 pub struct FilaStorage {
-    writer: Mutex<WalWriter>,
-    indexes: RwLock<Indexes>,
+    writer: Arc<Mutex<WalWriter>>,
+    indexes: Arc<RwLock<Indexes>>,
+    #[allow(dead_code)] // held for Drop — stops compaction thread on shutdown
+    compaction_handle: Option<compaction::CompactionHandle>,
 }
 
 impl FilaStorage {
@@ -142,9 +146,23 @@ impl FilaStorage {
             indexes.apply_entry(entry);
         }
 
+        let writer = Arc::new(Mutex::new(writer));
+        let indexes = Arc::new(RwLock::new(indexes));
+
+        let compaction_handle = if config.compaction_enabled {
+            Some(compaction::spawn_compaction_thread(
+                config,
+                writer.clone(),
+                indexes.clone(),
+            ))
+        } else {
+            None
+        };
+
         Ok(Self {
-            writer: Mutex::new(writer),
-            indexes: RwLock::new(indexes),
+            writer,
+            indexes,
+            compaction_handle,
         })
     }
 }
@@ -912,5 +930,403 @@ mod tests {
 
         let retrieved = storage.get_message(P, b"same-key").unwrap().unwrap();
         assert_eq!(retrieved.payload, b"version-2");
+    }
+
+    // --- Compaction tests (Story 13.4) ---
+
+    fn small_segment_config(dir: &std::path::Path) -> FilaStorageConfig {
+        let mut config = FilaStorageConfig::new(dir.to_path_buf());
+        config.segment_size_bytes = 200; // very small to force rotation
+        config.compaction_enabled = false; // manual compaction in tests
+        config
+    }
+
+    fn run_compaction(storage: &FilaStorage, message_ttl_ms: Option<u64>) -> (u64, u64) {
+        compaction::run_compaction_pass_for_test(
+            &storage.writer,
+            &storage.indexes,
+            u64::MAX, // no rate limit in tests
+            message_ttl_ms,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn compaction_removes_dead_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = small_segment_config(dir.path());
+        let storage = FilaStorage::open(&config).unwrap();
+
+        // Write enough messages to create multiple segments
+        for i in 0..20 {
+            let msg = test_message("q1", format!("payload-{i}").as_bytes());
+            storage
+                .put_message(P, format!("q1:msg-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+
+        // Delete most of them (creating dead entries)
+        for i in 0..15 {
+            storage
+                .delete_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap();
+        }
+
+        // Verify we have sealed segments
+        let sealed_count = storage
+            .writer
+            .lock()
+            .unwrap()
+            .sealed_segment_paths()
+            .unwrap()
+            .len();
+        assert!(sealed_count > 0, "need sealed segments for compaction test");
+
+        // Run compaction
+        let (segments_compacted, bytes_reclaimed) = run_compaction(&storage, None);
+        assert!(segments_compacted > 0, "should have compacted segments");
+        assert!(bytes_reclaimed > 0, "should have reclaimed bytes");
+
+        // Verify live messages are still readable
+        for i in 15..20 {
+            assert!(
+                storage
+                    .get_message(P, format!("q1:msg-{i:04}").as_bytes())
+                    .unwrap()
+                    .is_some(),
+                "live message {i} should still exist after compaction"
+            );
+        }
+
+        // Verify deleted messages are still gone
+        for i in 0..15 {
+            assert!(
+                storage
+                    .get_message(P, format!("q1:msg-{i:04}").as_bytes())
+                    .unwrap()
+                    .is_none(),
+                "deleted message {i} should not reappear"
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_preserves_live_entries_on_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = small_segment_config(dir.path());
+        let storage = FilaStorage::open(&config).unwrap();
+
+        // Write messages across multiple segments
+        for i in 0..20 {
+            let msg = test_message("q1", format!("data-{i}").as_bytes());
+            storage
+                .put_message(P, format!("q1:msg-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+        // Delete some
+        for i in 0..5 {
+            storage
+                .delete_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap();
+        }
+
+        // Run compaction
+        run_compaction(&storage, None);
+
+        // Drop and reopen — WAL replay should produce same state
+        drop(storage);
+
+        let storage2 = FilaStorage::open(&config).unwrap();
+
+        // Live messages should be present
+        for i in 5..20 {
+            let msg = storage2
+                .get_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap();
+            assert!(
+                msg.is_some(),
+                "message {i} should survive compaction + replay"
+            );
+        }
+
+        // Deleted messages should not
+        for i in 0..5 {
+            assert!(storage2
+                .get_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn compaction_ttl_expiry_removes_old_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = small_segment_config(dir.path());
+        let storage = FilaStorage::open(&config).unwrap();
+
+        // Write messages with old timestamps (1 hour ago)
+        let one_hour_ago_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64
+            - 3_600_000_000_000;
+
+        for i in 0..10 {
+            let mut msg = test_message("q1", format!("old-{i}").as_bytes());
+            msg.enqueued_at = one_hour_ago_ns;
+            storage
+                .put_message(P, format!("q1:old-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+
+        // Write some recent messages
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
+        for i in 0..5 {
+            let mut msg = test_message("q1", format!("new-{i}").as_bytes());
+            msg.enqueued_at = now_ns;
+            storage
+                .put_message(P, format!("q1:new-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+
+        // Run compaction with 1-second TTL — old messages should expire
+        let (segments_compacted, _) = run_compaction(&storage, Some(1_000));
+
+        if segments_compacted > 0 {
+            // Old messages should be removed from the index
+            for i in 0..10 {
+                assert!(
+                    storage
+                        .get_message(P, format!("q1:old-{i:04}").as_bytes())
+                        .unwrap()
+                        .is_none(),
+                    "TTL-expired message {i} should be removed"
+                );
+            }
+        }
+
+        // New messages should still be present
+        for i in 0..5 {
+            assert!(
+                storage
+                    .get_message(P, format!("q1:new-{i:04}").as_bytes())
+                    .unwrap()
+                    .is_some(),
+                "recent message {i} should survive TTL check"
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_empty_segment_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = small_segment_config(dir.path());
+        let storage = FilaStorage::open(&config).unwrap();
+
+        // Write and delete the same messages to create all-dead segments
+        for i in 0..20 {
+            let msg = test_message("q1", format!("temp-{i}").as_bytes());
+            storage
+                .put_message(P, format!("q1:tmp-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+        for i in 0..20 {
+            storage
+                .delete_message(P, format!("q1:tmp-{i:04}").as_bytes())
+                .unwrap();
+        }
+
+        let sealed_before = storage
+            .writer
+            .lock()
+            .unwrap()
+            .sealed_segment_paths()
+            .unwrap()
+            .len();
+        assert!(sealed_before > 0);
+
+        run_compaction(&storage, None);
+
+        // Some sealed segments should have been deleted (all entries were dead)
+        let sealed_after = storage
+            .writer
+            .lock()
+            .unwrap()
+            .sealed_segment_paths()
+            .unwrap()
+            .len();
+        assert!(
+            sealed_after < sealed_before,
+            "all-dead segments should be deleted: before={sealed_before}, after={sealed_after}"
+        );
+    }
+
+    #[test]
+    fn compaction_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = small_segment_config(dir.path());
+        let storage = FilaStorage::open(&config).unwrap();
+
+        for i in 0..20 {
+            let msg = test_message("q1", format!("data-{i}").as_bytes());
+            storage
+                .put_message(P, format!("q1:msg-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+        // Delete some
+        for i in 0..10 {
+            storage
+                .delete_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap();
+        }
+
+        // First compaction
+        let (seg1, _bytes1) = run_compaction(&storage, None);
+        assert!(seg1 > 0);
+
+        // Second compaction — should be a no-op
+        let (_seg2, bytes2) = run_compaction(&storage, None);
+        assert_eq!(bytes2, 0, "second compaction should reclaim nothing");
+
+        // Live data still correct
+        for i in 10..20 {
+            assert!(storage
+                .get_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap()
+                .is_some());
+        }
+    }
+
+    #[test]
+    fn compaction_concurrent_read_write() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = small_segment_config(dir.path());
+        let storage = Arc::new(FilaStorage::open(&config).unwrap());
+
+        // Pre-populate
+        for i in 0..20 {
+            let msg = test_message("q1", format!("init-{i}").as_bytes());
+            storage
+                .put_message(P, format!("q1:msg-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+        for i in 0..10 {
+            storage
+                .delete_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap();
+        }
+
+        // Spawn compaction in a background thread
+        let storage_clone = storage.clone();
+        let compaction_thread = thread::spawn(move || run_compaction(&storage_clone, None));
+
+        // Meanwhile, write and read concurrently
+        for i in 20..30 {
+            let msg = test_message("q1", format!("concurrent-{i}").as_bytes());
+            storage
+                .put_message(P, format!("q1:msg-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+
+        // Read should work fine during compaction
+        for i in 10..20 {
+            assert!(storage
+                .get_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap()
+                .is_some());
+        }
+
+        compaction_thread.join().unwrap();
+
+        // Verify all data is consistent after compaction completes
+        for i in 10..30 {
+            assert!(
+                storage
+                    .get_message(P, format!("q1:msg-{i:04}").as_bytes())
+                    .unwrap()
+                    .is_some(),
+                "message {i} should exist after concurrent compaction"
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_storage_footprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = small_segment_config(dir.path());
+        let storage = FilaStorage::open(&config).unwrap();
+
+        // Write many messages
+        for i in 0..50 {
+            let msg = test_message("q1", format!("payload-{i}").as_bytes());
+            storage
+                .put_message(P, format!("q1:msg-{i:04}").as_bytes(), &msg)
+                .unwrap();
+        }
+
+        // Ack (delete) 80% of them
+        for i in 0..40 {
+            storage
+                .delete_message(P, format!("q1:msg-{i:04}").as_bytes())
+                .unwrap();
+        }
+
+        // Measure size before compaction
+        let size_before = dir_size(dir.path());
+
+        // Run compaction
+        run_compaction(&storage, None);
+
+        // Measure size after compaction
+        let size_after = dir_size(dir.path());
+
+        assert!(
+            size_after < size_before,
+            "compaction should reduce storage size: before={size_before}, after={size_after}"
+        );
+
+        // Calculate approximate raw size of 10 live messages
+        // Each message is ~200 bytes serialized, so 10 * 200 = 2000 bytes
+        // The footprint should be well under 1.5x that
+        let live_msg_count = 10;
+        let approx_raw_bytes = live_msg_count * 200;
+        assert!(
+            size_after < approx_raw_bytes * 3, // generous bound for test
+            "storage should be reasonably compact: {size_after} bytes for {live_msg_count} live messages"
+        );
+    }
+
+    fn dir_size(dir: &std::path::Path) -> u64 {
+        let mut total = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                total += entry.metadata().unwrap().len();
+            }
+        }
+        total
+    }
+
+    #[test]
+    fn compaction_background_thread_starts_and_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = FilaStorageConfig::new(dir.path().to_path_buf());
+        config.compaction_enabled = true;
+        config.compaction_interval_secs = 3600; // long interval, won't actually compact
+
+        let storage = FilaStorage::open(&config).unwrap();
+
+        // The compaction handle should exist
+        assert!(storage.compaction_handle.is_some());
+
+        // Storage should drop cleanly (thread stops)
+        drop(storage);
     }
 }

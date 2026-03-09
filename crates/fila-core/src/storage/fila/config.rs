@@ -26,6 +26,16 @@ pub struct FilaStorageConfig {
     pub segment_size_bytes: u64,
     /// How and when WAL writes are fsynced to disk.
     pub sync_mode: SyncMode,
+    /// Whether background compaction is enabled.
+    pub compaction_enabled: bool,
+    /// Interval between compaction passes in seconds.
+    pub compaction_interval_secs: u64,
+    /// Maximum I/O rate for compaction writes in bytes per second.
+    pub compaction_io_rate_bytes_per_sec: u64,
+    /// Optional message TTL in milliseconds. Messages older than this are
+    /// expired during compaction. None means no TTL (messages live forever
+    /// until explicitly deleted).
+    pub message_ttl_ms: Option<u64>,
 }
 
 impl FilaStorageConfig {
@@ -34,6 +44,10 @@ impl FilaStorageConfig {
             data_dir,
             segment_size_bytes: 64 * 1024 * 1024, // 64 MB
             sync_mode: SyncMode::default(),
+            compaction_enabled: false,
+            compaction_interval_secs: 60,
+            compaction_io_rate_bytes_per_sec: 10 * 1024 * 1024, // 10 MB/s
+            message_ttl_ms: None,
         }
     }
 }

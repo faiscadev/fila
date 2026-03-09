@@ -11,7 +11,7 @@ const SEGMENT_MAGIC: &[u8; 4] = b"FILA";
 /// Current segment format version.
 const SEGMENT_VERSION: u16 = 1;
 /// Total segment header size in bytes.
-const SEGMENT_HEADER_SIZE: u64 = 32;
+pub(super) const SEGMENT_HEADER_SIZE: u64 = 32;
 
 /// WAL operation tag values. These identify the operation type in each WAL
 /// entry and must remain stable across versions for replay compatibility.
@@ -66,10 +66,11 @@ pub struct WalEntry {
 // Serialization helpers for WAL entries
 // ---------------------------------------------------------------------------
 
-/// Serialize a batch of operations into the WAL payload format:
+/// Serialize a batch of operations into the WAL payload format.
+/// Public within the crate for use by the compaction module.
 ///   op_count (u32 LE) + for each op: tag(1) + key_len(u32 LE) + key +
 ///   [value_len(u32 LE) + value] (only for Put variants)
-fn serialize_entry(entry: &WalEntry) -> Vec<u8> {
+pub(super) fn serialize_entry(entry: &WalEntry) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&(entry.ops.len() as u32).to_le_bytes());
     for op in &entry.ops {
@@ -176,7 +177,7 @@ fn list_segments(dir: &Path) -> io::Result<Vec<(u64, PathBuf)>> {
 // Segment header
 // ---------------------------------------------------------------------------
 
-fn write_segment_header(writer: &mut BufWriter<File>) -> io::Result<()> {
+pub(super) fn write_segment_header(writer: &mut BufWriter<File>) -> io::Result<()> {
     let mut header = [0u8; SEGMENT_HEADER_SIZE as usize];
     header[0..4].copy_from_slice(SEGMENT_MAGIC);
     header[4..6].copy_from_slice(&SEGMENT_VERSION.to_le_bytes());
@@ -190,7 +191,7 @@ fn write_segment_header(writer: &mut BufWriter<File>) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_segment_header(reader: &mut BufReader<File>) -> io::Result<bool> {
+pub(super) fn validate_segment_header(reader: &mut BufReader<File>) -> io::Result<bool> {
     let mut header = [0u8; SEGMENT_HEADER_SIZE as usize];
     match reader.read_exact(&mut header) {
         Ok(()) => {}
@@ -311,10 +312,25 @@ impl WalWriter {
         Ok(())
     }
 
-    /// Returns the current segment sequence number (for testing).
-    #[cfg(test)]
+    /// Returns the current (active) segment sequence number.
     pub fn current_seq(&self) -> u64 {
         self.current_seq
+    }
+
+    /// Returns paths to all sealed (non-active) segment files, sorted by
+    /// sequence number.
+    pub fn sealed_segment_paths(&self) -> io::Result<Vec<PathBuf>> {
+        let segments = list_segments(&self.dir)?;
+        Ok(segments
+            .into_iter()
+            .filter(|(seq, _)| *seq != self.current_seq)
+            .map(|(_, path)| path)
+            .collect())
+    }
+
+    /// Returns the data directory.
+    pub fn data_dir(&self) -> &Path {
+        &self.dir
     }
 }
 
@@ -369,14 +385,14 @@ impl WalReader {
     }
 }
 
-enum EntryError {
+pub(super) enum EntryError {
     Truncated,
     CrcMismatch,
     Io(io::Error),
 }
 
 /// Read a single WAL entry from the reader. Returns None at clean EOF.
-fn read_one_entry(reader: &mut BufReader<File>) -> Result<Option<WalEntry>, EntryError> {
+pub(super) fn read_one_entry(reader: &mut BufReader<File>) -> Result<Option<WalEntry>, EntryError> {
     // Read length (4 bytes)
     let mut len_buf = [0u8; 4];
     match reader.read_exact(&mut len_buf) {
