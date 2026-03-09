@@ -17,11 +17,21 @@ pub struct BenchServer {
 impl BenchServer {
     /// Start a new fila-server instance for benchmarking.
     pub fn start() -> Self {
-        Self::start_with_quantum(None)
+        Self::start_with_options(None, None)
     }
 
     /// Start a new fila-server instance with a specific DRR quantum.
     pub fn start_with_quantum(quantum: Option<u32>) -> Self {
+        Self::start_with_options(quantum, None)
+    }
+
+    /// Start a new fila-server instance with a specific storage engine.
+    pub fn start_with_engine(engine: &str) -> Self {
+        Self::start_with_options(None, Some(engine.to_string()))
+    }
+
+    /// Start a new fila-server instance with custom options.
+    fn start_with_options(quantum: Option<u32>, storage_engine: Option<String>) -> Self {
         let port = free_port();
         let addr = format!("127.0.0.1:{port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");
@@ -47,11 +57,15 @@ otlp_endpoint = ""
             "fila-server binary not found at {binary:?}. Run `cargo build` first."
         );
 
-        let mut child = Command::new(&binary)
-            .env(
-                "FILA_DATA_DIR",
-                data_dir.path().join("data").to_str().unwrap(),
-            )
+        let mut cmd = Command::new(&binary);
+        cmd.env(
+            "FILA_DATA_DIR",
+            data_dir.path().join("data").to_str().unwrap(),
+        );
+        if let Some(engine) = &storage_engine {
+            cmd.env("FILA_STORAGE_ENGINE", engine);
+        }
+        let mut child = cmd
             .current_dir(data_dir.path())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
