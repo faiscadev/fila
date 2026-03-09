@@ -141,7 +141,7 @@ development_status:
   13-2-write-path-wal-segment-log: done
   13-3-read-path-indexing: done
   13-4-background-maintenance-compaction: done
-  13-5-integration-cutover-validation: review
+  13-5-integration-cutover-validation: done
   epic-13-retrospective: optional
 
   # Epic 14: Clustering & Horizontal Scaling

@@ -32,8 +32,8 @@ stories:
     dependsOn: ["13.2", "13.3"]
   - id: "13.5"
     title: "Integration, Cutover & Validation"
-    status: in-progress
-    currentPhase: "code-review"
+    status: completed
+    currentPhase: ""
     branch: "feat/13.5-integration-cutover-validation"
     pr: 53
     dependsOn: ["13.1", "13.2", "13.3", "13.4"]
