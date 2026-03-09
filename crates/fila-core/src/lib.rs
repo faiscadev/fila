@@ -6,7 +6,10 @@ pub mod queue;
 pub mod storage;
 pub mod telemetry;
 
-pub use broker::{Broker, BrokerConfig, QueueSummary, ReadyMessage, SchedulerCommand, StorageConfig, StorageEngine};
+pub use broker::{
+    Broker, BrokerConfig, QueueSummary, ReadyMessage, SchedulerCommand, StorageConfig,
+    StorageEngine,
+};
 pub use error::{
     AckError, BrokerError, BrokerResult, ConfigError, CreateQueueError, DeleteQueueError,
     EnqueueError, ListQueuesError, NackError, RedriveError, StatsError, StorageError,
@@ -14,4 +17,6 @@ pub use error::{
 };
 pub use message::Message;
 pub use queue::QueueConfig;
-pub use storage::{FilaStorage, FilaStorageConfig, PartitionId, RocksDbStorage, Storage, WriteBatchOp};
+pub use storage::{
+    FilaStorage, FilaStorageConfig, PartitionId, RocksDbStorage, Storage, WriteBatchOp,
+};
