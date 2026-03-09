@@ -1,7 +1,7 @@
 use super::*;
 use crate::broker::config::SchedulerConfig;
 use crate::message::Message;
-use crate::storage::{PartitionId, RocksDbStorage};
+use crate::storage::{FilaStorage, FilaStorageConfig, PartitionId, RocksDbStorage};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -23,3 +23,5 @@ mod recovery;
 mod redrive;
 mod stats;
 mod throttle;
+
+mod fila_backend;

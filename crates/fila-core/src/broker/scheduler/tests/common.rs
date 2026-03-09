@@ -18,6 +18,25 @@ pub(super) fn test_setup() -> (
     (tx, scheduler, dir)
 }
 
+pub(super) fn test_setup_fila() -> (
+    crossbeam_channel::Sender<SchedulerCommand>,
+    Scheduler,
+    tempfile::TempDir,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let fila_config = FilaStorageConfig::new(dir.path().to_path_buf());
+    let storage = Arc::new(FilaStorage::open(&fila_config).unwrap());
+    let config = SchedulerConfig {
+        command_channel_capacity: 256,
+        idle_timeout_ms: 10,
+        quantum: 1000,
+    };
+    let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
+    let lua_config = LuaConfig::default();
+    let scheduler = Scheduler::new(storage, rx, &config, &lua_config);
+    (tx, scheduler, dir)
+}
+
 pub(super) fn test_message(queue_id: &str) -> Message {
     Message {
         id: Uuid::now_v7(),
@@ -42,6 +61,11 @@ pub(super) fn send_create_queue(tx: &crossbeam_channel::Sender<SchedulerCommand>
         reply: reply_tx,
     })
     .unwrap();
+}
+
+/// Helper: create FilaStorage sharing an existing tempdir (for restart tests).
+pub(super) fn fila_storage(dir: &std::path::Path) -> Arc<dyn Storage> {
+    Arc::new(FilaStorage::open(&FilaStorageConfig::new(dir.to_path_buf())).unwrap())
 }
 
 /// Helper: create a scheduler sharing an existing storage (for restart tests).
