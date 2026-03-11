@@ -142,7 +142,7 @@ development_status:
   epic-13: done
   13-1-clean-storage-trait-abstraction: done
   13-2-phase-2-viability-seams: done
-  epic-13-retrospective: optional
+  epic-13-retrospective: done
 
   # Epic 14: Clustering & Horizontal Scaling (replanned 2026-03-10)
   # Raft-per-queue model (CockroachDB-style single binary).

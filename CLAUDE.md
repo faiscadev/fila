@@ -71,6 +71,14 @@ When a story creates or modifies a CI workflow (GitHub Actions, etc.), the workf
 
 This applies to all workflow types: release pipelines, publish workflows, Docker builds, etc. A workflow that has never been triggered is untested code.
 
+## Documentation for Future Phases
+
+When writing doc comments or documentation that describes **future phase behavior** (e.g., "in phase 2, this will..."), always cross-reference the relevant research or architecture document to capture **all modes and strategies** — not just the most obvious case.
+
+Example: The `QueueRouter` phase 2 docs initially described only FIFO partitioning by fairness key, missing non-FIFO partitioning by message ID. The research doc (`_bmad/docs/research/decoupled-scheduler-sharded-storage.md`) clearly specified both strategies.
+
+**Rule:** Before committing phase 2 design comments, verify them against the research doc. Incomplete forward-looking docs mislead future developers.
+
 ## PR Review — Cubic Automated Review
 
 This project uses **Cubic**, an automated AI reviewer that runs on every PR. You MUST check Cubic's findings before considering a story complete.
