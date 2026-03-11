@@ -1,33 +1,20 @@
-epic: "Epic 12: Benchmarks & Competitive Positioning"
-epicNumber: 12
-startedAt: "2026-03-05T20:00:00Z"
-currentPrIndex: 3
+epic: "Epic 13: Purpose-Built Storage Engine"
+epicNumber: 13
+startedAt: "2026-03-11T00:00:00Z"
+completedAt: "2026-03-11T16:57:52Z"
+currentPrIndex: 2
 prChain:
-  - storyId: "12.1"
-    storyKey: "12-1-benchmark-harness-self-benchmarking"
-    title: "Benchmark Harness & Self-Benchmarking"
-    branch: "feat/12.1-benchmark-harness-self-benchmarking"
-    pr: 45
+  - storyId: "13.1"
+    storyKey: "13-1-clean-storage-trait-abstraction"
+    title: "Clean Storage Trait Abstraction"
+    branch: "feat/13.1-clean-storage-trait-abstraction"
+    pr: 54
     baseBranch: "main"
     status: merged
-  - storyId: "12.2"
-    storyKey: "12-2-ci-regression-detection"
-    title: "CI Regression Detection"
-    branch: "feat/12.2-ci-regression-detection"
-    pr: 46
+  - storyId: "13.2"
+    storyKey: "13-2-phase-2-viability-seams"
+    title: "Phase 2 Viability Seams"
+    branch: "feat/13.2-phase-2-viability-seams"
+    pr: 55
     baseBranch: "main"
     status: merged
-  - storyId: "12.3"
-    storyKey: "12-3-competitive-benchmarks"
-    title: "Competitive Benchmarks"
-    branch: "feat/12.3-competitive-benchmarks"
-    pr: 47
-    baseBranch: "main"
-    status: merged
-  - storyId: "12.4"
-    storyKey: "12-4-published-results-benchmark-dashboard"
-    title: "Published Results & Benchmark Dashboard"
-    branch: "feat/12.4-published-results-benchmark-dashboard"
-    pr: 48
-    baseBranch: "feat/12.3-competitive-benchmarks"
-    status: pending
