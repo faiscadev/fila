@@ -324,17 +324,18 @@ Establish Fila's performance baseline and competitive standing. Data-driven foun
 | Competitive benchmarks | Head-to-head vs Kafka, RabbitMQ, NATS for queue workloads. Reproducible, published methodology |
 | Published results | Benchmark results as content — blog post, README badge, HN launch material |
 
-### Phase 3 — Storage Engine + Clustering (Coupled Workstream)
+### Phase 3 — Storage Abstraction + Clustering (Coupled Workstream)
 
-Purpose-built storage engine designed with partitioning in mind. RocksDB is a placeholder — queue workloads are specific: sequential writes, TTL expiry, consumer cursors, high-throughput append. Storage and clustering must be designed together; building a storage engine without considering partitioning means rebuilding it later.
+> **Updated 2026-03-10:** Technical research (`_bmad/docs/research/decoupled-scheduler-sharded-storage.md`) validated a CockroachDB-style Raft-per-queue model. RocksDB is sufficient as a Raft state machine backend — a purpose-built storage engine is a future optimization, not a prerequisite. Sharding is by queue (not Kafka-style partitions), preserving perfect per-queue fairness with zero algorithmic changes.
 
 | Deliverable | Description |
 |-------------|-------------|
-| Storage abstraction | Clean storage trait designed for distributed-awareness. Build single-node first, extend to multi-node |
-| Purpose-built storage engine | Optimized for queue access patterns: append-heavy, TTL-aware, compaction-friendly. Replaces RocksDB |
-| Embedded consensus | Raft-based clustering. Zero external dependencies — single binary stays single binary |
-| Invisible partitioning | Users create queues, Fila distributes them. Queue semantics never leak the log — no offsets, no rebalancing |
-| Multi-node horizontal scaling | Partition-aware delivery. Consumer connections route to the correct partition |
+| Storage abstraction | Clean storage trait using Fila-domain terms. Enables future engine swaps and provides interface for Raft state machine application |
+| Phase 2 viability seams | Routing indirection, DRR key-set scoping, scheduling stats emission — thin seams that keep hierarchical scaling viable without premature engineering |
+| Embedded consensus | Raft-based clustering. Zero external dependencies — single binary stays single binary. Each queue is a Raft group |
+| Automatic queue distribution | Users create queues, Fila distributes them across cluster nodes via Raft groups. Queue semantics never leak — no offsets, no partitions exposed |
+| Transparent routing | Any node accepts any request; routes to queue's Raft leader. Consumers connect to any node |
+| Purpose-built storage engine | **Deferred** — future optimization after clustering is proven. RocksDB serves as local state machine backend under Raft |
 
 ### Phase 4 — Authentication & Security
 
@@ -492,10 +493,10 @@ REST API dropped — reintroduce only if real demand surfaces.
 
 #### Clustering & Storage
 
-- **FR66**: The broker can persist messages using a purpose-built storage engine optimized for queue access patterns, replacing RocksDB
-- **FR67**: Operators can deploy multi-node clusters with embedded Raft consensus
-- **FR68**: Operators can create queues without managing partitions — Fila distributes and rebalances automatically
-- **FR69**: Consumers can connect to any node and be routed to the correct partition transparently
+- **FR66**: ~~The broker can persist messages using a purpose-built storage engine optimized for queue access patterns, replacing RocksDB~~ **Deferred** — RocksDB is sufficient as Raft state machine backend. Future optimization, not a clustering prerequisite.
+- **FR67**: Operators can deploy multi-node clusters with embedded Raft consensus (Raft-per-queue model)
+- **FR68**: Operators can create queues without managing partitions — Fila distributes them across cluster nodes automatically
+- **FR69**: Consumers can connect to any node and be transparently routed to the queue's Raft leader
 - **FR70**: Operators can view cluster-wide queue stats aggregated from all nodes
 
 #### Authentication & Authorization
@@ -568,7 +569,9 @@ REST API dropped — reintroduce only if real demand surfaces.
 - **NFR28**: API key validation < 100us per request
 - **NFR29**: Secure defaults — authentication required unless explicitly disabled
 
-#### Storage Engine
+#### Storage Engine (Deferred)
+
+> **Deferred 2026-03-10:** These NFRs apply to a purpose-built storage engine (FR66), which is deferred until after clustering is proven. RocksDB remains the storage engine for now.
 
 - **NFR30**: Queue-optimized write throughput >= 2x RocksDB for append-heavy workloads
 - **NFR31**: Predictable latency — no compaction-induced latency spikes > 10ms p99
