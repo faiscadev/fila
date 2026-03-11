@@ -151,7 +151,7 @@ development_status:
   14-1-raft-integration-single-node-mode: done
   14-2-queue-level-raft-groups-assignment: done
   14-3-request-routing-transparent-delivery: done
-  14-4-replication-failover-recovery: review
+  14-4-replication-failover-recovery: done
   14-5-cluster-observability-scaling-validation: backlog
   epic-14-retrospective: optional
 

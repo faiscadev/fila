@@ -1,6 +1,6 @@
 # Story 14.4: Replication, Failover & Recovery
 
-Status: review
+Status: done
 
 ## Story
 
