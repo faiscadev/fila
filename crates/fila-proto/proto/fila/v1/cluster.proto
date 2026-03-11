@@ -26,6 +26,9 @@ service FilaCluster {
 /// in protobuf. The serialization format is JSON (via serde).
 message RaftRequest {
   bytes data = 1;
+  /// Identifies which Raft group this RPC targets. Empty string means the
+  /// meta (cluster-wide) Raft group. Non-empty means a queue-level group.
+  string group_id = 3;
 }
 
 message RaftResponse {

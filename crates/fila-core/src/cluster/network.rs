@@ -12,7 +12,27 @@ use fila_proto::fila_cluster_client::FilaClusterClient;
 use fila_proto::RaftRequest;
 
 /// Factory that creates gRPC-based network connections to peer nodes.
-pub struct FilaNetworkFactory;
+///
+/// Each factory is scoped to a Raft group: the meta group uses an empty
+/// `group_id`, while queue groups carry their queue ID so the remote node
+/// can route the RPC to the correct Raft instance.
+pub struct FilaNetworkFactory {
+    group_id: String,
+}
+
+impl FilaNetworkFactory {
+    /// Create a factory for the meta Raft group.
+    pub fn meta() -> Self {
+        Self {
+            group_id: String::new(),
+        }
+    }
+
+    /// Create a factory for a queue-level Raft group.
+    pub fn for_queue(queue_id: String) -> Self {
+        Self { group_id: queue_id }
+    }
+}
 
 impl RaftNetworkFactory<TypeConfig> for FilaNetworkFactory {
     type Network = FilaNetwork;
@@ -25,6 +45,7 @@ impl RaftNetworkFactory<TypeConfig> for FilaNetworkFactory {
         };
         FilaNetwork {
             url,
+            group_id: self.group_id.clone(),
             client: OnceCell::new(),
         }
     }
@@ -36,6 +57,7 @@ impl RaftNetworkFactory<TypeConfig> for FilaNetworkFactory {
 /// and reused for all subsequent RPCs to this peer.
 pub struct FilaNetwork {
     url: String,
+    group_id: String,
     client: OnceCell<FilaClusterClient<tonic::transport::Channel>>,
 }
 
@@ -57,6 +79,13 @@ impl FilaNetwork {
         // Clone is cheap — tonic Channel is backed by a shared connection pool.
         Ok(client.clone())
     }
+
+    fn make_request(&self, data: Vec<u8>) -> RaftRequest {
+        RaftRequest {
+            data,
+            group_id: self.group_id.clone(),
+        }
+    }
 }
 
 impl RaftNetwork<TypeConfig> for FilaNetwork {
@@ -70,7 +99,7 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
 
         let mut client = self.get_client().await?;
         let resp = client
-            .append_entries(RaftRequest { data })
+            .append_entries(self.make_request(data))
             .await
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
@@ -102,7 +131,7 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
             },
         )?;
         let resp = client
-            .install_snapshot(RaftRequest { data })
+            .install_snapshot(self.make_request(data))
             .await
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
@@ -127,7 +156,7 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
 
         let mut client = self.get_client().await?;
         let resp = client
-            .vote(RaftRequest { data })
+            .vote(self.make_request(data))
             .await
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
