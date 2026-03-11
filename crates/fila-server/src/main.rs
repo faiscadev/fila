@@ -75,22 +75,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = listen_addr.parse()?;
     info!(%addr, "starting gRPC server");
 
-    Server::builder()
+    let serve_result = Server::builder()
         .layer(trace_context::TraceContextLayer)
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))
         .serve_with_shutdown(addr, shutdown_signal())
-        .await?;
+        .await;
 
     info!("gRPC server stopped, shutting down broker");
 
     // Graceful broker shutdown — Drop impl will handle it since Arc may have refs
     drop(broker);
 
-    // Shut down Raft before exiting.
+    // Shut down Raft before exiting (both success and error paths).
     if let Some(cm) = cluster_manager {
         cm.shutdown().await;
     }
+
+    serve_result?;
 
     // Flush OTel pipeline (spans + metrics) before exit
     if let Some(guard) = telemetry_guard {

@@ -51,11 +51,7 @@ impl ClusterManager {
             snapshot_policy: openraft::SnapshotPolicy::LogsSinceLast(config.snapshot_threshold),
             ..Default::default()
         };
-        let raft_config = Arc::new(
-            raft_config
-                .validate()
-                .map_err(|e| format!("invalid raft config: {e}"))?,
-        );
+        let raft_config = Arc::new(raft_config.validate()?);
 
         let store = FilaRaftStore::new(db);
         let (log_store, state_machine) = Adaptor::new(store);

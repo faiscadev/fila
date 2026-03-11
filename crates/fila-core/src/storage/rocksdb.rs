@@ -101,6 +101,54 @@ impl RocksDbEngine {
         Ok(results)
     }
 
+    /// Return the last key-value pair in the Raft log column family whose key
+    /// starts with `prefix`, or `None` if no such entry exists.
+    ///
+    /// Uses RocksDB reverse iteration so it touches at most one entry.
+    pub fn raft_last_with_prefix(
+        &self,
+        prefix: &[u8],
+    ) -> StorageResult<Option<(Vec<u8>, Vec<u8>)>> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+
+        // Build the successor key of the prefix (prefix with last byte incremented).
+        // Seek to that successor in reverse to land on the last key with the prefix.
+        let mut upper = prefix.to_vec();
+        // Increment the last byte; if it overflows, extend with 0xFF.
+        if let Some(last) = upper.last_mut() {
+            if *last < 0xFF {
+                *last += 1;
+            } else {
+                upper.push(0xFF);
+            }
+        } else {
+            // Empty prefix — scan from the very end.
+            return self.raft_last_entry();
+        }
+
+        let mut iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(&upper, rocksdb::Direction::Reverse));
+        if let Some(item) = iter.next() {
+            let (key, value) = item?;
+            if key.starts_with(prefix) {
+                return Ok(Some((key.to_vec(), value.to_vec())));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Return the very last key-value pair in the Raft log column family.
+    fn raft_last_entry(&self) -> StorageResult<Option<(Vec<u8>, Vec<u8>)>> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        let mut iter = self.db.iterator_cf(&cf, IteratorMode::End);
+        match iter.next() {
+            Some(Ok((key, value))) => Ok(Some((key.to_vec(), value.to_vec()))),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
     /// Delete a range of keys in the Raft log column family [start, end).
     pub fn raft_delete_range(&self, start: &[u8], end: &[u8]) -> StorageResult<()> {
         let cf = self.cf(CF_RAFT_LOG)?;

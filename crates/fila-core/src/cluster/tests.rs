@@ -288,7 +288,12 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify the remaining 2-node cluster still has a leader.
+        // Verify the remaining 2-node cluster still has a leader
+        // that is NOT the removed node.
+        let remaining: Vec<u64> = vec![1, 2, 3]
+            .into_iter()
+            .filter(|&id| id != remove_id)
+            .collect();
         let still_leader = timeout(Duration::from_secs(5), async {
             loop {
                 if let Some(id) = node1.raft.current_leader().await {
@@ -301,8 +306,8 @@ mod tests {
         .expect("cluster should still have leader after removing a node");
 
         assert!(
-            still_leader == 1 || still_leader == 2 || still_leader == 3,
-            "leader should exist"
+            remaining.contains(&still_leader),
+            "leader {still_leader} must be one of the remaining nodes {remaining:?}, not the removed node {remove_id}"
         );
 
         node1.shutdown().await;

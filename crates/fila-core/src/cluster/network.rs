@@ -5,6 +5,7 @@ use openraft::raft::{
     VoteRequest, VoteResponse,
 };
 use openraft::{BasicNode, RaftNetwork, RaftNetworkFactory};
+use tokio::sync::OnceCell;
 
 use super::types::{NodeId, TypeConfig};
 use fila_proto::fila_cluster_client::FilaClusterClient;
@@ -17,32 +18,44 @@ impl RaftNetworkFactory<TypeConfig> for FilaNetworkFactory {
     type Network = FilaNetwork;
 
     async fn new_client(&mut self, _target: NodeId, node: &BasicNode) -> Self::Network {
+        let url = if node.addr.starts_with("http") {
+            node.addr.clone()
+        } else {
+            format!("http://{}", node.addr)
+        };
         FilaNetwork {
-            addr: node.addr.clone(),
+            url,
+            client: OnceCell::new(),
         }
     }
 }
 
 /// A gRPC-based network connection to a single peer node.
+///
+/// The underlying tonic channel is lazily established on first use
+/// and reused for all subsequent RPCs to this peer.
 pub struct FilaNetwork {
-    addr: String,
+    url: String,
+    client: OnceCell<FilaClusterClient<tonic::transport::Channel>>,
 }
 
 impl FilaNetwork {
-    async fn connect(
+    async fn get_client(
         &self,
     ) -> Result<
         FilaClusterClient<tonic::transport::Channel>,
         RPCError<NodeId, BasicNode, RaftError<NodeId>>,
     > {
-        let url = if self.addr.starts_with("http") {
-            self.addr.clone()
-        } else {
-            format!("http://{}", self.addr)
-        };
-        FilaClusterClient::connect(url)
-            .await
-            .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))
+        let client = self
+            .client
+            .get_or_try_init(|| async {
+                FilaClusterClient::connect(self.url.clone())
+                    .await
+                    .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))
+            })
+            .await?;
+        // Clone is cheap — tonic Channel is backed by a shared connection pool.
+        Ok(client.clone())
     }
 }
 
@@ -55,7 +68,7 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
         let data =
             serde_json::to_vec(&rpc).map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
-        let mut client = self.connect().await?;
+        let mut client = self.get_client().await?;
         let resp = client
             .append_entries(RaftRequest { data })
             .await
@@ -83,12 +96,11 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
         let data =
             serde_json::to_vec(&rpc).map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
-        let mut client =
-            self.connect()
-                .await
-                .map_err(|e: RPCError<NodeId, BasicNode, RaftError<NodeId>>| {
-                    RPCError::Unreachable(Unreachable::new(&std::io::Error::other(format!("{e}"))))
-                })?;
+        let mut client = self.get_client().await.map_err(
+            |e: RPCError<NodeId, BasicNode, RaftError<NodeId>>| {
+                RPCError::Unreachable(Unreachable::new(&std::io::Error::other(format!("{e}"))))
+            },
+        )?;
         let resp = client
             .install_snapshot(RaftRequest { data })
             .await
@@ -113,7 +125,7 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
         let data =
             serde_json::to_vec(&rpc).map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
-        let mut client = self.connect().await?;
+        let mut client = self.get_client().await?;
         let resp = client
             .vote(RaftRequest { data })
             .await

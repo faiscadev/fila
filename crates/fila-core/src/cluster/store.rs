@@ -383,28 +383,24 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
 impl FilaRaftStore {
     #[allow(clippy::result_large_err)]
     fn find_last_log_id(&self) -> Result<Option<LogId<NodeId>>, StorageError<NodeId>> {
-        // Scan a large range to find entries, then take the last one
-        let start = log_key(0);
-        let entries = self
+        // Reverse-seek to the last key with the "log:" prefix — O(1) instead of
+        // scanning all log entries forward.
+        let entry = self
             .db
-            .raft_scan(&start, usize::MAX)
+            .raft_last_with_prefix(LOG_PREFIX)
             .map_err(|e| StorageError::IO {
                 source: openraft::StorageIOError::read_logs(&e),
             })?;
 
-        // Find the last entry with log: prefix
-        let mut last_entry: Option<Entry<TypeConfig>> = None;
-        for (key, value) in entries {
-            if !key.starts_with(LOG_PREFIX) {
-                continue;
+        match entry {
+            Some((_key, value)) => {
+                let entry: Entry<TypeConfig> =
+                    serde_json::from_slice(&value).map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::read_logs(&e),
+                    })?;
+                Ok(Some(entry.log_id))
             }
-            let entry: Entry<TypeConfig> =
-                serde_json::from_slice(&value).map_err(|e| StorageError::IO {
-                    source: openraft::StorageIOError::read_logs(&e),
-                })?;
-            last_entry = Some(entry);
+            None => Ok(None),
         }
-
-        Ok(last_entry.map(|e| e.log_id))
     }
 }
