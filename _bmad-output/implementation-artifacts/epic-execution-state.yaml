@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "14.2"
     title: "Queue-Level Raft Groups & Assignment"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/14.2-queue-level-raft-groups-assignment"
-    pr: null
+    pr: 57
     dependsOn: ["14.1"]
   - id: "14.3"
     title: "Request Routing & Transparent Delivery"

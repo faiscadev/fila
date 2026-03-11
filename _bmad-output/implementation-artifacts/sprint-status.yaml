@@ -149,7 +149,7 @@ development_status:
   # Replaces partition-based design per clustering architecture research.
   epic-14: in-progress
   14-1-raft-integration-single-node-mode: done
-  14-2-queue-level-raft-groups-assignment: review
+  14-2-queue-level-raft-groups-assignment: done
   14-3-request-routing-transparent-delivery: backlog
   14-4-replication-failover-recovery: backlog
   14-5-cluster-observability-scaling-validation: backlog

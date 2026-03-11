@@ -1,6 +1,6 @@
 # Story 14.2: Queue-Level Raft Groups & Assignment
 
-Status: review
+Status: done
 
 ## Story
 
