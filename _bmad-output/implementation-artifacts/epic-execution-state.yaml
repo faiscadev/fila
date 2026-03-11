@@ -4,10 +4,10 @@ startedAt: "2026-03-11"
 stories:
   - id: "14.1"
     title: "Raft Integration & Single-Node Mode"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/14.1-raft-integration-single-node-mode"
-    pr: null
+    pr: 56
     dependsOn: []
   - id: "14.2"
     title: "Queue-Level Raft Groups & Assignment"

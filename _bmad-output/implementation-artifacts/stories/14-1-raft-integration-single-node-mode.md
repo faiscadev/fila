@@ -1,6 +1,6 @@
 # Story 14.1: Raft Integration & Single-Node Mode
 
-Status: review
+Status: done
 
 ## Story
 
