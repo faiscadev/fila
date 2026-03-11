@@ -2,6 +2,7 @@ pub mod command;
 pub mod config;
 pub mod drr;
 pub mod metrics;
+pub mod router;
 mod scheduler;
 pub mod stats;
 pub mod throttle;

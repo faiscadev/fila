@@ -9,6 +9,7 @@ use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::config::{LuaConfig, SchedulerConfig};
 use crate::broker::drr::DrrScheduler;
 use crate::broker::metrics::Metrics;
+use crate::broker::router::QueueRouter;
 use crate::broker::throttle::ThrottleManager;
 use crate::lua::LuaEngine;
 use crate::storage::{Mutation, StorageEngine};
@@ -60,6 +61,9 @@ pub struct Scheduler {
     lua_engine: Option<LuaEngine>,
     /// All known queue IDs, for zeroing gauges when queues become idle.
     known_queues: HashSet<String>,
+    /// Routes (queue_id, fairness_key) → GroupId for Raft group assignment.
+    /// Phase 1: trivial 1:1 routing (every key maps to its queue).
+    router: QueueRouter,
     /// OTel metrics for recording counters and gauges.
     metrics: Metrics,
     /// Per-(queue_id, fairness_key) delivery counts for fair share ratio calculation.
@@ -96,6 +100,7 @@ impl Scheduler {
             leased_msg_keys: HashMap::new(),
             lua_engine,
             known_queues: HashSet::new(),
+            router: QueueRouter::new(),
             metrics: Metrics::new(),
             fairness_deliveries: HashMap::new(),
         }
