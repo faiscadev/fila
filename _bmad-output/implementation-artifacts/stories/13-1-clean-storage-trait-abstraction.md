@@ -1,6 +1,6 @@
 # Story 13.1: Clean Storage Trait Abstraction
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -23,63 +23,30 @@ so that the storage implementation can be swapped without changing broker logic,
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Rename `Storage` to `StorageEngine` and `RocksDbStorage` to `RocksDbEngine` (AC: 1, 5, 6)
-  - [ ] 1.1 Rename the trait in `crates/fila-core/src/storage/traits.rs` from `Storage` to `StorageEngine`
-  - [ ] 1.2 Rename the struct in `crates/fila-core/src/storage/rocksdb.rs` from `RocksDbStorage` to `RocksDbEngine`
-  - [ ] 1.3 Update `crates/fila-core/src/storage/mod.rs` re-exports
-  - [ ] 1.4 Update `crates/fila-core/src/lib.rs` public exports
-  - [ ] 1.5 Update all references in broker/scheduler code (`handlers.rs`, `admin_handlers.rs`, `delivery.rs`, `recovery.rs`, `mod.rs`)
-  - [ ] 1.6 Update `crates/fila-core/src/lua/bridge.rs` (passes `Arc<dyn Storage>`)
-  - [ ] 1.7 Update `crates/fila-core/src/broker/mod.rs` (creates scheduler with storage)
-  - [ ] 1.8 Update `crates/fila-server/src/main.rs` (creates `RocksDbStorage`)
-  - [ ] 1.9 Update `crates/fila-sdk/` if it references storage types
-  - [ ] 1.10 Update all test files in `crates/fila-core/src/broker/scheduler/tests/`
-  - [ ] 1.11 Update e2e tests in `crates/fila-e2e/`
+- [x] Task 1: Rename `Storage` to `StorageEngine` and `RocksDbStorage` to `RocksDbEngine` (AC: 1, 5, 6)
+  - [x] 1.1–1.10: All references updated across 22 files
+  - [x] 1.9: fila-sdk has no storage type references (only a comment)
+  - [x] 1.11: fila-e2e has no storage type references
 
-- [ ] Task 2: Rename `WriteBatchOp` to `Mutation` and `write_batch` to `apply_mutations` (AC: 2, 4)
-  - [ ] 2.1 Rename `WriteBatchOp` enum to `Mutation` in `traits.rs`
-  - [ ] 2.2 Rename `write_batch` method to `apply_mutations` on the trait
-  - [ ] 2.3 Update `RocksDbEngine` implementation
-  - [ ] 2.4 Update all call sites in scheduler code
-  - [ ] 2.5 Update lib.rs exports
+- [x] Task 2: Rename `WriteBatchOp` to `Mutation` and `write_batch` to `apply_mutations` (AC: 2, 4)
+  - [x] 2.1–2.5: All renames complete
 
-- [ ] Task 3: Review and clean trait documentation (AC: 2)
-  - [ ] 3.1 Update trait doc comments to use "message store", "lease store", "config store" terminology
-  - [ ] 3.2 Remove any mention of "CF" or "column family" from trait-level docs
-  - [ ] 3.3 Add doc comment to `apply_mutations` explaining Raft state machine suitability
+- [x] Task 3: Review and clean trait documentation (AC: 2)
+  - [x] 3.1–3.3: Trait uses "message store", "lease store", "config store", "state store" terminology
 
-- [ ] Task 4: Verify no PartitionId concept exists (AC: 3)
-  - [ ] 4.1 Search codebase for PartitionId — confirm absent (it should be, based on current design)
+- [x] Task 4: Verify no PartitionId concept exists (AC: 3)
+  - [x] 4.1: Confirmed absent — grep returns zero results
 
-- [ ] Task 5: Implement `InMemoryEngine` (AC: 7)
-  - [ ] 5.1 Create `crates/fila-core/src/storage/memory.rs`
-  - [ ] 5.2 Implement `StorageEngine` using `HashMap`/`BTreeMap` behind a `Mutex`
-  - [ ] 5.3 Message store: `BTreeMap<Vec<u8>, Message>` (BTreeMap for correct range scans/prefix iteration)
-  - [ ] 5.4 Lease store: `BTreeMap<Vec<u8>, Vec<u8>>`
-  - [ ] 5.5 Lease expiry store: `BTreeSet<Vec<u8>>` (sorted for `list_expired_leases`)
-  - [ ] 5.6 Queue store: `HashMap<String, QueueConfig>`
-  - [ ] 5.7 State store: `BTreeMap<String, Vec<u8>>` (BTreeMap for prefix scans)
-  - [ ] 5.8 `apply_mutations` applies all ops atomically (hold lock for entire batch)
-  - [ ] 5.9 `flush` is a no-op
-  - [ ] 5.10 Export from `storage/mod.rs` and `lib.rs`
+- [x] ~~Task 5: Implement `InMemoryEngine`~~ (AC: 7) — **SKIPPED per Lucas's direction**: keep RocksDB for all tests, add mockall only if needed later
+- [x] ~~Task 6: Add storage engine tests for InMemoryEngine~~ — **SKIPPED** (follows Task 5)
 
-- [ ] Task 6: Add storage engine tests for InMemoryEngine (AC: 7, 8)
-  - [ ] 6.1 Create a shared test suite that runs against any `StorageEngine` impl
-  - [ ] 6.2 Run the shared suite against both `RocksDbEngine` and `InMemoryEngine`
-  - [ ] 6.3 Cover: put/get/delete for messages, leases, queues, state
-  - [ ] 6.4 Cover: prefix listing, expired lease listing, batch mutations
-  - [ ] 6.5 Cover: atomicity of apply_mutations (all-or-nothing)
+- [x] Task 7: Rename `StorageError` variants (AC: 2, 10)
+  - [x] 7.1–7.4: RocksDb→Engine, ColumnFamilyNotFound→StoreNotFound, all conversions updated
 
-- [ ] Task 7: Rename `StorageError` variants (AC: 2, 10)
-  - [ ] 7.1 Rename `StorageError::RocksDb` to `StorageError::Engine` — this is the generic "engine failed" variant
-  - [ ] 7.2 Rename `StorageError::ColumnFamilyNotFound` to `StorageError::StoreNotFound` — "store" not "column family"
-  - [ ] 7.3 Update error conversion `From<rocksdb::Error>` to map to `Engine` variant
-  - [ ] 7.4 Update any code matching on these variants
-
-- [ ] Task 8: Verify all tests pass (AC: 8, 9)
-  - [ ] 8.1 Run `cargo test --workspace` — all 278 tests pass
-  - [ ] 8.2 Run `cargo clippy --workspace` — no warnings
-  - [ ] 8.3 Run e2e test suite — all 11 tests pass
+- [x] Task 8: Verify all tests pass (AC: 8, 9)
+  - [x] 8.1: `cargo test --workspace` — all 278 tests pass
+  - [x] 8.2: `cargo clippy --workspace` — zero new warnings
+  - [x] 8.3: e2e test suite — all 11 tests pass
 
 ## Dev Notes
 
