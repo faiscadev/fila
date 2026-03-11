@@ -1,6 +1,6 @@
 # Story 13.2: Phase 2 Viability Seams
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -19,31 +19,31 @@ so that phase 2 (splitting hot queues across multiple Raft groups) is a matter o
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `QueueRouter` type with trivial 1:1 routing (AC: 1, 4)
-  - [ ] 1.1: Define `QueueRouter` in `crates/fila-core/src/broker/router.rs` with a `route(queue_id, fairness_key) -> GroupId` method that always returns the same group
-  - [ ] 1.2: Define `GroupId` as a newtype over `String` (or `u64`) — in phase 1, `GroupId` is just the `queue_id`
-  - [ ] 1.3: Wire `QueueRouter` into `Scheduler` — enqueue path calls `router.route(queue_id, fairness_key)` before storage write (result is currently unused beyond the seam existing)
-  - [ ] 1.4: Add unit test: `route()` returns same group for all fairness keys in same queue
+- [x] Task 1: Create `QueueRouter` type with trivial 1:1 routing (AC: 1, 4)
+  - [x] 1.1: Define `QueueRouter` in `crates/fila-core/src/broker/router.rs` with a `route(queue_id, fairness_key) -> GroupId` method that always returns the same group
+  - [x] 1.2: Define `GroupId` as a newtype over `String` (or `u64`) — in phase 1, `GroupId` is just the `queue_id`
+  - [x] 1.3: Wire `QueueRouter` into `Scheduler` — enqueue path calls `router.route(queue_id, fairness_key)` before storage write (result is currently unused beyond the seam existing)
+  - [x] 1.4: Add unit test: `route()` returns same group for all fairness keys in same queue
 
-- [ ] Task 2: Make DRR key-set scope explicit (AC: 2)
-  - [ ] 2.1: Review `DrrScheduler` — the key-set is already implicit (only operates on `add_key`'d keys). Document this property with a doc comment clarifying the phase 2 intent
-  - [ ] 2.2: If `drr_deliver_queue` pulls keys from any source other than what was explicitly added, refactor to use only the explicit key-set. (Expected: already clean — verify and document)
+- [x] Task 2: Make DRR key-set scope explicit (AC: 2)
+  - [x] 2.1: Review `DrrScheduler` — the key-set is already implicit (only operates on `add_key`'d keys). Document this property with a doc comment clarifying the phase 2 intent
+  - [x] 2.2: If `drr_deliver_queue` pulls keys from any source other than what was explicitly added, refactor to use only the explicit key-set. (Expected: already clean — verify and document)
 
-- [ ] Task 3: Emit aggregate scheduling stats as OTel metrics (AC: 3)
-  - [ ] 3.1: Review existing metrics — `fila.fairness.throughput` (per queue_id + fairness_key) and `fila.fairness.fair_share_ratio` already exist. `key_stats()` method on DrrScheduler exists.
-  - [ ] 3.2: Add `fila.scheduler.drr.deficit` gauge with `(queue_id, fairness_key)` dimensions — exposes current deficit state per key
-  - [ ] 3.3: Add `fila.scheduler.drr.weight` gauge with `(queue_id, fairness_key)` dimensions — exposes current weight per key
-  - [ ] 3.4: Wire new metrics into `record_gauges()` in `metrics_recording.rs`
-  - [ ] 3.5: Add metric tests verifying the new gauges report correct values
+- [x] Task 3: Emit aggregate scheduling stats as OTel metrics (AC: 3)
+  - [x] 3.1: Review existing metrics — `fila.fairness.throughput` (per queue_id + fairness_key) and `fila.fairness.fair_share_ratio` already exist. `key_stats()` method on DrrScheduler exists.
+  - [x] 3.2: Add `fila.scheduler.drr.deficit` gauge with `(queue_id, fairness_key)` dimensions — exposes current deficit state per key
+  - [x] 3.3: Add `fila.scheduler.drr.weight` gauge with `(queue_id, fairness_key)` dimensions — exposes current weight per key
+  - [x] 3.4: Wire new metrics into `record_gauges()` in `metrics_recording.rs`
+  - [x] 3.5: Add metric tests verifying the new gauges report correct values
 
-- [ ] Task 4: Thread fairness_key through enqueue routing decision (AC: 4)
-  - [ ] 4.1: In `handle_enqueue`, call `self.router.route(&message.queue_id, &message.fairness_key)` — the result is the `GroupId` (phase 1: always same group, no behavior change)
-  - [ ] 4.2: Log the routing decision at debug level for observability
+- [x] Task 4: Thread fairness_key through enqueue routing decision (AC: 4)
+  - [x] 4.1: In `handle_enqueue`, call `self.router.route(&message.queue_id, &message.fairness_key)` — the result is the `GroupId` (phase 1: always same group, no behavior change)
+  - [x] 4.2: Log the routing decision at debug level for observability
 
-- [ ] Task 5: Verify all tests pass with zero behavioral changes (AC: 5, 6)
-  - [ ] 5.1: `cargo test --workspace` — all tests pass
-  - [ ] 5.2: `cargo clippy --workspace` — zero new warnings
-  - [ ] 5.3: e2e test suite — all 11 tests pass
+- [x] Task 5: Verify all tests pass with zero behavioral changes (AC: 5, 6)
+  - [x] 5.1: `cargo test --workspace` — all tests pass
+  - [x] 5.2: `cargo clippy --workspace` — zero new warnings
+  - [x] 5.3: e2e test suite — all 11 tests pass
 
 ## Dev Notes
 
@@ -127,4 +127,17 @@ Claude Opus 4.6
 
 ### Completion Notes List
 
+- QueueRouter kept intentionally simple (struct, not trait) — phase 2 replaces implementation, not interface
+- DRR key-set scoping was already clean; task 2 was documentation-only
+- Existing `key_stats()` call in `record_gauges()` reused for deficit/weight gauges — no extra iteration
+- Routing result (`GroupId`) is computed and logged but not consumed in phase 1 — the code seam exists for phase 2
+
 ### File List
+
+- `crates/fila-core/src/broker/router.rs` — NEW: QueueRouter and GroupId types with trivial 1:1 routing
+- `crates/fila-core/src/broker/mod.rs` — Added `pub mod router;`
+- `crates/fila-core/src/broker/scheduler/mod.rs` — Added `router: QueueRouter` field and initialization
+- `crates/fila-core/src/broker/scheduler/handlers.rs` — Routing call and debug log in enqueue path
+- `crates/fila-core/src/broker/drr.rs` — Phase 2 design property doc comment
+- `crates/fila-core/src/broker/metrics.rs` — `drr_deficit` (i64) and `drr_weight` (u64) gauges, recording methods, test harness helpers, 2 tests
+- `crates/fila-core/src/broker/scheduler/metrics_recording.rs` — Wired deficit/weight gauges into `record_gauges()` loop
