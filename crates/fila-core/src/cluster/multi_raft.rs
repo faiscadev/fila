@@ -85,12 +85,25 @@ impl MultiRaftManager {
         Ok(())
     }
 
-    /// Shut down and remove a queue's Raft group.
+    /// Shut down and remove a queue's Raft group, cleaning up its storage.
     pub async fn remove_group(&self, queue_id: &str) {
         if let Some(raft) = self.groups.write().await.remove(queue_id) {
             if let Err(e) = raft.shutdown().await {
                 tracing::error!(queue_id, error = ?e, "error shutting down queue Raft group");
             }
+
+            // Clean up the queue's key-prefixed data from RocksDB so that
+            // re-creating a queue with the same name starts fresh.
+            let prefix = format!("q:{queue_id}:");
+            let mut upper = prefix.as_bytes().to_vec();
+            // Increment the last byte to form an exclusive upper bound.
+            if let Some(last) = upper.last_mut() {
+                *last += 1; // ':' (0x3A) → ';' (0x3B)
+            }
+            if let Err(e) = self.db.raft_delete_range(prefix.as_bytes(), &upper) {
+                tracing::error!(queue_id, error = %e, "error cleaning up queue Raft storage");
+            }
+
             info!(queue_id, "removed queue Raft group");
         }
     }
