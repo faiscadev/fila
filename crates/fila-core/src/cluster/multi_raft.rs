@@ -44,6 +44,10 @@ impl MultiRaftManager {
         members: &[NodeId],
         member_addrs: &HashMap<NodeId, String>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if members.is_empty() {
+            return Err("cannot create queue raft group with empty members".into());
+        }
+
         let store = FilaRaftStore::for_queue(Arc::clone(&self.db), queue_id);
         let (log_store, state_machine) = Adaptor::new(store);
         let network = FilaNetworkFactory::for_queue(queue_id.to_string());
@@ -60,22 +64,32 @@ impl MultiRaftManager {
 
         // Bootstrap the group if this node is the smallest member
         // (only one node should bootstrap to avoid conflicts).
-        let min_member = members.iter().copied().min().unwrap_or(0);
+        let min_member = members.iter().copied().min().expect("members is non-empty");
         if self.node_id == min_member {
             let mut member_map = std::collections::BTreeMap::new();
             for &node_id in members {
-                if let Some(addr) = member_addrs.get(&node_id) {
-                    member_map.insert(node_id, BasicNode { addr: addr.clone() });
-                }
+                let addr = member_addrs
+                    .get(&node_id)
+                    .ok_or_else(|| format!("missing address for member node {node_id}"))?;
+                member_map.insert(node_id, BasicNode { addr: addr.clone() });
             }
-            if let Err(e) = raft.initialize(member_map).await {
-                // Ignore "already initialized" — can happen if we restart and
-                // the group was previously bootstrapped.
-                tracing::debug!(
-                    queue_id,
-                    error = %e,
-                    "initialize queue raft group (may already be initialized)"
-                );
+            match raft.initialize(member_map).await {
+                Ok(_) => {}
+                Err(e) => {
+                    // openraft returns NotAllowed when already initialized —
+                    // this can happen on restart when the group was previously
+                    // bootstrapped. Any other error is unexpected.
+                    let err_str = format!("{e}");
+                    if err_str.contains("not allowed") || err_str.contains("NotAllowed") {
+                        tracing::debug!(
+                            queue_id,
+                            error = %e,
+                            "queue raft group already initialized"
+                        );
+                    } else {
+                        return Err(Box::new(e));
+                    }
+                }
             }
         }
 
