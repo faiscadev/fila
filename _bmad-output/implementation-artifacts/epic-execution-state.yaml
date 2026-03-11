@@ -1,0 +1,19 @@
+epic: "Epic 13: Storage Abstraction & Clustering Prep"
+baseBranch: main
+startedAt: "2026-03-10"
+stories:
+  - id: "13.1"
+    title: "Clean Storage Trait Abstraction"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/13.1-clean-storage-trait-abstraction"
+    pr: null
+    dependsOn: []
+  - id: "13.2"
+    title: "Phase 2 Viability Seams"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["13.1"]
+skippedIssues: []
