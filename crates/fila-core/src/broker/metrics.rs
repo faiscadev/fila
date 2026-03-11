@@ -364,12 +364,7 @@ pub mod test_harness {
         }
 
         /// Assert an i64 gauge has the expected value for given attributes.
-        pub fn assert_gauge_i64(
-            &self,
-            metric_name: &str,
-            attrs: &[KeyValue],
-            expected: i64,
-        ) {
+        pub fn assert_gauge_i64(&self, metric_name: &str, attrs: &[KeyValue], expected: i64) {
             self.flush();
             let metrics = self.finished_metrics();
             let value = gauge_value_i64(&metrics, metric_name, attrs);

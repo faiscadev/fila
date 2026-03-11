@@ -27,7 +27,8 @@ impl Scheduler {
 
             // DRR active keys gauge + per-key deficit and weight gauges
             let key_stats = self.drr.key_stats(queue_id);
-            self.metrics.set_drr_active_keys(queue_id, key_stats.len() as u64);
+            self.metrics
+                .set_drr_active_keys(queue_id, key_stats.len() as u64);
             for (key, deficit, weight) in &key_stats {
                 self.metrics.set_drr_deficit(queue_id, key, *deficit);
                 self.metrics.set_drr_weight(queue_id, key, *weight as u64);
