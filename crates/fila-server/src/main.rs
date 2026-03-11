@@ -6,7 +6,7 @@ mod trace_context;
 use std::path::Path;
 use std::sync::Arc;
 
-use fila_core::{Broker, BrokerConfig, RocksDbStorage};
+use fila_core::{Broker, BrokerConfig, RocksDbEngine};
 use fila_proto::fila_admin_server::FilaAdminServer;
 use fila_proto::fila_service_server::FilaServiceServer;
 use tonic::transport::Server;
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen_addr = config.server.listen_addr.clone();
 
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
-    let storage = Arc::new(RocksDbStorage::open(&data_dir)?);
+    let storage = Arc::new(RocksDbEngine::open(&data_dir)?);
 
     let broker = Arc::new(Broker::new(config, storage)?);
 

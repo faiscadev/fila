@@ -1,7 +1,7 @@
 use super::*;
 use crate::broker::config::SchedulerConfig;
 use crate::message::Message;
-use crate::storage::RocksDbStorage;
+use crate::storage::RocksDbEngine;
 use std::collections::HashMap;
 use uuid::Uuid;
 

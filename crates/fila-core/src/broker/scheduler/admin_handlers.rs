@@ -244,14 +244,14 @@ impl Scheduler {
 
             // Atomic move: delete from DLQ, put in parent queue
             let ops = vec![
-                WriteBatchOp::DeleteMessage { key: dlq_key },
-                WriteBatchOp::PutMessage {
+                Mutation::DeleteMessage { key: dlq_key },
+                Mutation::PutMessage {
                     key: parent_key.clone(),
                     value: msg_value,
                 },
             ];
-            if let Err(e) = self.storage.write_batch(ops) {
-                warn!(error = %e, msg_id = %msg.id, "write_batch failed during redrive, returning partial count");
+            if let Err(e) = self.storage.apply_mutations(ops) {
+                warn!(error = %e, msg_id = %msg.id, "apply_mutations failed during redrive, returning partial count");
                 break;
             }
 

@@ -7,7 +7,7 @@ use rocksdb::{
 use crate::error::{StorageError, StorageResult};
 use crate::message::Message;
 use crate::queue::QueueConfig;
-use crate::storage::traits::{Storage, WriteBatchOp};
+use crate::storage::traits::{Mutation, StorageEngine};
 
 const CF_MESSAGES: &str = "messages";
 const CF_LEASES: &str = "leases";
@@ -21,11 +21,11 @@ const COLUMN_FAMILIES: &[&str] = &[CF_MESSAGES, CF_LEASES, CF_LEASE_EXPIRY, CF_Q
 type DB = DBWithThreadMode<MultiThreaded>;
 
 /// RocksDB-backed storage implementation.
-pub struct RocksDbStorage {
+pub struct RocksDbEngine {
     db: DB,
 }
 
-impl RocksDbStorage {
+impl RocksDbEngine {
     /// Open or create a RocksDB database at the given path with all column families.
     pub fn open(path: impl AsRef<Path>) -> StorageResult<Self> {
         let mut db_opts = Options::default();
@@ -50,11 +50,11 @@ impl RocksDbStorage {
     ) -> StorageResult<std::sync::Arc<rocksdb::BoundColumnFamily<'_>>> {
         self.db
             .cf_handle(name)
-            .ok_or(StorageError::ColumnFamilyNotFound(name))
+            .ok_or(StorageError::StoreNotFound(name))
     }
 }
 
-impl Storage for RocksDbStorage {
+impl StorageEngine for RocksDbEngine {
     fn put_message(&self, key: &[u8], message: &Message) -> StorageResult<()> {
         let cf = self.cf(CF_MESSAGES)?;
         let value = serde_json::to_vec(message)?;
@@ -200,39 +200,39 @@ impl Storage for RocksDbStorage {
         Ok(result)
     }
 
-    fn write_batch(&self, ops: Vec<WriteBatchOp>) -> StorageResult<()> {
+    fn apply_mutations(&self, mutations: Vec<Mutation>) -> StorageResult<()> {
         let mut batch = WriteBatch::default();
 
-        for op in ops {
-            match op {
-                WriteBatchOp::PutMessage { key, value } => {
+        for mutation in mutations {
+            match mutation {
+                Mutation::PutMessage { key, value } => {
                     batch.put_cf(&self.cf(CF_MESSAGES)?, &key, &value);
                 }
-                WriteBatchOp::DeleteMessage { key } => {
+                Mutation::DeleteMessage { key } => {
                     batch.delete_cf(&self.cf(CF_MESSAGES)?, &key);
                 }
-                WriteBatchOp::PutLease { key, value } => {
+                Mutation::PutLease { key, value } => {
                     batch.put_cf(&self.cf(CF_LEASES)?, &key, &value);
                 }
-                WriteBatchOp::DeleteLease { key } => {
+                Mutation::DeleteLease { key } => {
                     batch.delete_cf(&self.cf(CF_LEASES)?, &key);
                 }
-                WriteBatchOp::PutLeaseExpiry { key } => {
+                Mutation::PutLeaseExpiry { key } => {
                     batch.put_cf(&self.cf(CF_LEASE_EXPIRY)?, &key, b"");
                 }
-                WriteBatchOp::DeleteLeaseExpiry { key } => {
+                Mutation::DeleteLeaseExpiry { key } => {
                     batch.delete_cf(&self.cf(CF_LEASE_EXPIRY)?, &key);
                 }
-                WriteBatchOp::PutQueue { key, value } => {
+                Mutation::PutQueue { key, value } => {
                     batch.put_cf(&self.cf(CF_QUEUES)?, &key, &value);
                 }
-                WriteBatchOp::DeleteQueue { key } => {
+                Mutation::DeleteQueue { key } => {
                     batch.delete_cf(&self.cf(CF_QUEUES)?, &key);
                 }
-                WriteBatchOp::PutState { key, value } => {
+                Mutation::PutState { key, value } => {
                     batch.put_cf(&self.cf(CF_STATE)?, &key, &value);
                 }
-                WriteBatchOp::DeleteState { key } => {
+                Mutation::DeleteState { key } => {
                     batch.delete_cf(&self.cf(CF_STATE)?, &key);
                 }
             }
@@ -245,7 +245,7 @@ impl Storage for RocksDbStorage {
     fn flush(&self) -> StorageResult<()> {
         self.db
             .flush_wal(true)
-            .map_err(|e| StorageError::RocksDb(e.to_string()))?;
+            .map_err(|e| StorageError::Engine(e.to_string()))?;
         Ok(())
     }
 }
@@ -257,9 +257,9 @@ mod tests {
     use std::collections::HashMap;
     use uuid::Uuid;
 
-    fn test_storage() -> (RocksDbStorage, tempfile::TempDir) {
+    fn test_storage() -> (RocksDbEngine, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let storage = RocksDbStorage::open(dir.path()).unwrap();
+        let storage = RocksDbEngine::open(dir.path()).unwrap();
         (storage, dir)
     }
 
@@ -450,10 +450,10 @@ mod tests {
         let ek3 = keys::lease_expiry_key(5000, "q1", &id3);
 
         storage
-            .write_batch(vec![
-                WriteBatchOp::PutLeaseExpiry { key: ek1.clone() },
-                WriteBatchOp::PutLeaseExpiry { key: ek2.clone() },
-                WriteBatchOp::PutLeaseExpiry { key: ek3.clone() },
+            .apply_mutations(vec![
+                Mutation::PutLeaseExpiry { key: ek1.clone() },
+                Mutation::PutLeaseExpiry { key: ek2.clone() },
+                Mutation::PutLeaseExpiry { key: ek3.clone() },
             ])
             .unwrap();
 
@@ -481,16 +481,16 @@ mod tests {
 
         // Atomic write: message + lease + lease_expiry
         storage
-            .write_batch(vec![
-                WriteBatchOp::PutMessage {
+            .apply_mutations(vec![
+                Mutation::PutMessage {
                     key: msg_key.clone(),
                     value: msg_value,
                 },
-                WriteBatchOp::PutLease {
+                Mutation::PutLease {
                     key: lease_key.clone(),
                     value: lease_val.clone(),
                 },
-                WriteBatchOp::PutLeaseExpiry {
+                Mutation::PutLeaseExpiry {
                     key: expiry_key.clone(),
                 },
             ])
@@ -505,14 +505,14 @@ mod tests {
 
         // Atomic delete: message + lease + lease_expiry
         storage
-            .write_batch(vec![
-                WriteBatchOp::DeleteMessage {
+            .apply_mutations(vec![
+                Mutation::DeleteMessage {
                     key: msg_key.clone(),
                 },
-                WriteBatchOp::DeleteLease {
+                Mutation::DeleteLease {
                     key: lease_key.clone(),
                 },
-                WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                Mutation::DeleteLeaseExpiry { key: expiry_key },
             ])
             .unwrap();
 
@@ -529,7 +529,7 @@ mod tests {
 
         // Write data
         {
-            let storage = RocksDbStorage::open(dir.path()).unwrap();
+            let storage = RocksDbEngine::open(dir.path()).unwrap();
             let config = QueueConfig::new("persistent-queue".to_string());
             storage.put_queue("persistent-queue", &config).unwrap();
             storage.put_state("my-key", b"my-value").unwrap();
@@ -537,7 +537,7 @@ mod tests {
 
         // Reopen and verify
         {
-            let storage = RocksDbStorage::open(dir.path()).unwrap();
+            let storage = RocksDbEngine::open(dir.path()).unwrap();
             let config = storage.get_queue("persistent-queue").unwrap().unwrap();
             assert_eq!(config.name, "persistent-queue");
             let val = storage.get_state("my-key").unwrap().unwrap();

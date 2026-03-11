@@ -51,11 +51,11 @@ impl Scheduler {
                 Ok(None) => {
                     // Message not found — orphaned lease entry, just clean up
                     warn!(%queue_id, %msg_id, "orphaned lease_expiry entry, message not found");
-                    let _ = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease {
+                    let _ = self.storage.apply_mutations(vec![
+                        Mutation::DeleteLease {
                             key: lease_key.clone(),
                         },
-                        WriteBatchOp::DeleteLeaseExpiry {
+                        Mutation::DeleteLeaseExpiry {
                             key: expiry_key.clone(),
                         },
                     ]);
@@ -72,9 +72,9 @@ impl Scheduler {
                 Ok(Some(msg)) => msg,
                 Ok(None) => {
                     warn!(%queue_id, %msg_id, "message key found but message missing");
-                    let _ = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease { key: lease_key },
-                        WriteBatchOp::DeleteLeaseExpiry {
+                    let _ = self.storage.apply_mutations(vec![
+                        Mutation::DeleteLease { key: lease_key },
+                        Mutation::DeleteLeaseExpiry {
                             key: expiry_key.clone(),
                         },
                     ]);
@@ -99,13 +99,13 @@ impl Scheduler {
                 }
             };
 
-            if let Err(e) = self.storage.write_batch(vec![
-                WriteBatchOp::PutMessage {
+            if let Err(e) = self.storage.apply_mutations(vec![
+                Mutation::PutMessage {
                     key: msg_key.clone(),
                     value: msg_value,
                 },
-                WriteBatchOp::DeleteLease { key: lease_key },
-                WriteBatchOp::DeleteLeaseExpiry {
+                Mutation::DeleteLease { key: lease_key },
+                Mutation::DeleteLeaseExpiry {
                     key: expiry_key.clone(),
                 },
             ]) {

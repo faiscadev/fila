@@ -1,16 +1,16 @@
-/// Low-level storage errors (RocksDB, serialization).
-/// This is the error type for the `Storage` trait — storage operations can only
-/// fail with infrastructure errors, never domain errors.
+/// Low-level storage engine errors (engine failures, serialization).
+/// This is the error type for the `StorageEngine` trait — storage operations
+/// can only fail with infrastructure errors, never domain errors.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
-    #[error("rocksdb error: {0}")]
-    RocksDb(String),
+    #[error("storage engine error: {0}")]
+    Engine(String),
 
     #[error("serialization error: {0}")]
     Serialization(String),
 
-    #[error("column family not found: {0}")]
-    ColumnFamilyNotFound(&'static str),
+    #[error("store not found: {0}")]
+    StoreNotFound(&'static str),
 
     #[error("corrupt data: {0}")]
     CorruptData(String),
@@ -18,7 +18,7 @@ pub enum StorageError {
 
 impl From<rocksdb::Error> for StorageError {
     fn from(err: rocksdb::Error) -> Self {
-        StorageError::RocksDb(err.into_string())
+        StorageError::Engine(err.into_string())
     }
 }
 

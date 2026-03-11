@@ -11,7 +11,7 @@ use crate::broker::drr::DrrScheduler;
 use crate::broker::metrics::Metrics;
 use crate::broker::throttle::ThrottleManager;
 use crate::lua::LuaEngine;
-use crate::storage::{Storage, WriteBatchOp};
+use crate::storage::{Mutation, StorageEngine};
 
 mod admin_handlers;
 mod delivery;
@@ -36,7 +36,7 @@ pub(super) struct PendingEntry {
 /// Single-threaded scheduler core. Owns all mutable scheduler state and
 /// processes commands from IO threads via a crossbeam channel.
 pub struct Scheduler {
-    storage: Arc<dyn Storage>,
+    storage: Arc<dyn StorageEngine>,
     inbound: Receiver<SchedulerCommand>,
     idle_timeout: Duration,
     running: bool,
@@ -69,7 +69,7 @@ pub struct Scheduler {
 
 impl Scheduler {
     pub fn new(
-        storage: Arc<dyn Storage>,
+        storage: Arc<dyn StorageEngine>,
         inbound: Receiver<SchedulerCommand>,
         config: &SchedulerConfig,
         lua_config: &LuaConfig,
@@ -273,7 +273,7 @@ impl Scheduler {
 
     /// Access the storage layer (used by tests).
     #[cfg(test)]
-    pub fn storage(&self) -> &dyn Storage {
+    pub fn storage(&self) -> &dyn StorageEngine {
         self.storage.as_ref()
     }
 }

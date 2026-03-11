@@ -232,12 +232,12 @@ impl Scheduler {
             let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
             let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
 
-            if let Err(e) = self.storage.write_batch(vec![
-                WriteBatchOp::PutLease {
+            if let Err(e) = self.storage.apply_mutations(vec![
+                Mutation::PutLease {
                     key: lease_key.to_vec(),
                     value: lease_val,
                 },
-                WriteBatchOp::PutLeaseExpiry {
+                Mutation::PutLeaseExpiry {
                     key: expiry_key.clone(),
                 },
             ]) {
@@ -265,22 +265,22 @@ impl Scheduler {
                 Ok(()) => return true,
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                     warn!(%cid, msg_id = %msg.id, "consumer channel full, trying next");
-                    if let Err(e) = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease {
+                    if let Err(e) = self.storage.apply_mutations(vec![
+                        Mutation::DeleteLease {
                             key: lease_key.to_vec(),
                         },
-                        WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                        Mutation::DeleteLeaseExpiry { key: expiry_key },
                     ]) {
                         error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
                     }
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                     warn!(%cid, msg_id = %msg.id, "consumer channel closed, trying next");
-                    if let Err(e) = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease {
+                    if let Err(e) = self.storage.apply_mutations(vec![
+                        Mutation::DeleteLease {
                             key: lease_key.to_vec(),
                         },
-                        WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                        Mutation::DeleteLeaseExpiry { key: expiry_key },
                     ]) {
                         error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
                     }
