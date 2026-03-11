@@ -140,6 +140,8 @@ None — clean implementation.
 - `FilaNetworkFactory` is now per-group scoped (meta vs queue) and carries `group_id` in outgoing RPCs.
 - Bootstrap logic: smallest node ID in the members list bootstraps the queue group to avoid conflicts.
 - 309 total tests (up from 305), 4 new multi-Raft integration tests.
+- Code review fix: `remove_group` now cleans up key-prefixed RocksDB data to prevent stale data on queue re-creation.
+- Code review fix: Proto `RaftRequest.group_id` field number corrected from 3 to 2.
 
 ### File List
 
