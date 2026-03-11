@@ -28,7 +28,7 @@ stories:
     status: in-progress
     currentPhase: "pr-ci"
     branch: "feat/14.4-replication-failover-recovery"
-    pr: null
+    pr: 59
     dependsOn: ["14.1", "14.2", "14.3"]
   - id: "14.5"
     title: "Cluster Observability & Scaling Validation"
