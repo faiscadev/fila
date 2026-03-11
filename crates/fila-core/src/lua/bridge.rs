@@ -45,7 +45,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
-        // Pre-populate state CF
+        // Pre-populate state store
         storage.put_state("max_retries", b"3").unwrap();
         storage.put_state("queue_name", b"orders").unwrap();
 

@@ -1,7 +1,7 @@
 use super::*;
 
 impl Scheduler {
-    /// Find the full message key in the messages CF by scanning the queue prefix.
+    /// Find the full message key in the message store by scanning the queue prefix.
     pub(super) fn find_message_key(
         &self,
         queue_id: &str,

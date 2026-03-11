@@ -1,7 +1,7 @@
 use super::*;
 
 impl Scheduler {
-    /// Throttle config key prefix. Keys in the state CF starting with this
+    /// Throttle config key prefix. Keys in the state store starting with this
     /// prefix are treated as throttle rate configurations.
     pub(super) const THROTTLE_PREFIX: &'static str = "throttle.";
 

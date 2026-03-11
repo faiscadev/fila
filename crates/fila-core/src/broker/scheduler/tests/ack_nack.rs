@@ -43,7 +43,7 @@ fn ack_removes_message_lease_and_expiry() {
     // Ack should succeed
     assert!(ack_rx.try_recv().unwrap().is_ok());
 
-    // Message should be gone from messages CF
+    // Message should be gone from message store
     let msg_key = crate::storage::keys::message_key("ack-queue", "default", 1_000_000_000, &msg_id);
     assert!(
         scheduler.storage().get_message(&msg_key).unwrap().is_none(),
@@ -270,7 +270,7 @@ fn nack_removes_lease_and_lease_expiry() {
         .unwrap();
     assert!(
         expired.is_empty(),
-        "lease_expiry CF should be empty after nack, found {} entries",
+        "lease expiry store should be empty after nack, found {} entries",
         expired.len()
     );
 }
@@ -561,12 +561,12 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
         "lease should be deleted after expiry reclaim"
     );
 
-    // lease_expiry CF should be empty
+    // lease expiry store should be empty
     let far_future = crate::storage::keys::lease_expiry_key(u64::MAX, "", &Uuid::nil());
     let expired = storage.list_expired_leases(&far_future).unwrap();
     assert!(
         expired.is_empty(),
-        "lease_expiry CF should be empty after reclaim, found {} entries",
+        "lease expiry store should be empty after reclaim, found {} entries",
         expired.len()
     );
 

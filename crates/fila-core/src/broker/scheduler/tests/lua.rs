@@ -112,7 +112,7 @@ fn queue_without_script_uses_defaults() {
 fn on_enqueue_reads_config_via_fila_get() {
     let (tx, mut scheduler, _dir) = test_setup();
 
-    // Write a config value to the state CF that the Lua script will read
+    // Write a config value to the state store that the Lua script will read
     scheduler
         .storage()
         .put_state("default_tenant", b"megacorp")
