@@ -24,7 +24,7 @@ impl Progress {
 
     pub fn inc(&mut self) {
         self.count += 1;
-        if self.count % self.log_interval == 0 || self.count == self.total {
+        if self.count.is_multiple_of(self.log_interval) || self.count == self.total {
             let elapsed = self.start.elapsed().as_secs_f64();
             let rate = self.count as f64 / elapsed;
             eprintln!(

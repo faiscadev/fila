@@ -140,7 +140,7 @@ development_status:
   # See _bmad/docs/research/decoupled-scheduler-sharded-storage.md for rationale.
   # PRs #49-53 closed without merge.
   epic-13: in-progress
-  13-1-clean-storage-trait-abstraction: in-progress
+  13-1-clean-storage-trait-abstraction: review
   13-2-phase-2-viability-seams: backlog
   epic-13-retrospective: optional
 
