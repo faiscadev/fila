@@ -259,7 +259,7 @@ fn drr_fairness_accuracy_10k_messages_6_keys() {
 
     // Custom setup: larger channel (all commands fit), smaller quantum
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let config = SchedulerConfig {
         command_channel_capacity: total_msgs + 100, // room for all commands
         idle_timeout_ms: 50,
@@ -451,7 +451,7 @@ fn drr_weight_update_changes_proportions() {
     // Per round: key_a gets 3*5=15 msgs, key_b gets 1*5=5 msgs.
     // ~2 rounds → key_a≈30, key_b≈10 → 3:1 ratio.
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let config = SchedulerConfig {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,

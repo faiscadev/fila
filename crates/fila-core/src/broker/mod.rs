@@ -12,7 +12,7 @@ use std::thread;
 use tracing::info;
 
 use crate::error::{BrokerError, BrokerResult};
-use crate::storage::Storage;
+use crate::storage::StorageEngine;
 
 pub use command::{QueueSummary, ReadyMessage, SchedulerCommand};
 pub use config::BrokerConfig;
@@ -30,7 +30,7 @@ pub struct Broker {
 impl Broker {
     /// Create a new broker, spawning the scheduler on a dedicated OS thread.
     #[tracing::instrument(skip_all, fields(listen_addr = %config.server.listen_addr))]
-    pub fn new(config: BrokerConfig, storage: Arc<dyn Storage>) -> BrokerResult<Self> {
+    pub fn new(config: BrokerConfig, storage: Arc<dyn StorageEngine>) -> BrokerResult<Self> {
         let (tx, rx) = crossbeam_channel::bounded::<SchedulerCommand>(
             config.scheduler.command_channel_capacity,
         );
@@ -99,13 +99,13 @@ impl Drop for Broker {
 mod tests {
     use super::*;
     use crate::message::Message;
-    use crate::storage::RocksDbStorage;
+    use crate::storage::RocksDbEngine;
     use std::collections::HashMap;
     use uuid::Uuid;
 
     fn test_broker() -> (Broker, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
         let config = BrokerConfig {
             scheduler: config::SchedulerConfig {
                 command_channel_capacity: 100,

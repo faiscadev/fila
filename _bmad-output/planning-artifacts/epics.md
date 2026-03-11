@@ -57,7 +57,7 @@ NFR33: Storage footprint < 1.5x raw message data (overhead from indexing and met
 
 ### Additional Requirements
 
-- Storage engine and clustering are a coupled workstream — must be designed together. Storage abstraction should be partition-aware from day 1. Build single-node first, extend to multi-node.
+- Storage engine and clustering are a coupled workstream — must be designed together. Clean storage trait abstraction enables future engine swaps. CockroachDB-style Raft-per-queue model: shard by queue, not by partition. RocksDB is sufficient as Raft state machine backend; purpose-built engine is a future optimization.
 - "Zero graduation" positioning requires published benchmark data — teams consume published benchmarks during evaluation, rarely run their own.
 - Benchmark yourself first (throughput ceiling, latency percentiles, RocksDB compaction impact, memory footprint), competitive comparison second.
 - Continuous benchmarks on PRs — shift-left, not just per-release.
@@ -73,10 +73,10 @@ NFR33: Storage footprint < 1.5x raw message data (overhead from indexing and met
 FR63: Epic 12 — Continuous benchmark suite on every PR
 FR64: Epic 12 — Published competitive benchmarks vs Kafka/RabbitMQ/NATS
 FR65: Epic 12 — Benchmark dashboard — throughput, latency, resources over time
-FR66: Epic 13 — Purpose-built storage engine replacing RocksDB
-FR67: Epic 14 — Multi-node clusters with embedded Raft
-FR68: Epic 14 — Invisible partitioning — automatic queue distribution
-FR69: Epic 14 — Transparent consumer routing to correct partition
+FR66: Deferred (post-clustering optimization) — Purpose-built storage engine replacing RocksDB
+FR67: Epic 14 — Multi-node clusters with embedded Raft (Raft-per-queue model)
+FR68: Epic 14 — Automatic queue distribution across cluster nodes
+FR69: Epic 14 — Transparent consumer routing to queue's Raft leader
 FR70: Epic 14 — Cluster-wide aggregated queue stats
 FR71: Epic 15 — mTLS for transport security
 FR72: Epic 15 — API key authentication
@@ -93,13 +93,13 @@ FR78: Epic 17 — Built-in Lua helpers for common patterns
 Developers get automatic performance regression detection on every PR. Evaluators can compare Fila's published benchmark data against Kafka, RabbitMQ, and NATS for queue workloads. Operators can track throughput, latency percentiles, and resource usage over time. This is the data-driven foundation — you can't improve what you can't measure.
 **FRs covered:** FR63, FR64, FR65
 
-### Epic 13: Purpose-Built Storage Engine
-Operators get predictable latency and higher throughput from a storage engine optimized for queue access patterns — sequential writes, TTL expiry, consumer cursors, high-throughput append. Replaces RocksDB with a purpose-built engine. The storage abstraction is designed with partition-awareness from day 1 (enabling Epic 14) but delivers standalone value: no compaction stalls, better write throughput, efficient TTL expiry.
-**FRs covered:** FR66
-**NFRs addressed:** NFR30, NFR31, NFR32, NFR33
+### Epic 13: Storage Abstraction & Clustering Prep
+Clean storage trait abstraction using Fila-domain terms (not RocksDB internals) and phase 2 viability seams for the Raft-per-queue clustering model. RocksDB remains the storage engine — under Raft it serves as a local state machine backend, making a custom engine a future optimization rather than a prerequisite. The storage trait enables future engine swaps and provides a clean interface for Raft state machine application.
+**FRs covered:** (preparatory — enables FR67-FR70)
+**Note:** FR66 (purpose-built storage engine) deferred to post-clustering. NFR30-33 deferred with it.
 
 ### Epic 14: Clustering & Horizontal Scaling
-Operators can deploy multi-node Fila clusters with embedded Raft consensus — zero external dependencies, single binary stays single binary. Users create queues; Fila distributes and rebalances partitions automatically. Consumers connect to any node and are transparently routed. Queue semantics never leak the log — no offsets, no rebalancing exposed to users. The "zero graduation" vision realized: scales like Kafka, works like a queue.
+Operators can deploy multi-node Fila clusters with embedded Raft consensus — zero external dependencies, single binary stays single binary. CockroachDB-style single-binary model: every node runs the same code (storage + scheduler + gateway), cluster self-organizes. Each queue is a Raft group with one leader handling scheduling, storage, and delivery. Followers replicate everything via Raft. Users create queues; Fila distributes them across nodes automatically. Queue semantics never leak — no offsets, no partitions exposed to users.
 **FRs covered:** FR67, FR68, FR69, FR70
 **NFRs addressed:** NFR22, NFR23, NFR24, NFR25, NFR26
 
@@ -206,117 +206,62 @@ So that I can reference performance data during architecture evaluation.
 
 ---
 
-## Epic 13: Purpose-Built Storage Engine
+## Epic 13: Storage Abstraction & Clustering Prep
 
-Operators get predictable latency and higher throughput from a storage engine optimized for queue access patterns — sequential writes, TTL expiry, consumer cursors, high-throughput append. Replaces RocksDB with a purpose-built engine. The storage abstraction is designed with partition-awareness from day 1 (enabling Epic 14) but delivers standalone value: no compaction stalls, better write throughput, efficient TTL expiry.
+Clean storage trait abstraction using Fila-domain terms (not RocksDB internals) and phase 2 viability seams for the Raft-per-queue clustering model. RocksDB remains the storage engine — under Raft it serves as a local state machine backend, making a custom engine a future optimization rather than a prerequisite. The storage trait enables future engine swaps and provides a clean interface for Raft state machine application.
 
-### Story 13.1: Storage Trait Abstraction & RocksDB Adapter
+> **Context:** This epic was reshaped from a 5-story purpose-built storage engine epic based on clustering architecture research (see `_bmad/docs/research/decoupled-scheduler-sharded-storage.md`). The research found that RocksDB is sufficient under Raft and that sharding should be by queue, not by Kafka-style partitions. The original Epic 13 PRs (#49-53) were closed without merge.
+
+### Story 13.1: Clean Storage Trait Abstraction
 
 As a developer,
-I want a clean storage engine trait that abstracts away the storage backend,
-So that the storage implementation can be swapped without changing broker logic.
+I want a clean storage engine trait using Fila-domain terms,
+So that the storage implementation can be swapped without changing broker logic, and the interface is ready for Raft state machine application.
 
 **Acceptance Criteria:**
 
 **Given** the existing codebase uses RocksDB directly throughout fila-core
 **When** the storage abstraction is implemented
 **Then** a `StorageEngine` trait is defined with methods covering all current storage operations: message CRUD, lease management, queue config, state/config operations, expiry scanning
-**And** the trait design is partition-namespace-aware: all operations accept a partition identifier (initially a single default partition, extensible to multi-partition for Epic 14)
+**And** the trait uses Fila-domain terms: message store, lease store, config store — not RocksDB concepts (column families, raw iterators, write batches)
+**And** the trait does NOT use PartitionId — queues are the unit of distribution in the Raft-per-queue model
+**And** the trait supports atomic batch mutations (`apply_mutations(batch)`) suitable for Raft state machine application (applying committed log entries)
 **And** a `RocksDbEngine` struct implements the `StorageEngine` trait, wrapping all existing RocksDB logic
 **And** all broker and scheduler code is migrated from direct RocksDB calls to `StorageEngine` trait methods
 **And** all existing unit and integration tests pass without modification to test assertions (only internal wiring changes)
 **And** the e2e test suite (11 tests) passes with the RocksDB adapter
 **And** the trait is defined in fila-core with no RocksDB-specific types in the trait interface (RocksDB is an implementation detail)
-**And** the partition namespace parameter has a default single-partition implementation that preserves current key encoding
 
-### Story 13.2: Write Path — WAL & Segment Log
-
-As a developer,
-I want a write-ahead log and segment-based storage engine optimized for queue write patterns,
-So that append-heavy workloads achieve higher throughput than RocksDB.
-
-**Acceptance Criteria:**
-
-**Given** the `StorageEngine` trait exists from Story 13.1
-**When** the new write path is implemented
-**Then** an append-only WAL accepts writes (enqueue, ack, nack, lease, config) as serialized entries
-**And** the WAL is fsync'd at configurable intervals (default: per batch or every N ms) for durability guarantees
-**And** WAL entries are grouped into segments of configurable size (default: 64MB)
-**And** write batching groups multiple operations into a single WAL append for throughput
-**And** completed segments are immutable and available for background processing
-**And** crash recovery replays the WAL from the last checkpoint to rebuild state
-**And** the write path implements the `StorageEngine` trait's write methods
-**And** unit tests verify WAL crash recovery: write N entries, simulate crash, replay, verify all entries recovered
-**And** unit tests verify segment rotation: write beyond segment size, verify new segment created, old segment sealed
-
-### Story 13.3: Read Path & Indexing
+### Story 13.2: Phase 2 Viability Seams
 
 As a developer,
-I want efficient index structures for queue read patterns,
-So that message retrieval, TTL expiry, and consumer cursor tracking are fast without full scans.
+I want thin architectural seams that enable future hierarchical queue scaling,
+So that phase 2 (splitting hot queues across multiple Raft groups) is a matter of implementing new logic behind existing interfaces, not rearchitecting the core.
 
 **Acceptance Criteria:**
 
-**Given** the WAL and segment log exist from Story 13.2
-**When** the read path and index structures are implemented
-**Then** an in-memory message index maps `(queue, fairness_key)` to ordered message references for O(1) next-message lookup
-**And** the message index is rebuilt from segments + WAL on startup (crash recovery)
-**And** a TTL expiry index tracks message expiration times, supporting efficient range queries without full-table scans (NFR32)
-**And** a lease tracking index maps active leases to expiry times for visibility timeout scanning
-**And** consumer cursor state tracks per-consumer delivery position for streaming
-**And** the read path implements the `StorageEngine` trait's read and scan methods
-**And** all index structures are maintained incrementally on writes (not rebuilt per-read)
-**And** unit tests verify: message retrieval by queue+fairness_key ordering, TTL expiry scanning returns only expired messages, lease expiry scanning correctness
-**And** the read path handles segment boundaries transparently (messages spanning multiple segments)
-
-### Story 13.4: Background Maintenance & Compaction
-
-As an operator,
-I want background storage maintenance that doesn't cause latency spikes,
-So that the broker maintains predictable performance under sustained load.
-
-**Acceptance Criteria:**
-
-**Given** the WAL, segment log, and index structures exist from Stories 13.2–13.3
-**When** background maintenance runs
-**Then** acknowledged messages are compacted from segments (dead entry removal) without blocking the write or read path
-**And** compaction is rate-limited to prevent I/O spikes that affect foreground latency (NFR31: no spikes > 10ms p99)
-**And** TTL-expired messages are reclaimed during compaction without requiring full-segment scans
-**And** storage footprint stays below 1.5x raw message data after compaction (NFR33)
-**And** compaction runs on a background thread with configurable scheduling (interval or threshold-based)
-**And** compaction progress is observable via OTel metrics: segments compacted, bytes reclaimed, compaction duration
-**And** unit tests verify: compaction removes acknowledged messages, compaction does not affect in-flight reads, storage footprint stays within bounds after compaction cycle
-**And** latency benchmarks during active compaction verify p99 stays under 10ms (NFR31)
-
-### Story 13.5: Integration, Cutover & Validation
-
-As an operator,
-I want the new storage engine to replace RocksDB as the default backend,
-So that I get better performance and predictable latency without changing my deployment.
-
-**Acceptance Criteria:**
-
-**Given** the new storage engine implements the full `StorageEngine` trait from Stories 13.2–13.4
-**When** the engine is wired as the default storage backend
-**Then** all existing unit and integration tests pass with the new engine
-**And** all e2e blackbox tests pass with the new engine
-**And** a configuration option selects the storage backend: `storage.engine = "fila"` (default) or `storage.engine = "rocksdb"` (legacy)
-**And** RocksDB remains available as a fallback for one release cycle
-**And** a benchmark comparison (using the suite from Epic 12) shows the new engine meets NFR30 (>= 2x write throughput), NFR31 (no p99 spikes > 10ms), NFR32 (efficient TTL), NFR33 (< 1.5x footprint)
-**And** the migration path for existing deployments is documented: new installations use the new engine by default, existing RocksDB deployments continue working with `storage.engine = "rocksdb"`
-**And** no data migration tool is needed — engine selection is per-deployment, not per-upgrade
+**Given** the storage trait and broker code from Story 13.1
+**When** viability seams are added
+**Then** a routing indirection layer maps `(queue, fairness_key)` → `RaftGroup` — in phase 1 the implementation is trivial (every fairness key in a queue maps to the same group, 1:1), but the indirection exists in the code path
+**And** DRR is scoped to a key-set parameter: the scheduler runs DRR over "the fairness keys I'm responsible for" — in phase 1 this happens to be all keys in the queue, but the scope is explicit, not hardcoded
+**And** each queue emits aggregate scheduling stats as OTel metrics: messages scheduled per fairness key, current deficit state, throughput — in phase 1 these are consumed only for observability
+**And** the enqueue path threads `fairness_key` through the routing decision: routing is by `(queue, fairness_key)`, not just queue — in phase 1 the fairness key is ignored in routing (all go to the same group)
+**And** all 278 tests + 11 e2e tests pass with zero behavioral changes
+**And** no speculative abstractions or premature engineering — these are thin seams, not full implementations
 
 ---
 
 ## Epic 14: Clustering & Horizontal Scaling
 
-Operators can deploy multi-node Fila clusters with embedded Raft consensus — zero external dependencies, single binary stays single binary. Users create queues; Fila distributes and rebalances partitions automatically. Consumers connect to any node and are transparently routed. Queue semantics never leak the log — no offsets, no rebalancing exposed to users. The "zero graduation" vision realized: scales like Kafka, works like a queue.
+Operators can deploy multi-node Fila clusters with embedded Raft consensus — zero external dependencies, single binary stays single binary. CockroachDB-style single-binary model: every node runs the same code (storage + scheduler + gateway), cluster self-organizes. Each queue is a Raft group with one leader handling scheduling, storage, and delivery for that queue. Followers replicate everything via Raft. Users create queues; Fila distributes them across nodes automatically. Queue semantics never leak — no offsets, no partitions exposed to users. The "zero graduation" vision realized: scales like Kafka, works like a queue.
 
-### Story 14.1: Raft Consensus & Cluster Bootstrap
+> **Architecture:** See `_bmad/docs/research/decoupled-scheduler-sharded-storage.md` for the full research and design rationale.
 
-As an operator,
-I want to bootstrap a multi-node Fila cluster using embedded Raft consensus,
-So that I can deploy highly available message infrastructure without external dependencies.
+### Story 14.1: Raft Integration & Single-Node Mode
+
+As a developer,
+I want Raft consensus embedded in the Fila binary with zero overhead in single-node mode,
+So that clustering is built into the same binary without affecting existing single-node deployments.
 
 **Acceptance Criteria:**
 
@@ -328,56 +273,57 @@ So that I can deploy highly available message infrastructure without external de
 **And** additional nodes join an existing cluster by specifying seed peers
 **And** leader election completes within the Raft election timeout (configurable, default 1 second)
 **And** cluster membership changes (add/remove node) are committed via Raft log entries
-**And** the Raft state machine manages cluster metadata: node membership, partition assignments, queue-to-partition mapping
+**And** the Raft state machine applies committed entries to local state: message writes, DRR state, leases, pending index, config — there is no separate "storage" vs "scheduler" replication, it's one Raft log per queue
 **And** intra-cluster communication uses a dedicated gRPC service (separate from client-facing RPCs)
-**And** single-node mode (`cluster.enabled = false`, the default) continues to work exactly as before — zero behavior change for existing deployments
+**And** single-node mode (`cluster.enabled = false`, the default) continues to work exactly as before — zero Raft overhead, zero behavior change
 **And** integration tests verify: 3-node cluster bootstrap, leader election, membership change (add 4th node, remove a node)
 
-### Story 14.2: Partitioned Queue Management
+### Story 14.2: Queue-Level Raft Groups & Assignment
 
 As an operator,
-I want queues to be automatically distributed across cluster nodes,
-So that I don't have to manually manage partitions or data placement.
+I want each queue to be its own Raft group distributed across the cluster,
+So that queues scale independently and failure of one queue's leader doesn't affect other queues.
 
 **Acceptance Criteria:**
 
 **Given** a Fila cluster is running with multiple nodes (from Story 14.1)
 **When** an operator creates a queue
-**Then** the queue is assigned to one or more partitions based on a configurable partition count (default: number of nodes)
-**And** partitions are distributed across nodes for balanced load
-**And** the partition assignment is stored in Raft-replicated cluster metadata
-**And** when a node is added, partitions are rebalanced automatically across the new topology
-**And** when a node is removed, its partitions are reassigned to remaining nodes
-**And** rebalancing is gradual (one partition at a time) to minimize disruption
-**And** partition data is migrated as part of rebalancing — the source node streams partition data to the destination node
+**Then** a new Raft group is created for that queue with all N nodes as replicas (or a configurable subset for large clusters)
+**And** the queue → Raft group mapping is stored in a placement table (using the routing indirection from Epic 13 Story 13.2)
+**And** one node is elected Raft leader for the queue — the leader handles all scheduling, storage writes, and consumer delivery for that queue
+**And** leadership is balanced across nodes automatically (different queues have different leaders)
+**And** fencing tokens (Raft term number) are included on every scheduling operation — stale leaders are rejected
+**And** deleting a queue removes its Raft group
 **And** queue creation, deletion, and management RPCs work from any node (forwarded to leader if needed)
-**And** operators never interact with partitions directly — `CreateQueue` and `DeleteQueue` RPCs are unchanged (FR68)
-**And** integration tests verify: create queue on 3-node cluster, verify partitions distributed, add 4th node, verify rebalance, remove a node, verify reassignment
+**And** operators never interact with Raft groups directly — `CreateQueue` and `DeleteQueue` RPCs are unchanged (FR68)
+**And** adding a node → it joins as Raft follower for existing queue groups, cluster rebalances some queue leaderships to it
+**And** removing a node → its queue leaderships transfer to other nodes in 1-2 seconds, followers already have full state, zero data migration needed
+**And** integration tests verify: create queues on 3-node cluster, verify leadership distributed, add 4th node, verify leadership rebalance, remove a node, verify leadership transfer
 
-### Story 14.3: Request Routing & Transparent Consumer Delivery
+### Story 14.3: Request Routing & Transparent Delivery
 
 As a consumer,
 I want to connect to any Fila node and have my requests served correctly,
-So that I don't need to know which node owns which partition.
+So that I don't need to know which node is the leader for which queue.
 
 **Acceptance Criteria:**
 
-**Given** a multi-node cluster with partitioned queues (from Story 14.2)
+**Given** a multi-node cluster with queue-level Raft groups (from Story 14.2)
 **When** a client sends an Enqueue request to any node
-**Then** the receiving node routes the request to the node owning the target partition
+**Then** the receiving node routes the request to the queue's Raft leader
+**And** the leader commits the message to the Raft log — ack-after-replicate: message is committed to a quorum before the producer receives acknowledgment (NFR24)
 **And** routing is transparent — the client receives a normal response regardless of which node it connected to
-**And** the routing layer uses the partition assignment table from Raft metadata for lookup
 
 **Given** a client opens a Consume stream on any node
-**When** the queue has partitions on multiple nodes
-**Then** the consuming node merges streams from all partition owners and applies DRR scheduling across them (FR69)
-**And** Ack and Nack requests are routed to the correct partition owner based on message ID
-**And** routing adds minimal latency overhead (one network hop for cross-node requests)
-**And** clients that connect directly to the partition owner get zero routing overhead
+**When** the queue's leader is on a different node
+**Then** the consuming node proxies the stream to the queue's Raft leader — the leader handles all DRR scheduling for its queues (no cross-node DRR merging needed)
+**And** lease records are committed to Raft-replicated state before the message is sent to the consumer
+**And** Ack and Nack requests are routed to the queue's Raft leader
+**And** routing adds minimal latency overhead (one network hop for cross-node requests, zero for direct leader connections)
 **And** SDK connection strings accept multiple node addresses for automatic failover
 **And** integration tests verify: producer enqueues via node A, consumer receives via node B, ack via node C — full lifecycle across nodes
 
-### Story 14.4: Replication & Failover
+### Story 14.4: Replication, Failover & Recovery
 
 As an operator,
 I want automatic failover when a node goes down,
@@ -385,26 +331,28 @@ So that message processing continues without manual intervention or data loss.
 
 **Acceptance Criteria:**
 
-**Given** a multi-node cluster with partitioned queues (from Stories 14.1–14.3)
-**When** partition data is written
-**Then** each partition is replicated to a configurable number of replicas (default: replication factor = 3)
-**And** replication uses the Raft log — partition writes are committed only after a quorum of replicas acknowledge
+**Given** a multi-node cluster with queue-level Raft groups (from Stories 14.1–14.3)
+**When** data is written for a queue
+**Then** the Raft leader replicates everything via its Raft log: message data, DRR deficits, leases, pending index, scheduler metadata — followers have full replicated state at all times
+**And** writes are committed only after a quorum of replicas acknowledge
 **And** zero messages are lost during planned node additions and removals (NFR24)
 
 **Given** a node fails unexpectedly
-**When** the Raft leader detects the failure via heartbeat timeout
-**Then** partitions owned by the failed node are reassigned to replica nodes within 10 seconds (NFR23)
+**When** the Raft followers detect the failure via heartbeat timeout
+**Then** a new leader is elected from followers (who already have full state) within 1-2 seconds
+**And** automatic failover completes within 10 seconds (NFR23) — no data migration, no state reconstruction
 **And** consumer streams connected to the failed node receive a disconnection
 **And** consumers reconnect to healthy nodes within 5 seconds (NFR25) — SDKs handle reconnection automatically
-**And** in-flight messages on the failed node are governed by their visibility timeout (at-least-once delivery preserved)
+**And** in-flight messages are governed by their visibility timeout (at-least-once delivery preserved)
 
-**Given** the failed node recovers
+**Given** a failed node recovers
 **When** it rejoins the cluster
-**Then** it catches up from the Raft log
+**Then** it catches up from the Raft log (or receives a Raft snapshot from the leader if too far behind)
 **And** cluster state converges within 30 seconds of membership change (NFR26)
+**And** cluster rebalances some queue leaderships to the recovered node
 **And** integration tests verify: 3-node cluster, kill one node, verify failover < 10s, verify zero message loss, restart node, verify rejoin and convergence
 
-### Story 14.5: Cluster-Wide Observability & Scaling Validation
+### Story 14.5: Cluster Observability & Scaling Validation
 
 As an operator,
 I want to view aggregated stats across all cluster nodes and verify linear scaling,
@@ -415,14 +363,14 @@ So that I can monitor the cluster as a single system and trust that adding nodes
 **Given** a multi-node cluster is operational (from Stories 14.1–14.4)
 **When** an operator calls GetStats
 **Then** the response includes cluster-wide aggregated metrics: total queue depth, total throughput, per-node breakdown (FR70)
-**And** per-queue stats are aggregated across all partitions
-**And** cluster health is reported: node count, leader node, partition distribution, replication status
+**And** per-queue stats show which node is the Raft leader for each queue
+**And** cluster health is reported: node count, per-queue leader distribution, replication status per queue group
 **And** OTel metrics include cluster-level dimensions: `node_id` labels on existing metrics, cluster-level rollup metrics
 **And** the CLI `fila stats` shows cluster-wide summary when connected to any node
 
 **Given** a 2-node cluster is benchmarked using the Epic 12 benchmark suite
-**When** throughput is measured
-**Then** throughput is >= 1.8x single-node throughput (NFR22: linear scaling)
+**When** throughput is measured across multiple queues
+**Then** aggregate throughput is >= 1.8x single-node throughput (NFR22: linear scaling across queues)
 **And** the benchmark methodology documents how to reproduce the scaling test
 **And** integration tests verify: GetStats returns correct aggregated counts across a 3-node cluster
 

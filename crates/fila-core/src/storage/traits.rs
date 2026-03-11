@@ -2,9 +2,14 @@ use crate::error::StorageResult;
 use crate::message::Message;
 use crate::queue::QueueConfig;
 
-/// Represents a single operation in an atomic write batch.
+/// A single mutation to apply atomically as part of a batch.
+///
+/// Used by `StorageEngine::apply_mutations` to group multiple writes and
+/// deletes into a single atomic operation. In a Raft-replicated system,
+/// committed log entries are applied to the local state machine via a
+/// batch of `Mutation`s.
 #[derive(Debug)]
-pub enum WriteBatchOp {
+pub enum Mutation {
     PutMessage { key: Vec<u8>, value: Vec<u8> },
     DeleteMessage { key: Vec<u8> },
     PutLease { key: Vec<u8>, value: Vec<u8> },
@@ -17,15 +22,22 @@ pub enum WriteBatchOp {
     DeleteState { key: Vec<u8> },
 }
 
-/// Storage trait for all persistence operations. Implementations must be thread-safe.
+/// Storage engine trait for all persistence operations.
 ///
-/// All methods return `StorageResult` — only infrastructure errors (RocksDB,
-/// serialization) are possible. Domain errors (queue not found, etc.) are
-/// handled at the broker/scheduler layer.
-pub trait Storage: Send + Sync {
-    // --- Message operations ---
+/// Defines what Fila needs from its storage layer using domain terms:
+/// message store, lease store, queue config store, and state store.
+/// Implementations must be thread-safe (`Send + Sync`).
+///
+/// All methods return `StorageResult` — only infrastructure errors
+/// (engine failures, serialization) are possible. Domain errors
+/// (queue not found, etc.) are handled at the broker/scheduler layer.
+///
+/// In a Raft-replicated system, the storage engine serves as the local
+/// state machine backend: it applies committed entries and serves reads.
+pub trait StorageEngine: Send + Sync {
+    // --- Message store ---
 
-    /// Store a message in the messages CF.
+    /// Store a message.
     fn put_message(&self, key: &[u8], message: &Message) -> StorageResult<()>;
 
     /// Retrieve a message by its full key.
@@ -37,9 +49,9 @@ pub trait Storage: Send + Sync {
     /// List messages whose keys start with the given prefix, in lexicographic order.
     fn list_messages(&self, prefix: &[u8]) -> StorageResult<Vec<(Vec<u8>, Message)>>;
 
-    // --- Lease operations ---
+    // --- Lease store ---
 
-    /// Store a lease in the leases CF.
+    /// Store a lease record.
     fn put_lease(&self, key: &[u8], value: &[u8]) -> StorageResult<()>;
 
     /// Retrieve a lease value by key.
@@ -49,10 +61,10 @@ pub trait Storage: Send + Sync {
     fn delete_lease(&self, key: &[u8]) -> StorageResult<()>;
 
     /// List lease expiry entries whose keys are <= the given upper bound timestamp key.
-    /// Returns (expiry_key, empty_value) pairs sorted by expiry time (earliest first).
+    /// Returns expiry keys sorted by expiry time (earliest first).
     fn list_expired_leases(&self, up_to_key: &[u8]) -> StorageResult<Vec<Vec<u8>>>;
 
-    // --- Queue operations ---
+    // --- Queue config store ---
 
     /// Store a queue config.
     fn put_queue(&self, queue_id: &str, config: &QueueConfig) -> StorageResult<()>;
@@ -66,7 +78,7 @@ pub trait Storage: Send + Sync {
     /// List all queue configs.
     fn list_queues(&self) -> StorageResult<Vec<QueueConfig>>;
 
-    // --- State operations ---
+    // --- State store ---
 
     /// Store a state key-value pair.
     fn put_state(&self, key: &str, value: &[u8]) -> StorageResult<()>;
@@ -85,13 +97,17 @@ pub trait Storage: Send + Sync {
         limit: usize,
     ) -> StorageResult<Vec<(String, Vec<u8>)>>;
 
-    // --- Batch operations ---
+    // --- Batch mutations ---
 
-    /// Atomically apply a batch of write operations across column families.
-    fn write_batch(&self, ops: Vec<WriteBatchOp>) -> StorageResult<()>;
+    /// Atomically apply a batch of mutations.
+    ///
+    /// All mutations in the batch are applied as a single atomic operation.
+    /// In a Raft-replicated system, this is the method used to apply
+    /// committed log entries to the local state machine.
+    fn apply_mutations(&self, mutations: Vec<Mutation>) -> StorageResult<()>;
 
     // --- Lifecycle ---
 
-    /// Flush the WAL to ensure all writes are durable.
+    /// Flush the write-ahead log to ensure all writes are durable.
     fn flush(&self) -> StorageResult<()>;
 }

@@ -234,14 +234,14 @@ impl Scheduler {
 
         // Atomically delete the message, lease, and lease expiry
         let mut ops = vec![
-            WriteBatchOp::DeleteLease { key: lease_key },
-            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+            Mutation::DeleteLease { key: lease_key },
+            Mutation::DeleteLeaseExpiry { key: expiry_key },
         ];
         if let Some(key) = msg_key {
-            ops.push(WriteBatchOp::DeleteMessage { key });
+            ops.push(Mutation::DeleteMessage { key });
         }
 
-        self.storage.write_batch(ops)?;
+        self.storage.apply_mutations(ops)?;
         self.metrics.record_ack(queue_id);
         Ok(())
     }
@@ -355,15 +355,15 @@ impl Scheduler {
                     serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
 
                 let ops = vec![
-                    WriteBatchOp::DeleteMessage { key: msg_key },
-                    WriteBatchOp::PutMessage {
+                    Mutation::DeleteMessage { key: msg_key },
+                    Mutation::PutMessage {
                         key: dlq_msg_key.clone(),
                         value: msg_value,
                     },
-                    WriteBatchOp::DeleteLease { key: lease_key },
-                    WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+                    Mutation::DeleteLease { key: lease_key },
+                    Mutation::DeleteLeaseExpiry { key: expiry_key },
                 ];
-                self.storage.write_batch(ops)?;
+                self.storage.apply_mutations(ops)?;
 
                 // Add the message to the DLQ's DRR active set for delivery
                 self.drr
@@ -403,14 +403,14 @@ impl Scheduler {
         let msg_value = serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
 
         let ops = vec![
-            WriteBatchOp::PutMessage {
+            Mutation::PutMessage {
                 key: msg_key.clone(),
                 value: msg_value,
             },
-            WriteBatchOp::DeleteLease { key: lease_key },
-            WriteBatchOp::DeleteLeaseExpiry { key: expiry_key },
+            Mutation::DeleteLease { key: lease_key },
+            Mutation::DeleteLeaseExpiry { key: expiry_key },
         ];
-        self.storage.write_batch(ops)?;
+        self.storage.apply_mutations(ops)?;
 
         // Re-add the fairness key to DRR active set so the message can be scheduled
         self.drr.add_key(queue_id, &msg.fairness_key, msg.weight);

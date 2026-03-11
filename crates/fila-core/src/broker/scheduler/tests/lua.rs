@@ -112,7 +112,7 @@ fn queue_without_script_uses_defaults() {
 fn on_enqueue_reads_config_via_fila_get() {
     let (tx, mut scheduler, _dir) = test_setup();
 
-    // Write a config value to the state CF that the Lua script will read
+    // Write a config value to the state store that the Lua script will read
     scheduler
         .storage()
         .put_state("default_tenant", b"megacorp")
@@ -699,7 +699,7 @@ fn on_failure_no_script_uses_default_retry() {
 #[test]
 fn recovery_restores_on_failure_scripts() {
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
     // Phase 1: create queue with on_failure script, enqueue a message, shut down
     let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));

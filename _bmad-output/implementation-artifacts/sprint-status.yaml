@@ -135,22 +135,24 @@ development_status:
   12-4-published-results-benchmark-dashboard: done
   epic-12-retrospective: done
 
-  # Epic 13: Purpose-Built Storage Engine
-  epic-13: backlog
-  13-1-storage-trait-abstraction-rocksdb-adapter: backlog
-  13-2-write-path-wal-segment-log: backlog
-  13-3-read-path-indexing: backlog
-  13-4-background-maintenance-compaction: backlog
-  13-5-integration-cutover-validation: backlog
+  # Epic 13: Storage Abstraction & Clustering Prep (reshaped 2026-03-10)
+  # Original 5-story purpose-built storage engine replaced with 2-story prep epic.
+  # See _bmad/docs/research/decoupled-scheduler-sharded-storage.md for rationale.
+  # PRs #49-53 closed without merge.
+  epic-13: in-progress
+  13-1-clean-storage-trait-abstraction: done
+  13-2-phase-2-viability-seams: backlog
   epic-13-retrospective: optional
 
-  # Epic 14: Clustering & Horizontal Scaling
+  # Epic 14: Clustering & Horizontal Scaling (replanned 2026-03-10)
+  # Raft-per-queue model (CockroachDB-style single binary).
+  # Replaces partition-based design per clustering architecture research.
   epic-14: backlog
-  14-1-raft-consensus-cluster-bootstrap: backlog
-  14-2-partitioned-queue-management: backlog
-  14-3-request-routing-transparent-consumer-delivery: backlog
-  14-4-replication-failover: backlog
-  14-5-cluster-wide-observability-scaling-validation: backlog
+  14-1-raft-integration-single-node-mode: backlog
+  14-2-queue-level-raft-groups-assignment: backlog
+  14-3-request-routing-transparent-delivery: backlog
+  14-4-replication-failover-recovery: backlog
+  14-5-cluster-observability-scaling-validation: backlog
   epic-14-retrospective: optional
 
   # Epic 15: Authentication & Security

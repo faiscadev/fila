@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn recovery_preserves_messages_after_restart() {
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
     // Phase 1: enqueue messages, then shut down the scheduler
     let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
@@ -50,7 +50,7 @@ fn recovery_preserves_messages_after_restart() {
 #[test]
 fn recovery_reclaims_expired_leases() {
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
     // Phase 1: set up a queue, enqueue a message, and manually create an
     // expired lease (simulating a crash while a message was in-flight)
@@ -72,12 +72,12 @@ fn recovery_reclaims_expired_leases() {
     let lease_val = crate::storage::keys::lease_value("old-consumer", 1);
     let expiry_key = crate::storage::keys::lease_expiry_key(1, "reclaim-queue", &msg_id);
     storage
-        .write_batch(vec![
-            WriteBatchOp::PutLease {
+        .apply_mutations(vec![
+            Mutation::PutLease {
                 key: lease_key.clone(),
                 value: lease_val,
             },
-            WriteBatchOp::PutLeaseExpiry {
+            Mutation::PutLeaseExpiry {
                 key: expiry_key.clone(),
             },
         ])
@@ -127,7 +127,7 @@ fn recovery_reclaims_expired_leases() {
 #[test]
 fn recovery_does_not_duplicate_reclaimed_messages() {
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
     let config = crate::queue::QueueConfig::new("dup-queue".to_string());
     storage.put_queue("dup-queue", &config).unwrap();
@@ -152,12 +152,12 @@ fn recovery_does_not_duplicate_reclaimed_messages() {
             let lease_val = crate::storage::keys::lease_value("old-consumer", 1);
             let expiry_key = crate::storage::keys::lease_expiry_key(1 + i, "dup-queue", &msg.id);
             storage
-                .write_batch(vec![
-                    WriteBatchOp::PutLease {
+                .apply_mutations(vec![
+                    Mutation::PutLease {
                         key: lease_key,
                         value: lease_val,
                     },
-                    WriteBatchOp::PutLeaseExpiry { key: expiry_key },
+                    Mutation::PutLeaseExpiry { key: expiry_key },
                 ])
                 .unwrap();
         }
@@ -192,7 +192,7 @@ fn recovery_preserves_queue_definitions() {
 
     // Phase 1: create queues, shut down, drop all handles
     {
-        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
         let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
         for name in &["q1", "q2", "q3"] {
             send_create_queue(&tx, name);
@@ -202,7 +202,7 @@ fn recovery_preserves_queue_definitions() {
     }
 
     // Phase 2: reopen storage from disk — queues should survive the restart
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let queues = storage.list_queues().unwrap();
     assert_eq!(
         queues.len(),
@@ -226,7 +226,7 @@ fn shutdown_flushes_wal() {
 
     // Phase 1: enqueue a message and shut down gracefully (which flushes WAL)
     {
-        let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
         let (tx, mut scheduler) = test_setup_with_storage(Arc::clone(&storage));
         send_create_queue(&tx, "flush-queue");
 
@@ -244,7 +244,7 @@ fn shutdown_flushes_wal() {
     }
 
     // Phase 2: reopen the database and verify data survived
-    let storage2: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage2: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let prefix = crate::storage::keys::message_prefix("flush-queue");
     let messages = storage2.list_messages(&prefix).unwrap();
     assert_eq!(
@@ -258,7 +258,7 @@ fn shutdown_flushes_wal() {
 #[test]
 fn recovery_skips_corrupt_lease_expiry_key() {
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
     // Set up a queue with a message
     let config = crate::queue::QueueConfig::new("corrupt-queue".to_string());
@@ -278,7 +278,7 @@ fn recovery_skips_corrupt_lease_expiry_key() {
     let lease_key = crate::storage::keys::lease_key("corrupt-queue", &msg_id);
     let lease_val = crate::storage::keys::lease_value("c1", 1);
     storage
-        .write_batch(vec![WriteBatchOp::PutLease {
+        .apply_mutations(vec![Mutation::PutLease {
             key: lease_key.clone(),
             value: lease_val,
         }])
@@ -291,7 +291,7 @@ fn recovery_skips_corrupt_lease_expiry_key() {
     corrupt_expiry_key.push(b':');
     corrupt_expiry_key.extend_from_slice(&[0xFF; 4]); // garbage
     storage
-        .write_batch(vec![WriteBatchOp::PutLeaseExpiry {
+        .apply_mutations(vec![Mutation::PutLeaseExpiry {
             key: corrupt_expiry_key.clone(),
         }])
         .unwrap();
@@ -320,7 +320,7 @@ fn recovery_skips_corrupt_lease_expiry_key() {
 #[test]
 fn recovery_preserves_non_expired_leases() {
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
     // Set up a queue with a message
     let config = crate::queue::QueueConfig::new("active-lease-queue".to_string());
@@ -343,12 +343,12 @@ fn recovery_preserves_non_expired_leases() {
     let expiry_key =
         crate::storage::keys::lease_expiry_key(future_expiry, "active-lease-queue", &msg_id);
     storage
-        .write_batch(vec![
-            WriteBatchOp::PutLease {
+        .apply_mutations(vec![
+            Mutation::PutLease {
                 key: lease_key.clone(),
                 value: lease_val,
             },
-            WriteBatchOp::PutLeaseExpiry {
+            Mutation::PutLeaseExpiry {
                 key: expiry_key.clone(),
             },
         ])

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use mlua::Lua;
 
 use crate::broker::config::LuaConfig;
-use crate::storage::Storage;
+use crate::storage::StorageEngine;
 
 pub use on_enqueue::OnEnqueueResult;
 pub use on_failure::{FailureAction, OnFailureResult};
@@ -49,7 +49,7 @@ pub struct LuaEngine {
 
 impl LuaEngine {
     /// Create a new LuaEngine with a sandboxed Lua VM and fila.get() bridge.
-    pub fn new(storage: Arc<dyn Storage>, lua_config: &LuaConfig) -> Result<Self, LuaError> {
+    pub fn new(storage: Arc<dyn StorageEngine>, lua_config: &LuaConfig) -> Result<Self, LuaError> {
         let lua = sandbox::create_sandbox().map_err(LuaError::VmCreation)?;
         bridge::register_fila_api(&lua, storage).map_err(LuaError::BridgeRegistration)?;
 
@@ -294,11 +294,11 @@ pub enum LuaError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::RocksDbStorage;
+    use crate::storage::RocksDbEngine;
 
     fn test_engine() -> (LuaEngine, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
         let lua_config = crate::broker::config::LuaConfig::default();
         let engine = LuaEngine::new(storage, &lua_config).unwrap();
         (engine, dir)

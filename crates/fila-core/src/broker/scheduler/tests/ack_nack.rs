@@ -43,7 +43,7 @@ fn ack_removes_message_lease_and_expiry() {
     // Ack should succeed
     assert!(ack_rx.try_recv().unwrap().is_ok());
 
-    // Message should be gone from messages CF
+    // Message should be gone from message store
     let msg_key = crate::storage::keys::message_key("ack-queue", "default", 1_000_000_000, &msg_id);
     assert!(
         scheduler.storage().get_message(&msg_key).unwrap().is_none(),
@@ -270,7 +270,7 @@ fn nack_removes_lease_and_lease_expiry() {
         .unwrap();
     assert!(
         expired.is_empty(),
-        "lease_expiry CF should be empty after nack, found {} entries",
+        "lease expiry store should be empty after nack, found {} entries",
         expired.len()
     );
 }
@@ -439,7 +439,7 @@ fn lease_expiry_redelivers_message_with_incremented_attempt_count() {
     // Use a short visibility timeout (50ms) and idle_timeout (10ms)
     // so the scheduler wakes up frequently and reclaims quickly.
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let config = SchedulerConfig {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
@@ -503,7 +503,7 @@ fn lease_expiry_redelivers_message_with_incremented_attempt_count() {
 fn lease_expiry_clears_lease_and_expiry_entries() {
     // Verify that lease and lease_expiry CFs are cleaned up after expiry reclaim
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let config = SchedulerConfig {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
@@ -561,12 +561,12 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
         "lease should be deleted after expiry reclaim"
     );
 
-    // lease_expiry CF should be empty
+    // lease expiry store should be empty
     let far_future = crate::storage::keys::lease_expiry_key(u64::MAX, "", &Uuid::nil());
     let expired = storage.list_expired_leases(&far_future).unwrap();
     assert!(
         expired.is_empty(),
-        "lease_expiry CF should be empty after reclaim, found {} entries",
+        "lease expiry store should be empty after reclaim, found {} entries",
         expired.len()
     );
 
@@ -592,7 +592,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
     // Two queues with different visibility timeouts: 50ms and 200ms.
     // After 100ms, only the first message should be redelivered.
     let dir = tempfile::tempdir().unwrap();
-    let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let config = SchedulerConfig {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
@@ -678,7 +678,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
 fn ack_before_expiry_prevents_redelivery() {
     // Ack within the visibility timeout prevents the message from being redelivered
     let dir = tempfile::tempdir().unwrap();
-    let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let config = SchedulerConfig {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,

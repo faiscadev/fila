@@ -186,9 +186,9 @@ fn set_config_rejects_empty_throttle_key_name() {
 #[test]
 fn recovery_restores_throttle_rates_from_state_cf() {
     let dir = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn Storage> = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage: Arc<dyn StorageEngine> = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
-    // Pre-populate throttle rates in state CF
+    // Pre-populate throttle rates in state store
     storage
         .put_state("throttle.provider_a", b"10.0,100.0")
         .unwrap();

@@ -149,10 +149,13 @@ cargo init --name fila
 **Deferred Decisions (Post-MVP):**
 
 - Authentication mechanism (API keys vs mTLS vs both)
-- Clustering and replication strategy
 - Consumer group assignment algorithm
 - REST API design (if demand materializes)
-- Custom storage engine design
+- Custom storage engine design (deferred — RocksDB sufficient as Raft state machine backend)
+
+**Decided (Post-Research):**
+
+- Clustering architecture — CockroachDB-style single-binary Raft-per-queue model (see `_bmad/docs/research/decoupled-scheduler-sharded-storage.md`). Each queue is a Raft group. Every node runs the same code (storage + scheduler + gateway). RocksDB serves as local state machine backend under Raft. Shard by queue, not by Kafka-style partitions. Phase 2 viability constraints preserve path to hierarchical scaling for hot queues.
 
 ### Concurrency Architecture
 

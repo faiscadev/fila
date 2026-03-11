@@ -1,7 +1,7 @@
 use super::*;
 
 impl Scheduler {
-    /// Scan the `lease_expiry` CF for expired leases and reclaim them.
+    /// Scan the lease expiry store for expired leases and reclaim them.
     ///
     /// For each expired lease:
     /// 1. Delete the lease and lease_expiry entries
@@ -51,11 +51,11 @@ impl Scheduler {
                 Ok(None) => {
                     // Message not found — orphaned lease entry, just clean up
                     warn!(%queue_id, %msg_id, "orphaned lease_expiry entry, message not found");
-                    let _ = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease {
+                    let _ = self.storage.apply_mutations(vec![
+                        Mutation::DeleteLease {
                             key: lease_key.clone(),
                         },
-                        WriteBatchOp::DeleteLeaseExpiry {
+                        Mutation::DeleteLeaseExpiry {
                             key: expiry_key.clone(),
                         },
                     ]);
@@ -72,9 +72,9 @@ impl Scheduler {
                 Ok(Some(msg)) => msg,
                 Ok(None) => {
                     warn!(%queue_id, %msg_id, "message key found but message missing");
-                    let _ = self.storage.write_batch(vec![
-                        WriteBatchOp::DeleteLease { key: lease_key },
-                        WriteBatchOp::DeleteLeaseExpiry {
+                    let _ = self.storage.apply_mutations(vec![
+                        Mutation::DeleteLease { key: lease_key },
+                        Mutation::DeleteLeaseExpiry {
                             key: expiry_key.clone(),
                         },
                     ]);
@@ -99,13 +99,13 @@ impl Scheduler {
                 }
             };
 
-            if let Err(e) = self.storage.write_batch(vec![
-                WriteBatchOp::PutMessage {
+            if let Err(e) = self.storage.apply_mutations(vec![
+                Mutation::PutMessage {
                     key: msg_key.clone(),
                     value: msg_value,
                 },
-                WriteBatchOp::DeleteLease { key: lease_key },
-                WriteBatchOp::DeleteLeaseExpiry {
+                Mutation::DeleteLease { key: lease_key },
+                Mutation::DeleteLeaseExpiry {
                     key: expiry_key.clone(),
                 },
             ]) {
@@ -147,7 +147,7 @@ impl Scheduler {
     /// RocksDB persists all data to disk, so queue definitions, messages, and
     /// leases survive restarts. Recovery does two things:
     /// 1. Reclaim expired leases so messages re-enter the ready pool
-    /// 2. Rebuild DRR active keys by scanning the messages CF
+    /// 2. Rebuild DRR active keys by scanning the message store
     pub(super) fn recover(&mut self) {
         self.reclaim_expired_leases();
 
@@ -243,7 +243,7 @@ impl Scheduler {
             Err(e) => warn!(error = %e, "failed to list queues during recovery"),
         }
 
-        // Restore throttle rates from state CF
+        // Restore throttle rates from state store
         match self
             .storage
             .list_state_by_prefix(Self::THROTTLE_PREFIX, usize::MAX)

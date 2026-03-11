@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use mlua::Lua;
 
-use crate::storage::Storage;
+use crate::storage::StorageEngine;
 
 /// Register the `fila` namespace table with `fila.get(key)` that reads
-/// runtime config from the storage `state` column family.
+/// runtime config from the state store.
 ///
 /// The storage reference is captured by the closure and used for each
 /// `fila.get()` call. Since Lua runs on the scheduler thread which owns
 /// storage access, this is safe without additional synchronization.
-pub fn register_fila_api(lua: &Lua, storage: Arc<dyn Storage>) -> mlua::Result<()> {
+pub fn register_fila_api(lua: &Lua, storage: Arc<dyn StorageEngine>) -> mlua::Result<()> {
     let fila_table = lua.create_table()?;
 
     let get_fn = lua.create_function(move |_, key: String| {
@@ -38,14 +38,14 @@ pub fn register_fila_api(lua: &Lua, storage: Arc<dyn Storage>) -> mlua::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::RocksDbStorage;
+    use crate::storage::RocksDbEngine;
 
     #[test]
     fn fila_get_reads_from_state_cf() {
         let dir = tempfile::tempdir().unwrap();
-        let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
 
-        // Pre-populate state CF
+        // Pre-populate state store
         storage.put_state("max_retries", b"3").unwrap();
         storage.put_state("queue_name", b"orders").unwrap();
 

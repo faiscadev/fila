@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Queue configuration stored in the `queues` column family.
+/// Queue configuration stored in the queue config store.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QueueConfig {
     pub name: String,

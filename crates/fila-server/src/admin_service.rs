@@ -349,12 +349,12 @@ impl FilaAdmin for AdminService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fila_core::{Broker, BrokerConfig, RocksDbStorage};
+    use fila_core::{Broker, BrokerConfig, RocksDbEngine};
     use fila_proto::QueueConfig as ProtoQueueConfig;
 
     fn test_admin_service() -> (AdminService, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+        let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
         let broker = Arc::new(Broker::new(BrokerConfig::default(), storage).unwrap());
         (AdminService::new(broker), dir)
     }

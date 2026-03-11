@@ -6,7 +6,7 @@ pub(super) fn test_setup() -> (
     tempfile::TempDir,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let storage = Arc::new(RocksDbStorage::open(dir.path()).unwrap());
+    let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
     let config = SchedulerConfig {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
@@ -46,7 +46,7 @@ pub(super) fn send_create_queue(tx: &crossbeam_channel::Sender<SchedulerCommand>
 
 /// Helper: create a scheduler sharing an existing storage (for restart tests).
 pub(super) fn test_setup_with_storage(
-    storage: Arc<dyn Storage>,
+    storage: Arc<dyn StorageEngine>,
 ) -> (crossbeam_channel::Sender<SchedulerCommand>, Scheduler) {
     let config = SchedulerConfig {
         command_channel_capacity: 256,
