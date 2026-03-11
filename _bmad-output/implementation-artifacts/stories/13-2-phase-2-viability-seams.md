@@ -14,7 +14,7 @@ so that phase 2 (splitting hot queues across multiple Raft groups) is a matter o
 2. DRR is scoped to a key-set parameter: the scheduler runs DRR over "the fairness keys I'm responsible for" — in phase 1 this happens to be all keys in the queue, but the scope is explicit, not hardcoded.
 3. Each queue emits aggregate scheduling stats as OTel metrics: messages scheduled per fairness key, current deficit state, throughput — in phase 1 these are consumed only for observability.
 4. The enqueue path threads `fairness_key` through the routing decision: routing is by `(queue, fairness_key)`, not just queue — in phase 1 the fairness key is ignored in routing (all go to the same group).
-5. All 278 tests + 11 e2e tests pass with zero behavioral changes.
+5. All 280 tests + 11 e2e tests pass with zero behavioral changes.
 6. No speculative abstractions or premature engineering — these are thin seams, not full implementations.
 
 ## Tasks / Subtasks
