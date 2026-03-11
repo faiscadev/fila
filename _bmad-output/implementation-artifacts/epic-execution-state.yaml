@@ -14,6 +14,6 @@ stories:
     status: in-progress
     currentPhase: "pr-ci"
     branch: "feat/13.2-phase-2-viability-seams"
-    pr: null
+    pr: 55
     dependsOn: ["13.1"]
 skippedIssues: []
