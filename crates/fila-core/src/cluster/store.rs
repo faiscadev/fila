@@ -512,6 +512,28 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
             data,
         });
 
+        // After restoring from snapshot, emit events for all queue groups
+        // so the background handler creates local queues and Raft groups.
+        // Without this, nodes that start from a snapshot would miss setup.
+        if let Some(ref tx) = self.meta_event_tx {
+            let member_addrs: HashMap<u64, String> = self
+                .state_machine
+                .last_membership
+                .membership()
+                .nodes()
+                .map(|(&id, n)| (id, n.addr.clone()))
+                .collect();
+
+            for (queue_id, members) in &self.state_machine.queue_groups {
+                let _ = tx.send(MetaStoreEvent::QueueGroupCreated {
+                    queue_id: queue_id.clone(),
+                    members: members.clone(),
+                    member_addrs: member_addrs.clone(),
+                    config: Box::new(QueueConfig::new(queue_id.clone())),
+                });
+            }
+        }
+
         Ok(())
     }
 

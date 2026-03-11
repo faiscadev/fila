@@ -50,8 +50,14 @@ impl ClusterGrpcService {
                     tracing::error!(error = %e, "failed to apply forwarded enqueue to scheduler");
                     return;
                 }
-                if let Err(e) = reply_rx.await {
-                    tracing::error!(error = %e, "scheduler dropped reply for forwarded enqueue");
+                match reply_rx.await {
+                    Err(e) => {
+                        tracing::error!(error = %e, "scheduler dropped reply for forwarded enqueue");
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(error = %e, "scheduler rejected forwarded enqueue");
+                    }
+                    Ok(Ok(_)) => {}
                 }
             }
             super::types::ClusterRequest::Ack { queue_id, msg_id } => {
@@ -64,8 +70,14 @@ impl ClusterGrpcService {
                     tracing::error!(error = %e, "failed to apply forwarded ack to scheduler");
                     return;
                 }
-                if let Err(e) = reply_rx.await {
-                    tracing::error!(error = %e, "scheduler dropped reply for forwarded ack");
+                match reply_rx.await {
+                    Err(e) => {
+                        tracing::error!(error = %e, "scheduler dropped reply for forwarded ack");
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(error = %e, "scheduler rejected forwarded ack");
+                    }
+                    Ok(Ok(_)) => {}
                 }
             }
             super::types::ClusterRequest::Nack {
@@ -83,8 +95,14 @@ impl ClusterGrpcService {
                     tracing::error!(error = %e, "failed to apply forwarded nack to scheduler");
                     return;
                 }
-                if let Err(e) = reply_rx.await {
-                    tracing::error!(error = %e, "scheduler dropped reply for forwarded nack");
+                match reply_rx.await {
+                    Err(e) => {
+                        tracing::error!(error = %e, "scheduler dropped reply for forwarded nack");
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(error = %e, "scheduler rejected forwarded nack");
+                    }
+                    Ok(Ok(_)) => {}
                 }
             }
             // Other request types (CreateQueue, DeleteQueue, etc.) are handled

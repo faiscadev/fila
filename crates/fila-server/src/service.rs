@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use fila_core::{
-    Broker, ClusterHandle, ClusterRequest, ClusterResponse, Message, ReadyMessage, SchedulerCommand,
+    Broker, ClusterHandle, ClusterRequest, ClusterResponse, ClusterWriteError, Message,
+    ReadyMessage, SchedulerCommand,
 };
 use fila_proto::fila_service_server::FilaService;
 use fila_proto::{
@@ -13,6 +14,16 @@ use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use crate::error::IntoStatus;
+
+/// Map cluster write errors to appropriate gRPC status codes.
+fn cluster_write_err_to_status(err: ClusterWriteError) -> Status {
+    match err {
+        ClusterWriteError::QueueGroupNotFound => Status::not_found("queue raft group not found"),
+        ClusterWriteError::NoLeader => Status::unavailable("no leader available"),
+        ClusterWriteError::Raft(e) => Status::internal(format!("raft error: {e}")),
+        ClusterWriteError::Forward(e) => Status::unavailable(format!("forward error: {e}")),
+    }
+}
 
 /// gRPC hot-path service implementation for producers and consumers.
 pub struct HotPathService {
@@ -87,7 +98,7 @@ impl FilaService for HotPathService {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(format!("{e}")))?;
+                .map_err(cluster_write_err_to_status)?;
 
             let msg_id = match result.response {
                 ClusterResponse::Enqueue { msg_id } => msg_id,
@@ -237,7 +248,7 @@ impl FilaService for HotPathService {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(format!("{e}")))?;
+                .map_err(cluster_write_err_to_status)?;
 
             if let ClusterResponse::Error { message } = result.response {
                 return Err(Status::internal(message));
@@ -308,7 +319,7 @@ impl FilaService for HotPathService {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(format!("{e}")))?;
+                .map_err(cluster_write_err_to_status)?;
 
             if let ClusterResponse::Error { message } = result.response {
                 return Err(Status::internal(message));

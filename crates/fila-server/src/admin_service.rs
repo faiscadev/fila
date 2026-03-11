@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use fila_core::{
-    Broker, ClusterHandle, ClusterRequest, ClusterResponse, QueueConfig, SchedulerCommand,
+    Broker, ClusterHandle, ClusterRequest, ClusterResponse, ClusterWriteError, QueueConfig,
+    SchedulerCommand,
 };
 use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
@@ -15,6 +16,16 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use crate::error::IntoStatus;
+
+/// Map cluster write errors to appropriate gRPC status codes.
+fn cluster_write_err_to_status(err: ClusterWriteError) -> Status {
+    match err {
+        ClusterWriteError::QueueGroupNotFound => Status::not_found("queue raft group not found"),
+        ClusterWriteError::NoLeader => Status::unavailable("no leader available"),
+        ClusterWriteError::Raft(e) => Status::internal(format!("raft error: {e}")),
+        ClusterWriteError::Forward(e) => Status::unavailable(format!("forward error: {e}")),
+    }
+}
 
 /// gRPC admin service implementation. Wraps a Broker to send commands
 /// to the scheduler thread.
@@ -89,7 +100,7 @@ impl FilaAdmin for AdminService {
                     config,
                 })
                 .await
-                .map_err(|e| Status::internal(format!("{e}")))?;
+                .map_err(cluster_write_err_to_status)?;
 
             match resp {
                 ClusterResponse::CreateQueueGroup { queue_id } => {
@@ -137,7 +148,7 @@ impl FilaAdmin for AdminService {
                     queue_id: req.queue,
                 })
                 .await
-                .map_err(|e| Status::internal(format!("{e}")))?;
+                .map_err(cluster_write_err_to_status)?;
 
             match resp {
                 ClusterResponse::DeleteQueueGroup => Ok(Response::new(DeleteQueueResponse {})),

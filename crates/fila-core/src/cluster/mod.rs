@@ -38,6 +38,14 @@ pub struct ClusterHandle {
     pub meta_raft: Arc<Raft<TypeConfig>>,
     pub multi_raft: Arc<MultiRaftManager>,
     pub node_id: NodeId,
+    /// Cached gRPC clients for forwarding writes to leader nodes.
+    /// Avoids opening a new HTTP/2 connection per forwarded request.
+    client_cache: tokio::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            fila_proto::fila_cluster_client::FilaClusterClient<tonic::transport::Channel>,
+        >,
+    >,
 }
 
 /// Error from a cluster write operation (client_write or forward).
@@ -104,7 +112,9 @@ impl ClusterHandle {
                     .leader_node
                     .map(|n| n.addr)
                     .ok_or(ClusterWriteError::NoLeader)?;
-                let response = Self::forward_client_write(&leader_addr, queue_id, &request).await?;
+                let response = self
+                    .forward_client_write(&leader_addr, queue_id, &request)
+                    .await?;
                 Ok(ClusterWriteResult {
                     response,
                     handled_locally: false,
@@ -131,7 +141,7 @@ impl ClusterHandle {
                     .map(|n| n.addr)
                     .ok_or(ClusterWriteError::NoLeader)?;
                 // Empty group_id means meta Raft.
-                Self::forward_client_write(&leader_addr, "", &request).await
+                self.forward_client_write(&leader_addr, "", &request).await
             }
             Err(RaftError::APIError(ClientWriteError::ChangeMembershipError(e))) => {
                 Err(ClusterWriteError::Raft(format!("{e}")))
@@ -162,7 +172,9 @@ impl ClusterHandle {
 
     /// Forward a client write to a specific node via the cluster gRPC
     /// `ClientWrite` RPC. Used when this node is not the Raft leader.
+    /// Reuses cached gRPC connections to avoid per-request handshakes.
     async fn forward_client_write(
+        &self,
         leader_addr: &str,
         group_id: &str,
         request: &ClusterRequest,
@@ -176,14 +188,23 @@ impl ClusterHandle {
             format!("http://{leader_addr}")
         };
 
-        let mut client = FilaClusterClient::connect(url)
-            .await
-            .map_err(|e| ClusterWriteError::Forward(format!("connect: {e}")))?;
+        let mut cache = self.client_cache.lock().await;
+        let client = if let Some(client) = cache.get(&url) {
+            client.clone()
+        } else {
+            let new_client = FilaClusterClient::connect(url.clone())
+                .await
+                .map_err(|e| ClusterWriteError::Forward(format!("connect: {e}")))?;
+            cache.insert(url, new_client.clone());
+            new_client
+        };
+        drop(cache);
 
         let data = serde_json::to_vec(request)
             .map_err(|e| ClusterWriteError::Forward(format!("serialize: {e}")))?;
 
         let resp = client
+            .clone()
             .client_write(tonic::Request::new(RaftRequest {
                 data,
                 group_id: group_id.to_string(),
@@ -481,6 +502,7 @@ impl ClusterManager {
             meta_raft: Arc::clone(&self.raft),
             multi_raft: Arc::clone(&self.multi_raft),
             node_id: self.node_id,
+            client_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
 
