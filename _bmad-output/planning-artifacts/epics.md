@@ -228,7 +228,6 @@ So that the storage implementation can be swapped without changing broker logic,
 **And** the trait supports atomic batch mutations (`apply_mutations(batch)`) suitable for Raft state machine application (applying committed log entries)
 **And** a `RocksDbEngine` struct implements the `StorageEngine` trait, wrapping all existing RocksDB logic
 **And** all broker and scheduler code is migrated from direct RocksDB calls to `StorageEngine` trait methods
-**And** an `InMemoryEngine` implementation is provided for unit tests (enables faster, deterministic scheduler testing)
 **And** all existing unit and integration tests pass without modification to test assertions (only internal wiring changes)
 **And** the e2e test suite (11 tests) passes with the RocksDB adapter
 **And** the trait is defined in fila-core with no RocksDB-specific types in the trait interface (RocksDB is an implementation detail)
