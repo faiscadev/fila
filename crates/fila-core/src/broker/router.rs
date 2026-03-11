@@ -1,17 +1,24 @@
-/// Identifies a Raft group that owns a set of fairness keys for a queue.
+/// Identifies a Raft group that owns a subset of a queue's messages.
 ///
 /// In phase 1 (single-node), every queue maps to exactly one group whose ID
-/// equals the queue ID. In phase 2 (hierarchical scaling), a queue's fairness
-/// keys are partitioned across multiple groups via consistent hashing.
+/// equals the queue ID. In phase 2 (hierarchical scaling), messages are
+/// partitioned across multiple groups — by fairness key for FIFO queues
+/// (preserving per-key ordering) or by message ID for non-FIFO queues
+/// (load-balanced distribution).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GroupId(pub String);
 
-/// Routes `(queue_id, fairness_key)` pairs to Raft groups.
+/// Routes messages to Raft groups based on queue configuration.
 ///
-/// Phase 1: trivial 1:1 routing — every fairness key in a queue maps to the
+/// Phase 1: trivial 1:1 routing — every message in a queue maps to the
 /// queue itself. The indirection exists in the code path so that phase 2 can
-/// replace the implementation with a placement table and consistent hashing
-/// without rearchitecting the enqueue path.
+/// replace the implementation without rearchitecting the enqueue path.
+///
+/// Phase 2 routing strategy depends on queue mode:
+/// - **FIFO queues:** route by `consistent_hash(fairness_key)` so all messages
+///   for a given fairness key land on the same group, preserving per-key order.
+/// - **Non-FIFO queues:** route by `consistent_hash(message_id)` for even
+///   load distribution across groups.
 pub struct QueueRouter;
 
 impl QueueRouter {
@@ -19,11 +26,11 @@ impl QueueRouter {
         Self
     }
 
-    /// Determine which Raft group should handle a message with the given
-    /// queue and fairness key.
+    /// Determine which Raft group should handle a message.
     ///
-    /// Phase 1: always returns `GroupId(queue_id)` — fairness key is ignored.
-    /// Phase 2: will use `consistent_hash(fairness_key) % num_groups`.
+    /// Phase 1: always returns `GroupId(queue_id)` — all other fields ignored.
+    /// Phase 2: FIFO queues hash by fairness key, non-FIFO queues hash by
+    /// message ID (see struct-level docs).
     pub fn route(&self, queue_id: &str, _fairness_key: &str) -> GroupId {
         GroupId(queue_id.to_string())
     }
