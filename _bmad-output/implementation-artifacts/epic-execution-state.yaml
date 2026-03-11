@@ -32,9 +32,9 @@ stories:
     dependsOn: ["14.1", "14.2", "14.3"]
   - id: "14.5"
     title: "Cluster Observability & Scaling Validation"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/14.5-cluster-observability-scaling-validation"
     pr: null
     dependsOn: ["14.1", "14.2", "14.3", "14.4"]
 skippedIssues: []
