@@ -12,7 +12,7 @@ stories:
   - id: "13.2"
     title: "Phase 2 Viability Seams"
     status: in-progress
-    currentPhase: "setup"
+    currentPhase: "dev"
     branch: "feat/13.2-phase-2-viability-seams"
     pr: null
     dependsOn: ["13.1"]
