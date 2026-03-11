@@ -188,17 +188,20 @@ impl ClusterHandle {
             format!("http://{leader_addr}")
         };
 
-        let mut cache = self.client_cache.lock().await;
-        let client = if let Some(client) = cache.get(&url) {
-            client.clone()
+        // Check cache without holding the lock during connect().
+        let cached = {
+            let cache = self.client_cache.lock().await;
+            cache.get(&url).cloned()
+        };
+        let client = if let Some(client) = cached {
+            client
         } else {
             let new_client = FilaClusterClient::connect(url.clone())
                 .await
                 .map_err(|e| ClusterWriteError::Forward(format!("connect: {e}")))?;
-            cache.insert(url, new_client.clone());
-            new_client
+            let mut cache = self.client_cache.lock().await;
+            cache.entry(url).or_insert(new_client).clone()
         };
-        drop(cache);
 
         let data = serde_json::to_vec(request)
             .map_err(|e| ClusterWriteError::Forward(format!("serialize: {e}")))?;
