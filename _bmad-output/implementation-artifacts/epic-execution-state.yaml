@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "14.2"
     title: "Queue-Level Raft Groups & Assignment"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/14.2-queue-level-raft-groups-assignment"
     pr: null
     dependsOn: ["14.1"]
   - id: "14.3"
