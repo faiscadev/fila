@@ -56,6 +56,18 @@ impl Scheduler {
         }
 
         let msg_id = message.id;
+
+        // Route the message to a Raft group based on (queue_id, fairness_key).
+        // Phase 1: trivial 1:1 routing — all fairness keys in a queue map to
+        // the same group. The routing call exists as a seam for phase 2.
+        let group = self.router.route(&message.queue_id, &message.fairness_key);
+        debug!(
+            queue_id = %message.queue_id,
+            fairness_key = %message.fairness_key,
+            group_id = %group.0,
+            "routed enqueue"
+        );
+
         let key = crate::storage::keys::message_key(
             &message.queue_id,
             &message.fairness_key,

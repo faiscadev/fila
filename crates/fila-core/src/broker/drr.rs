@@ -32,6 +32,13 @@ struct DrrQueueState {
 /// Each queue maintains an independent active key set, deficit counters,
 /// and round position. The scheduler is intended to run on a single thread
 /// — no internal synchronization.
+///
+/// **Phase 2 design property:** The DRR engine operates exclusively on keys
+/// registered via `add_key()`. It has no mechanism to discover fairness keys
+/// from storage or queue configuration — the key-set is an explicit input.
+/// In phase 1, the caller adds all fairness keys for a queue. In phase 2
+/// (hierarchical scaling), each Raft group adds only its assigned subset of
+/// fairness keys, and the DRR engine works unchanged.
 pub struct DrrScheduler {
     queues: HashMap<String, DrrQueueState>,
     quantum: u32,
