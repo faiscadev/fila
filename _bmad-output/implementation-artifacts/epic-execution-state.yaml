@@ -26,7 +26,7 @@ stories:
   - id: "14.4"
     title: "Replication, Failover & Recovery"
     status: in-progress
-    currentPhase: "code-review"
+    currentPhase: "pr-ci"
     branch: "feat/14.4-replication-failover-recovery"
     pr: null
     dependsOn: ["14.1", "14.2", "14.3"]
