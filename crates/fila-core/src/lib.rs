@@ -1,4 +1,5 @@
 pub mod broker;
+pub mod cluster;
 pub mod error;
 pub mod lua;
 pub mod message;

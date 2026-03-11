@@ -5,7 +5,7 @@ stories:
   - id: "14.1"
     title: "Raft Integration & Single-Node Mode"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/14.1-raft-integration-single-node-mode"
     pr: null
     dependsOn: []

@@ -14,9 +14,17 @@ const CF_LEASES: &str = "leases";
 const CF_LEASE_EXPIRY: &str = "lease_expiry";
 const CF_QUEUES: &str = "queues";
 const CF_STATE: &str = "state";
+const CF_RAFT_LOG: &str = "raft_log";
 
 /// All column family names (excluding `default` which RocksDB creates automatically).
-const COLUMN_FAMILIES: &[&str] = &[CF_MESSAGES, CF_LEASES, CF_LEASE_EXPIRY, CF_QUEUES, CF_STATE];
+const COLUMN_FAMILIES: &[&str] = &[
+    CF_MESSAGES,
+    CF_LEASES,
+    CF_LEASE_EXPIRY,
+    CF_QUEUES,
+    CF_STATE,
+    CF_RAFT_LOG,
+];
 
 type DB = DBWithThreadMode<MultiThreaded>;
 
@@ -51,6 +59,55 @@ impl RocksDbEngine {
         self.db
             .cf_handle(name)
             .ok_or(StorageError::StoreNotFound(name))
+    }
+
+    // --- Raft log column family access ---
+
+    /// Put a raw key-value into the Raft log column family.
+    pub fn raft_put(&self, key: &[u8], value: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        self.db.put_cf(&cf, key, value)?;
+        Ok(())
+    }
+
+    /// Get a raw value from the Raft log column family.
+    pub fn raft_get(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        Ok(self.db.get_cf(&cf, key)?.map(|v| v.to_vec()))
+    }
+
+    /// Delete a key from the Raft log column family.
+    pub fn raft_delete(&self, key: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        self.db.delete_cf(&cf, key)?;
+        Ok(())
+    }
+
+    /// Scan keys in the Raft log column family from `start` (inclusive),
+    /// returning up to `limit` entries.
+    pub fn raft_scan(&self, start: &[u8], limit: usize) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(start, rocksdb::Direction::Forward));
+        let mut results = Vec::new();
+        for item in iter {
+            if results.len() >= limit {
+                break;
+            }
+            let (key, value) = item?;
+            results.push((key.to_vec(), value.to_vec()));
+        }
+        Ok(results)
+    }
+
+    /// Delete a range of keys in the Raft log column family [start, end).
+    pub fn raft_delete_range(&self, start: &[u8], end: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        self.db
+            .delete_range_cf(&cf, start, end)
+            .map_err(|e| StorageError::Engine(e.to_string()))?;
+        Ok(())
     }
 }
 

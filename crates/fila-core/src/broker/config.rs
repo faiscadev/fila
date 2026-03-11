@@ -8,6 +8,32 @@ pub struct BrokerConfig {
     pub scheduler: SchedulerConfig,
     pub lua: LuaConfig,
     pub telemetry: TelemetryConfig,
+    pub cluster: ClusterConfig,
+}
+
+/// Cluster configuration for Raft-based horizontal scaling.
+///
+/// When `enabled` is false (the default), Fila runs as a standalone
+/// single-node broker with zero Raft overhead.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ClusterConfig {
+    /// Enable cluster mode. When false, no Raft infrastructure is created.
+    pub enabled: bool,
+    /// Unique numeric node ID within the cluster.
+    pub node_id: u64,
+    /// Addresses of seed peers for cluster discovery (e.g., `["node1:5556", "node2:5556"]`).
+    pub peers: Vec<String>,
+    /// Listen address for intra-cluster gRPC communication (separate from client port).
+    pub bind_addr: String,
+    /// Bootstrap a new single-node cluster. Only set on the first node.
+    pub bootstrap: bool,
+    /// Raft election timeout in milliseconds.
+    pub election_timeout_ms: u64,
+    /// Raft heartbeat interval in milliseconds.
+    pub heartbeat_interval_ms: u64,
+    /// Number of applied log entries before triggering a snapshot.
+    pub snapshot_threshold: u64,
 }
 
 /// Server configuration (gRPC listen address).
@@ -87,6 +113,21 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen_addr: "0.0.0.0:5555".to_string(),
+        }
+    }
+}
+
+impl Default for ClusterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            node_id: 1,
+            peers: Vec::new(),
+            bind_addr: "0.0.0.0:5556".to_string(),
+            bootstrap: false,
+            election_timeout_ms: 1000,
+            heartbeat_interval_ms: 300,
+            snapshot_threshold: 10_000,
         }
     }
 }
@@ -197,6 +238,50 @@ mod tests {
             config.telemetry.metrics_interval(),
             std::time::Duration::from_millis(5_000)
         );
+    }
+
+    #[test]
+    fn cluster_defaults() {
+        let config = BrokerConfig::default();
+        assert!(!config.cluster.enabled);
+        assert_eq!(config.cluster.node_id, 1);
+        assert!(config.cluster.peers.is_empty());
+        assert_eq!(config.cluster.bind_addr, "0.0.0.0:5556");
+        assert!(!config.cluster.bootstrap);
+        assert_eq!(config.cluster.election_timeout_ms, 1000);
+        assert_eq!(config.cluster.heartbeat_interval_ms, 300);
+        assert_eq!(config.cluster.snapshot_threshold, 10_000);
+    }
+
+    #[test]
+    fn cluster_toml_parsing() {
+        let toml_str = r#"
+            [cluster]
+            enabled = true
+            node_id = 3
+            peers = ["node1:5556", "node2:5556"]
+            bind_addr = "0.0.0.0:6000"
+            bootstrap = true
+            election_timeout_ms = 2000
+            heartbeat_interval_ms = 500
+            snapshot_threshold = 5000
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.cluster.enabled);
+        assert_eq!(config.cluster.node_id, 3);
+        assert_eq!(config.cluster.peers, vec!["node1:5556", "node2:5556"]);
+        assert_eq!(config.cluster.bind_addr, "0.0.0.0:6000");
+        assert!(config.cluster.bootstrap);
+        assert_eq!(config.cluster.election_timeout_ms, 2000);
+        assert_eq!(config.cluster.heartbeat_interval_ms, 500);
+        assert_eq!(config.cluster.snapshot_threshold, 5000);
+    }
+
+    #[test]
+    fn cluster_absent_section_uses_defaults() {
+        let config: BrokerConfig = toml::from_str("").unwrap();
+        assert!(!config.cluster.enabled);
+        assert_eq!(config.cluster.node_id, 1);
     }
 
     #[test]

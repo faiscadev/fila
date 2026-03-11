@@ -56,6 +56,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
     let storage = Arc::new(RocksDbEngine::open(&data_dir)?);
 
+    // Conditionally start cluster manager (Raft consensus).
+    let cluster_config = config.cluster.clone();
+    let cluster_manager = if cluster_config.enabled {
+        Some(
+            fila_core::cluster::ClusterManager::start(&cluster_config, Arc::clone(&storage))
+                .await?,
+        )
+    } else {
+        None
+    };
+
     let broker = Arc::new(Broker::new(config, storage)?);
 
     let admin_service = AdminService::new(Arc::clone(&broker));
@@ -75,6 +86,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Graceful broker shutdown — Drop impl will handle it since Arc may have refs
     drop(broker);
+
+    // Shut down Raft before exiting.
+    if let Some(cm) = cluster_manager {
+        cm.shutdown().await;
+    }
 
     // Flush OTel pipeline (spans + metrics) before exit
     if let Some(guard) = telemetry_guard {
