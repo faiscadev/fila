@@ -54,7 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen_addr = config.server.listen_addr.clone();
 
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
-    let storage = Arc::new(RocksDbEngine::open(&data_dir)?);
+    let rocksdb = Arc::new(RocksDbEngine::open(&data_dir)?);
+    let storage: Arc<dyn fila_core::StorageEngine> = Arc::clone(&rocksdb) as _;
 
     // Conditionally start cluster manager (Raft consensus).
     let cluster_config = config.cluster.clone();
@@ -74,20 +75,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cluster_handle = cluster_manager.as_ref().map(|cm| cm.handle());
 
-    let broker = Arc::new(Broker::new(config, storage)?);
+    let broker = Arc::new(Broker::new(config, Arc::clone(&storage))?);
 
     // Wire cluster ↔ broker integration:
     // 1. Give the cluster gRPC service access to the Broker so forwarded
     //    writes can be applied to the leader's local scheduler.
     // 2. Start meta event handler for queue group lifecycle.
+    // 3. Start leader change watcher for failover (recover queue / drop consumers).
+    let (leader_watch_shutdown_tx, leader_watch_shutdown_rx) = tokio::sync::watch::channel(false);
     if let Some(ref cm) = cluster_manager {
         cm.set_broker(Arc::clone(&broker));
+        // Give queue-level Raft stores access to the broker's storage
+        // so committed entries are replicated to all nodes.
+        cm.multi_raft().set_broker_storage(Arc::clone(&storage));
         let broker_for_events = Arc::clone(&broker);
         let multi_raft = Arc::clone(cm.multi_raft());
         tokio::spawn(fila_core::cluster::process_meta_events(
             meta_event_rx,
             broker_for_events,
             multi_raft,
+        ));
+
+        let broker_for_watcher = Arc::clone(&broker);
+        let multi_raft_for_watcher = Arc::clone(cm.multi_raft());
+        let node_id = cluster_config.node_id;
+        tokio::spawn(fila_core::cluster::watch_leader_changes(
+            node_id,
+            multi_raft_for_watcher,
+            broker_for_watcher,
+            std::time::Duration::from_millis(200),
+            leader_watch_shutdown_rx,
         ));
     }
 
@@ -109,7 +126,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Graceful broker shutdown — Drop impl will handle it since Arc may have refs
     drop(broker);
 
-    // Shut down Raft before exiting (both success and error paths).
+    // Shut down leader change watcher and Raft before exiting.
+    let _ = leader_watch_shutdown_tx.send(true);
     if let Some(cm) = cluster_manager {
         cm.shutdown().await;
     }

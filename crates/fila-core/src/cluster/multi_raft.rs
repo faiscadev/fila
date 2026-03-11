@@ -35,6 +35,10 @@ pub struct MultiRaftManager {
     /// Queue ID → Raft instance. Protected by RwLock for concurrent reads
     /// (message routing) with infrequent writes (queue creation/deletion).
     groups: RwLock<HashMap<String, Arc<Raft<TypeConfig>>>>,
+    /// Broker storage reference for queue-level Raft state machines.
+    /// When set, committed entries (enqueue, ack, nack) are applied to the
+    /// broker's RocksDB on all nodes for replication.
+    broker_storage: std::sync::OnceLock<Arc<dyn crate::storage::StorageEngine>>,
 }
 
 impl MultiRaftManager {
@@ -44,7 +48,14 @@ impl MultiRaftManager {
             db,
             raft_config,
             groups: RwLock::new(HashMap::new()),
+            broker_storage: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Set the broker storage reference for queue-level Raft replication.
+    /// Must be called after the Broker is created.
+    pub fn set_broker_storage(&self, storage: Arc<dyn crate::storage::StorageEngine>) {
+        let _ = self.broker_storage.set(storage);
     }
 
     /// Create a new Raft group for a queue. All specified member nodes will
@@ -55,7 +66,8 @@ impl MultiRaftManager {
         queue_id: &str,
         members: &NonEmpty<(NodeId, String)>,
     ) -> Result<(), CreateGroupError> {
-        let store = FilaRaftStore::for_queue(Arc::clone(&self.db), queue_id);
+        let broker_storage = self.broker_storage.get().cloned();
+        let store = FilaRaftStore::for_queue(Arc::clone(&self.db), queue_id, broker_storage);
         let (log_store, state_machine) = Adaptor::new(store);
         let network = FilaNetworkFactory::for_queue(queue_id.to_string());
 
@@ -147,5 +159,16 @@ impl MultiRaftManager {
     /// List all active queue group IDs.
     pub async fn list_groups(&self) -> Vec<String> {
         self.groups.read().await.keys().cloned().collect()
+    }
+
+    /// Get a snapshot of all queue group Raft instances.
+    /// Used by `LeaderChangeWatcher` to monitor leadership changes.
+    pub async fn snapshot_groups(&self) -> Vec<(String, Arc<Raft<TypeConfig>>)> {
+        self.groups
+            .read()
+            .await
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::clone(v)))
+            .collect()
     }
 }
