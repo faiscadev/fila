@@ -1,6 +1,6 @@
 # Story 13.1: Clean Storage Trait Abstraction
 
-Status: review
+Status: done
 
 ## Story
 

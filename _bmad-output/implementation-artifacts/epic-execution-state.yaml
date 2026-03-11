@@ -4,8 +4,8 @@ startedAt: "2026-03-10"
 stories:
   - id: "13.1"
     title: "Clean Storage Trait Abstraction"
-    status: in-progress
-    currentPhase: "pr-complete"
+    status: completed
+    currentPhase: ""
     branch: "feat/13.1-clean-storage-trait-abstraction"
     pr: 54
     dependsOn: []
