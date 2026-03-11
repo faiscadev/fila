@@ -11,8 +11,8 @@ stories:
     dependsOn: []
   - id: "13.2"
     title: "Phase 2 Viability Seams"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/13.2-phase-2-viability-seams"
     pr: 55
     dependsOn: ["13.1"]
