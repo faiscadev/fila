@@ -18,8 +18,8 @@ stories:
     dependsOn: ["14.1"]
   - id: "14.3"
     title: "Request Routing & Transparent Delivery"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/14.3-request-routing-transparent-delivery"
     pr: 58
     dependsOn: ["14.2"]

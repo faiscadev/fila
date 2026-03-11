@@ -516,7 +516,7 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
         // so the background handler creates local queues and Raft groups.
         // Without this, nodes that start from a snapshot would miss setup.
         if let Some(ref tx) = self.meta_event_tx {
-            let member_addrs: HashMap<u64, String> = self
+            let all_nodes: Vec<(NodeId, String)> = self
                 .state_machine
                 .last_membership
                 .membership()
@@ -525,12 +525,20 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                 .collect();
 
             for (queue_id, members) in &self.state_machine.queue_groups {
-                let _ = tx.send(MetaStoreEvent::QueueGroupCreated {
-                    queue_id: queue_id.clone(),
-                    members: members.clone(),
-                    member_addrs: member_addrs.clone(),
-                    config: Box::new(QueueConfig::new(queue_id.clone())),
-                });
+                let member_pairs: Vec<(NodeId, String)> = all_nodes
+                    .iter()
+                    .filter(|(id, _)| members.contains(id))
+                    .cloned()
+                    .collect();
+                if let Some(member_pairs) = NonEmpty::from_vec(member_pairs) {
+                    let _ = tx.send(MetaStoreEvent::QueueGroupCreated {
+                        queue_id: queue_id.clone(),
+                        members: member_pairs,
+                        config: Box::new(QueueConfig::new(queue_id.clone())),
+                    });
+                } else {
+                    tracing::error!(queue_id, "no member addresses found in snapshot membership");
+                }
             }
         }
 

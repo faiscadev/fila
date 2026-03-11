@@ -266,10 +266,7 @@ pub async fn process_meta_events(
                 }
 
                 // Start the queue's Raft group.
-                if let Err(e) = multi_raft
-                    .create_group(&queue_id, &members)
-                    .await
-                {
+                if let Err(e) = multi_raft.create_group(&queue_id, &members).await {
                     tracing::error!(queue_id, error = %e, "failed to create queue raft group");
                 }
             }
