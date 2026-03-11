@@ -7,6 +7,7 @@ use tonic::{Request, Response, Status};
 
 use super::multi_raft::MultiRaftManager;
 use super::types::{NodeId, TypeConfig};
+use crate::Broker;
 use fila_proto::fila_cluster_server::FilaCluster;
 use fila_proto::{
     AddNodeRequest, AddNodeResponse, RaftRequest, RaftResponse, RemoveNodeRequest,
@@ -18,13 +19,77 @@ use fila_proto::{
 pub struct ClusterGrpcService {
     meta_raft: Arc<Raft<TypeConfig>>,
     multi_raft: Arc<MultiRaftManager>,
+    /// Broker reference for applying forwarded writes to the local scheduler.
+    /// Set after Broker creation via OnceLock — None during initial startup.
+    broker: Arc<std::sync::OnceLock<Arc<Broker>>>,
 }
 
 impl ClusterGrpcService {
-    pub fn new(meta_raft: Arc<Raft<TypeConfig>>, multi_raft: Arc<MultiRaftManager>) -> Self {
+    pub fn new(
+        meta_raft: Arc<Raft<TypeConfig>>,
+        multi_raft: Arc<MultiRaftManager>,
+        broker: Arc<std::sync::OnceLock<Arc<Broker>>>,
+    ) -> Self {
         Self {
             meta_raft,
             multi_raft,
+            broker,
+        }
+    }
+
+    /// Apply a forwarded write to the local scheduler after Raft commit.
+    /// This ensures the leader's scheduler has the data for serving consumers.
+    async fn apply_to_scheduler(broker: &Broker, req: &super::types::ClusterRequest) {
+        match req {
+            super::types::ClusterRequest::Enqueue { message } => {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                if let Err(e) = broker.send_command(crate::SchedulerCommand::Enqueue {
+                    message: message.clone(),
+                    reply: reply_tx,
+                }) {
+                    tracing::error!(error = %e, "failed to apply forwarded enqueue to scheduler");
+                    return;
+                }
+                if let Err(e) = reply_rx.await {
+                    tracing::error!(error = %e, "scheduler dropped reply for forwarded enqueue");
+                }
+            }
+            super::types::ClusterRequest::Ack { queue_id, msg_id } => {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                if let Err(e) = broker.send_command(crate::SchedulerCommand::Ack {
+                    queue_id: queue_id.clone(),
+                    msg_id: *msg_id,
+                    reply: reply_tx,
+                }) {
+                    tracing::error!(error = %e, "failed to apply forwarded ack to scheduler");
+                    return;
+                }
+                if let Err(e) = reply_rx.await {
+                    tracing::error!(error = %e, "scheduler dropped reply for forwarded ack");
+                }
+            }
+            super::types::ClusterRequest::Nack {
+                queue_id,
+                msg_id,
+                error,
+            } => {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                if let Err(e) = broker.send_command(crate::SchedulerCommand::Nack {
+                    queue_id: queue_id.clone(),
+                    msg_id: *msg_id,
+                    error: error.clone(),
+                    reply: reply_tx,
+                }) {
+                    tracing::error!(error = %e, "failed to apply forwarded nack to scheduler");
+                    return;
+                }
+                if let Err(e) = reply_rx.await {
+                    tracing::error!(error = %e, "scheduler dropped reply for forwarded nack");
+                }
+            }
+            // Other request types (CreateQueue, DeleteQueue, etc.) are handled
+            // through the meta Raft event system, not here.
+            _ => {}
         }
     }
 
@@ -133,6 +198,48 @@ impl FilaCluster for ClusterGrpcService {
                 leader_addr: String::new(),
             })),
             Err(e) => Ok(Response::new(handle_membership_error(e))),
+        }
+    }
+
+    async fn client_write(
+        &self,
+        request: Request<RaftRequest>,
+    ) -> Result<Response<RaftResponse>, Status> {
+        let inner = request.into_inner();
+        let raft = self.resolve_raft(&inner.group_id).await?;
+
+        let req: super::types::ClusterRequest = serde_json::from_slice(&inner.data)
+            .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
+
+        match raft.client_write(req.clone()).await {
+            Ok(resp) => {
+                // Apply to local scheduler so forwarded writes have
+                // real side effects on the leader node.
+                if let Some(broker) = self.broker.get() {
+                    Self::apply_to_scheduler(broker, &req).await;
+                }
+
+                let data = serde_json::to_vec(&resp.data)
+                    .map_err(|e| Status::internal(format!("serialize response: {e}")))?;
+                Ok(Response::new(RaftResponse {
+                    data,
+                    error: String::new(),
+                }))
+            }
+            Err(openraft::error::RaftError::APIError(
+                openraft::error::ClientWriteError::ForwardToLeader(fwd),
+            )) => {
+                let leader_addr = fwd
+                    .leader_node
+                    .as_ref()
+                    .map(|n| n.addr.clone())
+                    .unwrap_or_default();
+                Ok(Response::new(RaftResponse {
+                    data: Vec::new(),
+                    error: format!("ForwardToLeader:{leader_addr}"),
+                }))
+            }
+            Err(e) => raft_response_err(e),
         }
     }
 

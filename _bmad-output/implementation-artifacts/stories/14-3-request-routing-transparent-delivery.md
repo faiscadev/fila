@@ -1,6 +1,6 @@
 # Story 14.3: Request Routing & Transparent Delivery
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -26,33 +26,33 @@ so that I don't need to know which node is the leader for which queue.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Wire queue CRUD to multi-raft lifecycle (AC: 4, 6) — deferred from 14.2 Task 5
-  - [ ] 1.1 Pass `ClusterManager` reference to `AdminService` and `HotPathService`
-  - [ ] 1.2 When `AdminService::create_queue` is called in cluster mode, submit `CreateQueueGroup` to the meta Raft leader; on commit, each node's state machine triggers `MultiRaftManager::create_group()`
-  - [ ] 1.3 When `AdminService::delete_queue` is called in cluster mode, submit `DeleteQueueGroup` to the meta Raft leader; on commit, each node triggers `MultiRaftManager::remove_group()`
-  - [ ] 1.4 If the receiving node is not the meta leader, forward the request to the leader (use `ForwardToLeader` error's leader hint)
+- [x] Task 1: Wire queue CRUD to multi-raft lifecycle (AC: 4, 6) — deferred from 14.2 Task 5
+  - [x] 1.1 Pass `ClusterHandle` reference to `AdminService` and `HotPathService`
+  - [x] 1.2 When `AdminService::create_queue` is called in cluster mode, submit `CreateQueueGroup` to the meta Raft leader; on commit, each node's state machine triggers `MultiRaftManager::create_group()`
+  - [x] 1.3 When `AdminService::delete_queue` is called in cluster mode, submit `DeleteQueueGroup` to the meta Raft leader; on commit, each node triggers `MultiRaftManager::remove_group()`
+  - [x] 1.4 If the receiving node is not the meta leader, forward the request to the leader (use `ForwardToLeader` error's leader hint)
 
-- [ ] Task 2: Queue Raft state machine applies operations to scheduler (AC: 5, 6) — deferred from 14.2 Task 6
-  - [ ] 2.1 Give `FilaRaftStore` access to the broker's scheduler command channel (for queue-level stores)
-  - [ ] 2.2 When `apply_to_state_machine` handles `Enqueue`, send `SchedulerCommand::Enqueue` to the broker
-  - [ ] 2.3 When `apply_to_state_machine` handles `Ack`/`Nack`, send corresponding `SchedulerCommand`
-  - [ ] 2.4 Meta Raft state machine continues to just track state (no scheduler routing)
+- [x] Task 2: Queue Raft state machine applies operations to scheduler (AC: 5, 6) — deferred from 14.2 Task 6
+  - [x] 2.1 `ClusterGrpcService` gets `broker_slot` (OnceLock) for applying forwarded writes to the leader's scheduler
+  - [x] 2.2 `apply_to_scheduler()` handles Enqueue via `SchedulerCommand::Enqueue`
+  - [x] 2.3 `apply_to_scheduler()` handles Ack/Nack via corresponding `SchedulerCommand`
+  - [x] 2.4 Meta Raft state machine emits `MetaStoreEvent` for queue group lifecycle; `process_meta_events()` handler creates/removes queues and Raft groups
 
-- [ ] Task 3: Request routing in service handlers (AC: 1, 2, 3, 6)
-  - [ ] 3.1 In `HotPathService::enqueue`, check cluster mode: if enabled, submit `ClusterRequest::Enqueue` to the queue's Raft leader via `client_write()`; if not leader, openraft's `ForwardToLeader` provides the leader address
-  - [ ] 3.2 In `HotPathService::ack` and `nack`, same pattern: route to queue Raft leader
-  - [ ] 3.3 Implement leader forwarding: when `client_write()` returns `ForwardToLeader`, create a gRPC client to the leader and retry the request there
-  - [ ] 3.4 In single-node mode, bypass Raft entirely — send directly to scheduler (existing path)
+- [x] Task 3: Request routing in service handlers (AC: 1, 2, 3, 6)
+  - [x] 3.1 In `HotPathService::enqueue`, check cluster mode: if enabled, submit `ClusterRequest::Enqueue` via `ClusterHandle::write_to_queue()`; handles ForwardToLeader transparently
+  - [x] 3.2 In `HotPathService::ack` and `nack`, same pattern: route to queue Raft leader
+  - [x] 3.3 Implement leader forwarding: `ClusterHandle::forward_client_write()` creates gRPC client to leader and sends via `ClientWrite` RPC
+  - [x] 3.4 In single-node mode, bypass Raft entirely — send directly to scheduler (existing path)
 
-- [ ] Task 4: Integration tests (AC: 7)
-  - [ ] 4.1 Test: enqueue on node A, consume on node B — message delivered across nodes
-  - [ ] 4.2 Test: ack on node C — full lifecycle across 3 nodes
-  - [ ] 4.3 Test: create queue on non-leader node — propagates to all nodes
-  - [ ] 4.4 Test: delete queue on non-leader node — cleaned up on all nodes
+- [x] Task 4: Integration tests (AC: 7)
+  - [x] 4.1 Test: enqueue on node A, consume on node B — message delivered across nodes
+  - [x] 4.2 Test: ack on node C — full lifecycle across 3 nodes
+  - [x] 4.3 Test: create queue on non-leader node — propagates to all nodes
+  - [x] 4.4 Test: delete queue on non-leader node — cleaned up on all nodes
 
-- [ ] Task 5: Verify single-node mode unchanged (AC: 6)
-  - [ ] 5.1 Run existing test suite — verify zero regressions
-  - [ ] 5.2 Verify no Raft involvement when `cluster.enabled = false`
+- [x] Task 5: Verify single-node mode unchanged (AC: 6)
+  - [x] 5.1 Run existing test suite — 313 tests pass, zero regressions
+  - [x] 5.2 Verify no Raft involvement when `cluster.enabled = false` — all handlers check `if let Some(ref cluster)`
 
 ## Dev Notes
 
@@ -114,6 +114,38 @@ Claude Opus 4.6
 
 ### Debug Log References
 
+- Code review iteration 1: fixed broker tempdir leak in FullTestNode (test-only)
+- Clippy fixes: Box<QueueConfig> for large enum variant, removed unused import
+
 ### Completion Notes List
 
+- ClusterHandle pattern separates shareable cluster references from non-cloneable ClusterManager resources
+- OnceLock<Broker> solves chicken-and-egg: ClusterGrpcService starts before Broker exists
+- Two-path scheduler application: local writes applied by service handler (handled_locally=true), forwarded writes applied by leader's ClientWrite gRPC handler
+- MetaStoreEvent channel decouples Raft state machine from queue lifecycle management
+
+### Change Log
+
+- Added `ClientWrite` RPC to cluster.proto for leader forwarding
+- Created `ClusterHandle`, `ClusterWriteResult`, `ClusterWriteError` types
+- Created `MetaStoreEvent` enum and `process_meta_events()` handler
+- Implemented `apply_to_scheduler()` in `ClusterGrpcService` for forwarded writes
+- Added cluster routing to `HotPathService` (enqueue, ack, nack)
+- Added cluster routing to `AdminService` (create_queue, delete_queue)
+- Wired cluster ↔ broker integration in main.rs
+- 4 new integration tests: enqueue/consume across nodes, ack across nodes, create queue on non-leader, delete queue propagation
+
 ### File List
+
+| File | Change |
+|------|--------|
+| `crates/fila-proto/proto/fila/v1/cluster.proto` | Added `ClientWrite` RPC |
+| `crates/fila-core/src/cluster/types.rs` | Added `config: QueueConfig` to `CreateQueueGroup` |
+| `crates/fila-core/src/cluster/store.rs` | Added `MetaStoreEvent`, `meta_event_tx`, event emission on CreateQueueGroup/DeleteQueueGroup |
+| `crates/fila-core/src/cluster/mod.rs` | Added `ClusterHandle`, `ClusterWriteResult`, `ClusterWriteError`, `process_meta_events()`, `set_broker()`, `handle()` |
+| `crates/fila-core/src/cluster/grpc_service.rs` | Added `broker_slot`, `client_write()` handler, `apply_to_scheduler()` |
+| `crates/fila-core/src/cluster/tests.rs` | Added `FullTestNode`, 4 integration tests, helper functions |
+| `crates/fila-core/src/lib.rs` | Added cluster type exports |
+| `crates/fila-server/src/main.rs` | Wired cluster ↔ broker integration, event handler |
+| `crates/fila-server/src/service.rs` | Added cluster routing to enqueue/ack/nack |
+| `crates/fila-server/src/admin_service.rs` | Added cluster routing to create_queue/delete_queue |

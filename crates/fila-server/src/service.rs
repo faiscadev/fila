@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use fila_core::{Broker, Message, ReadyMessage, SchedulerCommand};
+use fila_core::{
+    Broker, ClusterHandle, ClusterRequest, ClusterResponse, Message, ReadyMessage, SchedulerCommand,
+};
 use fila_proto::fila_service_server::FilaService;
 use fila_proto::{
     AckRequest, AckResponse, ConsumeRequest, ConsumeResponse, EnqueueRequest, EnqueueResponse,
@@ -15,11 +17,12 @@ use crate::error::IntoStatus;
 /// gRPC hot-path service implementation for producers and consumers.
 pub struct HotPathService {
     broker: Arc<Broker>,
+    cluster: Option<Arc<ClusterHandle>>,
 }
 
 impl HotPathService {
-    pub fn new(broker: Arc<Broker>) -> Self {
-        Self { broker }
+    pub fn new(broker: Arc<Broker>, cluster: Option<Arc<ClusterHandle>>) -> Self {
+        Self { broker, cluster }
     }
 }
 
@@ -63,7 +66,7 @@ impl FilaService for HotPathService {
 
         let message = Message {
             id: msg_id,
-            queue_id: req.queue,
+            queue_id: req.queue.clone(),
             headers: req.headers,
             payload: req.payload,
             fairness_key: "default".to_string(),
@@ -74,22 +77,66 @@ impl FilaService for HotPathService {
             leased_at: None,
         };
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.broker
-            .send_command(SchedulerCommand::Enqueue {
-                message,
-                reply: reply_tx,
-            })
-            .map_err(IntoStatus::into_status)?;
+        if let Some(ref cluster) = self.cluster {
+            // Cluster mode: commit through the queue's Raft group.
+            let result = cluster
+                .write_to_queue(
+                    &req.queue,
+                    ClusterRequest::Enqueue {
+                        message: message.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| Status::internal(format!("{e}")))?;
 
-        let msg_id = reply_rx
-            .await
-            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(IntoStatus::into_status)?;
+            let msg_id = match result.response {
+                ClusterResponse::Enqueue { msg_id } => msg_id,
+                ClusterResponse::Error { message } => {
+                    return Err(Status::internal(message));
+                }
+                _ => return Err(Status::internal("unexpected cluster response")),
+            };
 
-        Ok(Response::new(EnqueueResponse {
-            message_id: msg_id.to_string(),
-        }))
+            // Apply to local scheduler only if this node handled the
+            // write (is the leader). Forwarded writes are applied by
+            // the leader's ClientWrite handler.
+            if result.handled_locally {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                self.broker
+                    .send_command(SchedulerCommand::Enqueue {
+                        message,
+                        reply: reply_tx,
+                    })
+                    .map_err(IntoStatus::into_status)?;
+
+                let _ = reply_rx
+                    .await
+                    .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                    .map_err(IntoStatus::into_status)?;
+            }
+
+            Ok(Response::new(EnqueueResponse {
+                message_id: msg_id.to_string(),
+            }))
+        } else {
+            // Single-node mode: direct to scheduler.
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            self.broker
+                .send_command(SchedulerCommand::Enqueue {
+                    message,
+                    reply: reply_tx,
+                })
+                .map_err(IntoStatus::into_status)?;
+
+            let msg_id = reply_rx
+                .await
+                .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                .map_err(IntoStatus::into_status)?;
+
+            Ok(Response::new(EnqueueResponse {
+                message_id: msg_id.to_string(),
+            }))
+        }
     }
 
     type ConsumeStream = tokio_stream::wrappers::ReceiverStream<Result<ConsumeResponse, Status>>;
@@ -179,19 +226,53 @@ impl FilaService for HotPathService {
             .parse()
             .map_err(|_| Status::invalid_argument("invalid message_id format"))?;
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.broker
-            .send_command(SchedulerCommand::Ack {
-                queue_id: req.queue,
-                msg_id,
-                reply: reply_tx,
-            })
-            .map_err(IntoStatus::into_status)?;
+        if let Some(ref cluster) = self.cluster {
+            // Cluster mode: commit through queue Raft.
+            let result = cluster
+                .write_to_queue(
+                    &req.queue,
+                    ClusterRequest::Ack {
+                        queue_id: req.queue.clone(),
+                        msg_id,
+                    },
+                )
+                .await
+                .map_err(|e| Status::internal(format!("{e}")))?;
 
-        reply_rx
-            .await
-            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(IntoStatus::into_status)?;
+            if let ClusterResponse::Error { message } = result.response {
+                return Err(Status::internal(message));
+            }
+
+            if result.handled_locally {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                self.broker
+                    .send_command(SchedulerCommand::Ack {
+                        queue_id: req.queue,
+                        msg_id,
+                        reply: reply_tx,
+                    })
+                    .map_err(IntoStatus::into_status)?;
+
+                reply_rx
+                    .await
+                    .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                    .map_err(IntoStatus::into_status)?;
+            }
+        } else {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            self.broker
+                .send_command(SchedulerCommand::Ack {
+                    queue_id: req.queue,
+                    msg_id,
+                    reply: reply_tx,
+                })
+                .map_err(IntoStatus::into_status)?;
+
+            reply_rx
+                .await
+                .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                .map_err(IntoStatus::into_status)?;
+        }
 
         Ok(Response::new(AckResponse {}))
     }
@@ -215,20 +296,56 @@ impl FilaService for HotPathService {
             .parse()
             .map_err(|_| Status::invalid_argument("invalid message_id format"))?;
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.broker
-            .send_command(SchedulerCommand::Nack {
-                queue_id: req.queue,
-                msg_id,
-                error: req.error,
-                reply: reply_tx,
-            })
-            .map_err(IntoStatus::into_status)?;
+        if let Some(ref cluster) = self.cluster {
+            // Cluster mode: commit through queue Raft.
+            let result = cluster
+                .write_to_queue(
+                    &req.queue,
+                    ClusterRequest::Nack {
+                        queue_id: req.queue.clone(),
+                        msg_id,
+                        error: req.error.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| Status::internal(format!("{e}")))?;
 
-        reply_rx
-            .await
-            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(IntoStatus::into_status)?;
+            if let ClusterResponse::Error { message } = result.response {
+                return Err(Status::internal(message));
+            }
+
+            if result.handled_locally {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                self.broker
+                    .send_command(SchedulerCommand::Nack {
+                        queue_id: req.queue,
+                        msg_id,
+                        error: req.error,
+                        reply: reply_tx,
+                    })
+                    .map_err(IntoStatus::into_status)?;
+
+                reply_rx
+                    .await
+                    .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                    .map_err(IntoStatus::into_status)?;
+            }
+        } else {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            self.broker
+                .send_command(SchedulerCommand::Nack {
+                    queue_id: req.queue,
+                    msg_id,
+                    error: req.error,
+                    reply: reply_tx,
+                })
+                .map_err(IntoStatus::into_status)?;
+
+            reply_rx
+                .await
+                .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                .map_err(IntoStatus::into_status)?;
+        }
 
         Ok(Response::new(NackResponse {}))
     }

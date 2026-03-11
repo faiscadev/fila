@@ -68,6 +68,9 @@ pub enum ClusterRequest {
         queue_id: String,
         /// Node IDs that should be members of this queue's Raft group.
         members: Vec<u64>,
+        /// Queue configuration so all nodes can create the queue in their
+        /// local scheduler when the group is established.
+        config: QueueConfig,
     },
     /// Delete a queue's Raft group. Applied by the meta Raft state machine;
     /// each node then shuts down its local Raft instance for the queue.

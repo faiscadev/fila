@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use fila_core::{Broker, QueueConfig, SchedulerCommand};
+use fila_core::{
+    Broker, ClusterHandle, ClusterRequest, ClusterResponse, QueueConfig, SchedulerCommand,
+};
 use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
     ConfigEntry, CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
@@ -18,14 +20,15 @@ use crate::error::IntoStatus;
 /// to the scheduler thread.
 pub struct AdminService {
     broker: Arc<Broker>,
+    cluster: Option<Arc<ClusterHandle>>,
 }
 
 impl AdminService {
     const MAX_CONFIG_KEY_LEN: usize = 256;
     const MAX_CONFIG_VALUE_LEN: usize = 1024;
 
-    pub fn new(broker: Arc<Broker>) -> Self {
-        Self { broker }
+    pub fn new(broker: Arc<Broker>, cluster: Option<Arc<ClusterHandle>>) -> Self {
+        Self { broker, cluster }
     }
 }
 
@@ -73,21 +76,46 @@ impl FilaAdmin for AdminService {
             lua_memory_limit_bytes: None,
         };
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.broker
-            .send_command(SchedulerCommand::CreateQueue {
-                name: req.name,
-                config,
-                reply: reply_tx,
-            })
-            .map_err(IntoStatus::into_status)?;
+        if let Some(ref cluster) = self.cluster {
+            // Cluster mode: submit CreateQueueGroup to meta Raft.
+            // The meta state machine event handler will create the queue
+            // in the local scheduler and start the queue's Raft group on
+            // all nodes.
+            let (members, _member_addrs) = cluster.meta_members();
+            let resp = cluster
+                .write_to_meta(ClusterRequest::CreateQueueGroup {
+                    queue_id: req.name.clone(),
+                    members,
+                    config,
+                })
+                .await
+                .map_err(|e| Status::internal(format!("{e}")))?;
 
-        let queue_id = reply_rx
-            .await
-            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(IntoStatus::into_status)?;
+            match resp {
+                ClusterResponse::CreateQueueGroup { queue_id } => {
+                    Ok(Response::new(CreateQueueResponse { queue_id }))
+                }
+                ClusterResponse::Error { message } => Err(Status::internal(message)),
+                _ => Err(Status::internal("unexpected cluster response")),
+            }
+        } else {
+            // Single-node mode: direct to scheduler.
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            self.broker
+                .send_command(SchedulerCommand::CreateQueue {
+                    name: req.name,
+                    config,
+                    reply: reply_tx,
+                })
+                .map_err(IntoStatus::into_status)?;
 
-        Ok(Response::new(CreateQueueResponse { queue_id }))
+            let queue_id = reply_rx
+                .await
+                .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                .map_err(IntoStatus::into_status)?;
+
+            Ok(Response::new(CreateQueueResponse { queue_id }))
+        }
     }
 
     #[instrument(skip(self), fields(queue_id))]
@@ -102,20 +130,37 @@ impl FilaAdmin for AdminService {
         }
         tracing::Span::current().record("queue_id", req.queue.as_str());
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.broker
-            .send_command(SchedulerCommand::DeleteQueue {
-                queue_id: req.queue,
-                reply: reply_tx,
-            })
-            .map_err(IntoStatus::into_status)?;
+        if let Some(ref cluster) = self.cluster {
+            // Cluster mode: submit DeleteQueueGroup to meta Raft.
+            let resp = cluster
+                .write_to_meta(ClusterRequest::DeleteQueueGroup {
+                    queue_id: req.queue,
+                })
+                .await
+                .map_err(|e| Status::internal(format!("{e}")))?;
 
-        reply_rx
-            .await
-            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(IntoStatus::into_status)?;
+            match resp {
+                ClusterResponse::DeleteQueueGroup => Ok(Response::new(DeleteQueueResponse {})),
+                ClusterResponse::Error { message } => Err(Status::internal(message)),
+                _ => Err(Status::internal("unexpected cluster response")),
+            }
+        } else {
+            // Single-node mode: direct to scheduler.
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            self.broker
+                .send_command(SchedulerCommand::DeleteQueue {
+                    queue_id: req.queue,
+                    reply: reply_tx,
+                })
+                .map_err(IntoStatus::into_status)?;
 
-        Ok(Response::new(DeleteQueueResponse {}))
+            reply_rx
+                .await
+                .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                .map_err(IntoStatus::into_status)?;
+
+            Ok(Response::new(DeleteQueueResponse {}))
+        }
     }
 
     #[instrument(skip(self))]
@@ -356,7 +401,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
         let broker = Arc::new(Broker::new(BrokerConfig::default(), storage).unwrap());
-        (AdminService::new(broker), dir)
+        (AdminService::new(broker, None), dir)
     }
 
     #[tokio::test]
