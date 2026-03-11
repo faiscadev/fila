@@ -121,6 +121,37 @@ Claude Opus 4.6
 
 ### Debug Log References
 
+- All 278 tests pass (`cargo test --workspace`)
+- Zero clippy warnings (`cargo clippy --workspace`)
+
 ### Completion Notes List
 
+- Story was primarily a rename operation — existing Storage trait abstraction was already well-designed with RocksDB types fully encapsulated.
+- InMemoryEngine was initially implemented then removed per Lucas's direction: RocksDB-backed tests are preferred since they test what runs in production.
+- Code review caught 11 stale "CF" (column family) references in scheduler/test comments that needed domain-term updates.
+
 ### File List
+
+- `crates/fila-core/src/storage/traits.rs` — Renamed trait + enum + method, updated doc comments to domain terms
+- `crates/fila-core/src/storage/rocksdb.rs` — Renamed struct, updated impl block and error variants
+- `crates/fila-core/src/storage/mod.rs` — Updated re-exports
+- `crates/fila-core/src/error.rs` — Renamed StorageError variants: RocksDb→Engine, ColumnFamilyNotFound→StoreNotFound
+- `crates/fila-core/src/lib.rs` — Updated public exports
+- `crates/fila-core/src/broker/mod.rs` — Updated type references
+- `crates/fila-core/src/broker/scheduler/mod.rs` — Updated imports and type references
+- `crates/fila-core/src/broker/scheduler/handlers.rs` — WriteBatchOp→Mutation, write_batch→apply_mutations
+- `crates/fila-core/src/broker/scheduler/admin_handlers.rs` — Same renames + doc comment update
+- `crates/fila-core/src/broker/scheduler/delivery.rs` — Same renames + doc comment update
+- `crates/fila-core/src/broker/scheduler/recovery.rs` — Same renames + doc comment updates
+- `crates/fila-core/src/broker/scheduler/tests/mod.rs` — Updated imports
+- `crates/fila-core/src/broker/scheduler/tests/common.rs` — Updated type references
+- `crates/fila-core/src/broker/scheduler/tests/ack_nack.rs` — Updated type references + comment fixes
+- `crates/fila-core/src/broker/scheduler/tests/config.rs` — Updated type references + comment fix
+- `crates/fila-core/src/broker/scheduler/tests/fairness.rs` — Updated type references
+- `crates/fila-core/src/broker/scheduler/tests/lua.rs` — Updated type references + comment fix
+- `crates/fila-core/src/broker/scheduler/tests/recovery.rs` — Updated type references
+- `crates/fila-core/src/lua/mod.rs` — Updated type references
+- `crates/fila-core/src/lua/bridge.rs` — Updated type references + doc comment + test comment
+- `crates/fila-core/src/queue.rs` — Updated doc comment
+- `crates/fila-server/src/main.rs` — Updated imports
+- `crates/fila-server/src/admin_service.rs` — Updated test imports
