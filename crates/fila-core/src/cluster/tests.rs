@@ -1276,6 +1276,8 @@ mod tests {
     // --- Story 14.5: Cluster Observability tests ---
 
     /// Test: 3-node cluster GetStats returns valid leader_node_id and correct replication_count.
+    /// Exercises both the scheduler GetStats command (verifying stats are returned)
+    /// and the Raft metrics path (which admin_service uses for cluster enrichment).
     #[tokio::test]
     async fn test_cluster_get_stats_returns_cluster_fields() {
         let base_port = 15770;
@@ -1289,8 +1291,23 @@ mod tests {
 
         create_queue_cluster(&node1, "stats-q").await.unwrap();
         let queue_leader_id = wait_for_queue_ready(&nodes, "stats-q", 10).await;
+        let leader = get_leader_node(&nodes, queue_leader_id);
 
-        // Query cluster info the same way admin_service does.
+        // 1. Verify the scheduler GetStats command returns valid stats.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        leader
+            .broker
+            .send_command(crate::SchedulerCommand::GetStats {
+                queue_id: "stats-q".to_string(),
+                reply: reply_tx,
+            })
+            .unwrap();
+        let stats = reply_rx.await.unwrap().unwrap();
+        // Scheduler returns 0 for cluster fields (enrichment happens in admin_service).
+        assert_eq!(stats.leader_node_id, 0);
+        assert_eq!(stats.replication_count, 0);
+
+        // 2. Verify the Raft metrics path (used by admin_service for enrichment).
         let raft = node1.multi_raft.get_raft("stats-q").await.unwrap();
         let metrics = raft.metrics().borrow().clone();
         let leader_id = metrics.current_leader.unwrap_or(0);
@@ -1309,6 +1326,7 @@ mod tests {
     }
 
     /// Test: 3-node cluster ListQueues returns leader per queue and cluster_node_count=3.
+    /// Exercises both the scheduler ListQueues command and the cluster metadata path.
     #[tokio::test]
     async fn test_cluster_list_queues_returns_cluster_fields() {
         let base_port = 15780;
@@ -1322,8 +1340,21 @@ mod tests {
 
         create_queue_cluster(&node1, "list-q").await.unwrap();
         let queue_leader_id = wait_for_queue_ready(&nodes, "list-q", 10).await;
+        let leader = get_leader_node(&nodes, queue_leader_id);
 
-        // Check meta_members returns correct node count.
+        // 1. Verify the scheduler ListQueues command returns queue summaries.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        leader
+            .broker
+            .send_command(crate::SchedulerCommand::ListQueues { reply: reply_tx })
+            .unwrap();
+        let summaries = reply_rx.await.unwrap().unwrap();
+        let stats_q = summaries.iter().find(|s| s.name == "list-q");
+        assert!(stats_q.is_some(), "list-q should appear in ListQueues");
+        // Scheduler returns 0 for leader (enrichment happens in admin_service).
+        assert_eq!(stats_q.unwrap().leader_node_id, 0);
+
+        // 2. Verify meta_members returns correct node count (used by admin_service).
         let (members, _addrs) = node1.cluster_handle.meta_members();
         assert_eq!(
             members.len(),
@@ -1331,7 +1362,7 @@ mod tests {
             "cluster_node_count should be 3 for a 3-node cluster"
         );
 
-        // Check leader_node_id per queue from Raft metrics.
+        // 3. Verify leader_node_id per queue from Raft metrics (used by admin_service).
         let raft = node1.multi_raft.get_raft("list-q").await.unwrap();
         let leader_id = raft.metrics().borrow().current_leader.unwrap_or(0);
         assert_eq!(leader_id, queue_leader_id);
