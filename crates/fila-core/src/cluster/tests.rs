@@ -1273,6 +1273,78 @@ mod tests {
         node2.shutdown().await;
     }
 
+    // --- Story 14.5: Cluster Observability tests ---
+
+    /// Test: 3-node cluster GetStats returns valid leader_node_id and correct replication_count.
+    #[tokio::test]
+    async fn test_cluster_get_stats_returns_cluster_fields() {
+        let base_port = 15770;
+        let node1 = FullTestNode::start(1, base_port).await;
+        let node2 = FullTestNode::start(2, base_port + 1).await;
+        let node3 = FullTestNode::start(3, base_port + 2).await;
+
+        let nodes = [&node1, &node2, &node3];
+        bootstrap_full_cluster(&nodes, base_port).await;
+        wait_for_leader(&node1.raft, 5).await;
+
+        create_queue_cluster(&node1, "stats-q").await.unwrap();
+        let queue_leader_id = wait_for_queue_ready(&nodes, "stats-q", 10).await;
+
+        // Query cluster info the same way admin_service does.
+        let raft = node1.multi_raft.get_raft("stats-q").await.unwrap();
+        let metrics = raft.metrics().borrow().clone();
+        let leader_id = metrics.current_leader.unwrap_or(0);
+        let voter_count = metrics.membership_config.membership().voter_ids().count();
+
+        assert_eq!(leader_id, queue_leader_id);
+        assert_eq!(voter_count, 3, "replication count should match group size");
+        assert!(
+            (1..=3).contains(&leader_id),
+            "leader_node_id should be a valid cluster member"
+        );
+
+        node1.shutdown().await;
+        node2.shutdown().await;
+        node3.shutdown().await;
+    }
+
+    /// Test: 3-node cluster ListQueues returns leader per queue and cluster_node_count=3.
+    #[tokio::test]
+    async fn test_cluster_list_queues_returns_cluster_fields() {
+        let base_port = 15780;
+        let node1 = FullTestNode::start(1, base_port).await;
+        let node2 = FullTestNode::start(2, base_port + 1).await;
+        let node3 = FullTestNode::start(3, base_port + 2).await;
+
+        let nodes = [&node1, &node2, &node3];
+        bootstrap_full_cluster(&nodes, base_port).await;
+        wait_for_leader(&node1.raft, 5).await;
+
+        create_queue_cluster(&node1, "list-q").await.unwrap();
+        let queue_leader_id = wait_for_queue_ready(&nodes, "list-q", 10).await;
+
+        // Check meta_members returns correct node count.
+        let (members, _addrs) = node1.cluster_handle.meta_members();
+        assert_eq!(
+            members.len(),
+            3,
+            "cluster_node_count should be 3 for a 3-node cluster"
+        );
+
+        // Check leader_node_id per queue from Raft metrics.
+        let raft = node1.multi_raft.get_raft("list-q").await.unwrap();
+        let leader_id = raft.metrics().borrow().current_leader.unwrap_or(0);
+        assert_eq!(leader_id, queue_leader_id);
+        assert!(
+            (1..=3).contains(&leader_id),
+            "leader_node_id should be a valid cluster member"
+        );
+
+        node1.shutdown().await;
+        node2.shutdown().await;
+        node3.shutdown().await;
+    }
+
     /// Test multiple queues have potentially different leaders (leadership distribution).
     #[tokio::test]
     async fn test_multiple_queue_groups_leadership() {

@@ -77,6 +77,7 @@ impl Scheduler {
         inbound: Receiver<SchedulerCommand>,
         config: &SchedulerConfig,
         lua_config: &LuaConfig,
+        cluster_node_id: u64,
     ) -> Self {
         let lua_engine = match LuaEngine::new(storage.clone(), lua_config) {
             Ok(engine) => Some(engine),
@@ -101,7 +102,11 @@ impl Scheduler {
             lua_engine,
             known_queues: HashSet::new(),
             router: QueueRouter::new(),
-            metrics: Metrics::new(),
+            metrics: if cluster_node_id > 0 {
+                Metrics::with_node_id(cluster_node_id)
+            } else {
+                Metrics::new()
+            },
             fairness_deliveries: HashMap::new(),
         }
     }

@@ -470,7 +470,7 @@ fn lease_expiry_redelivers_message_with_incremented_attempt_count() {
     // so it must be created inside the thread.
     let handle = std::thread::spawn(move || {
         let lua_config = LuaConfig::default();
-        let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config);
+        let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config, 0);
         scheduler.run();
     });
 
@@ -535,7 +535,7 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
     // so it must be created inside the thread.
     let handle = std::thread::spawn(move || {
         let lua_config = LuaConfig::default();
-        let mut scheduler = Scheduler::new(storage_for_thread, rx, &config, &lua_config);
+        let mut scheduler = Scheduler::new(storage_for_thread, rx, &config, &lua_config, 0);
         scheduler.run();
     });
 
@@ -640,7 +640,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
     // so it must be created inside the thread.
     let handle = std::thread::spawn(move || {
         let lua_config = LuaConfig::default();
-        let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config);
+        let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config, 0);
         scheduler.run();
     });
 
@@ -709,7 +709,7 @@ fn ack_before_expiry_prevents_redelivery() {
     // so it must be created inside the thread.
     let handle = std::thread::spawn(move || {
         let lua_config = LuaConfig::default();
-        let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config);
+        let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config, 0);
         scheduler.run();
     });
 

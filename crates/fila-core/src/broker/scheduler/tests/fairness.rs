@@ -299,7 +299,7 @@ fn drr_fairness_accuracy_10k_messages_6_keys() {
     // so it must be created inside the thread.
     let lua_config = LuaConfig::default();
     let handle = std::thread::spawn(move || {
-        let mut s = Scheduler::new(storage, rx, &config, &lua_config);
+        let mut s = Scheduler::new(storage, rx, &config, &lua_config, 0);
         s.run();
     });
 
@@ -459,7 +459,7 @@ fn drr_weight_update_changes_proportions() {
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
     let lua_config = LuaConfig::default();
-    let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config);
+    let mut scheduler = Scheduler::new(storage, rx, &config, &lua_config, 0);
 
     send_create_queue(&tx, "weight-update");
 

@@ -22,6 +22,9 @@ pub struct Metrics {
     pub drr_weight: Gauge<u64>,
     pub lua_errors: Counter<u64>,
     pub lua_cb_activations: Counter<u64>,
+    /// Optional cluster node ID. When non-zero, all metric recordings
+    /// include a `node_id` label for per-node dashboarding.
+    node_id: Option<KeyValue>,
 }
 
 impl Default for Metrics {
@@ -36,6 +39,17 @@ impl Metrics {
     pub fn new() -> Self {
         let meter = opentelemetry::global::meter("fila");
         Self::from_meter(&meter)
+    }
+
+    /// Create metrics with a cluster node ID. When `node_id` > 0, all
+    /// recordings include a `node_id` label for per-node metrics.
+    pub fn with_node_id(node_id: u64) -> Self {
+        let meter = opentelemetry::global::meter("fila");
+        let mut m = Self::from_meter(&meter);
+        if node_id > 0 {
+            m.node_id = Some(KeyValue::new("node_id", node_id.to_string()));
+        }
+        m
     }
 
     /// Create metrics from a specific meter (used in tests with in-memory exporter).
@@ -113,129 +127,125 @@ impl Metrics {
                 .u64_counter("fila.lua.circuit_breaker.activations")
                 .with_description("Lua circuit breaker activations")
                 .build(),
+            node_id: None,
         }
     }
 
+    /// Build an attribute list, appending node_id if configured.
+    fn attrs(&self, base: &[KeyValue]) -> Vec<KeyValue> {
+        let mut attrs = base.to_vec();
+        if let Some(nid) = &self.node_id {
+            attrs.push(nid.clone());
+        }
+        attrs
+    }
+
     pub fn record_enqueue(&self, queue_id: &str) {
-        self.messages_enqueued
-            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.messages_enqueued.add(1, &attrs);
     }
 
     pub fn record_lease(&self, queue_id: &str) {
-        self.messages_leased
-            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.messages_leased.add(1, &attrs);
     }
 
     pub fn record_ack(&self, queue_id: &str) {
-        self.messages_acked
-            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.messages_acked.add(1, &attrs);
     }
 
     pub fn record_nack(&self, queue_id: &str) {
-        self.messages_nacked
-            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.messages_nacked.add(1, &attrs);
     }
 
     pub fn set_queue_depth(&self, queue_id: &str, depth: u64) {
-        self.queue_depth
-            .record(depth, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.queue_depth.record(depth, &attrs);
     }
 
     pub fn set_leases_active(&self, queue_id: &str, count: u64) {
-        self.leases_active
-            .record(count, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.leases_active.record(count, &attrs);
     }
 
     pub fn record_fairness_delivery(&self, queue_id: &str, fairness_key: &str) {
-        self.fairness_throughput.add(
-            1,
-            &[
-                KeyValue::new("queue_id", queue_id.to_string()),
-                KeyValue::new("fairness_key", fairness_key.to_string()),
-            ],
-        );
+        let attrs = self.attrs(&[
+            KeyValue::new("queue_id", queue_id.to_string()),
+            KeyValue::new("fairness_key", fairness_key.to_string()),
+        ]);
+        self.fairness_throughput.add(1, &attrs);
     }
 
     pub fn record_throttle_decision(&self, throttle_key: &str, result: &str) {
-        self.throttle_decisions.add(
-            1,
-            &[
-                KeyValue::new("throttle_key", throttle_key.to_string()),
-                KeyValue::new("result", result.to_string()),
-            ],
-        );
+        let attrs = self.attrs(&[
+            KeyValue::new("throttle_key", throttle_key.to_string()),
+            KeyValue::new("result", result.to_string()),
+        ]);
+        self.throttle_decisions.add(1, &attrs);
     }
 
     pub fn record_drr_round(&self, queue_id: &str) {
-        self.drr_rounds
-            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.drr_rounds.add(1, &attrs);
     }
 
     pub fn set_drr_active_keys(&self, queue_id: &str, count: u64) {
-        self.drr_active_keys
-            .record(count, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.drr_active_keys.record(count, &attrs);
     }
 
     pub fn record_drr_key_processed(&self, queue_id: &str) {
-        self.drr_keys_processed
-            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.drr_keys_processed.add(1, &attrs);
     }
 
     pub fn set_fairness_ratio(&self, queue_id: &str, fairness_key: &str, ratio: f64) {
-        self.fairness_ratio.record(
-            ratio,
-            &[
-                KeyValue::new("queue_id", queue_id.to_string()),
-                KeyValue::new("fairness_key", fairness_key.to_string()),
-            ],
-        );
+        let attrs = self.attrs(&[
+            KeyValue::new("queue_id", queue_id.to_string()),
+            KeyValue::new("fairness_key", fairness_key.to_string()),
+        ]);
+        self.fairness_ratio.record(ratio, &attrs);
     }
 
     pub fn set_drr_deficit(&self, queue_id: &str, fairness_key: &str, deficit: i64) {
-        self.drr_deficit.record(
-            deficit,
-            &[
-                KeyValue::new("queue_id", queue_id.to_string()),
-                KeyValue::new("fairness_key", fairness_key.to_string()),
-            ],
-        );
+        let attrs = self.attrs(&[
+            KeyValue::new("queue_id", queue_id.to_string()),
+            KeyValue::new("fairness_key", fairness_key.to_string()),
+        ]);
+        self.drr_deficit.record(deficit, &attrs);
     }
 
     pub fn set_drr_weight(&self, queue_id: &str, fairness_key: &str, weight: u64) {
-        self.drr_weight.record(
-            weight,
-            &[
-                KeyValue::new("queue_id", queue_id.to_string()),
-                KeyValue::new("fairness_key", fairness_key.to_string()),
-            ],
-        );
+        let attrs = self.attrs(&[
+            KeyValue::new("queue_id", queue_id.to_string()),
+            KeyValue::new("fairness_key", fairness_key.to_string()),
+        ]);
+        self.drr_weight.record(weight, &attrs);
     }
 
     pub fn set_throttle_tokens(&self, throttle_key: &str, tokens: f64) {
-        self.throttle_tokens_remaining.record(
-            tokens,
-            &[KeyValue::new("throttle_key", throttle_key.to_string())],
-        );
+        let attrs = self.attrs(&[KeyValue::new("throttle_key", throttle_key.to_string())]);
+        self.throttle_tokens_remaining.record(tokens, &attrs);
     }
 
     pub fn record_lua_duration(&self, queue_id: &str, hook: &str, duration_us: f64) {
-        self.lua_execution_duration.record(
-            duration_us,
-            &[
-                KeyValue::new("queue_id", queue_id.to_string()),
-                KeyValue::new("hook", hook.to_string()),
-            ],
-        );
+        let attrs = self.attrs(&[
+            KeyValue::new("queue_id", queue_id.to_string()),
+            KeyValue::new("hook", hook.to_string()),
+        ]);
+        self.lua_execution_duration.record(duration_us, &attrs);
     }
 
     pub fn record_lua_error(&self, queue_id: &str) {
-        self.lua_errors
-            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.lua_errors.add(1, &attrs);
     }
 
     pub fn record_lua_cb_activation(&self, queue_id: &str) {
-        self.lua_cb_activations
-            .add(1, &[KeyValue::new("queue_id", queue_id.to_string())]);
+        let attrs = self.attrs(&[KeyValue::new("queue_id", queue_id.to_string())]);
+        self.lua_cb_activations.add(1, &attrs);
     }
 }
 
@@ -889,6 +899,57 @@ pub mod test_harness {
             h.metrics.record_lua_cb_activation("q1");
 
             h.assert_counter("fila.lua.circuit_breaker.activations", "q1", 1);
+        }
+
+        #[test]
+        fn node_id_label_included_when_set() {
+            let h = MetricTestHarness::new();
+            // Simulate cluster mode by setting node_id on the metrics.
+            let mut metrics = Metrics::from_meter(&h.meter_provider.meter("fila-test-node"));
+            metrics.node_id = Some(KeyValue::new("node_id", "42".to_string()));
+
+            metrics.record_enqueue("q1");
+
+            h.flush();
+            let all_metrics = h.finished_metrics();
+
+            // Verify that the enqueue counter has both queue_id and node_id labels.
+            let value = counter_value_u64_with_attrs(
+                &all_metrics,
+                "fila.messages.enqueued",
+                &[
+                    KeyValue::new("queue_id", "q1".to_string()),
+                    KeyValue::new("node_id", "42".to_string()),
+                ],
+            );
+            assert_eq!(value, Some(1), "counter should include node_id label");
+        }
+
+        #[test]
+        fn node_id_label_absent_when_not_set() {
+            let h = MetricTestHarness::new();
+            h.metrics.record_enqueue("q1");
+
+            h.flush();
+            let all_metrics = h.finished_metrics();
+
+            // Should find the counter with just queue_id, without node_id.
+            let value = counter_value_u64_with_attrs(
+                &all_metrics,
+                "fila.messages.enqueued",
+                &[
+                    KeyValue::new("queue_id", "q1".to_string()),
+                    KeyValue::new("node_id", "42".to_string()),
+                ],
+            );
+            assert_eq!(
+                value, None,
+                "counter should NOT have node_id when not configured"
+            );
+
+            // But should exist with just queue_id.
+            let value = counter_value_u64(&all_metrics, "fila.messages.enqueued", "q1");
+            assert_eq!(value, Some(1));
         }
 
         #[test]

@@ -23,4 +23,8 @@ pub struct QueueStats {
     pub quantum: u32,
     pub per_key_stats: Vec<FairnessKeyStats>,
     pub per_throttle_stats: Vec<ThrottleKeyStats>,
+    /// Raft leader node ID for this queue (0 = not clustered).
+    pub leader_node_id: u64,
+    /// Number of replicas in the queue's Raft group (0 = not clustered).
+    pub replication_count: u32,
 }

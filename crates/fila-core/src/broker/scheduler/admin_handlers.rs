@@ -176,6 +176,8 @@ impl Scheduler {
             quantum,
             per_key_stats,
             per_throttle_stats,
+            leader_node_id: 0,
+            replication_count: 0,
         })
     }
 
@@ -338,6 +340,7 @@ impl Scheduler {
                 depth: pending + in_flight,
                 in_flight,
                 active_consumers,
+                leader_node_id: 0,
             });
         }
 

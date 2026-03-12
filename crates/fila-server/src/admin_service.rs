@@ -299,10 +299,11 @@ impl FilaAdmin for AdminService {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
 
+        let queue_name = req.queue;
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.broker
             .send_command(SchedulerCommand::GetStats {
-                queue_id: req.queue,
+                queue_id: queue_name.clone(),
                 reply: reply_tx,
             })
             .map_err(IntoStatus::into_status)?;
@@ -334,6 +335,24 @@ impl FilaAdmin for AdminService {
             })
             .collect();
 
+        // Enrich with cluster info if in cluster mode.
+        let (leader_node_id, replication_count) = if let Some(cluster) = &self.cluster {
+            let leader = cluster
+                .multi_raft
+                .get_raft(&queue_name)
+                .await
+                .map(|raft| {
+                    let metrics = raft.metrics().borrow().clone();
+                    let leader_id = metrics.current_leader.unwrap_or(0);
+                    let voters = metrics.membership_config.membership().voter_ids().count() as u32;
+                    (leader_id, voters)
+                })
+                .unwrap_or((0, 0));
+            leader
+        } else {
+            (0, 0)
+        };
+
         Ok(Response::new(GetStatsResponse {
             depth: stats.depth,
             in_flight: stats.in_flight,
@@ -342,6 +361,8 @@ impl FilaAdmin for AdminService {
             quantum: stats.quantum,
             per_key_stats,
             per_throttle_stats,
+            leader_node_id,
+            replication_count,
         }))
     }
 
@@ -388,17 +409,40 @@ impl FilaAdmin for AdminService {
             .map_err(|_| Status::internal("scheduler reply channel dropped"))?
             .map_err(IntoStatus::into_status)?;
 
-        let queues = summaries
-            .into_iter()
-            .map(|s| QueueInfo {
+        let mut queues = Vec::with_capacity(summaries.len());
+        for s in summaries {
+            let leader_node_id = if let Some(cluster) = &self.cluster {
+                cluster
+                    .multi_raft
+                    .get_raft(&s.name)
+                    .await
+                    .map(|raft| raft.metrics().borrow().current_leader.unwrap_or(0))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            queues.push(QueueInfo {
                 name: s.name,
                 depth: s.depth,
                 in_flight: s.in_flight,
                 active_consumers: s.active_consumers,
-            })
-            .collect();
+                leader_node_id,
+            });
+        }
 
-        Ok(Response::new(ListQueuesResponse { queues }))
+        let cluster_node_count = self
+            .cluster
+            .as_ref()
+            .map(|c| {
+                let (members, _) = c.meta_members();
+                members.len() as u32
+            })
+            .unwrap_or(0);
+
+        Ok(Response::new(ListQueuesResponse {
+            queues,
+            cluster_node_count,
+        }))
     }
 }
 
@@ -751,6 +795,64 @@ mod tests {
             assert_eq!(q.depth, 0);
             assert_eq!(q.in_flight, 0);
             assert_eq!(q.active_consumers, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_stats_single_node_returns_zero_cluster_fields() {
+        let (svc, _dir) = test_admin_service();
+
+        svc.create_queue(Request::new(CreateQueueRequest {
+            name: "single-q".to_string(),
+            config: None,
+        }))
+        .await
+        .unwrap();
+
+        let resp = svc
+            .get_stats(Request::new(GetStatsRequest {
+                queue: "single-q".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(
+            resp.leader_node_id, 0,
+            "single-node should have leader_node_id=0"
+        );
+        assert_eq!(
+            resp.replication_count, 0,
+            "single-node should have replication_count=0"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_queues_single_node_returns_zero_cluster_fields() {
+        let (svc, _dir) = test_admin_service();
+
+        svc.create_queue(Request::new(CreateQueueRequest {
+            name: "single-q".to_string(),
+            config: None,
+        }))
+        .await
+        .unwrap();
+
+        let resp = svc
+            .list_queues(Request::new(ListQueuesRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(
+            resp.cluster_node_count, 0,
+            "single-node should have cluster_node_count=0"
+        );
+        for q in &resp.queues {
+            assert_eq!(
+                q.leader_node_id, 0,
+                "single-node queue should have leader_node_id=0"
+            );
         }
     }
 
