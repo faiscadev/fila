@@ -1,6 +1,6 @@
 # Story 14.5: Cluster Observability & Scaling Validation
 
-Status: review
+Status: done
 
 ## Story
 

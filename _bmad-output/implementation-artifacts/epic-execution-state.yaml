@@ -32,8 +32,8 @@ stories:
     dependsOn: ["14.1", "14.2", "14.3"]
   - id: "14.5"
     title: "Cluster Observability & Scaling Validation"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/14.5-cluster-observability-scaling-validation"
     pr: 60
     dependsOn: ["14.1", "14.2", "14.3", "14.4"]
