@@ -1,6 +1,6 @@
 # Story 14.5: Cluster Observability & Scaling Validation
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -26,37 +26,37 @@ so that I can monitor the cluster as a single system and trust that adding nodes
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add cluster fields to proto messages (AC: 1, 2, 6)
-  - [ ] 1.1 Add `leader_node_id` (uint64) and `replication_count` (uint32) to `GetStatsResponse` in admin.proto
-  - [ ] 1.2 Add `leader_node_id` (uint64) to `QueueInfo` and `cluster_node_count` (uint32) to `ListQueuesResponse` in admin.proto
-  - [ ] 1.3 Update `QueueStats` and `QueueSummary` structs in fila-core to carry these fields
-  - [ ] 1.4 Update admin_handlers.rs to populate from ClusterHandle (or default to 0 in single-node)
+- [x] Task 1: Add cluster fields to proto messages (AC: 1, 2, 6)
+  - [x] 1.1 Add `leader_node_id` (uint64) and `replication_count` (uint32) to `GetStatsResponse` in admin.proto
+  - [x] 1.2 Add `leader_node_id` (uint64) to `QueueInfo` and `cluster_node_count` (uint32) to `ListQueuesResponse` in admin.proto
+  - [x] 1.3 Update `QueueStats` and `QueueSummary` structs in fila-core to carry these fields
+  - [x] 1.4 Update admin_handlers.rs to populate from ClusterHandle (or default to 0 in single-node)
 
-- [ ] Task 2: Add node_id label to OTel metrics (AC: 3)
-  - [ ] 2.1 Accept optional `node_id` in `Metrics::new()` / `from_meter()` (or store as a field)
-  - [ ] 2.2 Include `node_id` KeyValue in all metric record calls when set (cluster mode)
-  - [ ] 2.3 Wire node_id from BrokerConfig/ClusterConfig into Metrics construction
-  - [ ] 2.4 Test: verify node_id label appears on metrics when configured
+- [x] Task 2: Add node_id label to OTel metrics (AC: 3)
+  - [x] 2.1 Accept optional `node_id` in `Metrics::new()` / `from_meter()` (or store as a field)
+  - [x] 2.2 Include `node_id` KeyValue in all metric record calls when set (cluster mode)
+  - [x] 2.3 Wire node_id from BrokerConfig/ClusterConfig into Metrics construction
+  - [x] 2.4 Test: verify node_id label appears on metrics when configured
 
-- [ ] Task 3: Wire cluster info into GetStats and ListQueues handlers (AC: 1, 2)
-  - [ ] 3.1 Pass ClusterHandle (or None) to the Scheduler so it can query leader/replication info
-  - [ ] 3.2 In handle_get_stats: query ClusterHandle::is_queue_leader and multi_raft.get_raft for group size
-  - [ ] 3.3 In handle_list_queues: include leader_node_id per queue and cluster_node_count
-  - [ ] 3.4 Update admin_service.rs to map new fields to proto response
+- [x] Task 3: Wire cluster info into GetStats and ListQueues handlers (AC: 1, 2)
+  - [x] 3.1 Pass ClusterHandle (or None) to the Scheduler so it can query leader/replication info
+  - [x] 3.2 In handle_get_stats: query ClusterHandle::is_queue_leader and multi_raft.get_raft for group size
+  - [x] 3.3 In handle_list_queues: include leader_node_id per queue and cluster_node_count
+  - [x] 3.4 Update admin_service.rs to map new fields to proto response
 
-- [ ] Task 4: Update CLI display (AC: 4)
-  - [ ] 4.1 Update `fila queue inspect` to show "Raft leader: node X" and "Replicas: N" when values are non-zero
-  - [ ] 4.2 Update `fila queue list` to show leader_node_id column when cluster_node_count > 0
+- [x] Task 4: Update CLI display (AC: 4)
+  - [x] 4.1 Update `fila queue inspect` to show "Raft leader: node X" and "Replicas: N" when values are non-zero
+  - [x] 4.2 Update `fila queue list` to show leader_node_id column when cluster_node_count > 0
 
-- [ ] Task 5: Integration tests (AC: 5, 6)
-  - [ ] 5.1 Test: 3-node cluster GetStats returns valid leader_node_id and correct replication_count
-  - [ ] 5.2 Test: 3-node cluster ListQueues returns leader_node_id per queue and cluster_node_count=3
-  - [ ] 5.3 Test: single-node mode returns leader_node_id=0 and replication_count=0 (existing tests)
+- [x] Task 5: Integration tests (AC: 5, 6)
+  - [x] 5.1 Test: 3-node cluster GetStats returns valid leader_node_id and correct replication_count
+  - [x] 5.2 Test: 3-node cluster ListQueues returns leader_node_id per queue and cluster_node_count=3
+  - [x] 5.3 Test: single-node mode returns leader_node_id=0 and replication_count=0 (existing tests)
 
-- [ ] Task 6: Scaling benchmark methodology (AC: 7)
-  - [ ] 6.1 Write docs/cluster-scaling.md documenting how to run a multi-node scaling benchmark
-  - [ ] 6.2 Include example fila.toml configs for a 3-node local cluster
-  - [ ] 6.3 Reference the Epic 12 fila-bench harness and explain how to measure throughput scaling
+- [x] Task 6: Scaling benchmark methodology (AC: 7)
+  - [x] 6.1 Write docs/cluster-scaling.md documenting how to run a multi-node scaling benchmark
+  - [x] 6.2 Include example fila.toml configs for a 3-node local cluster
+  - [x] 6.3 Reference the Epic 12 fila-bench harness and explain how to measure throughput scaling
 
 ## Dev Notes
 
@@ -123,4 +123,29 @@ Claude Opus 4.6
 
 ### Change Log
 
+- Added cluster fields (leader_node_id, replication_count, cluster_node_count) to admin.proto
+- Added leader_node_id/replication_count to QueueStats and QueueSummary structs
+- Updated admin_service.rs to enrich stats with cluster info from Raft metrics
+- Added node_id label to OTel Metrics struct (optional, cluster-mode only)
+- Updated Scheduler::new to accept cluster_node_id parameter
+- Updated CLI queue inspect/list to show cluster fields when non-zero
+- Added 2 cluster stats integration tests, 2 single-node tests, 2 metric label tests
+- Created docs/cluster-scaling.md with 3-node benchmark methodology
+
 ### File List
+
+- crates/fila-proto/proto/fila/v1/admin.proto
+- proto/fila/v1/admin.proto
+- crates/fila-core/src/broker/stats.rs
+- crates/fila-core/src/broker/command.rs
+- crates/fila-core/src/broker/metrics.rs
+- crates/fila-core/src/broker/mod.rs
+- crates/fila-core/src/broker/scheduler/mod.rs
+- crates/fila-core/src/broker/scheduler/admin_handlers.rs
+- crates/fila-core/src/broker/scheduler/tests/common.rs
+- crates/fila-core/src/broker/scheduler/tests/fairness.rs
+- crates/fila-core/src/broker/scheduler/tests/ack_nack.rs
+- crates/fila-core/src/cluster/tests.rs
+- crates/fila-server/src/admin_service.rs
+- crates/fila-cli/src/main.rs
+- docs/cluster-scaling.md
