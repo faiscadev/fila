@@ -60,7 +60,6 @@ impl RocksDbEngine {
             .cf_handle(name)
             .ok_or(StorageError::StoreNotFound(name))
     }
-
 }
 
 impl RaftKeyValueStore for RocksDbEngine {
@@ -97,10 +96,7 @@ impl RaftKeyValueStore for RocksDbEngine {
         Ok(results)
     }
 
-    fn raft_last_with_prefix(
-        &self,
-        prefix: &[u8],
-    ) -> StorageResult<Option<(Vec<u8>, Vec<u8>)>> {
+    fn raft_last_with_prefix(&self, prefix: &[u8]) -> StorageResult<Option<(Vec<u8>, Vec<u8>)>> {
         let cf = self.cf(CF_RAFT_LOG)?;
 
         // Build the successor key of the prefix (prefix with last byte incremented).
