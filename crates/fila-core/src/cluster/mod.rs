@@ -377,8 +377,8 @@ impl ClusterManager {
             }
         });
 
-        // Bootstrap or join cluster.
-        if config.bootstrap {
+        // Bootstrap or join cluster based on peers list.
+        if config.peers.is_empty() {
             info!(node_id, "bootstrapping single-node cluster");
             let mut members = BTreeMap::new();
             members.insert(
@@ -388,7 +388,7 @@ impl ClusterManager {
                 },
             );
             raft.initialize(members).await?;
-        } else if !config.peers.is_empty() {
+        } else {
             info!(node_id, peers = ?config.peers, "joining existing cluster");
             Self::join_cluster(node_id, &config.bind_addr, &config.peers).await?;
         }
