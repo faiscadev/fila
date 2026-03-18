@@ -1,16 +1,18 @@
 use std::sync::Arc;
 
 use openraft::error::RaftError;
-use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
 use openraft::{BasicNode, Raft};
 use tonic::{Request, Response, Status};
 
 use super::multi_raft::MultiRaftManager;
+use super::proto_convert;
 use super::types::{NodeId, TypeConfig};
 use crate::Broker;
 use fila_proto::fila_cluster_server::FilaCluster;
 use fila_proto::{
-    AddNodeRequest, AddNodeResponse, RaftRequest, RaftResponse, RemoveNodeRequest,
+    AddNodeRequest, AddNodeResponse, RaftAppendEntriesRequest, RaftAppendEntriesResponse,
+    RaftClientWriteRequest, RaftClientWriteResponse, RaftInstallSnapshotRequest,
+    RaftInstallSnapshotResponse, RaftVoteRequest, RaftVoteResponse, RemoveNodeRequest,
     RemoveNodeResponse,
 };
 
@@ -124,67 +126,57 @@ impl ClusterGrpcService {
     }
 }
 
-/// Serialize a Raft response (or error) into a RaftResponse proto message.
-fn raft_response_ok<T: serde::Serialize>(value: &T) -> Result<Response<RaftResponse>, Status> {
-    let data = serde_json::to_vec(value)
-        .map_err(|e| Status::internal(format!("serialize response: {e}")))?;
-    Ok(Response::new(RaftResponse {
-        data,
-        error: String::new(),
-    }))
-}
-
-fn raft_response_err(error: impl std::fmt::Display) -> Result<Response<RaftResponse>, Status> {
-    Ok(Response::new(RaftResponse {
-        data: Vec::new(),
-        error: error.to_string(),
-    }))
-}
-
 #[tonic::async_trait]
 impl FilaCluster for ClusterGrpcService {
     async fn append_entries(
         &self,
-        request: Request<RaftRequest>,
-    ) -> Result<Response<RaftResponse>, Status> {
+        request: Request<RaftAppendEntriesRequest>,
+    ) -> Result<Response<RaftAppendEntriesResponse>, Status> {
         let inner = request.into_inner();
         let raft = self.resolve_raft(&inner.group_id).await?;
 
-        let req: AppendEntriesRequest<TypeConfig> = serde_json::from_slice(&inner.data)
+        let req = proto_convert::append_entries_request_from_proto(inner)
             .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
 
         match raft.append_entries(req).await {
-            Ok(resp) => raft_response_ok(&resp),
-            Err(e) => raft_response_err(e),
+            Ok(resp) => Ok(Response::new(
+                proto_convert::append_entries_response_to_proto(resp),
+            )),
+            Err(e) => Err(Status::internal(format!("raft error: {e}"))),
         }
     }
 
-    async fn vote(&self, request: Request<RaftRequest>) -> Result<Response<RaftResponse>, Status> {
+    async fn vote(
+        &self,
+        request: Request<RaftVoteRequest>,
+    ) -> Result<Response<RaftVoteResponse>, Status> {
         let inner = request.into_inner();
         let raft = self.resolve_raft(&inner.group_id).await?;
 
-        let req: VoteRequest<NodeId> = serde_json::from_slice(&inner.data)
+        let req = proto_convert::vote_request_from_proto(inner)
             .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
 
         match raft.vote(req).await {
-            Ok(resp) => raft_response_ok(&resp),
-            Err(e) => raft_response_err(e),
+            Ok(resp) => Ok(Response::new(proto_convert::vote_response_to_proto(resp))),
+            Err(e) => Err(Status::internal(format!("raft error: {e}"))),
         }
     }
 
     async fn install_snapshot(
         &self,
-        request: Request<RaftRequest>,
-    ) -> Result<Response<RaftResponse>, Status> {
+        request: Request<RaftInstallSnapshotRequest>,
+    ) -> Result<Response<RaftInstallSnapshotResponse>, Status> {
         let inner = request.into_inner();
         let raft = self.resolve_raft(&inner.group_id).await?;
 
-        let req: InstallSnapshotRequest<TypeConfig> = serde_json::from_slice(&inner.data)
+        let req = proto_convert::install_snapshot_request_from_proto(inner)
             .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
 
         match raft.install_snapshot(req).await {
-            Ok(resp) => raft_response_ok(&resp),
-            Err(e) => raft_response_err(e),
+            Ok(resp) => Ok(Response::new(
+                proto_convert::install_snapshot_response_to_proto(resp),
+            )),
+            Err(e) => Err(Status::internal(format!("raft error: {e}"))),
         }
     }
 
@@ -221,13 +213,19 @@ impl FilaCluster for ClusterGrpcService {
 
     async fn client_write(
         &self,
-        request: Request<RaftRequest>,
-    ) -> Result<Response<RaftResponse>, Status> {
+        request: Request<RaftClientWriteRequest>,
+    ) -> Result<Response<RaftClientWriteResponse>, Status> {
         let inner = request.into_inner();
-        let raft = self.resolve_raft(&inner.group_id).await?;
+        let group_id = inner.group_id.clone();
+        let raft = self.resolve_raft(&group_id).await?;
 
-        let req: super::types::ClusterRequest = serde_json::from_slice(&inner.data)
-            .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
+        let req: super::types::ClusterRequest = inner
+            .request
+            .ok_or_else(|| Status::invalid_argument("missing request"))?
+            .try_into()
+            .map_err(|e: super::proto_convert::ConvertError| {
+                Status::invalid_argument(format!("deserialize: {e}"))
+            })?;
 
         match raft.client_write(req.clone()).await {
             Ok(resp) => {
@@ -237,11 +235,9 @@ impl FilaCluster for ClusterGrpcService {
                     Self::apply_to_scheduler(broker, &req).await;
                 }
 
-                let data = serde_json::to_vec(&resp.data)
-                    .map_err(|e| Status::internal(format!("serialize response: {e}")))?;
-                Ok(Response::new(RaftResponse {
-                    data,
-                    error: String::new(),
+                let response_proto = fila_proto::ClusterResponseProto::from(resp.data);
+                Ok(Response::new(RaftClientWriteResponse {
+                    response: Some(response_proto),
                 }))
             }
             Err(openraft::error::RaftError::APIError(
@@ -252,12 +248,16 @@ impl FilaCluster for ClusterGrpcService {
                     .as_ref()
                     .map(|n| n.addr.clone())
                     .unwrap_or_default();
-                Ok(Response::new(RaftResponse {
-                    data: Vec::new(),
-                    error: format!("ForwardToLeader:{leader_addr}"),
+                // Signal forwarding via error response with leader address.
+                let response_proto =
+                    fila_proto::ClusterResponseProto::from(super::types::ClusterResponse::Error {
+                        message: format!("ForwardToLeader:{leader_addr}"),
+                    });
+                Ok(Response::new(RaftClientWriteResponse {
+                    response: Some(response_proto),
                 }))
             }
-            Err(e) => raft_response_err(e),
+            Err(e) => Err(Status::internal(format!("raft error: {e}"))),
         }
     }
 

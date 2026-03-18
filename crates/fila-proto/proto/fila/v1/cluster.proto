@@ -2,17 +2,19 @@ syntax = "proto3";
 
 package fila.v1;
 
+import "fila/v1/messages.proto";
+
 /// Internal cluster gRPC service for Raft consensus communication.
 /// This service runs on a separate port from the client-facing service.
 service FilaCluster {
   /// Forward a Raft AppendEntries RPC.
-  rpc AppendEntries(RaftRequest) returns (RaftResponse);
+  rpc AppendEntries(RaftAppendEntriesRequest) returns (RaftAppendEntriesResponse);
 
   /// Forward a Raft Vote RPC.
-  rpc Vote(RaftRequest) returns (RaftResponse);
+  rpc Vote(RaftVoteRequest) returns (RaftVoteResponse);
 
   /// Forward a Raft InstallSnapshot RPC.
-  rpc InstallSnapshot(RaftRequest) returns (RaftResponse);
+  rpc InstallSnapshot(RaftInstallSnapshotRequest) returns (RaftInstallSnapshotResponse);
 
   /// Request to add this node to the cluster.
   rpc AddNode(AddNodeRequest) returns (AddNodeResponse);
@@ -24,23 +26,201 @@ service FilaCluster {
   /// Used for transparent request routing: when a node receives a write
   /// request but is not the leader for the target group, it serializes
   /// the ClusterRequest and forwards it to the leader via this RPC.
-  rpc ClientWrite(RaftRequest) returns (RaftResponse);
+  rpc ClientWrite(RaftClientWriteRequest) returns (RaftClientWriteResponse);
 }
 
-/// Generic Raft RPC wrapper — carries serialized openraft request/response.
-/// We use opaque bytes to avoid duplicating openraft's complex message types
-/// in protobuf. The serialization format is JSON (via serde).
-message RaftRequest {
-  bytes data = 1;
-  /// Identifies which Raft group this RPC targets. Empty string means the
-  /// meta (cluster-wide) Raft group. Non-empty means a queue-level group.
+// --- Primitive openraft types ---
+
+message RaftLeaderId {
+  uint64 term = 1;
+  uint64 node_id = 2;
+}
+
+message RaftLogId {
+  RaftLeaderId leader_id = 1;
+  uint64 index = 2;
+}
+
+message RaftVote {
+  RaftLeaderId leader_id = 1;
+  bool committed = 2;
+}
+
+message RaftBasicNode {
+  string addr = 1;
+}
+
+// --- Membership ---
+
+message RaftNodeIdSet {
+  repeated uint64 node_ids = 1;
+}
+
+message RaftMembership {
+  /// Joint config — each element is a set of node IDs.
+  repeated RaftNodeIdSet configs = 1;
+  map<uint64, RaftBasicNode> nodes = 2;
+}
+
+message RaftStoredMembership {
+  optional RaftLogId log_id = 1;
+  RaftMembership membership = 2;
+}
+
+// --- Entry & Payload ---
+
+message RaftEntryPayload {
+  oneof payload {
+    bool blank = 1;
+    ClusterRequestProto normal = 2;
+    RaftMembership membership = 3;
+  }
+}
+
+message RaftEntry {
+  RaftLogId log_id = 1;
+  RaftEntryPayload payload = 2;
+}
+
+// --- Raft RPC messages ---
+
+message RaftAppendEntriesRequest {
+  RaftVote vote = 1;
+  optional RaftLogId prev_log_id = 2;
+  repeated RaftEntry entries = 3;
+  optional RaftLogId leader_commit = 4;
+  string group_id = 5;
+}
+
+message RaftAppendEntriesResponse {
+  oneof result {
+    bool success = 1;
+    RaftLogId partial_success = 2;
+    bool conflict = 3;
+    RaftVote higher_vote = 4;
+  }
+}
+
+message RaftVoteRequest {
+  RaftVote vote = 1;
+  optional RaftLogId last_log_id = 2;
+  string group_id = 3;
+}
+
+message RaftVoteResponse {
+  RaftVote vote = 1;
+  bool vote_granted = 2;
+  optional RaftLogId last_log_id = 3;
+}
+
+message RaftInstallSnapshotRequest {
+  RaftVote vote = 1;
+  RaftSnapshotMeta meta = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool done = 5;
+  string group_id = 6;
+}
+
+message RaftInstallSnapshotResponse {
+  RaftVote vote = 1;
+}
+
+message RaftSnapshotMeta {
+  optional RaftLogId last_log_id = 1;
+  RaftStoredMembership last_membership = 2;
+  string snapshot_id = 3;
+}
+
+// --- Application-level types ---
+
+/// ClusterRequest — mirrors the Rust enum.
+message ClusterRequestProto {
+  oneof request {
+    ClusterEnqueue enqueue = 1;
+    ClusterAck ack = 2;
+    ClusterNack nack = 3;
+    ClusterCreateQueue create_queue = 4;
+    ClusterDeleteQueue delete_queue = 5;
+    ClusterSetConfig set_config = 6;
+    ClusterSetThrottleRate set_throttle_rate = 7;
+    ClusterRemoveThrottleRate remove_throttle_rate = 8;
+    ClusterRedrive redrive = 9;
+    ClusterCreateQueueGroup create_queue_group = 10;
+    ClusterDeleteQueueGroup delete_queue_group = 11;
+  }
+}
+
+message ClusterEnqueue { fila.v1.Message message = 1; }
+message ClusterAck { string queue_id = 1; string msg_id = 2; }
+message ClusterNack { string queue_id = 1; string msg_id = 2; string error = 3; }
+message ClusterCreateQueue { string name = 1; ClusterQueueConfig config = 2; }
+message ClusterDeleteQueue { string queue_id = 1; }
+message ClusterSetConfig { string key = 1; string value = 2; }
+message ClusterSetThrottleRate { string key = 1; double rate_per_second = 2; double burst = 3; }
+message ClusterRemoveThrottleRate { string key = 1; }
+message ClusterRedrive { string dlq_queue_id = 1; uint64 count = 2; }
+message ClusterCreateQueueGroup { string queue_id = 1; repeated uint64 members = 2; ClusterQueueConfig config = 3; }
+message ClusterDeleteQueueGroup { string queue_id = 1; }
+
+/// Full QueueConfig for internal cluster use (all 7 fields, vs admin.proto's 3).
+message ClusterQueueConfig {
+  string name = 1;
+  optional string on_enqueue_script = 2;
+  optional string on_failure_script = 3;
+  uint64 visibility_timeout_ms = 4;
+  optional string dlq_queue_id = 5;
+  optional uint64 lua_timeout_ms = 6;
+  optional uint64 lua_memory_limit_bytes = 7;
+}
+
+/// Response from applying a committed ClusterRequest.
+message ClusterResponseProto {
+  oneof response {
+    ClusterEnqueueResponse enqueue = 1;
+    bool ack = 2;
+    bool nack = 3;
+    ClusterCreateQueueResponse create_queue = 4;
+    bool delete_queue = 5;
+    bool set_config = 6;
+    bool set_throttle_rate = 7;
+    bool remove_throttle_rate = 8;
+    ClusterRedriveResponse redrive = 9;
+    ClusterCreateQueueGroupResponse create_queue_group = 10;
+    bool delete_queue_group = 11;
+    string error = 12;
+  }
+}
+
+message ClusterEnqueueResponse { string msg_id = 1; }
+message ClusterCreateQueueResponse { string queue_id = 1; }
+message ClusterRedriveResponse { uint64 count = 1; }
+message ClusterCreateQueueGroupResponse { string queue_id = 1; }
+
+// --- State machine snapshot ---
+
+message StateMachineDataProto {
+  optional RaftLogId last_applied_log = 1;
+  RaftStoredMembership last_membership = 2;
+  map<string, QueueGroupMembers> queue_groups = 3;
+}
+
+message QueueGroupMembers {
+  repeated uint64 members = 1;
+}
+
+// --- ClientWrite forwarding ---
+
+message RaftClientWriteRequest {
+  ClusterRequestProto request = 1;
   string group_id = 2;
 }
 
-message RaftResponse {
-  bytes data = 1;
-  string error = 2;
+message RaftClientWriteResponse {
+  ClusterResponseProto response = 1;
 }
+
+// --- Node management ---
 
 message AddNodeRequest {
   uint64 node_id = 1;
