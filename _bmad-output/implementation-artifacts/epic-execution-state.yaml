@@ -1,24 +1,40 @@
-epic: "Epic 13: Storage Abstraction & Clustering Prep"
+epic: "Epic 14: Clustering & Horizontal Scaling"
 baseBranch: main
-startedAt: "2026-03-10"
+startedAt: "2026-03-11"
 stories:
-  - id: "13.1"
-    title: "Clean Storage Trait Abstraction"
+  - id: "14.1"
+    title: "Raft Integration & Single-Node Mode"
     status: completed
     currentPhase: ""
-    branch: "feat/13.1-clean-storage-trait-abstraction"
-    pr: 54
+    branch: "feat/14.1-raft-integration-single-node-mode"
+    pr: 56
     dependsOn: []
-  - id: "13.2"
-    title: "Phase 2 Viability Seams"
-    status: completed
+  - id: "14.2"
+    title: "Queue-Level Raft Groups & Assignment"
+    status: pending
     currentPhase: ""
-    branch: "feat/13.2-phase-2-viability-seams"
-    pr: 55
-    dependsOn: ["13.1"]
+    branch: ""
+    pr: null
+    dependsOn: ["14.1"]
+  - id: "14.3"
+    title: "Request Routing & Transparent Delivery"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["14.2"]
+  - id: "14.4"
+    title: "Replication, Failover & Recovery"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["14.1", "14.2", "14.3"]
+  - id: "14.5"
+    title: "Cluster Observability & Scaling Validation"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["14.1", "14.2", "14.3", "14.4"]
 skippedIssues: []
-completedAt: "2026-03-11"
-summary:
-  total: 2
-  completed: 2
-  skipped: 0

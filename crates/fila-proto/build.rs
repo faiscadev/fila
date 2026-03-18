@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         proto_root.join("fila/v1/messages.proto"),
         proto_root.join("fila/v1/service.proto"),
         proto_root.join("fila/v1/admin.proto"),
+        proto_root.join("fila/v1/cluster.proto"),
     ];
 
     // Rebuild if any proto file changes.

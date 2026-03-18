@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package fila.v1;
+
+/// Internal cluster gRPC service for Raft consensus communication.
+/// This service runs on a separate port from the client-facing service.
+service FilaCluster {
+  /// Forward a Raft AppendEntries RPC.
+  rpc AppendEntries(RaftRequest) returns (RaftResponse);
+
+  /// Forward a Raft Vote RPC.
+  rpc Vote(RaftRequest) returns (RaftResponse);
+
+  /// Forward a Raft InstallSnapshot RPC.
+  rpc InstallSnapshot(RaftRequest) returns (RaftResponse);
+
+  /// Request to add this node to the cluster.
+  rpc AddNode(AddNodeRequest) returns (AddNodeResponse);
+
+  /// Request to remove a node from the cluster.
+  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
+}
+
+/// Generic Raft RPC wrapper — carries serialized openraft request/response.
+/// We use opaque bytes to avoid duplicating openraft's complex message types
+/// in protobuf. The serialization format is JSON (via serde).
+message RaftRequest {
+  bytes data = 1;
+}
+
+message RaftResponse {
+  bytes data = 1;
+  string error = 2;
+}
+
+message AddNodeRequest {
+  uint64 node_id = 1;
+  string addr = 2;
+}
+
+message AddNodeResponse {
+  bool success = 1;
+  string error = 2;
+  /// If this node is not the leader, return the leader's address.
+  string leader_addr = 3;
+}
+
+message RemoveNodeRequest {
+  uint64 node_id = 1;
+}
+
+message RemoveNodeResponse {
+  bool success = 1;
+  string error = 2;
+  string leader_addr = 3;
+}

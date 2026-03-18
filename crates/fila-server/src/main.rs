@@ -56,6 +56,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
     let storage = Arc::new(RocksDbEngine::open(&data_dir)?);
 
+    // Conditionally start cluster manager (Raft consensus).
+    let cluster_config = config.cluster.clone();
+    let cluster_manager = if cluster_config.enabled {
+        Some(
+            fila_core::cluster::ClusterManager::start(&cluster_config, Arc::clone(&storage))
+                .await?,
+        )
+    } else {
+        None
+    };
+
     let broker = Arc::new(Broker::new(config, storage)?);
 
     let admin_service = AdminService::new(Arc::clone(&broker));
@@ -64,17 +75,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = listen_addr.parse()?;
     info!(%addr, "starting gRPC server");
 
-    Server::builder()
+    let serve_result = Server::builder()
         .layer(trace_context::TraceContextLayer)
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))
         .serve_with_shutdown(addr, shutdown_signal())
-        .await?;
+        .await;
 
     info!("gRPC server stopped, shutting down broker");
 
     // Graceful broker shutdown — Drop impl will handle it since Arc may have refs
     drop(broker);
+
+    // Shut down Raft before exiting (both success and error paths).
+    if let Some(cm) = cluster_manager {
+        cm.shutdown().await;
+    }
+
+    serve_result?;
 
     // Flush OTel pipeline (spans + metrics) before exit
     if let Some(guard) = telemetry_guard {

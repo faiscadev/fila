@@ -14,9 +14,17 @@ const CF_LEASES: &str = "leases";
 const CF_LEASE_EXPIRY: &str = "lease_expiry";
 const CF_QUEUES: &str = "queues";
 const CF_STATE: &str = "state";
+const CF_RAFT_LOG: &str = "raft_log";
 
 /// All column family names (excluding `default` which RocksDB creates automatically).
-const COLUMN_FAMILIES: &[&str] = &[CF_MESSAGES, CF_LEASES, CF_LEASE_EXPIRY, CF_QUEUES, CF_STATE];
+const COLUMN_FAMILIES: &[&str] = &[
+    CF_MESSAGES,
+    CF_LEASES,
+    CF_LEASE_EXPIRY,
+    CF_QUEUES,
+    CF_STATE,
+    CF_RAFT_LOG,
+];
 
 type DB = DBWithThreadMode<MultiThreaded>;
 
@@ -51,6 +59,103 @@ impl RocksDbEngine {
         self.db
             .cf_handle(name)
             .ok_or(StorageError::StoreNotFound(name))
+    }
+
+    // --- Raft log column family access ---
+
+    /// Put a raw key-value into the Raft log column family.
+    pub fn raft_put(&self, key: &[u8], value: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        self.db.put_cf(&cf, key, value)?;
+        Ok(())
+    }
+
+    /// Get a raw value from the Raft log column family.
+    pub fn raft_get(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        Ok(self.db.get_cf(&cf, key)?.map(|v| v.to_vec()))
+    }
+
+    /// Delete a key from the Raft log column family.
+    pub fn raft_delete(&self, key: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        self.db.delete_cf(&cf, key)?;
+        Ok(())
+    }
+
+    /// Scan keys in the Raft log column family from `start` (inclusive),
+    /// returning up to `limit` entries.
+    pub fn raft_scan(&self, start: &[u8], limit: usize) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(start, rocksdb::Direction::Forward));
+        let mut results = Vec::new();
+        for item in iter {
+            if results.len() >= limit {
+                break;
+            }
+            let (key, value) = item?;
+            results.push((key.to_vec(), value.to_vec()));
+        }
+        Ok(results)
+    }
+
+    /// Return the last key-value pair in the Raft log column family whose key
+    /// starts with `prefix`, or `None` if no such entry exists.
+    ///
+    /// Uses RocksDB reverse iteration so it touches at most one entry.
+    pub fn raft_last_with_prefix(
+        &self,
+        prefix: &[u8],
+    ) -> StorageResult<Option<(Vec<u8>, Vec<u8>)>> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+
+        // Build the successor key of the prefix (prefix with last byte incremented).
+        // Seek to that successor in reverse to land on the last key with the prefix.
+        let mut upper = prefix.to_vec();
+        // Increment the last byte; if it overflows, extend with 0xFF.
+        if let Some(last) = upper.last_mut() {
+            if *last < 0xFF {
+                *last += 1;
+            } else {
+                upper.push(0xFF);
+            }
+        } else {
+            // Empty prefix — scan from the very end.
+            return self.raft_last_entry();
+        }
+
+        let mut iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(&upper, rocksdb::Direction::Reverse));
+        if let Some(item) = iter.next() {
+            let (key, value) = item?;
+            if key.starts_with(prefix) {
+                return Ok(Some((key.to_vec(), value.to_vec())));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Return the very last key-value pair in the Raft log column family.
+    fn raft_last_entry(&self) -> StorageResult<Option<(Vec<u8>, Vec<u8>)>> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        let mut iter = self.db.iterator_cf(&cf, IteratorMode::End);
+        match iter.next() {
+            Some(Ok((key, value))) => Ok(Some((key.to_vec(), value.to_vec()))),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// Delete a range of keys in the Raft log column family [start, end).
+    pub fn raft_delete_range(&self, start: &[u8], end: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_RAFT_LOG)?;
+        self.db
+            .delete_range_cf(&cf, start, end)
+            .map_err(|e| StorageError::Engine(e.to_string()))?;
+        Ok(())
     }
 }
 
