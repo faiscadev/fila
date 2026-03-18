@@ -1,20 +1,47 @@
-epic: "Epic 13: Purpose-Built Storage Engine"
-epicNumber: 13
-startedAt: "2026-03-11T00:00:00Z"
-completedAt: "2026-03-11T16:57:52Z"
-currentPrIndex: 2
+epic: "Epic 14: Clustering & Horizontal Scaling"
+epicNumber: 14
+startedAt: "2026-03-18T00:00:00Z"
+currentPrIndex: 0
 prChain:
-  - storyId: "13.1"
-    storyKey: "13-1-clean-storage-trait-abstraction"
-    title: "Clean Storage Trait Abstraction"
-    branch: "feat/13.1-clean-storage-trait-abstraction"
-    pr: 54
+  - storyId: "14.1"
+    storyKey: "14-1-raft-integration-single-node-mode"
+    title: "Raft Integration & Single-Node Mode"
+    branch: "feat/14.1-raft-integration-single-node-mode"
+    pr: 56
     baseBranch: "main"
-    status: merged
-  - storyId: "13.2"
-    storyKey: "13-2-phase-2-viability-seams"
-    title: "Phase 2 Viability Seams"
-    branch: "feat/13.2-phase-2-viability-seams"
-    pr: 55
-    baseBranch: "main"
-    status: merged
+    status: pending
+  - storyId: "14.2"
+    storyKey: "14-2-queue-level-raft-groups-assignment"
+    title: "Queue-Level Raft Groups & Assignment"
+    branch: "feat/14.2-queue-level-raft-groups-assignment"
+    pr: 57
+    baseBranch: "feat/14.1-raft-integration-single-node-mode"
+    status: pending
+  - storyId: "14.3"
+    storyKey: "14-3-request-routing-transparent-delivery"
+    title: "Request Routing & Transparent Delivery"
+    branch: "feat/14.3-request-routing-transparent-delivery"
+    pr: 58
+    baseBranch: "feat/14.2-queue-level-raft-groups-assignment"
+    status: pending
+  - storyId: "14.4"
+    storyKey: "14-4-replication-failover-recovery"
+    title: "Replication, Failover & Recovery"
+    branch: "feat/14.4-replication-failover-recovery"
+    pr: 59
+    baseBranch: "feat/14.3-request-routing-transparent-delivery"
+    status: pending
+  - storyId: "14.5"
+    storyKey: "14-5-cluster-observability-scaling-validation"
+    title: "Cluster Observability & Scaling Validation"
+    branch: "feat/14.5-cluster-observability-scaling-validation"
+    pr: 60
+    baseBranch: "feat/14.4-replication-failover-recovery"
+    status: pending
+  - storyId: "14.6"
+    storyKey: "14-6-protobuf-cluster-serialization"
+    title: "Replace serde_json with Protobuf for Cluster Serialization"
+    branch: "feat/14.6-protobuf-cluster-serialization"
+    pr: 62
+    baseBranch: "feat/14.5-cluster-observability-scaling-validation"
+    status: pending
