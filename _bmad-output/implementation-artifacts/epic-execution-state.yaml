@@ -51,6 +51,13 @@ retroNotes:
       Stories 14.1 and 14.2 addressed most findings but left one each.
       Total: 10/25 Cubic findings (40%) went unaddressed during implementation.
     action: "Investigate why the Cubic review step was skipped in 14.4 and partially in 14.1/14.2"
+  - category: "process-failure"
+    summary: "cargo fmt not run before commit+push during review fix phase"
+    details: |
+      During the epic review fix cycle, the reviewer committed Cubic fixes
+      without running `cargo fmt` first, causing CI Format check failures
+      on PRs #59 and #60. Required a second force-push round to fix.
+    action: "Ensure cargo fmt is always run before committing Rust code — consider adding a pre-commit hook"
 completedAt: "2026-03-12"
 summary:
   total: 5
