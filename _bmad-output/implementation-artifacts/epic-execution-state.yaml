@@ -58,6 +58,14 @@ retroNotes:
       without running `cargo fmt` first, causing CI Format check failures
       on PRs #59 and #60. Required a second force-push round to fix.
     action: "Ensure cargo fmt is always run before committing Rust code — consider adding a pre-commit hook"
+  - category: "process-failure"
+    summary: "Cubic finding responses posted as standalone PR reviews instead of inline replies"
+    details: |
+      During the epic review fix cycle, dismissals and fix confirmations were
+      initially posted as standalone PR review comments (gh pr review --comment)
+      instead of replying directly to the specific Cubic inline comments.
+      This makes it harder to follow the conversation thread on each finding.
+    action: "Always reply to Cubic comments inline (gh api .../comments/{id}/replies) — not as standalone PR reviews"
 completedAt: "2026-03-12"
 summary:
   total: 5
