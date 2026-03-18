@@ -64,7 +64,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(
             fila_core::cluster::ClusterManager::start(
                 &cluster_config,
-                Arc::clone(&storage) as _,
+                Arc::clone(&rocksdb) as _,
+                Arc::clone(&storage),
                 Some(meta_event_tx),
             )
             .await?,
@@ -85,9 +86,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (leader_watch_shutdown_tx, leader_watch_shutdown_rx) = tokio::sync::watch::channel(false);
     if let Some(ref cm) = cluster_manager {
         cm.set_broker(Arc::clone(&broker));
-        // Give queue-level Raft stores access to the broker's storage
-        // so committed entries are replicated to all nodes.
-        cm.multi_raft().set_broker_storage(Arc::clone(&storage));
         let broker_for_events = Arc::clone(&broker);
         let multi_raft = Arc::clone(cm.multi_raft());
         tokio::spawn(fila_core::cluster::process_meta_events(

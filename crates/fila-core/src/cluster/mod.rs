@@ -416,6 +416,7 @@ impl ClusterManager {
     pub async fn start(
         config: &ClusterConfig,
         db: Arc<dyn RaftKeyValueStore>,
+        broker_storage: Arc<dyn crate::storage::StorageEngine>,
         meta_event_tx: Option<tokio::sync::mpsc::UnboundedSender<MetaStoreEvent>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let node_id = config.node_id;
@@ -449,6 +450,7 @@ impl ClusterManager {
             node_id,
             Arc::clone(&db),
             Arc::clone(&raft_config),
+            broker_storage,
         ));
 
         // Start cluster gRPC service.

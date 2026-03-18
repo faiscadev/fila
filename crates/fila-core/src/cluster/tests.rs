@@ -28,8 +28,9 @@ mod tests {
     impl TestNode {
         async fn start(node_id: u64, port: u16) -> Self {
             let dir = tempfile::tempdir().unwrap();
-            let db: Arc<dyn crate::storage::RaftKeyValueStore> =
-                Arc::new(RocksDbEngine::open(dir.path().to_str().unwrap()).unwrap());
+            let rocksdb = Arc::new(RocksDbEngine::open(dir.path().to_str().unwrap()).unwrap());
+            let db: Arc<dyn crate::storage::RaftKeyValueStore> = Arc::clone(&rocksdb) as _;
+            let broker_storage: Arc<dyn crate::storage::StorageEngine> = Arc::clone(&rocksdb) as _;
 
             let raft_config = Config {
                 cluster_name: "fila-test".to_string(),
@@ -59,6 +60,7 @@ mod tests {
                 node_id,
                 Arc::clone(&db),
                 Arc::clone(&raft_config),
+                broker_storage,
             ));
 
             let broker_slot = Arc::new(std::sync::OnceLock::new());
@@ -470,6 +472,11 @@ mod tests {
             let db: Arc<dyn crate::storage::RaftKeyValueStore> =
                 Arc::new(RocksDbEngine::open(dir.path().to_str().unwrap()).unwrap());
 
+            // Create broker storage (separate RocksDB for message storage).
+            let broker_dir = tempfile::tempdir().unwrap();
+            let broker_db: Arc<dyn crate::storage::StorageEngine> =
+                Arc::new(RocksDbEngine::open(broker_dir.path().to_str().unwrap()).unwrap());
+
             let raft_config = Config {
                 cluster_name: "fila-test".to_string(),
                 heartbeat_interval: 100,
@@ -499,6 +506,7 @@ mod tests {
                 node_id,
                 Arc::clone(&db),
                 Arc::clone(&raft_config),
+                Arc::clone(&broker_db),
             ));
 
             let broker_slot = Arc::new(std::sync::OnceLock::new());
@@ -522,17 +530,9 @@ mod tests {
 
             tokio::time::sleep(Duration::from_millis(50)).await;
 
-            // Create broker with a separate RocksDB for message storage.
-            let broker_dir = tempfile::tempdir().unwrap();
-            let broker_db: Arc<dyn crate::storage::StorageEngine> =
-                Arc::new(RocksDbEngine::open(broker_dir.path().to_str().unwrap()).unwrap());
             let broker = Arc::new(
                 crate::Broker::new(crate::BrokerConfig::default(), Arc::clone(&broker_db)).unwrap(),
             );
-
-            // Wire broker storage to multi-Raft so queue-level state machines
-            // replicate committed entries to all nodes.
-            multi_raft.set_broker_storage(Arc::clone(&broker_db));
 
             // Wire broker to cluster gRPC service for forwarded write handling.
             let _ = broker_slot.set(Arc::clone(&broker));

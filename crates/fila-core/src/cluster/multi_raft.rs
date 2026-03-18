@@ -35,27 +35,25 @@ pub struct MultiRaftManager {
     /// Queue ID → Raft instance. Protected by RwLock for concurrent reads
     /// (message routing) with infrequent writes (queue creation/deletion).
     groups: RwLock<HashMap<String, Arc<Raft<TypeConfig>>>>,
-    /// Broker storage reference for queue-level Raft state machines.
-    /// When set, committed entries (enqueue, ack, nack) are applied to the
-    /// broker's RocksDB on all nodes for replication.
-    broker_storage: std::sync::OnceLock<Arc<dyn crate::storage::StorageEngine>>,
+    /// Broker storage for queue-level Raft state machines. Committed entries
+    /// (enqueue, ack, nack) are applied to this storage on all nodes for replication.
+    broker_storage: Arc<dyn crate::storage::StorageEngine>,
 }
 
 impl MultiRaftManager {
-    pub fn new(node_id: NodeId, db: Arc<dyn RaftKeyValueStore>, raft_config: Arc<Config>) -> Self {
+    pub fn new(
+        node_id: NodeId,
+        db: Arc<dyn RaftKeyValueStore>,
+        raft_config: Arc<Config>,
+        broker_storage: Arc<dyn crate::storage::StorageEngine>,
+    ) -> Self {
         Self {
             node_id,
             db,
             raft_config,
             groups: RwLock::new(HashMap::new()),
-            broker_storage: std::sync::OnceLock::new(),
+            broker_storage,
         }
-    }
-
-    /// Set the broker storage reference for queue-level Raft replication.
-    /// Must be called after the Broker is created.
-    pub fn set_broker_storage(&self, storage: Arc<dyn crate::storage::StorageEngine>) {
-        let _ = self.broker_storage.set(storage);
     }
 
     /// Create a new Raft group for a queue. All specified member nodes will
@@ -66,15 +64,11 @@ impl MultiRaftManager {
         queue_id: &str,
         members: &NonEmpty<(NodeId, String)>,
     ) -> Result<(), CreateGroupError> {
-        let broker_storage = self.broker_storage.get().cloned();
-        if broker_storage.is_none() {
-            tracing::warn!(
-                queue_id,
-                "creating queue raft group without broker storage — \
-                 committed entries will not be replicated to local storage"
-            );
-        }
-        let store = FilaRaftStore::for_queue(Arc::clone(&self.db), queue_id, broker_storage);
+        let store = FilaRaftStore::for_queue(
+            Arc::clone(&self.db),
+            queue_id,
+            Arc::clone(&self.broker_storage),
+        );
         let (log_store, state_machine) = Adaptor::new(store);
         let network = FilaNetworkFactory::for_queue(queue_id.to_string());
 

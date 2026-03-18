@@ -147,13 +147,12 @@ impl FilaRaftStore {
 
     /// Create a store for a queue-level Raft group (prefixed key space).
     ///
-    /// If `broker_storage` is provided, committed entries (enqueue, ack, nack)
-    /// will be applied to the broker's storage on all nodes — enabling
-    /// replication for failover.
+    /// Committed entries (enqueue, ack, nack) are applied to `broker_storage`
+    /// on all nodes for replication.
     pub fn for_queue(
         db: Arc<dyn RaftKeyValueStore>,
         queue_id: &str,
-        broker_storage: Option<Arc<dyn StorageEngine>>,
+        broker_storage: Arc<dyn StorageEngine>,
     ) -> Self {
         Self {
             db,
@@ -161,7 +160,7 @@ impl FilaRaftStore {
             state_machine: StateMachineData::default(),
             current_snapshot: None,
             meta_event_tx: None,
-            broker_storage,
+            broker_storage: Some(broker_storage),
             queue_id: Some(queue_id.to_string()),
         }
     }
