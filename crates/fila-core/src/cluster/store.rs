@@ -622,41 +622,33 @@ impl FilaRaftStore {
             super::types::ClusterRequest::Ack { queue_id, msg_id } => {
                 // Find the message by scanning, then delete message + lease + lease_expiry.
                 let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                let messages = storage.list_messages(&msg_prefix).map_err(|e| {
-                    StorageError::IO {
-                        source: openraft::StorageIOError::apply(log_id, &e),
-                    }
-                })?;
+                let messages =
+                    storage
+                        .list_messages(&msg_prefix)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
                 for (key, msg) in messages {
                     if msg.id == *msg_id {
                         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
                         let mut mutations = vec![Mutation::DeleteMessage { key }];
                         // Clean up lease and lease_expiry entries.
-                        if let Some(lease_value) =
-                            storage.get_lease(&lease_key).ok().flatten()
-                        {
-                            mutations.push(Mutation::DeleteLease {
-                                key: lease_key,
-                            });
+                        if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
+                            mutations.push(Mutation::DeleteLease { key: lease_key });
                             if let Some(expiry_ts) =
-                                crate::storage::keys::parse_expiry_from_lease_value(
-                                    &lease_value,
-                                )
+                                crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
                             {
-                                let expiry_key =
-                                    crate::storage::keys::lease_expiry_key(
-                                        expiry_ts, queue_id, msg_id,
-                                    );
-                                mutations.push(Mutation::DeleteLeaseExpiry {
-                                    key: expiry_key,
-                                });
+                                let expiry_key = crate::storage::keys::lease_expiry_key(
+                                    expiry_ts, queue_id, msg_id,
+                                );
+                                mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
                             }
                         }
-                        storage.apply_mutations(mutations).map_err(|e| {
-                            StorageError::IO {
+                        storage
+                            .apply_mutations(mutations)
+                            .map_err(|e| StorageError::IO {
                                 source: openraft::StorageIOError::apply(log_id, &e),
-                            }
-                        })?;
+                            })?;
                         return Ok(());
                     }
                 }
@@ -666,11 +658,12 @@ impl FilaRaftStore {
             } => {
                 // Nack: increment attempt count, clear leased_at, delete lease + lease_expiry.
                 let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                let messages = storage.list_messages(&msg_prefix).map_err(|e| {
-                    StorageError::IO {
-                        source: openraft::StorageIOError::apply(log_id, &e),
-                    }
-                })?;
+                let messages =
+                    storage
+                        .list_messages(&msg_prefix)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
                 for (key, msg) in messages {
                     if msg.id == *msg_id {
                         let mut updated = msg;
@@ -685,31 +678,22 @@ impl FilaRaftStore {
                             key,
                             value: msg_value,
                         }];
-                        if let Some(lease_value) =
-                            storage.get_lease(&lease_key).ok().flatten()
-                        {
-                            mutations.push(Mutation::DeleteLease {
-                                key: lease_key,
-                            });
+                        if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
+                            mutations.push(Mutation::DeleteLease { key: lease_key });
                             if let Some(expiry_ts) =
-                                crate::storage::keys::parse_expiry_from_lease_value(
-                                    &lease_value,
-                                )
+                                crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
                             {
-                                let expiry_key =
-                                    crate::storage::keys::lease_expiry_key(
-                                        expiry_ts, queue_id, msg_id,
-                                    );
-                                mutations.push(Mutation::DeleteLeaseExpiry {
-                                    key: expiry_key,
-                                });
+                                let expiry_key = crate::storage::keys::lease_expiry_key(
+                                    expiry_ts, queue_id, msg_id,
+                                );
+                                mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
                             }
                         }
-                        storage.apply_mutations(mutations).map_err(|e| {
-                            StorageError::IO {
+                        storage
+                            .apply_mutations(mutations)
+                            .map_err(|e| StorageError::IO {
                                 source: openraft::StorageIOError::apply(log_id, &e),
-                            }
-                        })?;
+                            })?;
                         return Ok(());
                     }
                 }
