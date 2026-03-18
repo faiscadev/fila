@@ -334,7 +334,10 @@ impl Scheduler {
         // Clear existing pending entries for this queue to rebuild fresh.
         self.pending.retain(|(qid, _), _| qid != queue_id);
         self.pending_by_id.retain(|_, (qid, _)| qid != queue_id);
-        self.leased_msg_keys.retain(|_, _| true); // Keep all — we rebuild below
+        self.leased_msg_keys.retain(|_, key| {
+            // Only keep entries for OTHER queues; this queue's entries are rebuilt below.
+            !key.starts_with(crate::storage::keys::message_prefix(queue_id).as_slice())
+        });
 
         // Rebuild DRR keys and pending index by scanning messages.
         let prefix = crate::storage::keys::message_prefix(queue_id);

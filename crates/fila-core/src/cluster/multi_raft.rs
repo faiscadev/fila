@@ -67,6 +67,13 @@ impl MultiRaftManager {
         members: &NonEmpty<(NodeId, String)>,
     ) -> Result<(), CreateGroupError> {
         let broker_storage = self.broker_storage.get().cloned();
+        if broker_storage.is_none() {
+            tracing::warn!(
+                queue_id,
+                "creating queue raft group without broker storage — \
+                 committed entries will not be replicated to local storage"
+            );
+        }
         let store = FilaRaftStore::for_queue(Arc::clone(&self.db), queue_id, broker_storage);
         let (log_store, state_machine) = Adaptor::new(store);
         let network = FilaNetworkFactory::for_queue(queue_id.to_string());

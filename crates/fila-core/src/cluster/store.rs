@@ -412,7 +412,7 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                     // broker's storage so all nodes have the data. This is the
                     // replication mechanism — followers apply entries too.
                     if let Some(ref storage) = self.broker_storage {
-                        self.apply_to_broker_storage(storage.as_ref(), request);
+                        self.apply_to_broker_storage(storage.as_ref(), request, entry.log_id)?;
                     }
 
                     let response = match request {
@@ -589,11 +589,15 @@ impl FilaRaftStore {
     /// This runs on ALL nodes (leader and followers) when Raft commits an entry,
     /// ensuring every replica has the data in its local RocksDB. When a follower
     /// becomes leader, it can rebuild its in-memory scheduler state from storage.
+    ///
+    /// Returns `Err` if a storage mutation fails — the caller should propagate
+    /// this as a `StorageError` so Raft can handle the failure appropriately.
     fn apply_to_broker_storage(
         &self,
         storage: &dyn StorageEngine,
         request: &super::types::ClusterRequest,
-    ) {
+        log_id: LogId<NodeId>,
+    ) -> Result<(), StorageError<NodeId>> {
         match request {
             super::types::ClusterRequest::Enqueue { message } => {
                 let queue_id = self.queue_id.as_deref().unwrap_or(&message.queue_id);
@@ -603,87 +607,127 @@ impl FilaRaftStore {
                     message.enqueued_at,
                     &message.id,
                 );
-                let msg_value = match serde_json::to_vec(message) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to serialize message for storage replication");
-                        return;
-                    }
-                };
-                if let Err(e) = storage.apply_mutations(vec![Mutation::PutMessage {
-                    key: msg_key,
-                    value: msg_value,
-                }]) {
-                    tracing::error!(error = %e, "failed to replicate enqueue to broker storage");
-                }
+                let msg_value = serde_json::to_vec(message).map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
+                storage
+                    .apply_mutations(vec![Mutation::PutMessage {
+                        key: msg_key,
+                        value: msg_value,
+                    }])
+                    .map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    })?;
             }
             super::types::ClusterRequest::Ack { queue_id, msg_id } => {
-                // Find the message and its lease, then delete them.
+                // Find the message by scanning, then delete message + lease + lease_expiry.
                 let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                match storage.list_messages(&msg_prefix) {
-                    Ok(messages) => {
-                        for (key, msg) in messages {
-                            if msg.id == *msg_id {
-                                let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-                                let mut mutations = vec![Mutation::DeleteMessage { key }];
-                                // Also clean up any lease/lease_expiry entries.
-                                if storage.get_lease(&lease_key).ok().flatten().is_some() {
-                                    mutations.push(Mutation::DeleteLease { key: lease_key });
-                                }
-                                if let Err(e) = storage.apply_mutations(mutations) {
-                                    tracing::error!(error = %e, "failed to replicate ack to broker storage");
-                                }
-                                return;
+                let messages = storage.list_messages(&msg_prefix).map_err(|e| {
+                    StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    }
+                })?;
+                for (key, msg) in messages {
+                    if msg.id == *msg_id {
+                        let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+                        let mut mutations = vec![Mutation::DeleteMessage { key }];
+                        // Clean up lease and lease_expiry entries.
+                        if let Some(lease_value) =
+                            storage.get_lease(&lease_key).ok().flatten()
+                        {
+                            mutations.push(Mutation::DeleteLease {
+                                key: lease_key,
+                            });
+                            if let Some(expiry_ts) =
+                                crate::storage::keys::parse_expiry_from_lease_value(
+                                    &lease_value,
+                                )
+                            {
+                                let expiry_key =
+                                    crate::storage::keys::lease_expiry_key(
+                                        expiry_ts, queue_id, msg_id,
+                                    );
+                                mutations.push(Mutation::DeleteLeaseExpiry {
+                                    key: expiry_key,
+                                });
                             }
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to scan messages for ack replication");
+                        storage.apply_mutations(mutations).map_err(|e| {
+                            StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            }
+                        })?;
+                        return Ok(());
                     }
                 }
             }
             super::types::ClusterRequest::Nack {
                 queue_id, msg_id, ..
             } => {
-                // Nack: increment attempt count, clear leased_at, delete lease entries.
+                // Nack: increment attempt count, clear leased_at, delete lease + lease_expiry.
                 let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                match storage.list_messages(&msg_prefix) {
-                    Ok(messages) => {
-                        for (key, msg) in messages {
-                            if msg.id == *msg_id {
-                                let mut updated = msg;
-                                updated.attempt_count += 1;
-                                updated.leased_at = None;
-                                let msg_value = match serde_json::to_vec(&updated) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        tracing::error!(error = %e, "failed to serialize nack message");
-                                        return;
-                                    }
-                                };
-                                let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-                                let mut mutations = vec![Mutation::PutMessage {
-                                    key,
-                                    value: msg_value,
-                                }];
-                                if storage.get_lease(&lease_key).ok().flatten().is_some() {
-                                    mutations.push(Mutation::DeleteLease { key: lease_key });
-                                }
-                                if let Err(e) = storage.apply_mutations(mutations) {
-                                    tracing::error!(error = %e, "failed to replicate nack to broker storage");
-                                }
-                                return;
+                let messages = storage.list_messages(&msg_prefix).map_err(|e| {
+                    StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    }
+                })?;
+                for (key, msg) in messages {
+                    if msg.id == *msg_id {
+                        let mut updated = msg;
+                        updated.attempt_count += 1;
+                        updated.leased_at = None;
+                        let msg_value =
+                            serde_json::to_vec(&updated).map_err(|e| StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            })?;
+                        let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+                        let mut mutations = vec![Mutation::PutMessage {
+                            key,
+                            value: msg_value,
+                        }];
+                        if let Some(lease_value) =
+                            storage.get_lease(&lease_key).ok().flatten()
+                        {
+                            mutations.push(Mutation::DeleteLease {
+                                key: lease_key,
+                            });
+                            if let Some(expiry_ts) =
+                                crate::storage::keys::parse_expiry_from_lease_value(
+                                    &lease_value,
+                                )
+                            {
+                                let expiry_key =
+                                    crate::storage::keys::lease_expiry_key(
+                                        expiry_ts, queue_id, msg_id,
+                                    );
+                                mutations.push(Mutation::DeleteLeaseExpiry {
+                                    key: expiry_key,
+                                });
                             }
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to scan messages for nack replication");
+                        storage.apply_mutations(mutations).map_err(|e| {
+                            StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            }
+                        })?;
+                        return Ok(());
                     }
                 }
             }
-            // Other request types are not queue-level data operations.
-            _ => {}
+            // Queue-level data operations are Enqueue, Ack, Nack only.
+            // Meta operations (CreateQueue, DeleteQueue, etc.) and group
+            // operations (CreateQueueGroup, DeleteQueueGroup) are handled
+            // by the meta Raft state machine, not the queue store.
+            super::types::ClusterRequest::CreateQueue { .. }
+            | super::types::ClusterRequest::DeleteQueue { .. }
+            | super::types::ClusterRequest::SetConfig { .. }
+            | super::types::ClusterRequest::SetThrottleRate { .. }
+            | super::types::ClusterRequest::RemoveThrottleRate { .. }
+            | super::types::ClusterRequest::Redrive { .. }
+            | super::types::ClusterRequest::CreateQueueGroup { .. }
+            | super::types::ClusterRequest::DeleteQueueGroup { .. } => {}
         }
+        Ok(())
     }
 
     #[allow(clippy::result_large_err)]

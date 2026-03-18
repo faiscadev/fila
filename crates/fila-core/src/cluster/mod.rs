@@ -338,22 +338,52 @@ pub async fn watch_leader_changes(
             let was_leader = leading.get(queue_id).copied().unwrap_or(false);
 
             if is_leader && !was_leader {
-                // This node just became leader for this queue.
+                // This node just became leader (or is leader on first sight).
                 info!(queue_id, "became leader — triggering queue recovery");
-                let _ = broker.send_command(crate::SchedulerCommand::RecoverQueue {
+                match broker.send_command(crate::SchedulerCommand::RecoverQueue {
                     queue_id: queue_id.clone(),
-                });
-                leading.insert(queue_id.clone(), true);
+                }) {
+                    Ok(_) => {
+                        leading.insert(queue_id.clone(), true);
+                    }
+                    Err(e) => {
+                        // Don't update leading — next poll will retry.
+                        tracing::error!(queue_id, error = %e, "failed to send RecoverQueue");
+                    }
+                }
             } else if !is_leader && was_leader {
                 // This node just lost leadership for this queue.
                 info!(queue_id, "lost leadership — dropping consumer streams");
-                let _ = broker.send_command(crate::SchedulerCommand::DropQueueConsumers {
+                match broker.send_command(crate::SchedulerCommand::DropQueueConsumers {
                     queue_id: queue_id.clone(),
-                });
-                leading.insert(queue_id.clone(), false);
+                }) {
+                    Ok(_) => {
+                        leading.insert(queue_id.clone(), false);
+                    }
+                    Err(e) => {
+                        // Don't update leading — next poll will retry.
+                        tracing::error!(queue_id, error = %e, "failed to send DropQueueConsumers");
+                    }
+                }
             } else if !leading.contains_key(queue_id) {
-                // First time seeing this queue group — record current state.
-                leading.insert(queue_id.clone(), is_leader);
+                // First time seeing this queue group — record current state
+                // and trigger recovery if already leader so the scheduler
+                // catches any messages replicated between startup and now.
+                if is_leader {
+                    info!(queue_id, "first-sight leader — triggering queue recovery");
+                    match broker.send_command(crate::SchedulerCommand::RecoverQueue {
+                        queue_id: queue_id.clone(),
+                    }) {
+                        Ok(_) => {
+                            leading.insert(queue_id.clone(), true);
+                        }
+                        Err(e) => {
+                            tracing::error!(queue_id, error = %e, "failed to send RecoverQueue on first sight");
+                        }
+                    }
+                } else {
+                    leading.insert(queue_id.clone(), false);
+                }
             }
         }
 
