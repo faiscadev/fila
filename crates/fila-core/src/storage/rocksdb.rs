@@ -7,7 +7,7 @@ use rocksdb::{
 use crate::error::{StorageError, StorageResult};
 use crate::message::Message;
 use crate::queue::QueueConfig;
-use crate::storage::traits::{Mutation, StorageEngine};
+use crate::storage::traits::{Mutation, RaftKeyValueStore, StorageEngine};
 
 const CF_MESSAGES: &str = "messages";
 const CF_LEASES: &str = "leases";
@@ -156,6 +156,32 @@ impl RocksDbEngine {
             .delete_range_cf(&cf, start, end)
             .map_err(|e| StorageError::Engine(e.to_string()))?;
         Ok(())
+    }
+}
+
+impl RaftKeyValueStore for RocksDbEngine {
+    fn raft_put(&self, key: &[u8], value: &[u8]) -> StorageResult<()> {
+        self.raft_put(key, value)
+    }
+
+    fn raft_get(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
+        self.raft_get(key)
+    }
+
+    fn raft_delete(&self, key: &[u8]) -> StorageResult<()> {
+        self.raft_delete(key)
+    }
+
+    fn raft_scan(&self, start: &[u8], limit: usize) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.raft_scan(start, limit)
+    }
+
+    fn raft_last_with_prefix(&self, prefix: &[u8]) -> StorageResult<Option<(Vec<u8>, Vec<u8>)>> {
+        self.raft_last_with_prefix(prefix)
+    }
+
+    fn raft_delete_range(&self, start: &[u8], end: &[u8]) -> StorageResult<()> {
+        self.raft_delete_range(start, end)
     }
 }
 

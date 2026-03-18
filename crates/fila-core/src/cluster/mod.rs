@@ -46,6 +46,7 @@ impl ClusterManager {
         db: Arc<RocksDbEngine>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let node_id = config.node_id;
+        let db: Arc<dyn crate::storage::RaftKeyValueStore> = db;
 
         let raft_config = Config {
             cluster_name: "fila".to_string(),

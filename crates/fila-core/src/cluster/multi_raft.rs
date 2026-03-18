@@ -10,7 +10,23 @@ use tracing::info;
 use super::network::FilaNetworkFactory;
 use super::store::FilaRaftStore;
 use super::types::{NodeId, TypeConfig};
-use crate::storage::RocksDbEngine;
+use crate::storage::RaftKeyValueStore;
+
+/// Errors from `MultiRaftManager::create_group`.
+#[derive(Debug, thiserror::Error)]
+pub enum CreateGroupError {
+    #[error("empty members list: cannot create queue raft group with no members")]
+    EmptyMembers,
+
+    #[error("missing address for member node {node_id}")]
+    MissingMemberAddress { node_id: NodeId },
+
+    #[error("raft fatal error: {0}")]
+    RaftFatal(#[source] Box<openraft::error::Fatal<NodeId>>),
+
+    #[error("node {node_id} not in members list")]
+    NotInMembers { node_id: NodeId },
+}
 
 /// Manages multiple Raft instances — one per queue — within a single Fila node.
 ///
@@ -19,7 +35,7 @@ use crate::storage::RocksDbEngine;
 /// for queue-specific operations (enqueue, ack, nack).
 pub struct MultiRaftManager {
     node_id: NodeId,
-    db: Arc<RocksDbEngine>,
+    db: Arc<dyn RaftKeyValueStore>,
     raft_config: Arc<Config>,
     /// Queue ID → Raft instance. Protected by RwLock for concurrent reads
     /// (message routing) with infrequent writes (queue creation/deletion).
@@ -27,7 +43,7 @@ pub struct MultiRaftManager {
 }
 
 impl MultiRaftManager {
-    pub fn new(node_id: NodeId, db: Arc<RocksDbEngine>, raft_config: Arc<Config>) -> Self {
+    pub fn new(node_id: NodeId, db: Arc<dyn RaftKeyValueStore>, raft_config: Arc<Config>) -> Self {
         Self {
             node_id,
             db,
@@ -44,9 +60,9 @@ impl MultiRaftManager {
         queue_id: &str,
         members: &[NodeId],
         member_addrs: &HashMap<NodeId, String>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), CreateGroupError> {
         if members.is_empty() {
-            return Err("cannot create queue raft group with empty members".into());
+            return Err(CreateGroupError::EmptyMembers);
         }
 
         let store = FilaRaftStore::for_queue(Arc::clone(&self.db), queue_id);
@@ -60,7 +76,8 @@ impl MultiRaftManager {
             log_store,
             state_machine,
         )
-        .await?;
+        .await
+        .map_err(|e| CreateGroupError::RaftFatal(Box::new(e)))?;
         let raft = Arc::new(raft);
 
         // Bootstrap the group if this node is the smallest member
@@ -71,7 +88,7 @@ impl MultiRaftManager {
             for &node_id in members {
                 let addr = member_addrs
                     .get(&node_id)
-                    .ok_or_else(|| format!("missing address for member node {node_id}"))?;
+                    .ok_or(CreateGroupError::MissingMemberAddress { node_id })?;
                 member_map.insert(node_id, BasicNode { addr: addr.clone() });
             }
             match raft.initialize(member_map).await {
@@ -85,7 +102,12 @@ impl MultiRaftManager {
                         "queue raft group already initialized"
                     );
                 }
-                Err(e) => return Err(Box::new(e)),
+                Err(RaftError::Fatal(e)) => return Err(CreateGroupError::RaftFatal(Box::new(e))),
+                Err(RaftError::APIError(InitializeError::NotInMembers(_))) => {
+                    return Err(CreateGroupError::NotInMembers {
+                        node_id: self.node_id,
+                    });
+                }
             }
         }
 

@@ -28,7 +28,8 @@ mod tests {
     impl TestNode {
         async fn start(node_id: u64, port: u16) -> Self {
             let dir = tempfile::tempdir().unwrap();
-            let db = Arc::new(RocksDbEngine::open(dir.path().to_str().unwrap()).unwrap());
+            let db: Arc<dyn crate::storage::RaftKeyValueStore> =
+                Arc::new(RocksDbEngine::open(dir.path().to_str().unwrap()).unwrap());
 
             let raft_config = Config {
                 cluster_name: "fila-test".to_string(),

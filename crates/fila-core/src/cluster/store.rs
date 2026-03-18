@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::types::{ClusterResponse, NodeId, TypeConfig};
-use crate::storage::RocksDbEngine;
+use crate::storage::RaftKeyValueStore;
 
 /// Key segment names for Raft data in the raft_log column family.
 const VOTE_SUFFIX: &[u8] = b"vote";
@@ -86,7 +86,7 @@ pub struct StateMachineData {
 /// This implements the v1 `RaftStorage` trait. The `Adaptor` splits it into
 /// separate `RaftLogStorage` + `RaftStateMachine` for the Raft runtime.
 pub struct FilaRaftStore {
-    db: Arc<RocksDbEngine>,
+    db: Arc<dyn RaftKeyValueStore>,
     keys: KeyBuilder,
     /// In-memory state machine state.
     state_machine: StateMachineData,
@@ -102,7 +102,7 @@ struct StoredSnapshot {
 
 impl FilaRaftStore {
     /// Create a store for the meta Raft group (no key prefix).
-    pub fn new(db: Arc<RocksDbEngine>) -> Self {
+    pub fn new(db: Arc<dyn RaftKeyValueStore>) -> Self {
         Self {
             db,
             keys: KeyBuilder::meta(),
@@ -112,7 +112,7 @@ impl FilaRaftStore {
     }
 
     /// Create a store for a queue-level Raft group (prefixed key space).
-    pub fn for_queue(db: Arc<RocksDbEngine>, queue_id: &str) -> Self {
+    pub fn for_queue(db: Arc<dyn RaftKeyValueStore>, queue_id: &str) -> Self {
         Self {
             db,
             keys: KeyBuilder::for_queue(queue_id),
