@@ -15,7 +15,7 @@ use nonempty::NonEmpty;
 
 use super::types::{ClusterResponse, NodeId, TypeConfig};
 use crate::queue::QueueConfig;
-use crate::storage::RaftKeyValueStore;
+use crate::storage::{Mutation, RaftKeyValueStore, StorageEngine};
 
 /// Events emitted by the meta Raft state machine when queue group
 /// lifecycle changes are committed. A background task processes these
@@ -112,6 +112,14 @@ pub struct FilaRaftStore {
     current_snapshot: Option<StoredSnapshot>,
     /// For the meta store: channel to emit queue group lifecycle events.
     meta_event_tx: Option<tokio::sync::mpsc::UnboundedSender<MetaStoreEvent>>,
+    /// For queue-level stores: reference to the broker's storage engine so
+    /// committed entries (enqueue, ack, nack) are applied to the local storage
+    /// on ALL nodes — not just the leader. This is the core replication
+    /// mechanism: followers apply committed entries to their local RocksDB,
+    /// so when a follower becomes leader, it already has all the data.
+    broker_storage: Option<Arc<dyn StorageEngine>>,
+    /// Queue ID (only set for queue-level stores, used for storage key construction).
+    queue_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,17 +140,28 @@ impl FilaRaftStore {
             state_machine: StateMachineData::default(),
             current_snapshot: None,
             meta_event_tx,
+            broker_storage: None,
+            queue_id: None,
         }
     }
 
     /// Create a store for a queue-level Raft group (prefixed key space).
-    pub fn for_queue(db: Arc<dyn RaftKeyValueStore>, queue_id: &str) -> Self {
+    ///
+    /// Committed entries (enqueue, ack, nack) are applied to `broker_storage`
+    /// on all nodes for replication.
+    pub fn for_queue(
+        db: Arc<dyn RaftKeyValueStore>,
+        queue_id: &str,
+        broker_storage: Arc<dyn StorageEngine>,
+    ) -> Self {
         Self {
             db,
             keys: KeyBuilder::for_queue(queue_id),
             state_machine: StateMachineData::default(),
             current_snapshot: None,
             meta_event_tx: None,
+            broker_storage: Some(broker_storage),
+            queue_id: Some(queue_id.to_string()),
         }
     }
 }
@@ -303,6 +322,8 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
             state_machine: self.state_machine.clone(),
             current_snapshot: self.current_snapshot.clone(),
             meta_event_tx: self.meta_event_tx.clone(),
+            broker_storage: self.broker_storage.clone(),
+            queue_id: self.queue_id.clone(),
         }
     }
 
@@ -386,9 +407,13 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                     responses.push(ClusterResponse::Ack);
                 }
                 EntryPayload::Normal(request) => {
-                    // In Story 14.1, the state machine acknowledges operations
-                    // but does not route them to the scheduler yet.
-                    // Story 14.2 will integrate per-queue Raft groups with the scheduler.
+                    // Queue-level stores: apply committed operations to the
+                    // broker's storage so all nodes have the data. This is the
+                    // replication mechanism — followers apply entries too.
+                    if let Some(ref storage) = self.broker_storage {
+                        self.apply_to_broker_storage(storage.as_ref(), request, entry.log_id)?;
+                    }
+
                     let response = match request {
                         super::types::ClusterRequest::Enqueue { message } => {
                             ClusterResponse::Enqueue { msg_id: message.id }
@@ -485,6 +510,8 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
             state_machine: self.state_machine.clone(),
             current_snapshot: self.current_snapshot.clone(),
             meta_event_tx: self.meta_event_tx.clone(),
+            broker_storage: self.broker_storage.clone(),
+            queue_id: self.queue_id.clone(),
         }
     }
 
@@ -556,6 +583,136 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
 }
 
 impl FilaRaftStore {
+    /// Apply a committed queue-level operation to the broker's storage.
+    ///
+    /// This runs on ALL nodes (leader and followers) when Raft commits an entry,
+    /// ensuring every replica has the data in its local RocksDB. When a follower
+    /// becomes leader, it can rebuild its in-memory scheduler state from storage.
+    ///
+    /// Returns `Err` if a storage mutation fails — the caller should propagate
+    /// this as a `StorageError` so Raft can handle the failure appropriately.
+    fn apply_to_broker_storage(
+        &self,
+        storage: &dyn StorageEngine,
+        request: &super::types::ClusterRequest,
+        log_id: LogId<NodeId>,
+    ) -> Result<(), StorageError<NodeId>> {
+        match request {
+            super::types::ClusterRequest::Enqueue { message } => {
+                let queue_id = self.queue_id.as_deref().unwrap_or(&message.queue_id);
+                let msg_key = crate::storage::keys::message_key(
+                    queue_id,
+                    &message.fairness_key,
+                    message.enqueued_at,
+                    &message.id,
+                );
+                let msg_value = serde_json::to_vec(message).map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
+                storage
+                    .apply_mutations(vec![Mutation::PutMessage {
+                        key: msg_key,
+                        value: msg_value,
+                    }])
+                    .map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    })?;
+            }
+            super::types::ClusterRequest::Ack { queue_id, msg_id } => {
+                // Find the message by scanning, then delete message + lease + lease_expiry.
+                let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+                let messages =
+                    storage
+                        .list_messages(&msg_prefix)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
+                for (key, msg) in messages {
+                    if msg.id == *msg_id {
+                        let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+                        let mut mutations = vec![Mutation::DeleteMessage { key }];
+                        // Clean up lease and lease_expiry entries.
+                        if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
+                            mutations.push(Mutation::DeleteLease { key: lease_key });
+                            if let Some(expiry_ts) =
+                                crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
+                            {
+                                let expiry_key = crate::storage::keys::lease_expiry_key(
+                                    expiry_ts, queue_id, msg_id,
+                                );
+                                mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
+                            }
+                        }
+                        storage
+                            .apply_mutations(mutations)
+                            .map_err(|e| StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            })?;
+                        return Ok(());
+                    }
+                }
+            }
+            super::types::ClusterRequest::Nack {
+                queue_id, msg_id, ..
+            } => {
+                // Nack: increment attempt count, clear leased_at, delete lease + lease_expiry.
+                let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+                let messages =
+                    storage
+                        .list_messages(&msg_prefix)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
+                for (key, msg) in messages {
+                    if msg.id == *msg_id {
+                        let mut updated = msg;
+                        updated.attempt_count += 1;
+                        updated.leased_at = None;
+                        let msg_value =
+                            serde_json::to_vec(&updated).map_err(|e| StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            })?;
+                        let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+                        let mut mutations = vec![Mutation::PutMessage {
+                            key,
+                            value: msg_value,
+                        }];
+                        if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
+                            mutations.push(Mutation::DeleteLease { key: lease_key });
+                            if let Some(expiry_ts) =
+                                crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
+                            {
+                                let expiry_key = crate::storage::keys::lease_expiry_key(
+                                    expiry_ts, queue_id, msg_id,
+                                );
+                                mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
+                            }
+                        }
+                        storage
+                            .apply_mutations(mutations)
+                            .map_err(|e| StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            })?;
+                        return Ok(());
+                    }
+                }
+            }
+            // Queue-level data operations are Enqueue, Ack, Nack only.
+            // Meta operations (CreateQueue, DeleteQueue, etc.) and group
+            // operations (CreateQueueGroup, DeleteQueueGroup) are handled
+            // by the meta Raft state machine, not the queue store.
+            super::types::ClusterRequest::CreateQueue { .. }
+            | super::types::ClusterRequest::DeleteQueue { .. }
+            | super::types::ClusterRequest::SetConfig { .. }
+            | super::types::ClusterRequest::SetThrottleRate { .. }
+            | super::types::ClusterRequest::RemoveThrottleRate { .. }
+            | super::types::ClusterRequest::Redrive { .. }
+            | super::types::ClusterRequest::CreateQueueGroup { .. }
+            | super::types::ClusterRequest::DeleteQueueGroup { .. } => {}
+        }
+        Ok(())
+    }
+
     #[allow(clippy::result_large_err)]
     fn find_last_log_id(&self) -> Result<Option<LogId<NodeId>>, StorageError<NodeId>> {
         // Reverse-seek to the last key with the log prefix — O(1) instead of

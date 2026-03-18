@@ -164,6 +164,23 @@ impl FilaService for HotPathService {
         }
 
         tracing::Span::current().record("queue_id", req.queue.as_str());
+
+        // In cluster mode, consumers must connect to the queue's Raft leader
+        // so the DRR scheduler on the leader can serve them directly.
+        if let Some(ref cluster) = self.cluster {
+            match cluster.is_queue_leader(&req.queue).await {
+                Some(true) => { /* This node is the leader — proceed */ }
+                Some(false) => {
+                    return Err(Status::unavailable(
+                        "this node is not the leader for this queue; reconnect to the leader",
+                    ));
+                }
+                None => {
+                    return Err(Status::not_found("queue raft group not found"));
+                }
+            }
+        }
+
         let consumer_id = Uuid::now_v7().to_string();
 
         // Channel from scheduler (ReadyMessage) to converter task

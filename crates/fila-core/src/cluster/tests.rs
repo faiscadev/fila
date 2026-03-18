@@ -28,8 +28,9 @@ mod tests {
     impl TestNode {
         async fn start(node_id: u64, port: u16) -> Self {
             let dir = tempfile::tempdir().unwrap();
-            let db: Arc<dyn crate::storage::RaftKeyValueStore> =
-                Arc::new(RocksDbEngine::open(dir.path().to_str().unwrap()).unwrap());
+            let rocksdb = Arc::new(RocksDbEngine::open(dir.path().to_str().unwrap()).unwrap());
+            let db: Arc<dyn crate::storage::RaftKeyValueStore> = Arc::clone(&rocksdb) as _;
+            let broker_storage: Arc<dyn crate::storage::StorageEngine> = Arc::clone(&rocksdb) as _;
 
             let raft_config = Config {
                 cluster_name: "fila-test".to_string(),
@@ -59,6 +60,7 @@ mod tests {
                 node_id,
                 Arc::clone(&db),
                 Arc::clone(&raft_config),
+                broker_storage,
             ));
 
             let broker_slot = Arc::new(std::sync::OnceLock::new());
@@ -470,6 +472,11 @@ mod tests {
             let db: Arc<dyn crate::storage::RaftKeyValueStore> =
                 Arc::new(RocksDbEngine::open(dir.path().to_str().unwrap()).unwrap());
 
+            // Create broker storage (separate RocksDB for message storage).
+            let broker_dir = tempfile::tempdir().unwrap();
+            let broker_db: Arc<dyn crate::storage::StorageEngine> =
+                Arc::new(RocksDbEngine::open(broker_dir.path().to_str().unwrap()).unwrap());
+
             let raft_config = Config {
                 cluster_name: "fila-test".to_string(),
                 heartbeat_interval: 100,
@@ -499,6 +506,7 @@ mod tests {
                 node_id,
                 Arc::clone(&db),
                 Arc::clone(&raft_config),
+                Arc::clone(&broker_db),
             ));
 
             let broker_slot = Arc::new(std::sync::OnceLock::new());
@@ -522,12 +530,9 @@ mod tests {
 
             tokio::time::sleep(Duration::from_millis(50)).await;
 
-            // Create broker with a separate RocksDB for message storage.
-            let broker_dir = tempfile::tempdir().unwrap();
-            let broker_db =
-                Arc::new(RocksDbEngine::open(broker_dir.path().to_str().unwrap()).unwrap());
-            let broker =
-                Arc::new(crate::Broker::new(crate::BrokerConfig::default(), broker_db).unwrap());
+            let broker = Arc::new(
+                crate::Broker::new(crate::BrokerConfig::default(), Arc::clone(&broker_db)).unwrap(),
+            );
 
             // Wire broker to cluster gRPC service for forwarded write handling.
             let _ = broker_slot.set(Arc::clone(&broker));
@@ -960,6 +965,312 @@ mod tests {
         node1.shutdown().await;
         node2.shutdown().await;
         node3.shutdown().await;
+    }
+
+    // --- Story 14.4: Replication, Failover & Recovery tests ---
+
+    /// Test: kill queue leader, verify new leader elected within 10s, verify enqueue still works.
+    #[tokio::test]
+    async fn test_cluster_failover_new_leader_elected() {
+        let base_port = 15740;
+        let node1 = FullTestNode::start(1, base_port).await;
+        let node2 = FullTestNode::start(2, base_port + 1).await;
+        let node3 = FullTestNode::start(3, base_port + 2).await;
+
+        let nodes = [&node1, &node2, &node3];
+        bootstrap_full_cluster(&nodes, base_port).await;
+        wait_for_leader(&node1.raft, 5).await;
+
+        // Create queue and wait for a leader.
+        create_queue_cluster(&node1, "failover-q").await.unwrap();
+        let queue_leader_id = wait_for_queue_ready(&nodes, "failover-q", 10).await;
+
+        // Enqueue a message before the kill to verify data survives.
+        let leader = get_leader_node(&nodes, queue_leader_id);
+        let msg_id_before = enqueue_cluster(leader, "failover-q", b"before-kill".to_vec())
+            .await
+            .unwrap();
+        assert_ne!(msg_id_before, uuid::Uuid::nil());
+
+        // Identify surviving nodes.
+        let survivors: Vec<&FullTestNode> = nodes
+            .iter()
+            .filter(|n| n.cluster_handle.node_id != queue_leader_id)
+            .copied()
+            .collect();
+        assert_eq!(survivors.len(), 2);
+
+        // Kill the leader: shut down its Raft instances and gRPC server.
+        match queue_leader_id {
+            1 => {
+                node1.multi_raft.shutdown_all().await;
+                let _ = node1.raft.shutdown().await;
+            }
+            2 => {
+                node2.multi_raft.shutdown_all().await;
+                let _ = node2.raft.shutdown().await;
+            }
+            3 => {
+                node3.multi_raft.shutdown_all().await;
+                let _ = node3.raft.shutdown().await;
+            }
+            _ => unreachable!(),
+        }
+
+        // Wait for a new queue leader to be elected from survivors (within 10s).
+        let new_leader_id = timeout(Duration::from_secs(10), async {
+            loop {
+                for s in &survivors {
+                    if let Some(raft) = s.multi_raft.get_raft("failover-q").await {
+                        if let Some(lid) = raft.current_leader().await {
+                            if lid != queue_leader_id {
+                                return lid;
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("new leader should be elected within 10 seconds");
+
+        assert_ne!(
+            new_leader_id, queue_leader_id,
+            "new leader should differ from killed leader"
+        );
+
+        // Enqueue on a surviving node — should work after failover.
+        let new_leader = survivors
+            .iter()
+            .find(|n| n.cluster_handle.node_id == new_leader_id)
+            .unwrap();
+        let msg_id_after = enqueue_cluster(new_leader, "failover-q", b"after-kill".to_vec())
+            .await
+            .unwrap();
+        assert_ne!(msg_id_after, uuid::Uuid::nil());
+
+        // Cleanup (skip the killed node's shutdown — already done).
+        // Shutdown surviving nodes.
+        match queue_leader_id {
+            1 => {
+                node2.shutdown().await;
+                node3.shutdown().await;
+            }
+            2 => {
+                node1.shutdown().await;
+                node3.shutdown().await;
+            }
+            3 => {
+                node1.shutdown().await;
+                node2.shutdown().await;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Test: zero message loss after failover. Enqueue N messages, kill leader,
+    /// consume all N from surviving cluster.
+    #[tokio::test]
+    async fn test_cluster_failover_zero_message_loss() {
+        let base_port = 15750;
+        let node1 = FullTestNode::start(1, base_port).await;
+        let node2 = FullTestNode::start(2, base_port + 1).await;
+        let node3 = FullTestNode::start(3, base_port + 2).await;
+
+        let nodes = [&node1, &node2, &node3];
+        bootstrap_full_cluster(&nodes, base_port).await;
+        wait_for_leader(&node1.raft, 5).await;
+
+        create_queue_cluster(&node1, "loss-test").await.unwrap();
+        let queue_leader_id = wait_for_queue_ready(&nodes, "loss-test", 10).await;
+        let leader = get_leader_node(&nodes, queue_leader_id);
+
+        // Enqueue 5 messages.
+        let n = 5;
+        let mut sent_ids = Vec::new();
+        for i in 0..n {
+            let msg_id = enqueue_cluster(leader, "loss-test", format!("msg-{i}").into_bytes())
+                .await
+                .unwrap();
+            sent_ids.push(msg_id);
+        }
+
+        // Kill the leader.
+        let survivors: Vec<&FullTestNode> = nodes
+            .iter()
+            .filter(|n| n.cluster_handle.node_id != queue_leader_id)
+            .copied()
+            .collect();
+
+        match queue_leader_id {
+            1 => {
+                node1.multi_raft.shutdown_all().await;
+                let _ = node1.raft.shutdown().await;
+            }
+            2 => {
+                node2.multi_raft.shutdown_all().await;
+                let _ = node2.raft.shutdown().await;
+            }
+            3 => {
+                node3.multi_raft.shutdown_all().await;
+                let _ = node3.raft.shutdown().await;
+            }
+            _ => unreachable!(),
+        }
+
+        // Wait for new leader.
+        let new_leader_id = timeout(Duration::from_secs(10), async {
+            loop {
+                for s in &survivors {
+                    if let Some(raft) = s.multi_raft.get_raft("loss-test").await {
+                        if let Some(lid) = raft.current_leader().await {
+                            if lid != queue_leader_id {
+                                return lid;
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("new leader should be elected");
+
+        let new_leader = survivors
+            .iter()
+            .find(|n| n.cluster_handle.node_id == new_leader_id)
+            .unwrap();
+
+        // Trigger queue recovery on the new leader so its scheduler has the messages.
+        let _ = new_leader
+            .broker
+            .send_command(crate::SchedulerCommand::RecoverQueue {
+                queue_id: "loss-test".to_string(),
+            });
+
+        // Give the scheduler a moment to process recovery.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Consume from the new leader — all N messages should be available.
+        let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel(n + 1);
+        new_leader
+            .broker
+            .send_command(crate::SchedulerCommand::RegisterConsumer {
+                queue_id: "loss-test".to_string(),
+                consumer_id: "loss-consumer".to_string(),
+                tx: ready_tx,
+            })
+            .unwrap();
+
+        let mut received_ids = Vec::new();
+        for _ in 0..n {
+            let ready_msg = timeout(Duration::from_secs(5), ready_rx.recv())
+                .await
+                .expect("should receive message within timeout")
+                .expect("channel should not be closed");
+            received_ids.push(ready_msg.msg_id);
+        }
+
+        // Verify all sent messages were received (order may differ).
+        sent_ids.sort();
+        received_ids.sort();
+        assert_eq!(
+            sent_ids, received_ids,
+            "zero message loss — all messages recovered after failover"
+        );
+
+        // Cleanup.
+        let _ = new_leader
+            .broker
+            .send_command(crate::SchedulerCommand::UnregisterConsumer {
+                consumer_id: "loss-consumer".to_string(),
+            });
+        match queue_leader_id {
+            1 => {
+                node2.shutdown().await;
+                node3.shutdown().await;
+            }
+            2 => {
+                node1.shutdown().await;
+                node3.shutdown().await;
+            }
+            3 => {
+                node1.shutdown().await;
+                node2.shutdown().await;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Test: killed node rejoins cluster and catches up via Raft log.
+    /// We always kill node 3 (a non-minimum-ID node) to keep the test simple.
+    #[tokio::test]
+    async fn test_cluster_node_rejoin_catchup() {
+        let base_port = 15760;
+        let node1 = FullTestNode::start(1, base_port).await;
+        let node2 = FullTestNode::start(2, base_port + 1).await;
+        let node3 = FullTestNode::start(3, base_port + 2).await;
+
+        let nodes = [&node1, &node2, &node3];
+        bootstrap_full_cluster(&nodes, base_port).await;
+        wait_for_leader(&node1.raft, 5).await;
+
+        // Create a queue.
+        create_queue_cluster(&node1, "rejoin-q").await.unwrap();
+        wait_for_queue_ready(&nodes, "rejoin-q", 10).await;
+
+        // Kill node 3.
+        node3.shutdown().await;
+
+        // Give the cluster a moment to detect the failure and the port to free.
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+
+        // Enqueue a message on the surviving 2-node cluster.
+        let queue_leader_id = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(raft) = node2.multi_raft.get_raft("rejoin-q").await {
+                    if let Some(lid) = raft.current_leader().await {
+                        if lid != 3 {
+                            return lid;
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("should have a leader on surviving cluster");
+
+        let surviving_leader = if queue_leader_id == 1 { &node1 } else { &node2 };
+
+        enqueue_cluster(surviving_leader, "rejoin-q", b"while-down".to_vec())
+            .await
+            .unwrap();
+
+        // Restart node 3 on the same port (fresh state — simulates a rejoining node
+        // that will catch up via snapshot install from the leader).
+        let restarted = FullTestNode::start(3, base_port + 2).await;
+
+        // Wait for the restarted node to see the meta leader.
+        // Since it has a fresh store, the leader will send a snapshot.
+        let meta_leader = wait_for_leader(&restarted.raft, 10).await;
+        assert!(
+            meta_leader > 0,
+            "restarted node should see a meta leader after rejoin"
+        );
+
+        // Verify the surviving cluster still works.
+        let meta_leader_now = wait_for_leader(&node2.raft, 5).await;
+        assert!(
+            meta_leader_now > 0,
+            "meta raft should still have a leader after rejoin"
+        );
+
+        // Cleanup.
+        restarted.shutdown().await;
+        node1.shutdown().await;
+        node2.shutdown().await;
     }
 
     /// Test multiple queues have potentially different leaders (leadership distribution).

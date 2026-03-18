@@ -25,10 +25,10 @@ stories:
     dependsOn: ["14.2"]
   - id: "14.4"
     title: "Replication, Failover & Recovery"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/14.4-replication-failover-recovery"
+    pr: 59
     dependsOn: ["14.1", "14.2", "14.3"]
   - id: "14.5"
     title: "Cluster Observability & Scaling Validation"

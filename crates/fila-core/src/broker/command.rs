@@ -99,5 +99,17 @@ pub enum SchedulerCommand {
     ListQueues {
         reply: tokio::sync::oneshot::Sender<Result<Vec<QueueSummary>, ListQueuesError>>,
     },
+    /// Rebuild in-memory scheduler state (DRR keys, pending index) for a
+    /// single queue. Used when this node becomes the Raft leader for a queue
+    /// during failover — the new leader must reconstruct its scheduler state
+    /// from RocksDB before it can serve consumers.
+    RecoverQueue {
+        queue_id: String,
+    },
+    /// Drop all consumer streams for a queue. Used when this node loses Raft
+    /// leadership — consumers must reconnect to the new leader.
+    DropQueueConsumers {
+        queue_id: String,
+    },
     Shutdown,
 }

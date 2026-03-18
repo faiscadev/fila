@@ -243,7 +243,7 @@ impl Scheduler {
             Err(e) => warn!(error = %e, "failed to list queues during recovery"),
         }
 
-        // Restore throttle rates from state store
+        // Restore throttle rates from the state store
         match self
             .storage
             .list_state_by_prefix(Self::THROTTLE_PREFIX, usize::MAX)
@@ -271,6 +271,120 @@ impl Scheduler {
                 info!(count = restored, "recovery: throttle rates restored");
             }
             Err(e) => warn!(error = %e, "failed to scan throttle configs during recovery"),
+        }
+    }
+
+    /// Recover in-memory scheduler state for a single queue.
+    ///
+    /// Called when this node becomes the Raft leader for a queue during
+    /// failover. Rebuilds DRR keys, pending index, and leased_msg_keys
+    /// from RocksDB for the specified queue only — without disrupting
+    /// other queues.
+    pub(super) fn recover_queue(&mut self, queue_id: &str) {
+        // Load queue config to register known queue and Lua scripts.
+        match self.storage.get_queue(queue_id) {
+            Ok(Some(queue)) => {
+                self.known_queues.insert(queue.name.clone());
+                if queue.on_enqueue_script.is_some() || queue.on_failure_script.is_some() {
+                    if let Some(ref mut lua_engine) = self.lua_engine {
+                        lua_engine.register_queue_safety(
+                            &queue.name,
+                            queue.lua_timeout_ms,
+                            queue.lua_memory_limit_bytes,
+                        );
+                    }
+                }
+                if let Some(ref script_source) = queue.on_enqueue_script {
+                    if let Some(ref mut lua_engine) = self.lua_engine {
+                        match lua_engine.compile_script(script_source) {
+                            Ok(bytecode) => {
+                                lua_engine.cache_on_enqueue(&queue.name, bytecode);
+                            }
+                            Err(e) => {
+                                warn!(queue = %queue.name, error = %e, "failed to compile on_enqueue script during queue recovery");
+                            }
+                        }
+                    }
+                }
+                if let Some(ref script_source) = queue.on_failure_script {
+                    if let Some(ref mut lua_engine) = self.lua_engine {
+                        match lua_engine.compile_script(script_source) {
+                            Ok(bytecode) => {
+                                lua_engine.cache_on_failure(&queue.name, bytecode);
+                            }
+                            Err(e) => {
+                                warn!(queue = %queue.name, error = %e, "failed to compile on_failure script during queue recovery");
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(None) => {
+                // Queue definition not in storage yet — will be created
+                // when the CreateQueue meta event is processed.
+                debug!(queue_id, "queue not found in storage during recover_queue");
+                return;
+            }
+            Err(e) => {
+                warn!(queue_id, error = %e, "failed to load queue config during recover_queue");
+                return;
+            }
+        }
+
+        // Clear existing pending entries for this queue to rebuild fresh.
+        self.pending.retain(|(qid, _), _| qid != queue_id);
+        self.pending_by_id.retain(|_, (qid, _)| qid != queue_id);
+        self.leased_msg_keys.retain(|_, key| {
+            // Only keep entries for OTHER queues; this queue's entries are rebuilt below.
+            !key.starts_with(crate::storage::keys::message_prefix(queue_id).as_slice())
+        });
+
+        // Rebuild DRR keys and pending index by scanning messages.
+        let prefix = crate::storage::keys::message_prefix(queue_id);
+        match self.storage.list_messages(&prefix) {
+            Ok(messages) => {
+                for (key, msg) in messages {
+                    self.drr.add_key(queue_id, &msg.fairness_key, msg.weight);
+
+                    let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
+                    if self.storage.get_lease(&lease_key).ok().flatten().is_some() {
+                        self.leased_msg_keys.insert(msg.id, key);
+                    } else {
+                        self.pending_push(
+                            queue_id,
+                            &msg.fairness_key,
+                            PendingEntry {
+                                msg_key: key,
+                                msg_id: msg.id,
+                                throttle_keys: msg.throttle_keys.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(queue_id, error = %e, "failed to scan messages during queue recovery");
+            }
+        }
+
+        info!(queue_id, "queue recovery complete (leader promotion)");
+
+        // Deliver any pending messages to existing consumers for this queue.
+        self.drr_deliver_queue(queue_id);
+    }
+
+    /// Drop all consumer streams for a queue by removing their entries.
+    ///
+    /// When entries are removed, the `ConsumerEntry.tx` channels are dropped,
+    /// causing the converter tasks in service.rs to detect closure and end
+    /// the gRPC streams. Consumers will receive a disconnection and must
+    /// reconnect to the new leader.
+    pub(super) fn drop_queue_consumers(&mut self, queue_id: &str) {
+        let before = self.consumers.len();
+        self.consumers.retain(|_, entry| entry.queue_id != queue_id);
+        let dropped = before - self.consumers.len();
+        if dropped > 0 {
+            info!(queue_id, dropped, "dropped consumer streams (leader loss)");
         }
     }
 }

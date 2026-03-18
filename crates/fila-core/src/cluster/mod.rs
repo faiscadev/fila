@@ -294,6 +294,104 @@ pub async fn process_meta_events(
     }
 }
 
+/// Monitors queue-level Raft groups for leadership changes.
+///
+/// When this node becomes leader for a queue, it sends a `RecoverQueue`
+/// command to the broker's scheduler so in-memory state (DRR keys, pending
+/// index) is rebuilt from RocksDB. When this node loses leadership, it
+/// sends a `DropQueueConsumers` command so consumer streams are closed and
+/// clients reconnect to the new leader.
+///
+/// Runs as a background task, polling every `poll_interval`.
+pub async fn watch_leader_changes(
+    node_id: NodeId,
+    multi_raft: Arc<MultiRaftManager>,
+    broker: Arc<crate::Broker>,
+    poll_interval: std::time::Duration,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    use std::collections::HashMap;
+
+    // Tracks which queues this node currently leads.
+    let mut leading: HashMap<String, bool> = HashMap::new();
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(poll_interval) => {}
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() {
+                    info!("leader change watcher shutting down");
+                    return;
+                }
+            }
+        }
+
+        let groups = multi_raft.snapshot_groups().await;
+
+        // Track which queues we've seen this cycle (to detect removed groups).
+        let mut seen = std::collections::HashSet::new();
+
+        for (queue_id, raft) in &groups {
+            seen.insert(queue_id.clone());
+            let current_leader = raft.current_leader().await;
+            let is_leader = current_leader == Some(node_id);
+            let was_leader = leading.get(queue_id).copied().unwrap_or(false);
+
+            if is_leader && !was_leader {
+                // This node just became leader (or is leader on first sight).
+                info!(queue_id, "became leader — triggering queue recovery");
+                match broker.send_command(crate::SchedulerCommand::RecoverQueue {
+                    queue_id: queue_id.clone(),
+                }) {
+                    Ok(_) => {
+                        leading.insert(queue_id.clone(), true);
+                    }
+                    Err(e) => {
+                        // Don't update leading — next poll will retry.
+                        tracing::error!(queue_id, error = %e, "failed to send RecoverQueue");
+                    }
+                }
+            } else if !is_leader && was_leader {
+                // This node just lost leadership for this queue.
+                info!(queue_id, "lost leadership — dropping consumer streams");
+                match broker.send_command(crate::SchedulerCommand::DropQueueConsumers {
+                    queue_id: queue_id.clone(),
+                }) {
+                    Ok(_) => {
+                        leading.insert(queue_id.clone(), false);
+                    }
+                    Err(e) => {
+                        // Don't update leading — next poll will retry.
+                        tracing::error!(queue_id, error = %e, "failed to send DropQueueConsumers");
+                    }
+                }
+            } else if !leading.contains_key(queue_id) {
+                // First time seeing this queue group — record current state
+                // and trigger recovery if already leader so the scheduler
+                // catches any messages replicated between startup and now.
+                if is_leader {
+                    info!(queue_id, "first-sight leader — triggering queue recovery");
+                    match broker.send_command(crate::SchedulerCommand::RecoverQueue {
+                        queue_id: queue_id.clone(),
+                    }) {
+                        Ok(_) => {
+                            leading.insert(queue_id.clone(), true);
+                        }
+                        Err(e) => {
+                            tracing::error!(queue_id, error = %e, "failed to send RecoverQueue on first sight");
+                        }
+                    }
+                } else {
+                    leading.insert(queue_id.clone(), false);
+                }
+            }
+        }
+
+        // Clean up entries for removed queue groups.
+        leading.retain(|qid, _| seen.contains(qid));
+    }
+}
+
 /// Manages the Raft lifecycle: creates the meta Raft instance, starts the
 /// cluster gRPC service, bootstraps or joins the cluster, and manages
 /// per-queue Raft groups via `MultiRaftManager`.
@@ -318,6 +416,7 @@ impl ClusterManager {
     pub async fn start(
         config: &ClusterConfig,
         db: Arc<dyn RaftKeyValueStore>,
+        broker_storage: Arc<dyn crate::storage::StorageEngine>,
         meta_event_tx: Option<tokio::sync::mpsc::UnboundedSender<MetaStoreEvent>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let node_id = config.node_id;
@@ -351,6 +450,7 @@ impl ClusterManager {
             node_id,
             Arc::clone(&db),
             Arc::clone(&raft_config),
+            broker_storage,
         ));
 
         // Start cluster gRPC service.
