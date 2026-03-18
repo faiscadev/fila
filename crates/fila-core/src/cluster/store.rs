@@ -9,18 +9,63 @@ use openraft::{
 };
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
+
 use super::types::{ClusterResponse, NodeId, TypeConfig};
-use crate::storage::RocksDbEngine;
+use crate::storage::RaftKeyValueStore;
 
-/// Key prefixes for Raft data in the raft_log column family.
-const VOTE_KEY: &[u8] = b"vote";
-const LOG_PREFIX: &[u8] = b"log:";
-const LAST_PURGED_KEY: &[u8] = b"meta:last_purged";
+/// Key segment names for Raft data in the raft_log column family.
+const VOTE_SUFFIX: &[u8] = b"vote";
+const LOG_SUFFIX: &[u8] = b"log:";
+const LAST_PURGED_SUFFIX: &[u8] = b"meta:last_purged";
 
-fn log_key(index: u64) -> Vec<u8> {
-    let mut key = LOG_PREFIX.to_vec();
-    key.extend_from_slice(&index.to_be_bytes());
-    key
+/// Builds storage keys with an optional group prefix for multi-Raft isolation.
+///
+/// Meta Raft group uses empty prefix (keys: `vote`, `log:...`, `meta:last_purged`).
+/// Queue Raft groups use `q:{queue_id}:` prefix for key-space isolation within
+/// the same RocksDB column family.
+#[derive(Debug, Clone)]
+struct KeyBuilder {
+    prefix: Vec<u8>,
+}
+
+impl KeyBuilder {
+    /// Create a key builder for the meta Raft group (no prefix).
+    fn meta() -> Self {
+        Self { prefix: Vec::new() }
+    }
+
+    /// Create a key builder for a queue Raft group.
+    fn for_queue(queue_id: &str) -> Self {
+        Self {
+            prefix: format!("q:{queue_id}:").into_bytes(),
+        }
+    }
+
+    fn vote_key(&self) -> Vec<u8> {
+        let mut key = self.prefix.clone();
+        key.extend_from_slice(VOTE_SUFFIX);
+        key
+    }
+
+    fn log_key(&self, index: u64) -> Vec<u8> {
+        let mut key = self.prefix.clone();
+        key.extend_from_slice(LOG_SUFFIX);
+        key.extend_from_slice(&index.to_be_bytes());
+        key
+    }
+
+    fn last_purged_key(&self) -> Vec<u8> {
+        let mut key = self.prefix.clone();
+        key.extend_from_slice(LAST_PURGED_SUFFIX);
+        key
+    }
+
+    fn log_prefix(&self) -> Vec<u8> {
+        let mut key = self.prefix.clone();
+        key.extend_from_slice(LOG_SUFFIX);
+        key
+    }
 }
 
 /// In-memory state machine state, persisted via snapshots.
@@ -28,6 +73,11 @@ fn log_key(index: u64) -> Vec<u8> {
 pub struct StateMachineData {
     pub last_applied_log: Option<LogId<NodeId>>,
     pub last_membership: StoredMembership<NodeId, BasicNode>,
+    /// Active queue Raft groups: queue_id → member node IDs.
+    /// Tracked in the meta Raft state machine so all nodes learn about
+    /// queue groups through Raft replication.
+    #[serde(default)]
+    pub queue_groups: HashMap<String, Vec<u64>>,
 }
 
 /// Combined Raft storage implementation backed by RocksDB (for logs/vote)
@@ -36,7 +86,8 @@ pub struct StateMachineData {
 /// This implements the v1 `RaftStorage` trait. The `Adaptor` splits it into
 /// separate `RaftLogStorage` + `RaftStateMachine` for the Raft runtime.
 pub struct FilaRaftStore {
-    db: Arc<RocksDbEngine>,
+    db: Arc<dyn RaftKeyValueStore>,
+    keys: KeyBuilder,
     /// In-memory state machine state.
     state_machine: StateMachineData,
     /// Current snapshot (if any).
@@ -50,9 +101,21 @@ struct StoredSnapshot {
 }
 
 impl FilaRaftStore {
-    pub fn new(db: Arc<RocksDbEngine>) -> Self {
+    /// Create a store for the meta Raft group (no key prefix).
+    pub fn new(db: Arc<dyn RaftKeyValueStore>) -> Self {
         Self {
             db,
+            keys: KeyBuilder::meta(),
+            state_machine: StateMachineData::default(),
+            current_snapshot: None,
+        }
+    }
+
+    /// Create a store for a queue-level Raft group (prefixed key space).
+    pub fn for_queue(db: Arc<dyn RaftKeyValueStore>, queue_id: &str) -> Self {
+        Self {
+            db,
+            keys: KeyBuilder::for_queue(queue_id),
             state_machine: StateMachineData::default(),
             current_snapshot: None,
         }
@@ -75,7 +138,8 @@ impl RaftLogReader<TypeConfig> for FilaRaftStore {
             std::ops::Bound::Unbounded => u64::MAX,
         };
 
-        let start_key = log_key(start);
+        let start_key = self.keys.log_key(start);
+        let log_prefix = self.keys.log_prefix();
         let entries_raw = self
             .db
             .raft_scan(&start_key, (end - start) as usize)
@@ -85,11 +149,11 @@ impl RaftLogReader<TypeConfig> for FilaRaftStore {
 
         let mut entries = Vec::new();
         for (key, value) in entries_raw {
-            if !key.starts_with(LOG_PREFIX) {
+            if !key.starts_with(&log_prefix) {
                 break;
             }
             let index_bytes: [u8; 8] =
-                key[LOG_PREFIX.len()..]
+                key[log_prefix.len()..]
                     .try_into()
                     .map_err(|_| StorageError::IO {
                         source: openraft::StorageIOError::read_logs(&std::io::Error::new(
@@ -157,8 +221,9 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
         let data = serde_json::to_vec(vote).map_err(|e| StorageError::IO {
             source: openraft::StorageIOError::write_vote(&e),
         })?;
+        let vote_key = self.keys.vote_key();
         self.db
-            .raft_put(VOTE_KEY, &data)
+            .raft_put(&vote_key, &data)
             .map_err(|e| StorageError::IO {
                 source: openraft::StorageIOError::write_vote(&e),
             })?;
@@ -166,7 +231,8 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
     }
 
     async fn read_vote(&mut self) -> Result<Option<Vote<NodeId>>, StorageError<NodeId>> {
-        match self.db.raft_get(VOTE_KEY).map_err(|e| StorageError::IO {
+        let vote_key = self.keys.vote_key();
+        match self.db.raft_get(&vote_key).map_err(|e| StorageError::IO {
             source: openraft::StorageIOError::read_vote(&e),
         })? {
             Some(data) => {
@@ -182,10 +248,11 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
 
     async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, StorageError<NodeId>> {
         // Get last purged log id
+        let purged_key = self.keys.last_purged_key();
         let last_purged_log_id =
             match self
                 .db
-                .raft_get(LAST_PURGED_KEY)
+                .raft_get(&purged_key)
                 .map_err(|e| StorageError::IO {
                     source: openraft::StorageIOError::read_logs(&e),
                 })? {
@@ -205,9 +272,9 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
     }
 
     async fn get_log_reader(&mut self) -> Self::LogReader {
-        // We clone the db Arc and create a new reader with same state
         FilaRaftStore {
             db: Arc::clone(&self.db),
+            keys: self.keys.clone(),
             state_machine: self.state_machine.clone(),
             current_snapshot: self.current_snapshot.clone(),
         }
@@ -218,7 +285,7 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
         I: IntoIterator<Item = Entry<TypeConfig>> + Send,
     {
         for entry in entries {
-            let key = log_key(entry.log_id.index);
+            let key = self.keys.log_key(entry.log_id.index);
             let value = serde_json::to_vec(&entry).map_err(|e| StorageError::IO {
                 source: openraft::StorageIOError::write_logs(&e),
             })?;
@@ -235,8 +302,8 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
         &mut self,
         log_id: LogId<NodeId>,
     ) -> Result<(), StorageError<NodeId>> {
-        let start = log_key(log_id.index);
-        let end = log_key(u64::MAX);
+        let start = self.keys.log_key(log_id.index);
+        let end = self.keys.log_key(u64::MAX);
         self.db
             .raft_delete_range(&start, &end)
             .map_err(|e| StorageError::IO {
@@ -250,15 +317,16 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
         let data = serde_json::to_vec(&Some(log_id)).map_err(|e| StorageError::IO {
             source: openraft::StorageIOError::write_logs(&e),
         })?;
+        let purged_key = self.keys.last_purged_key();
         self.db
-            .raft_put(LAST_PURGED_KEY, &data)
+            .raft_put(&purged_key, &data)
             .map_err(|e| StorageError::IO {
                 source: openraft::StorageIOError::write_logs(&e),
             })?;
 
         // Delete log entries up to and including log_id.index
-        let start = log_key(0);
-        let end = log_key(log_id.index + 1);
+        let start = self.keys.log_key(0);
+        let end = self.keys.log_key(log_id.index + 1);
         self.db
             .raft_delete_range(&start, &end)
             .map_err(|e| StorageError::IO {
@@ -321,6 +389,22 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                         super::types::ClusterRequest::Redrive { .. } => {
                             ClusterResponse::Redrive { count: 0 }
                         }
+                        super::types::ClusterRequest::CreateQueueGroup {
+                            queue_id,
+                            members,
+                            ..
+                        } => {
+                            self.state_machine
+                                .queue_groups
+                                .insert(queue_id.clone(), members.clone());
+                            ClusterResponse::CreateQueueGroup {
+                                queue_id: queue_id.clone(),
+                            }
+                        }
+                        super::types::ClusterRequest::DeleteQueueGroup { queue_id } => {
+                            self.state_machine.queue_groups.remove(queue_id);
+                            ClusterResponse::DeleteQueueGroup
+                        }
                     };
                     responses.push(response);
                 }
@@ -338,6 +422,7 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
         FilaRaftStore {
             db: Arc::clone(&self.db),
+            keys: self.keys.clone(),
             state_machine: self.state_machine.clone(),
             current_snapshot: self.current_snapshot.clone(),
         }
@@ -383,11 +468,12 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
 impl FilaRaftStore {
     #[allow(clippy::result_large_err)]
     fn find_last_log_id(&self) -> Result<Option<LogId<NodeId>>, StorageError<NodeId>> {
-        // Reverse-seek to the last key with the "log:" prefix — O(1) instead of
+        // Reverse-seek to the last key with the log prefix — O(1) instead of
         // scanning all log entries forward.
+        let log_prefix = self.keys.log_prefix();
         let entry = self
             .db
-            .raft_last_with_prefix(LOG_PREFIX)
+            .raft_last_with_prefix(&log_prefix)
             .map_err(|e| StorageError::IO {
                 source: openraft::StorageIOError::read_logs(&e),
             })?;

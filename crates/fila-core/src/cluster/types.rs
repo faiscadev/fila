@@ -60,6 +60,20 @@ pub enum ClusterRequest {
         dlq_queue_id: String,
         count: u64,
     },
+
+    // --- Meta Raft group operations for multi-Raft coordination ---
+    /// Create a Raft group for a queue. Applied by the meta Raft state machine;
+    /// each node then starts a local Raft instance for the queue.
+    CreateQueueGroup {
+        queue_id: String,
+        /// Node IDs that should be members of this queue's Raft group.
+        members: Vec<u64>,
+    },
+    /// Delete a queue's Raft group. Applied by the meta Raft state machine;
+    /// each node then shuts down its local Raft instance for the queue.
+    DeleteQueueGroup {
+        queue_id: String,
+    },
 }
 
 /// Response from applying a committed `ClusterRequest` to the state machine.
@@ -74,5 +88,7 @@ pub enum ClusterResponse {
     SetThrottleRate,
     RemoveThrottleRate,
     Redrive { count: u64 },
+    CreateQueueGroup { queue_id: String },
+    DeleteQueueGroup,
     Error { message: String },
 }

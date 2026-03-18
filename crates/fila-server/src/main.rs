@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cluster_config = config.cluster.clone();
     let cluster_manager = if cluster_config.enabled {
         Some(
-            fila_core::cluster::ClusterManager::start(&cluster_config, Arc::clone(&storage))
+            fila_core::cluster::ClusterManager::start(&cluster_config, Arc::clone(&storage) as _)
                 .await?,
         )
     } else {

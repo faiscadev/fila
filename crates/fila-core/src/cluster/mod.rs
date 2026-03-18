@@ -1,4 +1,5 @@
 pub mod grpc_service;
+pub mod multi_raft;
 pub mod network;
 pub mod store;
 #[cfg(test)]
@@ -17,16 +18,19 @@ use tonic::transport::Server;
 use tracing::info;
 
 use crate::broker::config::ClusterConfig;
-use crate::storage::RocksDbEngine;
+use crate::storage::RaftKeyValueStore;
 use fila_proto::fila_cluster_server::FilaClusterServer;
 use grpc_service::ClusterGrpcService;
+use multi_raft::MultiRaftManager;
 use network::FilaNetworkFactory;
 use store::FilaRaftStore;
 
-/// Manages the Raft lifecycle: creates the Raft instance, starts the cluster
-/// gRPC service, bootstraps or joins the cluster.
+/// Manages the Raft lifecycle: creates the meta Raft instance, starts the
+/// cluster gRPC service, bootstraps or joins the cluster, and manages
+/// per-queue Raft groups via `MultiRaftManager`.
 pub struct ClusterManager {
     raft: Arc<Raft<TypeConfig>>,
+    multi_raft: Arc<MultiRaftManager>,
     grpc_handle: JoinHandle<()>,
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
 }
@@ -34,12 +38,12 @@ pub struct ClusterManager {
 impl ClusterManager {
     /// Create and start the cluster manager.
     ///
-    /// This initializes the Raft instance, starts the cluster gRPC service on
-    /// `config.bind_addr`, and either bootstraps a new cluster or joins an
+    /// This initializes the meta Raft instance, starts the cluster gRPC service
+    /// on `config.bind_addr`, and either bootstraps a new cluster or joins an
     /// existing one.
     pub async fn start(
         config: &ClusterConfig,
-        db: Arc<RocksDbEngine>,
+        db: Arc<dyn RaftKeyValueStore>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let node_id = config.node_id;
 
@@ -53,16 +57,29 @@ impl ClusterManager {
         };
         let raft_config = Arc::new(raft_config.validate()?);
 
-        let store = FilaRaftStore::new(db);
+        let store = FilaRaftStore::new(Arc::clone(&db));
         let (log_store, state_machine) = Adaptor::new(store);
 
-        let network = FilaNetworkFactory;
+        let network = FilaNetworkFactory::meta();
 
-        let raft = Raft::new(node_id, raft_config, network, log_store, state_machine).await?;
+        let raft = Raft::new(
+            node_id,
+            Arc::clone(&raft_config),
+            network,
+            log_store,
+            state_machine,
+        )
+        .await?;
         let raft = Arc::new(raft);
 
+        let multi_raft = Arc::new(MultiRaftManager::new(
+            node_id,
+            Arc::clone(&db),
+            Arc::clone(&raft_config),
+        ));
+
         // Start cluster gRPC service.
-        let service = ClusterGrpcService::new(Arc::clone(&raft));
+        let service = ClusterGrpcService::new(Arc::clone(&raft), Arc::clone(&multi_raft));
         let bind_addr: std::net::SocketAddr = config.bind_addr.parse()?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -98,6 +115,7 @@ impl ClusterManager {
 
         Ok(Self {
             raft,
+            multi_raft,
             grpc_handle,
             shutdown_tx,
         })
@@ -179,14 +197,21 @@ impl ClusterManager {
         Err("failed to join cluster via any seed peer".into())
     }
 
-    /// Get a reference to the Raft instance.
+    /// Get a reference to the meta Raft instance.
     pub fn raft(&self) -> &Arc<Raft<TypeConfig>> {
         &self.raft
     }
 
-    /// Gracefully shut down the Raft instance and cluster gRPC service.
+    /// Get a reference to the multi-Raft manager for queue-level groups.
+    pub fn multi_raft(&self) -> &Arc<MultiRaftManager> {
+        &self.multi_raft
+    }
+
+    /// Gracefully shut down all Raft instances and the cluster gRPC service.
     pub async fn shutdown(self) {
         info!("shutting down cluster manager");
+        // Shut down queue Raft groups first, then the meta group.
+        self.multi_raft.shutdown_all().await;
         if let Err(e) = self.raft.shutdown().await {
             tracing::error!("raft shutdown error: {e:?}");
         }

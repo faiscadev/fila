@@ -5,6 +5,7 @@ use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
 use openraft::{BasicNode, Raft};
 use tonic::{Request, Response, Status};
 
+use super::multi_raft::MultiRaftManager;
 use super::types::{NodeId, TypeConfig};
 use fila_proto::fila_cluster_server::FilaCluster;
 use fila_proto::{
@@ -12,14 +13,31 @@ use fila_proto::{
     RemoveNodeResponse,
 };
 
-/// gRPC service handler that forwards Raft RPCs to the local openraft instance.
+/// gRPC service handler that forwards Raft RPCs to the correct local Raft
+/// instance — either the meta group or a queue-level group based on `group_id`.
 pub struct ClusterGrpcService {
-    raft: Arc<Raft<TypeConfig>>,
+    meta_raft: Arc<Raft<TypeConfig>>,
+    multi_raft: Arc<MultiRaftManager>,
 }
 
 impl ClusterGrpcService {
-    pub fn new(raft: Arc<Raft<TypeConfig>>) -> Self {
-        Self { raft }
+    pub fn new(meta_raft: Arc<Raft<TypeConfig>>, multi_raft: Arc<MultiRaftManager>) -> Self {
+        Self {
+            meta_raft,
+            multi_raft,
+        }
+    }
+
+    /// Resolve which Raft instance should handle this RPC.
+    async fn resolve_raft(&self, group_id: &str) -> Result<Arc<Raft<TypeConfig>>, Status> {
+        if group_id.is_empty() {
+            Ok(Arc::clone(&self.meta_raft))
+        } else {
+            self.multi_raft
+                .get_raft(group_id)
+                .await
+                .ok_or_else(|| Status::not_found(format!("unknown raft group: {group_id}")))
+        }
     }
 }
 
@@ -46,21 +64,26 @@ impl FilaCluster for ClusterGrpcService {
         &self,
         request: Request<RaftRequest>,
     ) -> Result<Response<RaftResponse>, Status> {
-        let req: AppendEntriesRequest<TypeConfig> =
-            serde_json::from_slice(&request.into_inner().data)
-                .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
+        let inner = request.into_inner();
+        let raft = self.resolve_raft(&inner.group_id).await?;
 
-        match self.raft.append_entries(req).await {
+        let req: AppendEntriesRequest<TypeConfig> = serde_json::from_slice(&inner.data)
+            .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
+
+        match raft.append_entries(req).await {
             Ok(resp) => raft_response_ok(&resp),
             Err(e) => raft_response_err(e),
         }
     }
 
     async fn vote(&self, request: Request<RaftRequest>) -> Result<Response<RaftResponse>, Status> {
-        let req: VoteRequest<NodeId> = serde_json::from_slice(&request.into_inner().data)
+        let inner = request.into_inner();
+        let raft = self.resolve_raft(&inner.group_id).await?;
+
+        let req: VoteRequest<NodeId> = serde_json::from_slice(&inner.data)
             .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
 
-        match self.raft.vote(req).await {
+        match raft.vote(req).await {
             Ok(resp) => raft_response_ok(&resp),
             Err(e) => raft_response_err(e),
         }
@@ -70,11 +93,13 @@ impl FilaCluster for ClusterGrpcService {
         &self,
         request: Request<RaftRequest>,
     ) -> Result<Response<RaftResponse>, Status> {
-        let req: InstallSnapshotRequest<TypeConfig> =
-            serde_json::from_slice(&request.into_inner().data)
-                .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
+        let inner = request.into_inner();
+        let raft = self.resolve_raft(&inner.group_id).await?;
 
-        match self.raft.install_snapshot(req).await {
+        let req: InstallSnapshotRequest<TypeConfig> = serde_json::from_slice(&inner.data)
+            .map_err(|e| Status::invalid_argument(format!("deserialize: {e}")))?;
+
+        match raft.install_snapshot(req).await {
             Ok(resp) => raft_response_ok(&resp),
             Err(e) => raft_response_err(e),
         }
@@ -90,16 +115,15 @@ impl FilaCluster for ClusterGrpcService {
             addr: req.addr.clone(),
         };
 
-        // First add as learner, then promote to voter.
-        if let Err(e) = self.raft.add_learner(node_id, node, true).await {
+        // Add/remove node only affects the meta Raft group.
+        if let Err(e) = self.meta_raft.add_learner(node_id, node, true).await {
             return Ok(Response::new(handle_membership_error(e)));
         }
 
-        // Promote learner to voter.
         let mut members = std::collections::BTreeSet::new();
         members.insert(node_id);
         match self
-            .raft
+            .meta_raft
             .change_membership(openraft::ChangeMembers::AddVoterIds(members), false)
             .await
         {
@@ -122,7 +146,7 @@ impl FilaCluster for ClusterGrpcService {
         let mut members = std::collections::BTreeSet::new();
         members.insert(node_id);
         match self
-            .raft
+            .meta_raft
             .change_membership(openraft::ChangeMembers::RemoveVoters(members), false)
             .await
         {

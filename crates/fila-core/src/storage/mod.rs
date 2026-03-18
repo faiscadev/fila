@@ -3,4 +3,4 @@ mod rocksdb;
 mod traits;
 
 pub use self::rocksdb::RocksDbEngine;
-pub use traits::{Mutation, StorageEngine};
+pub use traits::{Mutation, RaftKeyValueStore, StorageEngine};

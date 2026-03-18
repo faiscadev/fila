@@ -111,3 +111,28 @@ pub trait StorageEngine: Send + Sync {
     /// Flush the write-ahead log to ensure all writes are durable.
     fn flush(&self) -> StorageResult<()>;
 }
+
+/// Key-value storage trait for Raft consensus log, vote, and metadata.
+///
+/// Separates Raft persistence from the application storage engine so that
+/// `FilaRaftStore` and `MultiRaftManager` depend on a trait rather than a
+/// concrete implementation like `RocksDbEngine`.
+pub trait RaftKeyValueStore: Send + Sync {
+    /// Put a raw key-value pair.
+    fn raft_put(&self, key: &[u8], value: &[u8]) -> StorageResult<()>;
+
+    /// Get a raw value by key.
+    fn raft_get(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>>;
+
+    /// Delete a key.
+    fn raft_delete(&self, key: &[u8]) -> StorageResult<()>;
+
+    /// Scan keys from `start` (inclusive), returning up to `limit` entries.
+    fn raft_scan(&self, start: &[u8], limit: usize) -> StorageResult<Vec<(Vec<u8>, Vec<u8>)>>;
+
+    /// Return the last key-value pair whose key starts with `prefix`.
+    fn raft_last_with_prefix(&self, prefix: &[u8]) -> StorageResult<Option<(Vec<u8>, Vec<u8>)>>;
+
+    /// Delete all keys in the range [start, end).
+    fn raft_delete_range(&self, start: &[u8], end: &[u8]) -> StorageResult<()>;
+}
