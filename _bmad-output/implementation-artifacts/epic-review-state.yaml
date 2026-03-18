@@ -1,7 +1,7 @@
 epic: "Epic 14: Clustering & Horizontal Scaling"
 epicNumber: 14
 startedAt: "2026-03-18T00:00:00Z"
-currentPrIndex: 0
+currentPrIndex: 1
 prChain:
   - storyId: "14.1"
     storyKey: "14-1-raft-integration-single-node-mode"
@@ -9,7 +9,7 @@ prChain:
     branch: "feat/14.1-raft-integration-single-node-mode"
     pr: 56
     baseBranch: "main"
-    status: pending
+    status: merged
   - storyId: "14.2"
     storyKey: "14-2-queue-level-raft-groups-assignment"
     title: "Queue-Level Raft Groups & Assignment"
