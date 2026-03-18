@@ -16,9 +16,6 @@ use crate::storage::RaftKeyValueStore;
 /// Errors from `MultiRaftManager::create_group`.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateGroupError {
-    #[error("missing address for member node {node_id}")]
-    MissingMemberAddress { node_id: NodeId },
-
     #[error("raft fatal error: {0}")]
     RaftFatal(#[source] Box<openraft::error::Fatal<NodeId>>),
 
@@ -56,8 +53,7 @@ impl MultiRaftManager {
     pub async fn create_group(
         &self,
         queue_id: &str,
-        members: &NonEmpty<NodeId>,
-        member_addrs: &HashMap<NodeId, String>,
+        members: &NonEmpty<(NodeId, String)>,
     ) -> Result<(), CreateGroupError> {
         let store = FilaRaftStore::for_queue(Arc::clone(&self.db), queue_id);
         let (log_store, state_machine) = Adaptor::new(store);
@@ -76,15 +72,12 @@ impl MultiRaftManager {
 
         // Bootstrap the group if this node is the smallest member
         // (only one node should bootstrap to avoid conflicts).
-        let min_member = *members.minimum();
+        let min_member = members.iter().map(|(id, _)| *id).min().unwrap();
         if self.node_id == min_member {
-            let mut member_map = std::collections::BTreeMap::new();
-            for &node_id in members.iter() {
-                let addr = member_addrs
-                    .get(&node_id)
-                    .ok_or(CreateGroupError::MissingMemberAddress { node_id })?;
-                member_map.insert(node_id, BasicNode { addr: addr.clone() });
-            }
+            let member_map: std::collections::BTreeMap<_, _> = members
+                .iter()
+                .map(|(id, addr)| (*id, BasicNode { addr: addr.clone() }))
+                .collect();
             match raft.initialize(member_map).await {
                 Ok(_) => {}
                 Err(RaftError::APIError(InitializeError::NotAllowed(e))) => {

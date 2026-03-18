@@ -279,17 +279,18 @@ mod tests {
         let members = bootstrap_cluster(&[&node1, &node2, &node3], base_port).await;
         wait_for_leader(&node1.raft, 5).await;
 
-        // Build member_addrs from the members map.
-        let member_addrs: std::collections::HashMap<u64, String> = members
-            .iter()
-            .map(|(&id, n)| (id, n.addr.clone()))
-            .collect();
-        let member_ids = nonempty::NonEmpty::from_vec(members.keys().copied().collect()).unwrap();
+        let member_ids = nonempty::NonEmpty::from_vec(
+            members
+                .iter()
+                .map(|(&id, n)| (id, n.addr.clone()))
+                .collect(),
+        )
+        .unwrap();
 
         // Create a queue Raft group on all nodes.
         for node in [&node1, &node2, &node3] {
             node.multi_raft
-                .create_group("orders", &member_ids, &member_addrs)
+                .create_group("orders", &member_ids)
                 .await
                 .unwrap();
         }
@@ -323,16 +324,18 @@ mod tests {
         let members = bootstrap_cluster(&[&node1, &node2, &node3], base_port).await;
         wait_for_leader(&node1.raft, 5).await;
 
-        let member_addrs: std::collections::HashMap<u64, String> = members
-            .iter()
-            .map(|(&id, n)| (id, n.addr.clone()))
-            .collect();
-        let member_ids = nonempty::NonEmpty::from_vec(members.keys().copied().collect()).unwrap();
+        let member_ids = nonempty::NonEmpty::from_vec(
+            members
+                .iter()
+                .map(|(&id, n)| (id, n.addr.clone()))
+                .collect(),
+        )
+        .unwrap();
 
         // Create queue group on all nodes.
         for node in [&node1, &node2, &node3] {
             node.multi_raft
-                .create_group("payments", &member_ids, &member_addrs)
+                .create_group("payments", &member_ids)
                 .await
                 .unwrap();
         }
@@ -406,16 +409,18 @@ mod tests {
         let members = bootstrap_cluster(&[&node1, &node2, &node3], base_port).await;
         wait_for_leader(&node1.raft, 5).await;
 
-        let member_addrs: std::collections::HashMap<u64, String> = members
-            .iter()
-            .map(|(&id, n)| (id, n.addr.clone()))
-            .collect();
-        let member_ids = nonempty::NonEmpty::from_vec(members.keys().copied().collect()).unwrap();
+        let member_ids = nonempty::NonEmpty::from_vec(
+            members
+                .iter()
+                .map(|(&id, n)| (id, n.addr.clone()))
+                .collect(),
+        )
+        .unwrap();
 
         // Create and then delete a queue group.
         for node in [&node1, &node2, &node3] {
             node.multi_raft
-                .create_group("temp-queue", &member_ids, &member_addrs)
+                .create_group("temp-queue", &member_ids)
                 .await
                 .unwrap();
         }
@@ -449,18 +454,20 @@ mod tests {
         let members = bootstrap_cluster(&[&node1, &node2, &node3], base_port).await;
         wait_for_leader(&node1.raft, 5).await;
 
-        let member_addrs: std::collections::HashMap<u64, String> = members
-            .iter()
-            .map(|(&id, n)| (id, n.addr.clone()))
-            .collect();
-        let member_ids = nonempty::NonEmpty::from_vec(members.keys().copied().collect()).unwrap();
+        let member_ids = nonempty::NonEmpty::from_vec(
+            members
+                .iter()
+                .map(|(&id, n)| (id, n.addr.clone()))
+                .collect(),
+        )
+        .unwrap();
 
         // Create multiple queue groups.
         let queue_ids = ["q1", "q2", "q3", "q4", "q5"];
         for queue_id in &queue_ids {
             for node in [&node1, &node2, &node3] {
                 node.multi_raft
-                    .create_group(queue_id, &member_ids, &member_addrs)
+                    .create_group(queue_id, &member_ids)
                     .await
                     .unwrap();
             }
