@@ -27,6 +27,7 @@ toml.workspace = true
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net"] }
 mlua.workspace = true
 openraft.workspace = true
+nonempty.workspace = true
 tonic.workspace = true
 
 [dev-dependencies]

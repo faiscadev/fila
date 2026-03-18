@@ -284,7 +284,7 @@ mod tests {
             .iter()
             .map(|(&id, n)| (id, n.addr.clone()))
             .collect();
-        let member_ids: Vec<u64> = members.keys().copied().collect();
+        let member_ids = nonempty::NonEmpty::from_vec(members.keys().copied().collect()).unwrap();
 
         // Create a queue Raft group on all nodes.
         for node in [&node1, &node2, &node3] {
@@ -327,7 +327,7 @@ mod tests {
             .iter()
             .map(|(&id, n)| (id, n.addr.clone()))
             .collect();
-        let member_ids: Vec<u64> = members.keys().copied().collect();
+        let member_ids = nonempty::NonEmpty::from_vec(members.keys().copied().collect()).unwrap();
 
         // Create queue group on all nodes.
         for node in [&node1, &node2, &node3] {
@@ -410,7 +410,7 @@ mod tests {
             .iter()
             .map(|(&id, n)| (id, n.addr.clone()))
             .collect();
-        let member_ids: Vec<u64> = members.keys().copied().collect();
+        let member_ids = nonempty::NonEmpty::from_vec(members.keys().copied().collect()).unwrap();
 
         // Create and then delete a queue group.
         for node in [&node1, &node2, &node3] {
@@ -453,7 +453,7 @@ mod tests {
             .iter()
             .map(|(&id, n)| (id, n.addr.clone()))
             .collect();
-        let member_ids: Vec<u64> = members.keys().copied().collect();
+        let member_ids = nonempty::NonEmpty::from_vec(members.keys().copied().collect()).unwrap();
 
         // Create multiple queue groups.
         let queue_ids = ["q1", "q2", "q3", "q4", "q5"];

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use nonempty::NonEmpty;
 use openraft::error::{InitializeError, RaftError};
 use openraft::storage::Adaptor;
 use openraft::{BasicNode, Config, Raft};
@@ -15,9 +16,6 @@ use crate::storage::RaftKeyValueStore;
 /// Errors from `MultiRaftManager::create_group`.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateGroupError {
-    #[error("empty members list: cannot create queue raft group with no members")]
-    EmptyMembers,
-
     #[error("missing address for member node {node_id}")]
     MissingMemberAddress { node_id: NodeId },
 
@@ -58,13 +56,9 @@ impl MultiRaftManager {
     pub async fn create_group(
         &self,
         queue_id: &str,
-        members: &[NodeId],
+        members: &NonEmpty<NodeId>,
         member_addrs: &HashMap<NodeId, String>,
     ) -> Result<(), CreateGroupError> {
-        if members.is_empty() {
-            return Err(CreateGroupError::EmptyMembers);
-        }
-
         let store = FilaRaftStore::for_queue(Arc::clone(&self.db), queue_id);
         let (log_store, state_machine) = Adaptor::new(store);
         let network = FilaNetworkFactory::for_queue(queue_id.to_string());
@@ -82,10 +76,10 @@ impl MultiRaftManager {
 
         // Bootstrap the group if this node is the smallest member
         // (only one node should bootstrap to avoid conflicts).
-        let min_member = members.iter().copied().min().expect("members is non-empty");
+        let min_member = *members.minimum();
         if self.node_id == min_member {
             let mut member_map = std::collections::BTreeMap::new();
-            for &node_id in members {
+            for &node_id in members.iter() {
                 let addr = member_addrs
                     .get(&node_id)
                     .ok_or(CreateGroupError::MissingMemberAddress { node_id })?;

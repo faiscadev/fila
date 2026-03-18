@@ -43,6 +43,7 @@ toml = "0.8"
 rocksdb = "0.24"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 openraft = { version = "0.9", features = ["serde"] }
+nonempty = "0.10"
 
 tokio-stream = "0.1"
 tower = "0.5"
