@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use openraft::error::{InitializeError, RaftError};
 use openraft::storage::Adaptor;
 use openraft::{BasicNode, Config, Raft};
 use tokio::sync::RwLock;
@@ -75,21 +76,16 @@ impl MultiRaftManager {
             }
             match raft.initialize(member_map).await {
                 Ok(_) => {}
-                Err(e) => {
-                    // openraft returns NotAllowed when already initialized —
-                    // this can happen on restart when the group was previously
-                    // bootstrapped. Any other error is unexpected.
-                    let err_str = format!("{e}");
-                    if err_str.contains("not allowed") || err_str.contains("NotAllowed") {
-                        tracing::debug!(
-                            queue_id,
-                            error = %e,
-                            "queue raft group already initialized"
-                        );
-                    } else {
-                        return Err(Box::new(e));
-                    }
+                Err(RaftError::APIError(InitializeError::NotAllowed(e))) => {
+                    // Already initialized — happens on restart when the group
+                    // was previously bootstrapped.
+                    tracing::debug!(
+                        queue_id,
+                        error = %e,
+                        "queue raft group already initialized"
+                    );
                 }
+                Err(e) => return Err(Box::new(e)),
             }
         }
 
