@@ -72,7 +72,7 @@ impl MultiRaftManager {
 
         // Bootstrap the group if this node is the smallest member
         // (only one node should bootstrap to avoid conflicts).
-        let min_member = members.iter().map(|(id, _)| *id).min().unwrap();
+        let min_member = members.iter().map(|(id, _)| *id).fold(u64::MAX, u64::min);
         if self.node_id == min_member {
             let member_map: std::collections::BTreeMap<_, _> = members
                 .iter()
