@@ -18,7 +18,7 @@ use tonic::transport::Server;
 use tracing::info;
 
 use crate::broker::config::ClusterConfig;
-use crate::storage::RocksDbEngine;
+use crate::storage::RaftKeyValueStore;
 use fila_proto::fila_cluster_server::FilaClusterServer;
 use grpc_service::ClusterGrpcService;
 use multi_raft::MultiRaftManager;
@@ -43,10 +43,9 @@ impl ClusterManager {
     /// existing one.
     pub async fn start(
         config: &ClusterConfig,
-        db: Arc<RocksDbEngine>,
+        db: Arc<dyn RaftKeyValueStore>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let node_id = config.node_id;
-        let db: Arc<dyn crate::storage::RaftKeyValueStore> = db;
 
         let raft_config = Config {
             cluster_name: "fila".to_string(),
