@@ -11,8 +11,26 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
+use nonempty::NonEmpty;
+
 use super::types::{ClusterResponse, NodeId, TypeConfig};
+use crate::queue::QueueConfig;
 use crate::storage::RaftKeyValueStore;
+
+/// Events emitted by the meta Raft state machine when queue group
+/// lifecycle changes are committed. A background task processes these
+/// events to create/remove queue Raft groups and local scheduler queues.
+#[derive(Debug)]
+pub enum MetaStoreEvent {
+    QueueGroupCreated {
+        queue_id: String,
+        members: NonEmpty<(NodeId, String)>,
+        config: Box<QueueConfig>,
+    },
+    QueueGroupDeleted {
+        queue_id: String,
+    },
+}
 
 /// Key segment names for Raft data in the raft_log column family.
 const VOTE_SUFFIX: &[u8] = b"vote";
@@ -92,6 +110,8 @@ pub struct FilaRaftStore {
     state_machine: StateMachineData,
     /// Current snapshot (if any).
     current_snapshot: Option<StoredSnapshot>,
+    /// For the meta store: channel to emit queue group lifecycle events.
+    meta_event_tx: Option<tokio::sync::mpsc::UnboundedSender<MetaStoreEvent>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,12 +122,16 @@ struct StoredSnapshot {
 
 impl FilaRaftStore {
     /// Create a store for the meta Raft group (no key prefix).
-    pub fn new(db: Arc<dyn RaftKeyValueStore>) -> Self {
+    pub fn new(
+        db: Arc<dyn RaftKeyValueStore>,
+        meta_event_tx: Option<tokio::sync::mpsc::UnboundedSender<MetaStoreEvent>>,
+    ) -> Self {
         Self {
             db,
             keys: KeyBuilder::meta(),
             state_machine: StateMachineData::default(),
             current_snapshot: None,
+            meta_event_tx,
         }
     }
 
@@ -118,6 +142,7 @@ impl FilaRaftStore {
             keys: KeyBuilder::for_queue(queue_id),
             state_machine: StateMachineData::default(),
             current_snapshot: None,
+            meta_event_tx: None,
         }
     }
 }
@@ -277,6 +302,7 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
             keys: self.keys.clone(),
             state_machine: self.state_machine.clone(),
             current_snapshot: self.current_snapshot.clone(),
+            meta_event_tx: self.meta_event_tx.clone(),
         }
     }
 
@@ -392,17 +418,50 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                         super::types::ClusterRequest::CreateQueueGroup {
                             queue_id,
                             members,
-                            ..
+                            config,
                         } => {
                             self.state_machine
                                 .queue_groups
                                 .insert(queue_id.clone(), members.clone());
+
+                            // Extract member (id, addr) pairs from Raft membership.
+                            let member_pairs: Vec<(NodeId, String)> = self
+                                .state_machine
+                                .last_membership
+                                .membership()
+                                .nodes()
+                                .filter(|(id, _)| members.contains(id))
+                                .map(|(&id, n)| (id, n.addr.clone()))
+                                .collect();
+
+                            if let Some(ref tx) = self.meta_event_tx {
+                                if let Some(member_pairs) = NonEmpty::from_vec(member_pairs) {
+                                    let _ = tx.send(MetaStoreEvent::QueueGroupCreated {
+                                        queue_id: queue_id.clone(),
+                                        members: member_pairs,
+                                        config: Box::new(config.clone()),
+                                    });
+                                } else {
+                                    tracing::error!(
+                                        queue_id,
+                                        "no member addresses found in raft membership"
+                                    );
+                                }
+                            }
+
                             ClusterResponse::CreateQueueGroup {
                                 queue_id: queue_id.clone(),
                             }
                         }
                         super::types::ClusterRequest::DeleteQueueGroup { queue_id } => {
                             self.state_machine.queue_groups.remove(queue_id);
+
+                            if let Some(ref tx) = self.meta_event_tx {
+                                let _ = tx.send(MetaStoreEvent::QueueGroupDeleted {
+                                    queue_id: queue_id.clone(),
+                                });
+                            }
+
                             ClusterResponse::DeleteQueueGroup
                         }
                     };
@@ -425,6 +484,7 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
             keys: self.keys.clone(),
             state_machine: self.state_machine.clone(),
             current_snapshot: self.current_snapshot.clone(),
+            meta_event_tx: self.meta_event_tx.clone(),
         }
     }
 
@@ -451,6 +511,36 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
             meta: meta.clone(),
             data,
         });
+
+        // After restoring from snapshot, emit events for all queue groups
+        // so the background handler creates local queues and Raft groups.
+        // Without this, nodes that start from a snapshot would miss setup.
+        if let Some(ref tx) = self.meta_event_tx {
+            let all_nodes: Vec<(NodeId, String)> = self
+                .state_machine
+                .last_membership
+                .membership()
+                .nodes()
+                .map(|(&id, n)| (id, n.addr.clone()))
+                .collect();
+
+            for (queue_id, members) in &self.state_machine.queue_groups {
+                let member_pairs: Vec<(NodeId, String)> = all_nodes
+                    .iter()
+                    .filter(|(id, _)| members.contains(id))
+                    .cloned()
+                    .collect();
+                if let Some(member_pairs) = NonEmpty::from_vec(member_pairs) {
+                    let _ = tx.send(MetaStoreEvent::QueueGroupCreated {
+                        queue_id: queue_id.clone(),
+                        members: member_pairs,
+                        config: Box::new(QueueConfig::new(queue_id.clone())),
+                    });
+                } else {
+                    tracing::error!(queue_id, "no member addresses found in snapshot membership");
+                }
+            }
+        }
 
         Ok(())
     }

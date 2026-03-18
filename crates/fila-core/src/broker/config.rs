@@ -23,11 +23,11 @@ pub struct ClusterConfig {
     /// Unique numeric node ID within the cluster.
     pub node_id: u64,
     /// Addresses of seed peers for cluster discovery (e.g., `["node1:5556", "node2:5556"]`).
+    /// When empty, this node bootstraps a new single-node cluster.
+    /// When non-empty, the node joins an existing cluster by contacting these peers.
     pub peers: Vec<String>,
     /// Listen address for intra-cluster gRPC communication (separate from client port).
     pub bind_addr: String,
-    /// Bootstrap a new single-node cluster. Only set on the first node.
-    pub bootstrap: bool,
     /// Raft election timeout in milliseconds.
     pub election_timeout_ms: u64,
     /// Raft heartbeat interval in milliseconds.
@@ -124,7 +124,6 @@ impl Default for ClusterConfig {
             node_id: 1,
             peers: Vec::new(),
             bind_addr: "0.0.0.0:5556".to_string(),
-            bootstrap: false,
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
             snapshot_threshold: 10_000,
@@ -247,7 +246,6 @@ mod tests {
         assert_eq!(config.cluster.node_id, 1);
         assert!(config.cluster.peers.is_empty());
         assert_eq!(config.cluster.bind_addr, "0.0.0.0:5556");
-        assert!(!config.cluster.bootstrap);
         assert_eq!(config.cluster.election_timeout_ms, 1000);
         assert_eq!(config.cluster.heartbeat_interval_ms, 300);
         assert_eq!(config.cluster.snapshot_threshold, 10_000);
@@ -261,7 +259,6 @@ mod tests {
             node_id = 3
             peers = ["node1:5556", "node2:5556"]
             bind_addr = "0.0.0.0:6000"
-            bootstrap = true
             election_timeout_ms = 2000
             heartbeat_interval_ms = 500
             snapshot_threshold = 5000
@@ -271,7 +268,6 @@ mod tests {
         assert_eq!(config.cluster.node_id, 3);
         assert_eq!(config.cluster.peers, vec!["node1:5556", "node2:5556"]);
         assert_eq!(config.cluster.bind_addr, "0.0.0.0:6000");
-        assert!(config.cluster.bootstrap);
         assert_eq!(config.cluster.election_timeout_ms, 2000);
         assert_eq!(config.cluster.heartbeat_interval_ms, 500);
         assert_eq!(config.cluster.snapshot_threshold, 5000);

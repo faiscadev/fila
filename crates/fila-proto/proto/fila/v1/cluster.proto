@@ -19,6 +19,12 @@ service FilaCluster {
 
   /// Request to remove a node from the cluster.
   rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
+
+  /// Forward a client write to the Raft leader for a specific group.
+  /// Used for transparent request routing: when a node receives a write
+  /// request but is not the leader for the target group, it serializes
+  /// the ClusterRequest and forwards it to the leader via this RPC.
+  rpc ClientWrite(RaftRequest) returns (RaftResponse);
 }
 
 /// Generic Raft RPC wrapper — carries serialized openraft request/response.

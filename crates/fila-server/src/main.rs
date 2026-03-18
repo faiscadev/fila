@@ -58,19 +58,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Conditionally start cluster manager (Raft consensus).
     let cluster_config = config.cluster.clone();
+    let (meta_event_tx, meta_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let cluster_manager = if cluster_config.enabled {
         Some(
-            fila_core::cluster::ClusterManager::start(&cluster_config, Arc::clone(&storage) as _)
-                .await?,
+            fila_core::cluster::ClusterManager::start(
+                &cluster_config,
+                Arc::clone(&storage) as _,
+                Some(meta_event_tx),
+            )
+            .await?,
         )
     } else {
         None
     };
 
+    let cluster_handle = cluster_manager.as_ref().map(|cm| cm.handle());
+
     let broker = Arc::new(Broker::new(config, storage)?);
 
-    let admin_service = AdminService::new(Arc::clone(&broker));
-    let hot_path_service = HotPathService::new(Arc::clone(&broker));
+    // Wire cluster ↔ broker integration:
+    // 1. Give the cluster gRPC service access to the Broker so forwarded
+    //    writes can be applied to the leader's local scheduler.
+    // 2. Start meta event handler for queue group lifecycle.
+    if let Some(ref cm) = cluster_manager {
+        cm.set_broker(Arc::clone(&broker));
+        let broker_for_events = Arc::clone(&broker);
+        let multi_raft = Arc::clone(cm.multi_raft());
+        tokio::spawn(fila_core::cluster::process_meta_events(
+            meta_event_rx,
+            broker_for_events,
+            multi_raft,
+        ));
+    }
+
+    let admin_service = AdminService::new(Arc::clone(&broker), cluster_handle.clone());
+    let hot_path_service = HotPathService::new(Arc::clone(&broker), cluster_handle);
 
     let addr = listen_addr.parse()?;
     info!(%addr, "starting gRPC server");

@@ -18,10 +18,10 @@ stories:
     dependsOn: ["14.1"]
   - id: "14.3"
     title: "Request Routing & Transparent Delivery"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/14.3-request-routing-transparent-delivery"
+    pr: 58
     dependsOn: ["14.2"]
   - id: "14.4"
     title: "Replication, Failover & Recovery"
