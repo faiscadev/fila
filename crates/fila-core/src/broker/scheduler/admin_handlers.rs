@@ -236,13 +236,8 @@ impl Scheduler {
                 msg.enqueued_at,
                 &msg.id,
             );
-            let msg_value = match serde_json::to_vec(&msg) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(error = %e, msg_id = %msg.id, "serialization failed during redrive, stopping");
-                    break;
-                }
-            };
+            let proto = fila_proto::Message::from(msg.clone());
+            let msg_value = prost::Message::encode_to_vec(&proto);
 
             // Atomic move: delete from DLQ, put in parent queue
             let ops = vec![

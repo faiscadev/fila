@@ -363,8 +363,8 @@ impl Scheduler {
                     msg.enqueued_at,
                     &msg.id,
                 );
-                let msg_value =
-                    serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
+                let proto = fila_proto::Message::from(msg.clone());
+                let msg_value = prost::Message::encode_to_vec(&proto);
 
                 let ops = vec![
                     Mutation::DeleteMessage { key: msg_key },
@@ -412,7 +412,8 @@ impl Scheduler {
         }
 
         // Retry path: update message in-place, clear lease
-        let msg_value = serde_json::to_vec(&msg).map_err(crate::error::StorageError::from)?;
+        let proto = fila_proto::Message::from(msg.clone());
+        let msg_value = prost::Message::encode_to_vec(&proto);
 
         let ops = vec![
             Mutation::PutMessage {
