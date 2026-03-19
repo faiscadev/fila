@@ -28,6 +28,17 @@ pub enum ConvertError {
     MissingField(&'static str),
     #[error("invalid uuid: {0}")]
     InvalidUuid(#[from] uuid::Error),
+    #[error("invalid timestamp: negative value")]
+    NegativeTimestamp,
+}
+
+/// Convert a protobuf `Timestamp` to nanoseconds since epoch.
+/// Returns an error if seconds or nanos are negative.
+fn timestamp_to_nanos(ts: &prost_types::Timestamp) -> Result<u64, ConvertError> {
+    if ts.seconds < 0 || ts.nanos < 0 {
+        return Err(ConvertError::NegativeTimestamp);
+    }
+    Ok(ts.seconds as u64 * 1_000_000_000 + ts.nanos as u64)
 }
 
 // ---------------------------------------------------------------------------
@@ -443,12 +454,16 @@ impl TryFrom<fila_proto::Message> for Message {
 
         let enqueued_at = timestamps
             .enqueued_at
-            .map(|ts| ts.seconds as u64 * 1_000_000_000 + ts.nanos as u64)
+            .as_ref()
+            .map(timestamp_to_nanos)
+            .transpose()?
             .unwrap_or(0);
 
         let leased_at = timestamps
             .leased_at
-            .map(|ts| ts.seconds as u64 * 1_000_000_000 + ts.nanos as u64);
+            .as_ref()
+            .map(timestamp_to_nanos)
+            .transpose()?;
 
         Ok(Message {
             id,
