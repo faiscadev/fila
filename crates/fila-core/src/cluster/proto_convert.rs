@@ -28,17 +28,20 @@ pub enum ConvertError {
     MissingField(&'static str),
     #[error("invalid uuid: {0}")]
     InvalidUuid(#[from] uuid::Error),
-    #[error("invalid timestamp: negative value")]
-    NegativeTimestamp,
+    #[error("invalid timestamp: out of range")]
+    InvalidTimestamp,
 }
 
 /// Convert a protobuf `Timestamp` to nanoseconds since epoch.
-/// Returns an error if seconds or nanos are negative.
+/// Returns an error if seconds or nanos are out of valid range.
 fn timestamp_to_nanos(ts: &prost_types::Timestamp) -> Result<u64, ConvertError> {
-    if ts.seconds < 0 || ts.nanos < 0 {
-        return Err(ConvertError::NegativeTimestamp);
+    if ts.seconds < 0 || !(0..1_000_000_000).contains(&ts.nanos) {
+        return Err(ConvertError::InvalidTimestamp);
     }
-    Ok(ts.seconds as u64 * 1_000_000_000 + ts.nanos as u64)
+    (ts.seconds as u64)
+        .checked_mul(1_000_000_000)
+        .and_then(|s| s.checked_add(ts.nanos as u64))
+        .ok_or(ConvertError::InvalidTimestamp)
 }
 
 // ---------------------------------------------------------------------------
