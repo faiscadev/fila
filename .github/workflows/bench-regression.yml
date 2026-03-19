@@ -127,7 +127,7 @@ jobs:
           # Get the current PR body
           current_body="$(gh pr view "$PR_NUMBER" --json body --jq '.body')"
 
-          if echo "$current_body" | grep -q '<!-- bench-results-start -->'; then
+          if echo "$current_body" | grep -qx '<!-- bench-results-start -->'; then
             # Replace existing bench results section
             echo "$current_body" | perl -0777 -pe \
               'BEGIN { local $/; open F, "/tmp/bench-section.md"; $r = <F>; chomp $r; close F }
