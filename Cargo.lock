@@ -1229,6 +1229,8 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "proptest",
+ "prost",
+ "prost-types",
  "rocksdb",
  "serde",
  "serde_json",

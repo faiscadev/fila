@@ -7,9 +7,9 @@ use openraft::raft::{
 use openraft::{BasicNode, RaftNetwork, RaftNetworkFactory};
 use tokio::sync::OnceCell;
 
+use super::proto_convert;
 use super::types::{NodeId, TypeConfig};
 use fila_proto::fila_cluster_client::FilaClusterClient;
-use fila_proto::RaftRequest;
 
 /// Factory that creates gRPC-based network connections to peer nodes.
 ///
@@ -79,13 +79,6 @@ impl FilaNetwork {
         // Clone is cheap — tonic Channel is backed by a shared connection pool.
         Ok(client.clone())
     }
-
-    fn make_request(&self, data: Vec<u8>) -> RaftRequest {
-        RaftRequest {
-            data,
-            group_id: self.group_id.clone(),
-        }
-    }
 }
 
 impl RaftNetwork<TypeConfig> for FilaNetwork {
@@ -94,23 +87,15 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
         rpc: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
     ) -> Result<AppendEntriesResponse<NodeId>, RPCError<NodeId, BasicNode, RaftError<NodeId>>> {
-        let data =
-            serde_json::to_vec(&rpc).map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
+        let proto_req = proto_convert::append_entries_request_to_proto(rpc, self.group_id.clone());
 
         let mut client = self.get_client().await?;
         let resp = client
-            .append_entries(self.make_request(data))
+            .append_entries(proto_req)
             .await
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
-        let resp_data = resp.into_inner();
-        if !resp_data.error.is_empty() {
-            return Err(RPCError::Unreachable(Unreachable::new(
-                &std::io::Error::other(resp_data.error),
-            )));
-        }
-
-        serde_json::from_slice(&resp_data.data)
+        proto_convert::append_entries_response_from_proto(resp.into_inner())
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))
     }
 
@@ -122,8 +107,8 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
         InstallSnapshotResponse<NodeId>,
         RPCError<NodeId, BasicNode, RaftError<NodeId, InstallSnapshotError>>,
     > {
-        let data =
-            serde_json::to_vec(&rpc).map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
+        let proto_req =
+            proto_convert::install_snapshot_request_to_proto(rpc, self.group_id.clone());
 
         let mut client = self.get_client().await.map_err(
             |e: RPCError<NodeId, BasicNode, RaftError<NodeId>>| {
@@ -131,18 +116,11 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
             },
         )?;
         let resp = client
-            .install_snapshot(self.make_request(data))
+            .install_snapshot(proto_req)
             .await
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
-        let resp_data = resp.into_inner();
-        if !resp_data.error.is_empty() {
-            return Err(RPCError::Unreachable(Unreachable::new(
-                &std::io::Error::other(resp_data.error),
-            )));
-        }
-
-        serde_json::from_slice(&resp_data.data)
+        proto_convert::install_snapshot_response_from_proto(resp.into_inner())
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))
     }
 
@@ -151,23 +129,15 @@ impl RaftNetwork<TypeConfig> for FilaNetwork {
         rpc: VoteRequest<NodeId>,
         _option: RPCOption,
     ) -> Result<VoteResponse<NodeId>, RPCError<NodeId, BasicNode, RaftError<NodeId>>> {
-        let data =
-            serde_json::to_vec(&rpc).map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
+        let proto_req = proto_convert::vote_request_to_proto(rpc, self.group_id.clone());
 
         let mut client = self.get_client().await?;
         let resp = client
-            .vote(self.make_request(data))
+            .vote(proto_req)
             .await
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
-        let resp_data = resp.into_inner();
-        if !resp_data.error.is_empty() {
-            return Err(RPCError::Unreachable(Unreachable::new(
-                &std::io::Error::other(resp_data.error),
-            )));
-        }
-
-        serde_json::from_slice(&resp_data.data)
+        proto_convert::vote_response_from_proto(resp.into_inner())
             .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))
     }
 }

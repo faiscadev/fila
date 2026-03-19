@@ -28,6 +28,18 @@ impl From<serde_json::Error> for StorageError {
     }
 }
 
+impl From<prost::DecodeError> for StorageError {
+    fn from(err: prost::DecodeError) -> Self {
+        StorageError::Serialization(err.to_string())
+    }
+}
+
+impl From<crate::cluster::proto_convert::ConvertError> for StorageError {
+    fn from(err: crate::cluster::proto_convert::ConvertError) -> Self {
+        StorageError::Serialization(err.to_string())
+    }
+}
+
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
 
 // --- Per-command error types ---

@@ -4,6 +4,8 @@ use rocksdb::{
     ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded, Options, WriteBatch,
 };
 
+use prost::Message as ProstMessage;
+
 use crate::error::{StorageError, StorageResult};
 use crate::message::Message;
 use crate::queue::QueueConfig;
@@ -143,7 +145,8 @@ impl RaftKeyValueStore for RocksDbEngine {
 impl StorageEngine for RocksDbEngine {
     fn put_message(&self, key: &[u8], message: &Message) -> StorageResult<()> {
         let cf = self.cf(CF_MESSAGES)?;
-        let value = serde_json::to_vec(message)?;
+        let proto = fila_proto::Message::from(message.clone());
+        let value = proto.encode_to_vec();
         self.db.put_cf(&cf, key, &value)?;
         Ok(())
     }
@@ -151,7 +154,11 @@ impl StorageEngine for RocksDbEngine {
     fn get_message(&self, key: &[u8]) -> StorageResult<Option<Message>> {
         let cf = self.cf(CF_MESSAGES)?;
         match self.db.get_cf(&cf, key)? {
-            Some(value) => Ok(Some(serde_json::from_slice(&value)?)),
+            Some(value) => {
+                let proto = fila_proto::Message::decode(&value[..])?;
+                let msg = Message::try_from(proto)?;
+                Ok(Some(msg))
+            }
             None => Ok(None),
         }
     }
@@ -173,7 +180,8 @@ impl StorageEngine for RocksDbEngine {
             if !key.starts_with(prefix) {
                 break;
             }
-            let msg: Message = serde_json::from_slice(&value)?;
+            let proto = fila_proto::Message::decode(&*value)?;
+            let msg = Message::try_from(proto)?;
             results.push((key.to_vec(), msg));
         }
         Ok(results)
@@ -212,7 +220,8 @@ impl StorageEngine for RocksDbEngine {
 
     fn put_queue(&self, queue_id: &str, config: &QueueConfig) -> StorageResult<()> {
         let cf = self.cf(CF_QUEUES)?;
-        let value = serde_json::to_vec(config)?;
+        let proto = fila_proto::ClusterQueueConfig::from(config.clone());
+        let value = proto.encode_to_vec();
         self.db.put_cf(&cf, queue_id.as_bytes(), &value)?;
         Ok(())
     }
@@ -220,7 +229,10 @@ impl StorageEngine for RocksDbEngine {
     fn get_queue(&self, queue_id: &str) -> StorageResult<Option<QueueConfig>> {
         let cf = self.cf(CF_QUEUES)?;
         match self.db.get_cf(&cf, queue_id.as_bytes())? {
-            Some(value) => Ok(Some(serde_json::from_slice(&value)?)),
+            Some(value) => {
+                let proto = fila_proto::ClusterQueueConfig::decode(&value[..])?;
+                Ok(Some(QueueConfig::from(proto)))
+            }
             None => Ok(None),
         }
     }
@@ -237,8 +249,8 @@ impl StorageEngine for RocksDbEngine {
         let mut results = Vec::new();
         for item in iter {
             let (_, value) = item?;
-            let config: QueueConfig = serde_json::from_slice(&value)?;
-            results.push(config);
+            let proto = fila_proto::ClusterQueueConfig::decode(&*value)?;
+            results.push(QueueConfig::from(proto));
         }
         Ok(results)
     }
@@ -563,7 +575,7 @@ mod tests {
         let lease_key = keys::lease_key("q1", &msg.id);
         let expiry_key = keys::lease_expiry_key(5_000_000_000, "q1", &msg.id);
         let lease_val = keys::lease_value("consumer-1", 5_000_000_000);
-        let msg_value = serde_json::to_vec(&msg).unwrap();
+        let msg_value = fila_proto::Message::from(msg.clone()).encode_to_vec();
 
         // Atomic write: message + lease + lease_expiry
         storage

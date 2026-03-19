@@ -1,6 +1,7 @@
 pub mod grpc_service;
 pub mod multi_raft;
 pub mod network;
+pub mod proto_convert;
 pub mod store;
 #[cfg(test)]
 mod tests;
@@ -180,7 +181,6 @@ impl ClusterHandle {
         request: &ClusterRequest,
     ) -> Result<ClusterResponse, ClusterWriteError> {
         use fila_proto::fila_cluster_client::FilaClusterClient;
-        use fila_proto::RaftRequest;
 
         let url = if leader_addr.starts_with("http") {
             leader_addr.to_string()
@@ -203,25 +203,32 @@ impl ClusterHandle {
             cache.entry(url).or_insert(new_client).clone()
         };
 
-        let data = serde_json::to_vec(request)
-            .map_err(|e| ClusterWriteError::Forward(format!("serialize: {e}")))?;
+        let request_proto = fila_proto::ClusterRequestProto::from(request.clone());
 
         let resp = client
             .clone()
-            .client_write(tonic::Request::new(RaftRequest {
-                data,
+            .client_write(tonic::Request::new(fila_proto::RaftClientWriteRequest {
+                request: Some(request_proto),
                 group_id: group_id.to_string(),
             }))
             .await
             .map_err(|e| ClusterWriteError::Forward(format!("rpc: {e}")))?
             .into_inner();
 
-        if !resp.error.is_empty() {
-            return Err(ClusterWriteError::Forward(resp.error));
+        let response: ClusterResponse = resp
+            .response
+            .ok_or_else(|| ClusterWriteError::Forward("missing response".to_string()))?
+            .try_into()
+            .map_err(|e: proto_convert::ConvertError| {
+                ClusterWriteError::Forward(format!("deserialize: {e}"))
+            })?;
+
+        // Check if the response is a ForwardToLeader error.
+        if let ClusterResponse::Error { ref message } = response {
+            return Err(ClusterWriteError::Forward(message.clone()));
         }
 
-        serde_json::from_slice(&resp.data)
-            .map_err(|e| ClusterWriteError::Forward(format!("deserialize: {e}")))
+        Ok(response)
     }
 }
 
@@ -342,6 +349,7 @@ pub async fn watch_leader_changes(
                 info!(queue_id, "became leader — triggering queue recovery");
                 match broker.send_command(crate::SchedulerCommand::RecoverQueue {
                     queue_id: queue_id.clone(),
+                    reply: None,
                 }) {
                     Ok(_) => {
                         leading.insert(queue_id.clone(), true);
@@ -373,6 +381,7 @@ pub async fn watch_leader_changes(
                     info!(queue_id, "first-sight leader — triggering queue recovery");
                     match broker.send_command(crate::SchedulerCommand::RecoverQueue {
                         queue_id: queue_id.clone(),
+                        reply: None,
                     }) {
                         Ok(_) => {
                             leading.insert(queue_id.clone(), true);

@@ -91,13 +91,8 @@ impl Scheduler {
             updated_msg.attempt_count += 1;
             updated_msg.leased_at = None;
 
-            let msg_value = match serde_json::to_vec(&updated_msg) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(error = %e, %queue_id, %msg_id, "failed to serialize message during lease reclaim");
-                    continue;
-                }
-            };
+            let proto = fila_proto::Message::from(updated_msg.clone());
+            let msg_value = prost::Message::encode_to_vec(&proto);
 
             if let Err(e) = self.storage.apply_mutations(vec![
                 Mutation::PutMessage {

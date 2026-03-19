@@ -7,12 +7,14 @@ use openraft::storage::{LogState, RaftLogReader, RaftSnapshotBuilder, RaftStorag
 use openraft::{
     BasicNode, Entry, EntryPayload, LogId, SnapshotMeta, StorageError, StoredMembership, Vote,
 };
+use prost::Message as ProstMessage;
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
 use nonempty::NonEmpty;
 
+use super::proto_convert;
 use super::types::{ClusterResponse, NodeId, TypeConfig};
 use crate::queue::QueueConfig;
 use crate::storage::{Mutation, RaftKeyValueStore, StorageEngine};
@@ -122,7 +124,7 @@ pub struct FilaRaftStore {
     queue_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct StoredSnapshot {
     meta: SnapshotMeta<NodeId, BasicNode>,
     data: Vec<u8>,
@@ -209,9 +211,15 @@ impl RaftLogReader<TypeConfig> for FilaRaftStore {
             if index >= end {
                 break;
             }
-            let entry: Entry<TypeConfig> =
-                serde_json::from_slice(&value).map_err(|e| StorageError::IO {
+            let proto_entry =
+                fila_proto::RaftEntry::decode(&value[..]).map_err(|e| StorageError::IO {
                     source: openraft::StorageIOError::read_logs(&e),
+                })?;
+            let entry =
+                proto_convert::entry_from_proto(proto_entry).map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::read_logs(&std::io::Error::other(
+                        e.to_string(),
+                    )),
                 })?;
             entries.push(entry);
         }
@@ -222,9 +230,8 @@ impl RaftLogReader<TypeConfig> for FilaRaftStore {
 
 impl RaftSnapshotBuilder<TypeConfig> for FilaRaftStore {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<NodeId>> {
-        let data = serde_json::to_vec(&self.state_machine).map_err(|e| StorageError::IO {
-            source: openraft::StorageIOError::read_state_machine(&e),
-        })?;
+        let proto = fila_proto::StateMachineDataProto::from(&self.state_machine);
+        let data = proto.encode_to_vec();
 
         let last_applied_log = self.state_machine.last_applied_log;
         let last_membership = self.state_machine.last_membership.clone();
@@ -262,9 +269,8 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
     type SnapshotBuilder = Self;
 
     async fn save_vote(&mut self, vote: &Vote<NodeId>) -> Result<(), StorageError<NodeId>> {
-        let data = serde_json::to_vec(vote).map_err(|e| StorageError::IO {
-            source: openraft::StorageIOError::write_vote(&e),
-        })?;
+        let proto = proto_convert::vote_to_proto(*vote);
+        let data = proto.encode_to_vec();
         let vote_key = self.keys.vote_key();
         self.db
             .raft_put(&vote_key, &data)
@@ -280,10 +286,15 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
             source: openraft::StorageIOError::read_vote(&e),
         })? {
             Some(data) => {
-                let vote: Vote<NodeId> =
-                    serde_json::from_slice(&data).map_err(|e| StorageError::IO {
+                let proto =
+                    fila_proto::RaftVote::decode(&data[..]).map_err(|e| StorageError::IO {
                         source: openraft::StorageIOError::read_vote(&e),
                     })?;
+                let vote = proto_convert::vote_from_proto(proto).map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::read_vote(&std::io::Error::other(
+                        e.to_string(),
+                    )),
+                })?;
                 Ok(Some(vote))
             }
             None => Ok(None),
@@ -300,10 +311,20 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                 .map_err(|e| StorageError::IO {
                     source: openraft::StorageIOError::read_logs(&e),
                 })? {
-                Some(data) => serde_json::from_slice(&data).map_err(|e| StorageError::IO {
-                    source: openraft::StorageIOError::read_logs(&e),
-                })?,
-                None => None,
+                Some(data) if !data.is_empty() => {
+                    let proto =
+                        fila_proto::RaftLogId::decode(&data[..]).map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::read_logs(&e),
+                        })?;
+                    Some(
+                        proto_convert::log_id_from_proto(proto).map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::read_logs(&std::io::Error::other(
+                                e.to_string(),
+                            )),
+                        })?,
+                    )
+                }
+                _ => None,
             };
 
         // Scan backwards to find last log entry
@@ -333,9 +354,8 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
     {
         for entry in entries {
             let key = self.keys.log_key(entry.log_id.index);
-            let value = serde_json::to_vec(&entry).map_err(|e| StorageError::IO {
-                source: openraft::StorageIOError::write_logs(&e),
-            })?;
+            let proto = proto_convert::entry_to_proto(entry);
+            let value = proto.encode_to_vec();
             self.db
                 .raft_put(&key, &value)
                 .map_err(|e| StorageError::IO {
@@ -361,9 +381,8 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
 
     async fn purge_logs_upto(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
         // Save the purge point
-        let data = serde_json::to_vec(&Some(log_id)).map_err(|e| StorageError::IO {
-            source: openraft::StorageIOError::write_logs(&e),
-        })?;
+        let proto = proto_convert::log_id_to_proto(log_id);
+        let data = proto.encode_to_vec();
         let purged_key = self.keys.last_purged_key();
         self.db
             .raft_put(&purged_key, &data)
@@ -528,10 +547,18 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
     ) -> Result<(), StorageError<NodeId>> {
         let data = snapshot.into_inner();
 
-        let new_state: StateMachineData =
-            serde_json::from_slice(&data).map_err(|e| StorageError::IO {
+        let proto =
+            fila_proto::StateMachineDataProto::decode(&data[..]).map_err(|e| StorageError::IO {
                 source: openraft::StorageIOError::read_state_machine(&e),
             })?;
+        let new_state: StateMachineData =
+            proto
+                .try_into()
+                .map_err(|e: proto_convert::ConvertError| StorageError::IO {
+                    source: openraft::StorageIOError::read_state_machine(&std::io::Error::other(
+                        e.to_string(),
+                    )),
+                })?;
 
         self.state_machine = new_state;
         self.current_snapshot = Some(StoredSnapshot {
@@ -607,9 +634,8 @@ impl FilaRaftStore {
                     message.enqueued_at,
                     &message.id,
                 );
-                let msg_value = serde_json::to_vec(message).map_err(|e| StorageError::IO {
-                    source: openraft::StorageIOError::apply(log_id, &e),
-                })?;
+                let proto = fila_proto::Message::from(message.clone());
+                let msg_value = proto.encode_to_vec();
                 storage
                     .apply_mutations(vec![Mutation::PutMessage {
                         key: msg_key,
@@ -669,10 +695,8 @@ impl FilaRaftStore {
                         let mut updated = msg;
                         updated.attempt_count += 1;
                         updated.leased_at = None;
-                        let msg_value =
-                            serde_json::to_vec(&updated).map_err(|e| StorageError::IO {
-                                source: openraft::StorageIOError::apply(log_id, &e),
-                            })?;
+                        let proto = fila_proto::Message::from(updated);
+                        let msg_value = proto.encode_to_vec();
                         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
                         let mut mutations = vec![Mutation::PutMessage {
                             key,
@@ -728,9 +752,15 @@ impl FilaRaftStore {
 
         match entry {
             Some((_key, value)) => {
-                let entry: Entry<TypeConfig> =
-                    serde_json::from_slice(&value).map_err(|e| StorageError::IO {
+                let proto =
+                    fila_proto::RaftEntry::decode(&value[..]).map_err(|e| StorageError::IO {
                         source: openraft::StorageIOError::read_logs(&e),
+                    })?;
+                let entry =
+                    proto_convert::entry_from_proto(proto).map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::read_logs(&std::io::Error::other(
+                            e.to_string(),
+                        )),
                     })?;
                 Ok(Some(entry.log_id))
             }

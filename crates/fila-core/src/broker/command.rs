@@ -107,6 +107,7 @@ pub enum SchedulerCommand {
     /// from RocksDB before it can serve consumers.
     RecoverQueue {
         queue_id: String,
+        reply: Option<tokio::sync::oneshot::Sender<()>>,
     },
     /// Drop all consumer streams for a queue. Used when this node loses Raft
     /// leadership — consumers must reconnect to the new leader.
