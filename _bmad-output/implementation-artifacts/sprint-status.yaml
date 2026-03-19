@@ -154,7 +154,7 @@ development_status:
   14-4-replication-failover-recovery: done
   14-5-cluster-observability-scaling-validation: done
   14-6-protobuf-cluster-serialization: done
-  epic-14-retrospective: optional
+  epic-14-retrospective: done
 
   # Epic 15: Authentication & Security
   epic-15: backlog
