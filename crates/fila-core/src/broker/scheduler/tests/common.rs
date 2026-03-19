@@ -14,7 +14,7 @@ pub(super) fn test_setup() -> (
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
     let lua_config = LuaConfig::default();
-    let scheduler = Scheduler::new(storage, rx, &config, &lua_config);
+    let scheduler = Scheduler::new(storage, rx, &config, &lua_config, 0);
     (tx, scheduler, dir)
 }
 
@@ -55,7 +55,7 @@ pub(super) fn test_setup_with_storage(
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
     let lua_config = LuaConfig::default();
-    let scheduler = Scheduler::new(storage, rx, &config, &lua_config);
+    let scheduler = Scheduler::new(storage, rx, &config, &lua_config, 0);
     (tx, scheduler)
 }
 

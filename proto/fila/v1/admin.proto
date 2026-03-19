@@ -89,6 +89,9 @@ message GetStatsResponse {
   uint32 quantum = 5;
   repeated PerFairnessKeyStats per_key_stats = 6;
   repeated PerThrottleKeyStats per_throttle_stats = 7;
+  // Cluster fields (0 when not in cluster mode).
+  uint64 leader_node_id = 8;
+  uint32 replication_count = 9;
 }
 
 message RedriveRequest {
@@ -107,8 +110,10 @@ message QueueInfo {
   uint64 depth = 2;
   uint64 in_flight = 3;
   uint32 active_consumers = 4;
+  uint64 leader_node_id = 5;
 }
 
 message ListQueuesResponse {
   repeated QueueInfo queues = 1;
+  uint32 cluster_node_count = 2;
 }

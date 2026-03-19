@@ -171,11 +171,15 @@ async fn cmd_queue_delete(client: &mut FilaAdminClient<Channel>, name: String) {
 async fn cmd_queue_list(client: &mut FilaAdminClient<Channel>) {
     match client.list_queues(ListQueuesRequest {}).await {
         Ok(resp) => {
-            let queues = resp.into_inner().queues;
+            let inner = resp.into_inner();
+            let queues = inner.queues;
+            let cluster_node_count = inner.cluster_node_count;
             if queues.is_empty() {
                 println!("No queues found.");
                 return;
             }
+
+            let is_cluster = cluster_node_count > 0;
 
             // Calculate column widths
             let name_width = queues
@@ -185,15 +189,29 @@ async fn cmd_queue_list(client: &mut FilaAdminClient<Channel>) {
                 .unwrap_or(4)
                 .max(4);
 
-            println!(
-                "{:<name_width$}  {:>7}  {:>9}  {:>9}",
-                "NAME", "DEPTH", "IN_FLIGHT", "CONSUMERS"
-            );
-            for q in &queues {
+            if is_cluster {
+                println!(
+                    "{:<name_width$}  {:>7}  {:>9}  {:>9}  {:>6}",
+                    "NAME", "DEPTH", "IN_FLIGHT", "CONSUMERS", "LEADER"
+                );
+                for q in &queues {
+                    println!(
+                        "{:<name_width$}  {:>7}  {:>9}  {:>9}  {:>6}",
+                        q.name, q.depth, q.in_flight, q.active_consumers, q.leader_node_id
+                    );
+                }
+                println!("\nCluster nodes: {cluster_node_count}");
+            } else {
                 println!(
                     "{:<name_width$}  {:>7}  {:>9}  {:>9}",
-                    q.name, q.depth, q.in_flight, q.active_consumers
+                    "NAME", "DEPTH", "IN_FLIGHT", "CONSUMERS"
                 );
+                for q in &queues {
+                    println!(
+                        "{:<name_width$}  {:>7}  {:>9}  {:>9}",
+                        q.name, q.depth, q.in_flight, q.active_consumers
+                    );
+                }
             }
         }
         Err(status) => {
@@ -218,6 +236,10 @@ async fn cmd_queue_inspect(client: &mut FilaAdminClient<Channel>, name: String) 
             println!("  Active fairness keys: {}", stats.active_fairness_keys);
             println!("  Active consumers:     {}", stats.active_consumers);
             println!("  Quantum:              {}", stats.quantum);
+            if stats.leader_node_id > 0 || stats.replication_count > 0 {
+                println!("  Raft leader:          node {}", stats.leader_node_id);
+                println!("  Replicas:             {}", stats.replication_count);
+            }
 
             if !stats.per_key_stats.is_empty() {
                 println!();

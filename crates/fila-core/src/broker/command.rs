@@ -27,6 +27,8 @@ pub struct QueueSummary {
     pub depth: u64,
     pub in_flight: u64,
     pub active_consumers: u32,
+    /// Raft leader node ID for this queue (0 = not clustered).
+    pub leader_node_id: u64,
 }
 
 /// Commands sent from IO threads to the single-threaded scheduler core.

@@ -147,12 +147,12 @@ development_status:
   # Epic 14: Clustering & Horizontal Scaling (replanned 2026-03-10)
   # Raft-per-queue model (CockroachDB-style single binary).
   # Replaces partition-based design per clustering architecture research.
-  epic-14: in-progress
+  epic-14: done
   14-1-raft-integration-single-node-mode: done
   14-2-queue-level-raft-groups-assignment: done
   14-3-request-routing-transparent-delivery: done
   14-4-replication-failover-recovery: done
-  14-5-cluster-observability-scaling-validation: backlog
+  14-5-cluster-observability-scaling-validation: done
   epic-14-retrospective: optional
 
   # Epic 15: Authentication & Security
