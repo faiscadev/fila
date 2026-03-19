@@ -274,9 +274,12 @@ impl Scheduler {
                 let result = self.handle_list_queues();
                 let _ = reply.send(result);
             }
-            SchedulerCommand::RecoverQueue { queue_id } => {
+            SchedulerCommand::RecoverQueue { queue_id, reply } => {
                 info!(%queue_id, "recover queue command received (leader promotion)");
                 self.recover_queue(&queue_id);
+                if let Some(tx) = reply {
+                    let _ = tx.send(());
+                }
             }
             SchedulerCommand::DropQueueConsumers { queue_id } => {
                 info!(%queue_id, "drop queue consumers command received (leader loss)");

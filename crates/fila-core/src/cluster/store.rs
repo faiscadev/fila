@@ -633,8 +633,10 @@ impl FilaRaftStore {
                     message.enqueued_at,
                     &message.id,
                 );
-                let proto = fila_proto::Message::from(message.clone());
-                let msg_value = proto.encode_to_vec();
+                // Serialize as JSON to match the format used by StorageEngine::list_messages.
+                let msg_value = serde_json::to_vec(message).map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
                 storage
                     .apply_mutations(vec![Mutation::PutMessage {
                         key: msg_key,
@@ -694,8 +696,10 @@ impl FilaRaftStore {
                         let mut updated = msg;
                         updated.attempt_count += 1;
                         updated.leased_at = None;
-                        let proto = fila_proto::Message::from(updated);
-                        let msg_value = proto.encode_to_vec();
+                        let msg_value =
+                            serde_json::to_vec(&updated).map_err(|e| StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            })?;
                         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
                         let mut mutations = vec![Mutation::PutMessage {
                             key,

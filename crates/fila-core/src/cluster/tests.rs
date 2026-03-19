@@ -458,6 +458,7 @@ mod tests {
         raft: Arc<Raft<TypeConfig>>,
         multi_raft: Arc<MultiRaftManager>,
         broker: Arc<crate::Broker>,
+        broker_storage: Arc<dyn crate::storage::StorageEngine>,
         cluster_handle: Arc<crate::ClusterHandle>,
         _grpc_handle: tokio::task::JoinHandle<()>,
         _event_handle: tokio::task::JoinHandle<()>,
@@ -557,6 +558,7 @@ mod tests {
                 raft,
                 multi_raft,
                 broker,
+                broker_storage: broker_db,
                 cluster_handle,
                 _grpc_handle: grpc_handle,
                 _event_handle: event_handle,
@@ -1072,7 +1074,6 @@ mod tests {
     /// Test: zero message loss after failover. Enqueue N messages, kill leader,
     /// consume all N from surviving cluster.
     #[tokio::test]
-    #[ignore = "flaky in CI — recovery timing issue, see #67"]
     async fn test_cluster_failover_zero_message_loss() {
         let base_port = 15750;
         let node1 = FullTestNode::start(1, base_port).await;
@@ -1143,15 +1144,19 @@ mod tests {
             .find(|n| n.cluster_handle.node_id == new_leader_id)
             .unwrap();
 
-        // Trigger queue recovery on the new leader so its scheduler has the messages.
-        let _ = new_leader
+        // Trigger queue recovery on the new leader and wait for completion.
+        let (recover_tx, recover_rx) = tokio::sync::oneshot::channel();
+        new_leader
             .broker
             .send_command(crate::SchedulerCommand::RecoverQueue {
                 queue_id: "loss-test".to_string(),
-            });
-
-        // Give the scheduler a moment to process recovery.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+                reply: Some(recover_tx),
+            })
+            .unwrap();
+        timeout(Duration::from_secs(5), recover_rx)
+            .await
+            .expect("recovery should complete within timeout")
+            .expect("recovery reply channel should not be dropped");
 
         // Consume from the new leader — all N messages should be available.
         let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel(n + 1);

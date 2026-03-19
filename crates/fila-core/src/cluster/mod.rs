@@ -349,6 +349,7 @@ pub async fn watch_leader_changes(
                 info!(queue_id, "became leader — triggering queue recovery");
                 match broker.send_command(crate::SchedulerCommand::RecoverQueue {
                     queue_id: queue_id.clone(),
+                    reply: None,
                 }) {
                     Ok(_) => {
                         leading.insert(queue_id.clone(), true);
@@ -380,6 +381,7 @@ pub async fn watch_leader_changes(
                     info!(queue_id, "first-sight leader — triggering queue recovery");
                     match broker.send_command(crate::SchedulerCommand::RecoverQueue {
                         queue_id: queue_id.clone(),
+                        reply: None,
                     }) {
                         Ok(_) => {
                             leading.insert(queue_id.clone(), true);
