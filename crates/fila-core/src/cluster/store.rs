@@ -591,7 +591,7 @@ impl FilaRaftStore {
     ///
     /// Returns `Err` if a storage mutation fails — the caller should propagate
     /// this as a `StorageError` so Raft can handle the failure appropriately.
-    #[allow(clippy::result_large_err)] // StorageError<NodeId> is an openraft type we can't shrink; boxing it would require unboxing at the call site since apply_to_state_machine returns the same type
+    #[allow(clippy::result_large_err)] // StorageError<NodeId> is an openraft type we can't shrink; the caller apply_to_state_machine is an openraft trait method with a fixed signature — we cannot change its return type
     fn apply_to_broker_storage(
         &self,
         storage: &dyn StorageEngine,
