@@ -229,14 +229,20 @@ impl Scheduler {
             msg.attempt_count = 0;
             msg.leased_at = None;
 
+            // Save fields needed after encoding before consuming msg
+            let msg_id = msg.id.clone();
+            let fairness_key = msg.fairness_key.clone();
+            let weight = msg.weight;
+            let throttle_keys = msg.throttle_keys.clone();
+
             // Generate new storage key for parent queue
             let parent_key = crate::storage::keys::message_key(
                 parent_queue_id,
-                &msg.fairness_key,
+                &fairness_key,
                 msg.enqueued_at,
-                &msg.id,
+                &msg_id,
             );
-            let proto = fila_proto::Message::from(msg.clone());
+            let proto = fila_proto::Message::from(msg);
             let msg_value = prost::Message::encode_to_vec(&proto);
 
             // Atomic move: delete from DLQ, put in parent queue
@@ -248,14 +254,14 @@ impl Scheduler {
                 },
             ];
             if let Err(e) = self.storage.apply_mutations(ops) {
-                warn!(error = %e, msg_id = %msg.id, "apply_mutations failed during redrive, returning partial count");
+                warn!(error = %e, msg_id = %msg_id, "apply_mutations failed during redrive, returning partial count");
                 break;
             }
 
             // Remove from DLQ's in-memory pending index if present
-            if let Some(pk) = self.pending_by_id.remove(&msg.id) {
+            if let Some(pk) = self.pending_by_id.remove(&msg_id) {
                 if let Some(deque) = self.pending.get_mut(&pk) {
-                    deque.retain(|e| e.msg_id != msg.id);
+                    deque.retain(|e| e.msg_id != msg_id);
                     if deque.is_empty() {
                         self.pending.remove(&pk);
                         // Clean up DRR active set for DLQ if no more pending
@@ -265,15 +271,14 @@ impl Scheduler {
             }
 
             // Add to parent queue's in-memory indices
-            self.drr
-                .add_key(parent_queue_id, &msg.fairness_key, msg.weight);
+            self.drr.add_key(parent_queue_id, &fairness_key, weight);
             self.pending_push(
                 parent_queue_id,
-                &msg.fairness_key,
+                &fairness_key,
                 PendingEntry {
                     msg_key: parent_key,
-                    msg_id: msg.id,
-                    throttle_keys: msg.throttle_keys.clone(),
+                    msg_id,
+                    throttle_keys,
                 },
             );
 
