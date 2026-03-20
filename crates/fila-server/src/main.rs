@@ -1,4 +1,5 @@
 mod admin_service;
+mod auth;
 mod error;
 mod service;
 mod trace_context;
@@ -59,13 +60,26 @@ fn load_config() -> BrokerConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = load_config();
+    let mut config = load_config();
 
     // Initialize telemetry (logging + optional OTel export).
     // Must happen after config is loaded but before anything else.
     let telemetry_guard = fila_core::telemetry::init_telemetry(&config.telemetry);
 
     let listen_addr = config.server.listen_addr.clone();
+
+    // FILA_BOOTSTRAP_APIKEY overrides (or sets) the bootstrap key from config.
+    // Setting the env var also implicitly enables auth when no [auth] section exists.
+    if let Ok(key) = std::env::var("FILA_BOOTSTRAP_APIKEY") {
+        match &mut config.auth {
+            Some(auth) => auth.bootstrap_apikey = key,
+            auth @ None => {
+                *auth = Some(fila_core::AuthConfig {
+                    bootstrap_apikey: key,
+                })
+            }
+        }
+    }
 
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
     let rocksdb = Arc::new(RocksDbEngine::open(&data_dir)?);
@@ -134,7 +148,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_builder = server_builder.tls_config(server_tls)?;
     }
 
+    // Layer order: last `.layer()` becomes outermost (first to receive requests).
+    // AuthLayer must be inner so auth runs within the trace context span.
     let serve_result = server_builder
+        .layer(auth::AuthLayer::new(Arc::clone(&broker)))
         .layer(trace_context::TraceContextLayer)
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))

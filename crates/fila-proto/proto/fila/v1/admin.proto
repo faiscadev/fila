@@ -11,6 +11,11 @@ service FilaAdmin {
   rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
   rpc Redrive(RedriveRequest) returns (RedriveResponse);
   rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
+
+  // API key management. These RPCs bypass auth validation (bootstrap mechanism).
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
+  rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
 }
 
 message CreateQueueRequest {
@@ -116,4 +121,41 @@ message QueueInfo {
 message ListQueuesResponse {
   repeated QueueInfo queues = 1;
   uint32 cluster_node_count = 2;
+}
+
+// --- API Key Management ---
+
+message CreateApiKeyRequest {
+  /// Human-readable label for the key.
+  string name = 1;
+  /// Optional Unix timestamp (milliseconds) after which the key expires.
+  /// 0 means no expiration.
+  uint64 expires_at_ms = 2;
+}
+
+message CreateApiKeyResponse {
+  /// Opaque key ID for management operations (revoke, list).
+  string key_id = 1;
+  /// Plaintext API key. Returned once — store it securely.
+  string key = 2;
+}
+
+message RevokeApiKeyRequest {
+  string key_id = 1;
+}
+
+message RevokeApiKeyResponse {}
+
+message ListApiKeysRequest {}
+
+message ApiKeyInfo {
+  string key_id = 1;
+  string name = 2;
+  uint64 created_at_ms = 3;
+  /// 0 means no expiration.
+  uint64 expires_at_ms = 4;
+}
+
+message ListApiKeysResponse {
+  repeated ApiKeyInfo keys = 1;
 }
