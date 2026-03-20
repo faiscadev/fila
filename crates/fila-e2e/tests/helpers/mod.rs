@@ -28,7 +28,11 @@ impl TestServer {
     ///
     /// Used by tests that need custom server configuration (e.g. TLS) and
     /// spawn the process themselves.
-    pub fn from_parts(child: std::process::Child, addr: String, data_dir: tempfile::TempDir) -> Self {
+    pub fn from_parts(
+        child: std::process::Child,
+        addr: String,
+        data_dir: tempfile::TempDir,
+    ) -> Self {
         Self {
             child: Some(child),
             addr,

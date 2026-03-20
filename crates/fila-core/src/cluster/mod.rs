@@ -587,7 +587,13 @@ impl ClusterManager {
             raft.initialize(members).await?;
         } else {
             info!(node_id, peers = ?config.peers, "joining existing cluster");
-            Self::join_cluster(node_id, &config.bind_addr, &config.peers, client_tls.clone()).await?;
+            Self::join_cluster(
+                node_id,
+                &config.bind_addr,
+                &config.peers,
+                client_tls.clone(),
+            )
+            .await?;
         }
 
         Ok(Self {
@@ -714,7 +720,10 @@ impl ClusterManager {
                                             info!(node_id, "joined cluster via leader redirect");
                                             return Ok(());
                                         }
-                                        tracing::warn!(error = resp.error, "failed to join via leader");
+                                        tracing::warn!(
+                                            error = resp.error,
+                                            "failed to join via leader"
+                                        );
                                     }
                                     Err(e) => {
                                         tracing::warn!(error = %e, "leader add_node rpc failed");

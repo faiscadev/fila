@@ -8,9 +8,12 @@ use helpers::TestServer;
 /// acts as the CA cert when configuring the client.
 fn generate_self_signed_cert() -> (Vec<u8>, Vec<u8>) {
     let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    let cert = rcgen::generate_simple_self_signed(subject_alt_names)
-        .expect("generate self-signed cert");
-    let cert_pem = cert.serialize_pem().expect("serialize cert PEM").into_bytes();
+    let cert =
+        rcgen::generate_simple_self_signed(subject_alt_names).expect("generate self-signed cert");
+    let cert_pem = cert
+        .serialize_pem()
+        .expect("serialize cert PEM")
+        .into_bytes();
     let key_pem = cert.serialize_private_key_pem().into_bytes();
     (cert_pem, key_pem)
 }
@@ -117,7 +120,9 @@ async fn tls_plaintext_client_is_rejected() {
         }
         Ok(client) => {
             // The TLS server will reject a plaintext HTTP/2 client; the RPC must fail.
-            let rpc_result = client.enqueue("probe-queue", Default::default(), b"x").await;
+            let rpc_result = client
+                .enqueue("probe-queue", Default::default(), b"x")
+                .await;
             assert!(
                 rpc_result.is_err(),
                 "plaintext client should not be able to make RPCs to a TLS server"
@@ -144,7 +149,9 @@ async fn tls_wrong_ca_cert_is_rejected() {
         }
         Ok(client) => {
             // TLS may be lazy — the first RPC must fail cert verification.
-            let rpc_result = client.enqueue("probe-queue", Default::default(), b"x").await;
+            let rpc_result = client
+                .enqueue("probe-queue", Default::default(), b"x")
+                .await;
             assert!(
                 rpc_result.is_err(),
                 "wrong CA should be rejected during TLS handshake"

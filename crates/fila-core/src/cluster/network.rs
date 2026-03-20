@@ -132,13 +132,13 @@ impl FilaNetwork {
         let client = self
             .client
             .get_or_try_init(|| async {
-                let channel = connect_channel(&url, tls.as_ref())
-                    .await
-                    .map_err(|e| {
-                        let io = std::io::Error::other(e.to_string());
-                        RPCError::Unreachable(Unreachable::new(&io))
-                    })?;
-                Ok::<_, RPCError<NodeId, BasicNode, RaftError<NodeId>>>(FilaClusterClient::new(channel))
+                let channel = connect_channel(&url, tls.as_ref()).await.map_err(|e| {
+                    let io = std::io::Error::other(e.to_string());
+                    RPCError::Unreachable(Unreachable::new(&io))
+                })?;
+                Ok::<_, RPCError<NodeId, BasicNode, RaftError<NodeId>>>(FilaClusterClient::new(
+                    channel,
+                ))
             })
             .await?;
         // Clone is cheap — tonic Channel is backed by a shared connection pool.

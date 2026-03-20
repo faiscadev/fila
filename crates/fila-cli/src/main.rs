@@ -134,7 +134,10 @@ async fn connect(
             let cert_pem = match std::fs::read(cert_path) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("Error: cannot read client cert {}: {e}", cert_path.display());
+                    eprintln!(
+                        "Error: cannot read client cert {}: {e}",
+                        cert_path.display()
+                    );
                     process::exit(1);
                 }
             };
