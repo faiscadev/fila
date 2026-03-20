@@ -14,35 +14,45 @@ use super::proto_convert;
 use super::types::{NodeId, TypeConfig};
 use fila_proto::fila_cluster_client::FilaClusterClient;
 
+/// Normalize a peer address to the correct URL scheme.
+///
+/// When `use_tls` is true, ensures the address uses `https://`.
+/// When false, ensures it uses `http://` (stripping `https://` if present).
+pub(super) fn normalize_cluster_url(addr: &str, use_tls: bool) -> String {
+    if use_tls {
+        if addr.starts_with("https://") {
+            addr.to_string()
+        } else if addr.starts_with("http://") {
+            addr.replacen("http://", "https://", 1)
+        } else {
+            format!("https://{addr}")
+        }
+    } else if addr.starts_with("http://") {
+        addr.to_string()
+    } else if addr.starts_with("https://") {
+        addr.replacen("https://", "http://", 1)
+    } else {
+        format!("http://{addr}")
+    }
+}
+
 /// Build a tonic `Channel` to a peer, applying TLS when configured.
 ///
 /// When `tls` is `None`, uses plain HTTP/2. When set, upgrades to TLS
 /// and uses the `https://` scheme.
-async fn connect_channel(
+pub(super) async fn connect_channel(
     addr: &str,
-    tls: Option<&Arc<ClientTlsConfig>>,
+    tls: Option<&ClientTlsConfig>,
 ) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
+    let url = normalize_cluster_url(addr, tls.is_some());
     if let Some(tls) = tls {
-        // Replace http:// with https:// when TLS is enabled.
-        let tls_url = if addr.starts_with("http://") {
-            addr.replacen("http://", "https://", 1)
-        } else if addr.starts_with("https://") {
-            addr.to_string()
-        } else {
-            format!("https://{addr}")
-        };
-        let channel = Channel::from_shared(tls_url)?
-            .tls_config((**tls).clone())?
+        let channel = Channel::from_shared(url)?
+            .tls_config(tls.clone())?
             .connect()
             .await?;
         Ok(channel)
     } else {
-        let plain_url = if addr.starts_with("http") {
-            addr.to_string()
-        } else {
-            format!("http://{addr}")
-        };
-        let channel = Channel::from_shared(plain_url)?.connect().await?;
+        let channel = Channel::from_shared(url)?.connect().await?;
         Ok(channel)
     }
 }
@@ -95,11 +105,7 @@ impl RaftNetworkFactory<TypeConfig> for FilaNetworkFactory {
     type Network = FilaNetwork;
 
     async fn new_client(&mut self, _target: NodeId, node: &BasicNode) -> Self::Network {
-        let url = if node.addr.starts_with("http") {
-            node.addr.clone()
-        } else {
-            format!("http://{}", node.addr)
-        };
+        let url = normalize_cluster_url(&node.addr, self.tls.is_some());
         FilaNetwork {
             url,
             group_id: self.group_id.clone(),
@@ -132,7 +138,7 @@ impl FilaNetwork {
         let client = self
             .client
             .get_or_try_init(|| async {
-                let channel = connect_channel(&url, tls.as_ref()).await.map_err(|e| {
+                let channel = connect_channel(&url, tls.as_deref()).await.map_err(|e| {
                     let io = std::io::Error::other(e.to_string());
                     RPCError::Unreachable(Unreachable::new(&io))
                 })?;

@@ -185,22 +185,9 @@ impl ClusterHandle {
         request: &ClusterRequest,
     ) -> Result<ClusterResponse, ClusterWriteError> {
         use fila_proto::fila_cluster_client::FilaClusterClient;
-        use tonic::transport::Channel;
 
         // Determine scheme-correct URL for cache key and connection.
-        let url = if self.tls.is_some() {
-            if leader_addr.starts_with("https") {
-                leader_addr.to_string()
-            } else if leader_addr.starts_with("http://") {
-                leader_addr.replacen("http://", "https://", 1)
-            } else {
-                format!("https://{leader_addr}")
-            }
-        } else if leader_addr.starts_with("http") {
-            leader_addr.to_string()
-        } else {
-            format!("http://{leader_addr}")
-        };
+        let url = network::normalize_cluster_url(leader_addr, self.tls.is_some());
 
         // Check cache without holding the lock during connect().
         let cached = {
@@ -210,21 +197,9 @@ impl ClusterHandle {
         let client = if let Some(client) = cached {
             client
         } else {
-            let channel = if let Some(ref tls) = self.tls {
-                Channel::from_shared(url.clone())
-                    .map_err(|e| ClusterWriteError::Forward(format!("invalid uri: {e}")))?
-                    .tls_config((**tls).clone())
-                    .map_err(|e| ClusterWriteError::Forward(format!("tls config: {e}")))?
-                    .connect()
-                    .await
-                    .map_err(|e| ClusterWriteError::Forward(format!("connect: {e}")))?
-            } else {
-                Channel::from_shared(url.clone())
-                    .map_err(|e| ClusterWriteError::Forward(format!("invalid uri: {e}")))?
-                    .connect()
-                    .await
-                    .map_err(|e| ClusterWriteError::Forward(format!("connect: {e}")))?
-            };
+            let channel = network::connect_channel(&url, self.tls.as_deref())
+                .await
+                .map_err(|e| ClusterWriteError::Forward(format!("connect: {e}")))?;
             let new_client = FilaClusterClient::new(channel);
             let mut cache = self.client_cache.lock().await;
             cache.entry(url).or_insert(new_client).clone()
@@ -618,7 +593,6 @@ impl ClusterManager {
     ) -> Result<(), Box<dyn std::error::Error>> {
         use fila_proto::fila_cluster_client::FilaClusterClient;
         use fila_proto::AddNodeRequest;
-        use tonic::transport::Channel;
 
         let req = AddNodeRequest {
             node_id,
@@ -626,39 +600,7 @@ impl ClusterManager {
         };
 
         for peer in peers {
-            let url = if tls.is_some() {
-                if peer.starts_with("https") {
-                    peer.clone()
-                } else if peer.starts_with("http://") {
-                    peer.replacen("http://", "https://", 1)
-                } else {
-                    format!("https://{peer}")
-                }
-            } else if peer.starts_with("http") {
-                peer.clone()
-            } else {
-                format!("http://{peer}")
-            };
-
-            let endpoint = match Channel::from_shared(url.clone()) {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::warn!(peer, error = %e, "invalid peer address");
-                    continue;
-                }
-            };
-            let endpoint = if let Some(ref t) = tls {
-                match endpoint.tls_config((**t).clone()) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        tracing::warn!(peer, error = %e, "tls config error for peer");
-                        continue;
-                    }
-                }
-            } else {
-                endpoint
-            };
-            let channel = match endpoint.connect().await {
+            let channel = match network::connect_channel(peer, tls.as_deref()).await {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!(peer, error = %e, "failed to connect to peer");
@@ -677,39 +619,7 @@ impl ClusterManager {
 
                     // If not leader, try the leader address.
                     if !resp.leader_addr.is_empty() {
-                        let leader_url = if tls.is_some() {
-                            if resp.leader_addr.starts_with("https") {
-                                resp.leader_addr.clone()
-                            } else if resp.leader_addr.starts_with("http://") {
-                                resp.leader_addr.replacen("http://", "https://", 1)
-                            } else {
-                                format!("https://{}", resp.leader_addr)
-                            }
-                        } else if resp.leader_addr.starts_with("http") {
-                            resp.leader_addr.clone()
-                        } else {
-                            format!("http://{}", resp.leader_addr)
-                        };
-
-                        let leader_endpoint = match Channel::from_shared(leader_url.clone()) {
-                            Ok(e) => e,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "invalid leader address");
-                                continue;
-                            }
-                        };
-                        let leader_endpoint = if let Some(ref t) = tls {
-                            match leader_endpoint.tls_config((**t).clone()) {
-                                Ok(e) => e,
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "tls config error for leader");
-                                    continue;
-                                }
-                            }
-                        } else {
-                            leader_endpoint
-                        };
-                        match leader_endpoint.connect().await {
+                        match network::connect_channel(&resp.leader_addr, tls.as_deref()).await {
                             Ok(leader_channel) => {
                                 let mut leader_client = FilaClusterClient::new(leader_channel);
                                 match leader_client
