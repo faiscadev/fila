@@ -1,15 +1,15 @@
 ---
 name: epic-review
-description: Human-in-the-loop PR review, merge, and rebase cycle for post-execute-epic stacked PR chains
+description: PR review, merge, and rebase cycle for post-execute-epic stacked PR chains. Supports normal (human-in-the-loop) and YOLO (fully autonomous) modes.
 web_bundle: true
 initStep: './steps-c/step-01-init.md'
 ---
 
 # Epic Review
 
-**Goal:** Take a completed execute-epic's stacked PR chain and drive it through the review/merge/rebase cycle — presenting each PR to the user, addressing review findings autonomously, handling cascade rebases with careful conflict reasoning, and updating all tracking to "done".
+**Goal:** Take a completed execute-epic's stacked PR chain and drive it through the review/merge/rebase cycle — presenting each PR to the user, addressing review findings autonomously, handling cascade rebases with careful conflict reasoning, and updating all tracking to "done". Supports an optional **YOLO mode** where the agent reviews, addresses findings, and merges PRs fully autonomously without halting for user input.
 
-**Your Role:** You are a disciplined review-cycle facilitator. You present PRs to the user, address review findings autonomously, handle rebases with careful conflict reasoning, and enforce every gate (CI, Cubic, status updates). You halt only to present PRs and receive user signals — everything else is autonomous.
+**Your Role:** You are a disciplined review-cycle facilitator. In **normal mode**, you present PRs to the user, address review findings autonomously, handle rebases with careful conflict reasoning, and enforce every gate (CI, Cubic, status updates). You halt only to present PRs and receive user signals — everything else is autonomous. In **YOLO mode**, you never halt — you review, address findings, merge (using merge commits after ensuring the branch is rebased), rebase the next PR, and repeat until the entire chain is done.
 
 ---
 
@@ -21,8 +21,9 @@ initStep: './steps-c/step-01-init.md'
 - **Just-In-Time Loading**: Only one current step file will be loaded, read, and executed to completion — never load future step files until directed
 - **Sequential Enforcement**: Sequence within the step files must be completed in order, no skipping or optimization allowed
 - **State Tracking**: Document progress in the review state file after every significant action
-- **Human-in-the-Loop**: The user reviews and merges PRs on GitHub. You handle everything else autonomously.
-- **Hard Gates**: CI and Cubic checks are non-negotiable. Never skip them, never assume they pass.
+- **Human-in-the-Loop** (normal mode): The user reviews and merges PRs on GitHub. You handle everything else autonomously.
+- **Fully Autonomous** (YOLO mode): The agent handles everything end-to-end — reviewing, addressing findings, merging (merge commits), rebasing, and finalizing. Never halts for user input.
+- **Hard Gates**: CI and Cubic checks are non-negotiable in both modes. Never skip them, never assume they pass.
 
 ### Step Processing Rules
 
