@@ -6,11 +6,12 @@ use fila_core::{
 };
 use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
-    ConfigEntry, CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
-    GetConfigRequest, GetConfigResponse, GetStatsRequest, GetStatsResponse, ListConfigRequest,
-    ListConfigResponse, ListQueuesRequest, ListQueuesResponse, PerFairnessKeyStats,
-    PerThrottleKeyStats, QueueInfo, RedriveRequest, RedriveResponse, SetConfigRequest,
-    SetConfigResponse,
+    ApiKeyInfo, ConfigEntry, CreateApiKeyRequest, CreateApiKeyResponse, CreateQueueRequest,
+    CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse, GetConfigRequest,
+    GetConfigResponse, GetStatsRequest, GetStatsResponse, ListApiKeysRequest, ListApiKeysResponse,
+    ListConfigRequest, ListConfigResponse, ListQueuesRequest, ListQueuesResponse,
+    PerFairnessKeyStats, PerThrottleKeyStats, QueueInfo, RedriveRequest, RedriveResponse,
+    RevokeApiKeyRequest, RevokeApiKeyResponse, SetConfigRequest, SetConfigResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::instrument;
@@ -443,6 +444,65 @@ impl FilaAdmin for AdminService {
             queues,
             cluster_node_count,
         }))
+    }
+
+    #[instrument(skip(self))]
+    async fn create_api_key(
+        &self,
+        request: Request<CreateApiKeyRequest>,
+    ) -> Result<Response<CreateApiKeyResponse>, Status> {
+        let req = request.into_inner();
+        let expires_at = if req.expires_at_ms == 0 {
+            None
+        } else {
+            Some(req.expires_at_ms)
+        };
+        let (key_id, token) = self
+            .broker
+            .create_api_key(&req.name, expires_at)
+            .map_err(|e| Status::internal(format!("storage error: {e}")))?;
+        Ok(Response::new(CreateApiKeyResponse { key_id, key: token }))
+    }
+
+    #[instrument(skip(self))]
+    async fn revoke_api_key(
+        &self,
+        request: Request<RevokeApiKeyRequest>,
+    ) -> Result<Response<RevokeApiKeyResponse>, Status> {
+        let req = request.into_inner();
+        if req.key_id.is_empty() {
+            return Err(Status::invalid_argument("key_id must not be empty"));
+        }
+        let found = self
+            .broker
+            .revoke_api_key(&req.key_id)
+            .map_err(|e| Status::internal(format!("storage error: {e}")))?;
+        if found {
+            Ok(Response::new(RevokeApiKeyResponse {}))
+        } else {
+            Err(Status::not_found("api key not found"))
+        }
+    }
+
+    #[instrument(skip(self))]
+    async fn list_api_keys(
+        &self,
+        _request: Request<ListApiKeysRequest>,
+    ) -> Result<Response<ListApiKeysResponse>, Status> {
+        let entries = self
+            .broker
+            .list_api_keys()
+            .map_err(|e| Status::internal(format!("storage error: {e}")))?;
+        let keys = entries
+            .into_iter()
+            .map(|e| ApiKeyInfo {
+                key_id: e.key_id,
+                name: e.name,
+                created_at_ms: e.created_at_ms,
+                expires_at_ms: e.expires_at_ms.unwrap_or(0),
+            })
+            .collect();
+        Ok(Response::new(ListApiKeysResponse { keys }))
     }
 }
 

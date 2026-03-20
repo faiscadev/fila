@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod command;
 pub mod config;
 pub mod drr;
@@ -16,7 +17,7 @@ use crate::error::{BrokerError, BrokerResult};
 use crate::storage::StorageEngine;
 
 pub use command::{QueueSummary, ReadyMessage, SchedulerCommand};
-pub use config::{BrokerConfig, TlsParams};
+pub use config::{AuthConfig, BrokerConfig, TlsParams};
 
 use scheduler::Scheduler;
 
@@ -26,6 +27,9 @@ use scheduler::Scheduler;
 pub struct Broker {
     command_tx: crossbeam_channel::Sender<SchedulerCommand>,
     scheduler_thread: Option<thread::JoinHandle<()>>,
+    storage: Arc<dyn StorageEngine>,
+    /// Whether API key authentication is enabled. Set from `BrokerConfig.auth`.
+    pub auth_enabled: bool,
 }
 
 impl Broker {
@@ -44,11 +48,17 @@ impl Broker {
             0
         };
 
+        let storage_for_scheduler = Arc::clone(&storage);
         let handle = thread::Builder::new()
             .name("fila-scheduler".to_string())
             .spawn(move || {
-                let mut scheduler =
-                    Scheduler::new(storage, rx, &scheduler_config, &lua_config, cluster_node_id);
+                let mut scheduler = Scheduler::new(
+                    storage_for_scheduler,
+                    rx,
+                    &scheduler_config,
+                    &lua_config,
+                    cluster_node_id,
+                );
                 scheduler.run();
             })
             .map_err(|e| BrokerError::SchedulerSpawn(e.to_string()))?;
@@ -58,6 +68,8 @@ impl Broker {
         Ok(Self {
             command_tx: tx,
             scheduler_thread: Some(handle),
+            storage,
+            auth_enabled: config.auth.is_some(),
         })
     }
 
@@ -87,6 +99,104 @@ impl Broker {
 
         info!("broker shutdown complete");
         Ok(())
+    }
+
+    // --- API key management ---
+
+    /// Create a new API key. Returns `(key_id, plaintext_token)`.
+    ///
+    /// The plaintext token is returned exactly once and never stored.
+    /// Only the SHA-256 hash is persisted in the state store.
+    pub fn create_api_key(
+        &self,
+        name: &str,
+        expires_at_ms: Option<u64>,
+    ) -> crate::error::StorageResult<(String, String)> {
+        use auth::{hash_key, now_ms, storage_key, ApiKeyEntry};
+        use uuid::Uuid;
+
+        let key_id = Uuid::new_v4().to_string();
+        let token = Uuid::new_v4().simple().to_string(); // 32-char hex, opaque to clients
+        let hashed = hash_key(&token);
+
+        let entry = ApiKeyEntry {
+            key_id: key_id.clone(),
+            name: name.to_string(),
+            hashed_key: hashed,
+            created_at_ms: now_ms(),
+            expires_at_ms,
+        };
+        let value = serde_json::to_vec(&entry)
+            .map_err(|e| crate::error::StorageError::Serialization(e.to_string()))?;
+        self.storage.put_state(&storage_key(&key_id), &value)?;
+
+        tracing::info!(key_id = %key_id, name = %name, "api key created");
+        Ok((key_id, token))
+    }
+
+    /// Revoke an API key by its key ID.
+    ///
+    /// Returns `true` if the key was found and deleted, `false` if not found.
+    pub fn revoke_api_key(&self, key_id: &str) -> crate::error::StorageResult<bool> {
+        use auth::storage_key;
+
+        let key = storage_key(key_id);
+        if self.storage.get_state(&key)?.is_none() {
+            return Ok(false);
+        }
+        self.storage.delete_state(&key)?;
+        tracing::info!(key_id = %key_id, "api key revoked");
+        Ok(true)
+    }
+
+    /// List all API keys (metadata only — no plaintext tokens).
+    ///
+    /// Expired keys are included so operators can identify and clean them up.
+    pub fn list_api_keys(&self) -> crate::error::StorageResult<Vec<auth::ApiKeyEntry>> {
+        use auth::{ApiKeyEntry, API_KEY_PREFIX};
+
+        let entries = self
+            .storage
+            .list_state_by_prefix(API_KEY_PREFIX, usize::MAX)?;
+        let mut result = Vec::with_capacity(entries.len());
+        for (_, value) in entries {
+            match serde_json::from_slice::<ApiKeyEntry>(&value) {
+                Ok(entry) => result.push(entry),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to deserialize api key entry — skipping");
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Validate a plaintext API key token.
+    ///
+    /// Returns `true` if the token matches a stored, non-expired key.
+    /// This is called on every authenticated RPC — designed to be fast
+    /// (SHA-256 hash + prefix scan over a small number of keys).
+    pub fn validate_api_key(&self, token: &str) -> crate::error::StorageResult<bool> {
+        use auth::{hash_key, now_ms, ApiKeyEntry, API_KEY_PREFIX};
+
+        let hashed = hash_key(token);
+        let now = now_ms();
+        let entries = self
+            .storage
+            .list_state_by_prefix(API_KEY_PREFIX, usize::MAX)?;
+        for (_, value) in entries {
+            if let Ok(entry) = serde_json::from_slice::<ApiKeyEntry>(&value) {
+                if entry.hashed_key == hashed {
+                    // Check expiry.
+                    if let Some(exp) = entry.expires_at_ms {
+                        if now > exp {
+                            return Ok(false);
+                        }
+                    }
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 }
 

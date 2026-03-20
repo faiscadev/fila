@@ -4,9 +4,11 @@ use std::process;
 use clap::{Parser, Subcommand};
 use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::{
-    CreateQueueRequest, DeleteQueueRequest, GetConfigRequest, GetStatsRequest, ListConfigRequest,
-    ListQueuesRequest, QueueConfig, RedriveRequest, SetConfigRequest,
+    CreateApiKeyRequest, CreateQueueRequest, DeleteQueueRequest, GetConfigRequest, GetStatsRequest,
+    ListApiKeysRequest, ListConfigRequest, ListQueuesRequest, QueueConfig, RedriveRequest,
+    RevokeApiKeyRequest, SetConfigRequest,
 };
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 #[derive(Parser)]
@@ -28,6 +30,10 @@ struct Cli {
     /// Client private key for mTLS. Requires --tls-cert.
     #[arg(long, global = true, requires = "tls_cert")]
     tls_key: Option<PathBuf>,
+
+    /// API key for authenticating with the broker (sent as `authorization: Bearer <key>`).
+    #[arg(long, global = true)]
+    api_key: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -52,6 +58,10 @@ enum Commands {
         #[arg(long, default_value = "0")]
         count: u64,
     },
+
+    /// Manage API keys
+    #[command(subcommand)]
+    Auth(AuthCommands),
 }
 
 #[derive(Subcommand)]
@@ -115,12 +125,55 @@ enum ConfigCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum AuthCommands {
+    /// Create a new API key
+    Create {
+        /// Human-readable name for the key
+        #[arg(long)]
+        name: String,
+
+        /// Expiry as Unix timestamp in milliseconds (optional; omit for no expiry)
+        #[arg(long)]
+        expires_at: Option<u64>,
+    },
+
+    /// Revoke an API key by its key ID
+    Revoke {
+        /// Key ID (as returned by `auth create` or `auth list`)
+        key_id: String,
+    },
+
+    /// List all API keys
+    List,
+}
+
+/// Interceptor that attaches an API key as `authorization: Bearer <key>`.
+#[derive(Clone)]
+struct ApiKeyInterceptor(Option<String>);
+
+impl tonic::service::Interceptor for ApiKeyInterceptor {
+    fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+        if let Some(ref key) = self.0 {
+            if let Ok(val) =
+                tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
+            {
+                req.metadata_mut().insert("authorization", val);
+            }
+        }
+        Ok(req)
+    }
+}
+
+type AdminClient = FilaAdminClient<InterceptedService<Channel, ApiKeyInterceptor>>;
+
 async fn connect(
     addr: &str,
     tls_ca_cert: Option<&PathBuf>,
     tls_cert: Option<&PathBuf>,
     tls_key: Option<&PathBuf>,
-) -> FilaAdminClient<Channel> {
+    api_key: Option<String>,
+) -> AdminClient {
     let channel = if let Some(ca_path) = tls_ca_cert {
         let ca_pem = match std::fs::read(ca_path) {
             Ok(b) => b,
@@ -186,7 +239,7 @@ async fn connect(
             }
         }
     };
-    FilaAdminClient::new(channel)
+    FilaAdminClient::with_interceptor(channel, ApiKeyInterceptor(api_key))
 }
 
 fn format_rpc_error(status: tonic::Status, context: &str) -> String {
@@ -204,7 +257,7 @@ fn format_rpc_error(status: tonic::Status, context: &str) -> String {
 }
 
 async fn cmd_queue_create(
-    client: &mut FilaAdminClient<Channel>,
+    client: &mut AdminClient,
     name: String,
     on_enqueue: Option<String>,
     on_failure: Option<String>,
@@ -231,7 +284,7 @@ async fn cmd_queue_create(
     }
 }
 
-async fn cmd_queue_delete(client: &mut FilaAdminClient<Channel>, name: String) {
+async fn cmd_queue_delete(client: &mut AdminClient, name: String) {
     match client
         .delete_queue(DeleteQueueRequest {
             queue: name.clone(),
@@ -246,7 +299,7 @@ async fn cmd_queue_delete(client: &mut FilaAdminClient<Channel>, name: String) {
     }
 }
 
-async fn cmd_queue_list(client: &mut FilaAdminClient<Channel>) {
+async fn cmd_queue_list(client: &mut AdminClient) {
     match client.list_queues(ListQueuesRequest {}).await {
         Ok(resp) => {
             let inner = resp.into_inner();
@@ -299,7 +352,7 @@ async fn cmd_queue_list(client: &mut FilaAdminClient<Channel>) {
     }
 }
 
-async fn cmd_queue_inspect(client: &mut FilaAdminClient<Channel>, name: String) {
+async fn cmd_queue_inspect(client: &mut AdminClient, name: String) {
     match client
         .get_stats(GetStatsRequest {
             queue: name.clone(),
@@ -368,7 +421,7 @@ async fn cmd_queue_inspect(client: &mut FilaAdminClient<Channel>, name: String) 
     }
 }
 
-async fn cmd_config_set(client: &mut FilaAdminClient<Channel>, key: String, value: String) {
+async fn cmd_config_set(client: &mut AdminClient, key: String, value: String) {
     match client
         .set_config(SetConfigRequest {
             key: key.clone(),
@@ -387,7 +440,7 @@ async fn cmd_config_set(client: &mut FilaAdminClient<Channel>, key: String, valu
     }
 }
 
-async fn cmd_config_get(client: &mut FilaAdminClient<Channel>, key: String) {
+async fn cmd_config_get(client: &mut AdminClient, key: String) {
     match client
         .get_config(GetConfigRequest { key: key.clone() })
         .await
@@ -410,7 +463,7 @@ async fn cmd_config_get(client: &mut FilaAdminClient<Channel>, key: String) {
     }
 }
 
-async fn cmd_config_list(client: &mut FilaAdminClient<Channel>, prefix: String) {
+async fn cmd_config_list(client: &mut AdminClient, prefix: String) {
     match client
         .list_config(ListConfigRequest {
             prefix: prefix.clone(),
@@ -447,7 +500,7 @@ async fn cmd_config_list(client: &mut FilaAdminClient<Channel>, prefix: String) 
     }
 }
 
-async fn cmd_redrive(client: &mut FilaAdminClient<Channel>, dlq_name: String, count: u64) {
+async fn cmd_redrive(client: &mut AdminClient, dlq_name: String, count: u64) {
     match client
         .redrive(RedriveRequest {
             dlq_queue: dlq_name.clone(),
@@ -472,6 +525,88 @@ async fn cmd_redrive(client: &mut FilaAdminClient<Channel>, dlq_name: String, co
     }
 }
 
+async fn cmd_auth_create(client: &mut AdminClient, name: String, expires_at: Option<u64>) {
+    match client
+        .create_api_key(CreateApiKeyRequest {
+            name: name.clone(),
+            expires_at_ms: expires_at.unwrap_or(0),
+        })
+        .await
+    {
+        Ok(resp) => {
+            let r = resp.into_inner();
+            println!("Created API key \"{name}\"");
+            println!("  Key ID : {}", r.key_id);
+            println!("  Token  : {}", r.key);
+            println!("Store the token securely — it will not be shown again.");
+        }
+        Err(status) => {
+            eprintln!("{}", format_rpc_error(status, "api key"));
+            process::exit(1);
+        }
+    }
+}
+
+async fn cmd_auth_revoke(client: &mut AdminClient, key_id: String) {
+    match client
+        .revoke_api_key(RevokeApiKeyRequest {
+            key_id: key_id.clone(),
+        })
+        .await
+    {
+        Ok(_) => {
+            println!("Revoked API key {key_id}");
+        }
+        Err(status) => {
+            eprintln!(
+                "{}",
+                format_rpc_error(status, &format!("api key \"{key_id}\""))
+            );
+            process::exit(1);
+        }
+    }
+}
+
+async fn cmd_auth_list(client: &mut AdminClient) {
+    match client.list_api_keys(ListApiKeysRequest {}).await {
+        Ok(resp) => {
+            let keys = resp.into_inner().keys;
+            if keys.is_empty() {
+                println!("No API keys found.");
+                return;
+            }
+
+            let id_width = keys
+                .iter()
+                .map(|k| k.key_id.len())
+                .max()
+                .unwrap_or(6)
+                .max(6);
+            let name_width = keys.iter().map(|k| k.name.len()).max().unwrap_or(4).max(4);
+
+            println!(
+                "{:<id_width$}  {:<name_width$}  CREATED_AT_MS  EXPIRES_AT_MS",
+                "KEY_ID", "NAME"
+            );
+            for k in &keys {
+                let expires = if k.expires_at_ms == 0 {
+                    "never".to_string()
+                } else {
+                    k.expires_at_ms.to_string()
+                };
+                println!(
+                    "{:<id_width$}  {:<name_width$}  {:>13}  {expires}",
+                    k.key_id, k.name, k.created_at_ms
+                );
+            }
+        }
+        Err(status) => {
+            eprintln!("{}", format_rpc_error(status, "api keys"));
+            process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -480,6 +615,7 @@ async fn main() {
         cli.tls_ca_cert.as_ref(),
         cli.tls_cert.as_ref(),
         cli.tls_key.as_ref(),
+        cli.api_key,
     )
     .await;
 
@@ -510,5 +646,12 @@ async fn main() {
             ConfigCommands::List { prefix } => cmd_config_list(&mut client, prefix).await,
         },
         Commands::Redrive { dlq_name, count } => cmd_redrive(&mut client, dlq_name, count).await,
+        Commands::Auth(cmd) => match cmd {
+            AuthCommands::Create { name, expires_at } => {
+                cmd_auth_create(&mut client, name, expires_at).await
+            }
+            AuthCommands::Revoke { key_id } => cmd_auth_revoke(&mut client, key_id).await,
+            AuthCommands::List => cmd_auth_list(&mut client).await,
+        },
     }
 }

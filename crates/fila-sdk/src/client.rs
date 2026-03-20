@@ -34,6 +34,9 @@ pub struct ConnectOptions {
     pub tls_client_cert_pem: Option<Vec<u8>>,
     /// PEM-encoded client private key for mTLS authentication.
     pub tls_client_key_pem: Option<Vec<u8>>,
+    /// API key for authenticating with the broker.
+    /// When set, every RPC includes `authorization: Bearer <key>` metadata.
+    pub api_key: Option<String>,
 }
 
 impl ConnectOptions {
@@ -61,6 +64,14 @@ impl ConnectOptions {
         self.tls_client_key_pem = Some(key_pem);
         self
     }
+
+    /// Set an API key for authenticating with the broker.
+    ///
+    /// When set, every RPC attaches `authorization: Bearer <key>` metadata.
+    pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.api_key = Some(api_key.into());
+        self
+    }
 }
 
 /// Idiomatic Rust client for the Fila message broker.
@@ -70,6 +81,8 @@ impl ConnectOptions {
 #[derive(Debug, Clone)]
 pub struct FilaClient {
     inner: FilaServiceClient<Channel>,
+    /// API key sent as `authorization: Bearer <key>` on every request.
+    api_key: Option<String>,
 }
 
 impl FilaClient {
@@ -78,7 +91,10 @@ impl FilaClient {
     /// The address should include the scheme, e.g. `http://localhost:5555`.
     pub async fn connect(addr: impl Into<String>) -> Result<Self, ConnectError> {
         let inner = FilaServiceClient::connect(addr.into()).await?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            api_key: None,
+        })
     }
 
     /// Connect to a Fila broker with custom options.
@@ -108,7 +124,24 @@ impl FilaClient {
 
         let channel = endpoint.connect().await?;
         let inner = FilaServiceClient::new(channel);
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            api_key: options.api_key,
+        })
+    }
+
+    /// Build a tonic `Request<T>` with the API key authorization header attached,
+    /// if an API key was configured.
+    fn request<T>(&self, body: T) -> tonic::Request<T> {
+        let mut req = tonic::Request::new(body);
+        if let Some(ref key) = self.api_key {
+            if let Ok(val) =
+                tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
+            {
+                req.metadata_mut().insert("authorization", val);
+            }
+        }
+        req
     }
 
     /// Enqueue a message to a queue.
@@ -123,11 +156,11 @@ impl FilaClient {
         let response = self
             .inner
             .clone()
-            .enqueue(EnqueueRequest {
+            .enqueue(self.request(EnqueueRequest {
                 queue: queue.to_string(),
                 headers,
                 payload: payload.into(),
-            })
+            }))
             .await
             .map_err(enqueue_status_error)?;
 
@@ -151,9 +184,9 @@ impl FilaClient {
         let response = self
             .inner
             .clone()
-            .consume(ConsumeRequest {
+            .consume(self.request(ConsumeRequest {
                 queue: queue.to_string(),
-            })
+            }))
             .await
             .map_err(consume_status_error)?;
 
@@ -185,10 +218,10 @@ impl FilaClient {
     pub async fn ack(&self, queue: &str, message_id: &str) -> Result<(), AckError> {
         self.inner
             .clone()
-            .ack(AckRequest {
+            .ack(self.request(AckRequest {
                 queue: queue.to_string(),
                 message_id: message_id.to_string(),
-            })
+            }))
             .await
             .map_err(ack_status_error)?;
 
@@ -202,11 +235,11 @@ impl FilaClient {
     pub async fn nack(&self, queue: &str, message_id: &str, error: &str) -> Result<(), NackError> {
         self.inner
             .clone()
-            .nack(NackRequest {
+            .nack(self.request(NackRequest {
                 queue: queue.to_string(),
                 message_id: message_id.to_string(),
                 error: error.to_string(),
-            })
+            }))
             .await
             .map_err(nack_status_error)?;
 

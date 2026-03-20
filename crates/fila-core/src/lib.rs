@@ -7,7 +7,9 @@ pub mod queue;
 pub mod storage;
 pub mod telemetry;
 
-pub use broker::{Broker, BrokerConfig, QueueSummary, ReadyMessage, SchedulerCommand, TlsParams};
+pub use broker::{
+    AuthConfig, Broker, BrokerConfig, QueueSummary, ReadyMessage, SchedulerCommand, TlsParams,
+};
 pub use error::{
     AckError, BrokerError, BrokerResult, ConfigError, CreateQueueError, DeleteQueueError,
     EnqueueError, ListQueuesError, NackError, RedriveError, StatsError, StorageError,

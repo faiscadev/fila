@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "15.2"
     title: "API Key Authentication"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/15.2-api-key-authentication"
     pr: null
     dependsOn: []
   - id: "15.3"

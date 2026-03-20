@@ -1,4 +1,5 @@
 mod admin_service;
+mod auth;
 mod error;
 mod service;
 mod trace_context;
@@ -136,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let serve_result = server_builder
         .layer(trace_context::TraceContextLayer)
+        .layer(auth::AuthLayer::new(Arc::clone(&broker)))
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))
         .serve_with_shutdown(addr, shutdown_signal())

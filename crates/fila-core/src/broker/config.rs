@@ -12,6 +12,9 @@ pub struct BrokerConfig {
     /// TLS configuration. `None` (the default) disables TLS entirely.
     /// Presence of this section in `fila.toml` enables TLS.
     pub tls: Option<TlsParams>,
+    /// Authentication configuration. `None` (the default) disables authentication.
+    /// Presence of this section in `fila.toml` enables API key authentication.
+    pub auth: Option<AuthConfig>,
 }
 
 /// Cluster configuration for Raft-based horizontal scaling.
@@ -55,6 +58,14 @@ pub struct TlsParams {
     /// When absent, client certificates are not required (server-TLS only).
     pub ca_file: Option<String>,
 }
+
+/// Authentication configuration. Presence in `BrokerConfig.auth` (i.e. an `[auth]` section
+/// in `fila.toml`) enables API key authentication; absence disables it entirely.
+///
+/// When enabled, every gRPC RPC must include `authorization: Bearer <key>` metadata,
+/// except for the key-management RPCs (`CreateApiKey`, `RevokeApiKey`, `ListApiKeys`).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AuthConfig {}
 
 /// Server configuration (gRPC listen address).
 #[derive(Debug, Clone, Deserialize)]
