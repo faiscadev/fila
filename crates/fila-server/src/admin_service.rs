@@ -6,16 +6,18 @@ use fila_core::{
 };
 use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
-    ApiKeyInfo, ConfigEntry, CreateApiKeyRequest, CreateApiKeyResponse, CreateQueueRequest,
-    CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse, GetConfigRequest,
-    GetConfigResponse, GetStatsRequest, GetStatsResponse, ListApiKeysRequest, ListApiKeysResponse,
-    ListConfigRequest, ListConfigResponse, ListQueuesRequest, ListQueuesResponse,
-    PerFairnessKeyStats, PerThrottleKeyStats, QueueInfo, RedriveRequest, RedriveResponse,
-    RevokeApiKeyRequest, RevokeApiKeyResponse, SetConfigRequest, SetConfigResponse,
+    AclPermission, ApiKeyInfo, ConfigEntry, CreateApiKeyRequest, CreateApiKeyResponse,
+    CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
+    GetAclRequest, GetAclResponse, GetConfigRequest, GetConfigResponse, GetStatsRequest,
+    GetStatsResponse, ListApiKeysRequest, ListApiKeysResponse, ListConfigRequest,
+    ListConfigResponse, ListQueuesRequest, ListQueuesResponse, PerFairnessKeyStats,
+    PerThrottleKeyStats, QueueInfo, RedriveRequest, RedriveResponse, RevokeApiKeyRequest,
+    RevokeApiKeyResponse, SetAclRequest, SetAclResponse, SetConfigRequest, SetConfigResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::instrument;
 
+use crate::auth::ValidatedKeyId;
 use crate::error::IntoStatus;
 
 /// Map cluster write errors to appropriate gRPC status codes.
@@ -42,6 +44,28 @@ impl AdminService {
     pub fn new(broker: Arc<Broker>, cluster: Option<Arc<ClusterHandle>>) -> Self {
         Self { broker, cluster }
     }
+
+    /// Check that the request's validated key has `admin:*` permission.
+    ///
+    /// Returns `Ok(())` when auth is disabled (no `ValidatedKeyId` extension) or
+    /// when the key has admin access. Returns `PERMISSION_DENIED` otherwise.
+    fn check_admin<T>(&self, request: &tonic::Request<T>) -> Result<(), Status> {
+        let key_id = match request.extensions().get::<ValidatedKeyId>() {
+            Some(k) => &k.0,
+            None => return Ok(()), // auth disabled
+        };
+        let permitted = self
+            .broker
+            .check_permission(key_id, fila_core::broker::auth::Permission::Admin, "*")
+            .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+        if permitted {
+            Ok(())
+        } else {
+            Err(Status::permission_denied(
+                "key does not have admin permission",
+            ))
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -51,6 +75,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<CreateQueueRequest>,
     ) -> Result<Response<CreateQueueResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
 
         if req.name.is_empty() {
@@ -135,6 +160,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<DeleteQueueRequest>,
     ) -> Result<Response<DeleteQueueResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
 
         if req.queue.is_empty() {
@@ -180,6 +206,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<SetConfigRequest>,
     ) -> Result<Response<SetConfigResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
 
         if req.key.is_empty() {
@@ -220,6 +247,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<GetConfigRequest>,
     ) -> Result<Response<GetConfigResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
 
         if req.key.is_empty() {
@@ -255,6 +283,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<ListConfigRequest>,
     ) -> Result<Response<ListConfigResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
 
         if req.prefix.len() > AdminService::MAX_CONFIG_KEY_LEN {
@@ -294,6 +323,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<GetStatsRequest>,
     ) -> Result<Response<GetStatsResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
 
         if req.queue.is_empty() {
@@ -372,6 +402,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<RedriveRequest>,
     ) -> Result<Response<RedriveResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
 
         if req.dlq_queue.is_empty() {
@@ -398,8 +429,9 @@ impl FilaAdmin for AdminService {
     #[instrument(skip(self))]
     async fn list_queues(
         &self,
-        _request: Request<ListQueuesRequest>,
+        request: Request<ListQueuesRequest>,
     ) -> Result<Response<ListQueuesResponse>, Status> {
+        self.check_admin(&request)?;
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.broker
             .send_command(SchedulerCommand::ListQueues { reply: reply_tx })
@@ -455,6 +487,46 @@ impl FilaAdmin for AdminService {
         if req.name.is_empty() {
             return Err(Status::invalid_argument("name must not be empty"));
         }
+        // `CreateApiKey` bypasses authentication (bootstrap), so we cannot rely on the
+        // auth middleware to inject a `ValidatedKeyId`.  To prevent privilege escalation,
+        // we block `is_superadmin: true` once an admin-capable key (superadmin or a key
+        // with `admin:*` permission) already exists.  Non-admin keys do not block bootstrap,
+        // so a deployment that only has produce/consume keys can still create its first
+        // superadmin key without being permanently locked out.
+        //
+        // TOCTOU note: the list-then-write pattern has an inherent race window.  Concurrent
+        // bootstrap requests arriving in the same nanosecond could each see an empty admin
+        // set and both create superadmin keys.  This is an operator-level operation (CLI /
+        // one-time setup), so the practical risk is negligible and does not warrant the
+        // complexity of distributed compare-and-swap locking.
+        if req.is_superadmin && self.broker.auth_enabled {
+            let existing = self
+                .broker
+                .list_api_keys()
+                .map_err(|e| Status::internal(format!("storage error: {e}")))?;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let has_admin_key = existing.iter().any(|k| {
+                // Expired keys do not count — they can no longer be used to grant admin access.
+                if let Some(exp) = k.expires_at_ms {
+                    if now_ms > exp {
+                        return false;
+                    }
+                }
+                k.is_superadmin
+                    || k.permissions
+                        .iter()
+                        .any(|(kind, pattern)| kind == "admin" && pattern == "*")
+            });
+            if has_admin_key {
+                return Err(Status::permission_denied(
+                    "superadmin key creation is only permitted when no admin-capable key exists; \
+                     use an existing key with admin permission to manage access",
+                ));
+            }
+        }
         let expires_at = if req.expires_at_ms == 0 {
             None
         } else {
@@ -462,9 +534,13 @@ impl FilaAdmin for AdminService {
         };
         let (key_id, token) = self
             .broker
-            .create_api_key(&req.name, expires_at)
+            .create_api_key(&req.name, expires_at, req.is_superadmin)
             .map_err(|e| Status::internal(format!("storage error: {e}")))?;
-        Ok(Response::new(CreateApiKeyResponse { key_id, key: token }))
+        Ok(Response::new(CreateApiKeyResponse {
+            key_id,
+            key: token,
+            is_superadmin: req.is_superadmin,
+        }))
     }
 
     #[instrument(skip(self))]
@@ -472,6 +548,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<RevokeApiKeyRequest>,
     ) -> Result<Response<RevokeApiKeyResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
         if req.key_id.is_empty() {
             return Err(Status::invalid_argument("key_id must not be empty"));
@@ -490,8 +567,9 @@ impl FilaAdmin for AdminService {
     #[instrument(skip(self))]
     async fn list_api_keys(
         &self,
-        _request: Request<ListApiKeysRequest>,
+        request: Request<ListApiKeysRequest>,
     ) -> Result<Response<ListApiKeysResponse>, Status> {
+        self.check_admin(&request)?;
         let entries = self
             .broker
             .list_api_keys()
@@ -503,9 +581,64 @@ impl FilaAdmin for AdminService {
                 name: e.name,
                 created_at_ms: e.created_at_ms,
                 expires_at_ms: e.expires_at_ms.unwrap_or(0),
+                is_superadmin: e.is_superadmin,
             })
             .collect();
         Ok(Response::new(ListApiKeysResponse { keys }))
+    }
+
+    #[instrument(skip(self))]
+    async fn set_acl(
+        &self,
+        request: Request<SetAclRequest>,
+    ) -> Result<Response<SetAclResponse>, Status> {
+        self.check_admin(&request)?;
+        let req = request.into_inner();
+        if req.key_id.is_empty() {
+            return Err(Status::invalid_argument("key_id must not be empty"));
+        }
+        let permissions = req
+            .permissions
+            .into_iter()
+            .map(|p| (p.kind, p.pattern))
+            .collect();
+        let found = self
+            .broker
+            .set_acl(&req.key_id, permissions)
+            .map_err(|e| Status::internal(format!("storage error: {e}")))?;
+        if found {
+            Ok(Response::new(SetAclResponse {}))
+        } else {
+            Err(Status::not_found("api key not found"))
+        }
+    }
+
+    #[instrument(skip(self))]
+    async fn get_acl(
+        &self,
+        request: Request<GetAclRequest>,
+    ) -> Result<Response<GetAclResponse>, Status> {
+        self.check_admin(&request)?;
+        let req = request.into_inner();
+        if req.key_id.is_empty() {
+            return Err(Status::invalid_argument("key_id must not be empty"));
+        }
+        match self
+            .broker
+            .get_acl(&req.key_id)
+            .map_err(|e| Status::internal(format!("storage error: {e}")))?
+        {
+            Some(entry) => Ok(Response::new(GetAclResponse {
+                key_id: entry.key_id,
+                permissions: entry
+                    .permissions
+                    .into_iter()
+                    .map(|(kind, pattern)| AclPermission { kind, pattern })
+                    .collect(),
+                is_superadmin: entry.is_superadmin,
+            })),
+            None => Err(Status::not_found("api key not found")),
+        }
     }
 }
 

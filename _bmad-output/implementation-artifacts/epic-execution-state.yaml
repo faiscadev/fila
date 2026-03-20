@@ -18,9 +18,34 @@ stories:
     dependsOn: []
   - id: "15.3"
     title: "Per-Queue Access Control"
-    status: in-progress
-    currentPhase: "dev"
+    status: done
+    currentPhase: "done"
     branch: "feat/15.3-per-queue-access-control"
-    pr: null
+    pr: 73
     dependsOn: ["15.2"]
 skippedIssues: []
+completedAt: "2026-03-19"
+summary:
+  totalStories: 3
+  completed: 3
+  skipped: 0
+  prs:
+    - id: 71
+      story: "15.1"
+      title: "mTLS Transport Security"
+      branch: "feat/15.1-mtls-transport-security"
+    - id: 72
+      story: "15.2"
+      title: "API Key Authentication"
+      branch: "feat/15.2-api-key-authentication"
+    - id: 73
+      story: "15.3"
+      title: "Per-Queue Access Control"
+      branch: "feat/15.3-per-queue-access-control"
+  notes: >
+    All 3 stories delivered. mTLS adds mutual TLS with cert-based identity.
+    API key auth adds bearer-token gating with key management CLI. Per-queue
+    ACL adds produce/consume/admin permission model with wildcard matching and
+    a bootstrap guard preventing privilege escalation post-bootstrap. Cubic
+    review resolved across 3 cycles for story 15.3 (privilege escalation P0,
+    bootstrap lockout P1, expired key filtering P2).
