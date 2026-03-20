@@ -1,6 +1,6 @@
 # Story 15.2: API Key Authentication
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -32,49 +32,49 @@ so that I can control which clients can access the broker.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Config (AC: 1, 10)
-  - [ ] 1.1 Add `AuthConfig` struct and `Option<AuthConfig>` to `BrokerConfig` in `config.rs`
-  - [ ] 1.2 Re-export from `broker/mod.rs` and `lib.rs`
-  - [ ] 1.3 Add TOML parsing tests (absent → disabled, present → enabled)
+- [x] Task 1: Config (AC: 1, 10)
+  - [x] 1.1 Add `AuthConfig` struct and `Option<AuthConfig>` to `BrokerConfig` in `config.rs`
+  - [x] 1.2 Re-export from `broker/mod.rs` and `lib.rs`
+  - [x] 1.3 Add TOML parsing tests (absent → disabled, present → enabled)
 
-- [ ] Task 2: Proto changes (AC: 5)
-  - [ ] 2.1 Add `ApiKeyEntry` message and `CreateApiKey`, `RevokeApiKey`, `ListApiKeys` RPCs to `fila_admin.proto`
-  - [ ] 2.2 Re-generate proto code
+- [x] Task 2: Proto changes (AC: 5)
+  - [x] 2.1 Add `ApiKeyEntry` message and `CreateApiKey`, `RevokeApiKey`, `ListApiKeys` RPCs to `fila_admin.proto`
+  - [x] 2.2 Re-generate proto code
 
-- [ ] Task 3: Domain types + storage (AC: 4, 5)
-  - [ ] 3.1 Add `sha2 = "0.10"` to workspace `Cargo.toml` (dev dep for fila-core)
-  - [ ] 3.2 Define `ApiKeyId` (UUID) and `ApiKeyEntry` (key_id, name, hashed_key, created_at, expires_at) in `broker/auth.rs`
-  - [ ] 3.3 Add `create_api_key`, `revoke_api_key`, `list_api_keys`, `validate_api_key_hash` methods to `StorageEngine` trait
-  - [ ] 3.4 Implement in `RocksDbEngine` using column family `auth` with key `api_key:<key_id>` → JSON `ApiKeyEntry`
-  - [ ] 3.5 Add validation helper: SHA-256 hash token, scan all keys to find matching hash
+- [x] Task 3: Domain types + storage (AC: 4, 5)
+  - [x] 3.1 Add `sha2 = "0.10"` to workspace `Cargo.toml` (dev dep for fila-core)
+  - [x] 3.2 Define `ApiKeyId` (UUID) and `ApiKeyEntry` (key_id, name, hashed_key, created_at, expires_at) in `broker/auth.rs`
+  - [x] 3.3 Add `create_api_key`, `revoke_api_key`, `list_api_keys`, `validate_api_key_hash` methods to `StorageEngine` trait
+  - [x] 3.4 Implement in `RocksDbEngine` using column family `auth` with key `api_key:<key_id>` → JSON `ApiKeyEntry`
+  - [x] 3.5 Add validation helper: SHA-256 hash token, scan all keys to find matching hash
 
-- [ ] Task 4: Broker methods (AC: 4, 5, 6)
-  - [ ] 4.1 Add `create_api_key`, `revoke_api_key`, `list_api_keys`, `validate_api_key` to `Broker`
-  - [ ] 4.2 `create_api_key`: generate random token (UUID v4 hex), hash it, store entry, return (key_id, token)
-  - [ ] 4.3 Audit log via `tracing::info!` on create and revoke
+- [x] Task 4: Broker methods (AC: 4, 5, 6)
+  - [x] 4.1 Add `create_api_key`, `revoke_api_key`, `list_api_keys`, `validate_api_key` to `Broker`
+  - [x] 4.2 `create_api_key`: generate random token (UUID v4 hex), hash it, store entry, return (key_id, token)
+  - [x] 4.3 Audit log via `tracing::info!` on create and revoke
 
-- [ ] Task 5: Auth middleware (AC: 2, 3, 4, 9)
-  - [ ] 5.1 Add `sha2` as dependency to `fila-core`
-  - [ ] 5.2 Write `AuthLayer` / `AuthService` tower middleware in `crates/fila-server/src/auth.rs`
-  - [ ] 5.3 Middleware extracts `authorization` header, parses `Bearer <token>`, hashes token, validates via broker
-  - [ ] 5.4 When auth disabled: pass through unconditionally
-  - [ ] 5.5 Apply layer in `fila-server/src/main.rs` between `TraceContextLayer` and the services
-  - [ ] 5.6 Admin RPCs for key management (`CreateApiKey`, `RevokeApiKey`, `ListApiKeys`) bypass auth (they're the mechanism for key issuance)
+- [x] Task 5: Auth middleware (AC: 2, 3, 4, 9)
+  - [x] 5.1 Add `sha2` as dependency to `fila-core`
+  - [x] 5.2 Write `AuthLayer` / `AuthService` tower middleware in `crates/fila-server/src/auth.rs`
+  - [x] 5.3 Middleware extracts `authorization` header, parses `Bearer <token>`, hashes token, validates via broker
+  - [x] 5.4 When auth disabled: pass through unconditionally
+  - [x] 5.5 Apply layer in `fila-server/src/main.rs` between `TraceContextLayer` and the services
+  - [x] 5.6 Admin RPCs for key management (`CreateApiKey`, `RevokeApiKey`, `ListApiKeys`) bypass auth (they're the mechanism for key issuance)
 
-- [ ] Task 6: Admin service wire-up (AC: 5)
-  - [ ] 6.1 Implement `CreateApiKey`, `RevokeApiKey`, `ListApiKeys` handlers in `admin_service.rs`
+- [x] Task 6: Admin service wire-up (AC: 5)
+  - [x] 6.1 Implement `CreateApiKey`, `RevokeApiKey`, `ListApiKeys` handlers in `admin_service.rs`
 
-- [ ] Task 7: SDK + CLI (AC: 7, 8)
-  - [ ] 7.1 Add `with_api_key(key: String)` to `ConnectOptions` in `fila-sdk/src/client.rs`
-  - [ ] 7.2 Apply `authorization: Bearer <key>` metadata interceptor via tonic `Interceptor`
-  - [ ] 7.3 Add `--api-key` flag to `fila` CLI; pass header via `tonic::metadata::MetadataValue`
+- [x] Task 7: SDK + CLI (AC: 7, 8)
+  - [x] 7.1 Add `with_api_key(key: String)` to `ConnectOptions` in `fila-sdk/src/client.rs`
+  - [x] 7.2 Apply `authorization: Bearer <key>` metadata interceptor via tonic `Interceptor`
+  - [x] 7.3 Add `--api-key` flag to `fila` CLI; pass header via `tonic::metadata::MetadataValue`
 
-- [ ] Task 8: Integration tests (AC: 1–4, 10)
-  - [ ] 8.1 Test: request succeeds without key when auth disabled
-  - [ ] 8.2 Test: request rejected without key when auth enabled
-  - [ ] 8.3 Test: request rejected with invalid key
-  - [ ] 8.4 Test: request succeeds with valid key
-  - [ ] 8.5 Test: revoked key is rejected
+- [x] Task 8: Integration tests (AC: 1–4, 10)
+  - [x] 8.1 Test: request succeeds without key when auth disabled
+  - [x] 8.2 Test: request rejected without key when auth enabled
+  - [x] 8.3 Test: request rejected with invalid key
+  - [x] 8.4 Test: request succeeds with valid key
+  - [x] 8.5 Test: revoked key is rejected
 
 ## Dev Notes
 
@@ -186,4 +186,25 @@ claude-sonnet-4-6
 
 ### Completion Notes List
 
+- Implemented auth key storage via existing `put_state`/`list_state_by_prefix` — no new StorageEngine trait methods needed
+- Only `CreateApiKey` bypasses auth (bootstrap); `RevokeApiKey`/`ListApiKeys` require a valid key
+- Cubic caught 8 issues across 2 review cycles: security bypass scope, poll_ready contract, layer ordering, silent MetadataValue failure, missing name validation, silent deserialization, test specificity, stale doc comment — all fixed
+- `fila auth create/revoke/list` CLI subcommands added (not in original ACs but implied)
+- PR: #72
+
 ### File List
+
+- `Cargo.toml` — added `sha2`, `rcgen`, updated `uuid` features
+- `crates/fila-core/Cargo.toml` — added `sha2`, `"fs"` tokio feature
+- `crates/fila-core/src/broker/auth.rs` — new: `ApiKeyEntry`, `hash_key`, `storage_key`, `now_ms`
+- `crates/fila-core/src/broker/config.rs` — added `AuthConfig`, `Option<AuthConfig>` to `BrokerConfig`
+- `crates/fila-core/src/broker/mod.rs` — added `create_api_key`, `revoke_api_key`, `list_api_keys`, `validate_api_key`
+- `crates/fila-core/src/lib.rs` — re-exported `AuthConfig`
+- `crates/fila-proto/proto/fila/v1/admin.proto` — added `CreateApiKey`, `RevokeApiKey`, `ListApiKeys` RPCs
+- `crates/fila-server/src/auth.rs` — new: Tower `AuthLayer`/`AuthService` middleware
+- `crates/fila-server/src/admin_service.rs` — added `create_api_key`, `revoke_api_key`, `list_api_keys` handlers
+- `crates/fila-server/src/main.rs` — added `mod auth`, applied `AuthLayer`
+- `crates/fila-server/Cargo.toml` — added `futures-core`
+- `crates/fila-sdk/src/client.rs` — added `with_api_key`, `request<T>` helper, `api_key` on `FilaClient`
+- `crates/fila-cli/src/main.rs` — added `--api-key` flag, `auth create/revoke/list` subcommands
+- `crates/fila-e2e/tests/auth.rs` — new: 5 integration tests
