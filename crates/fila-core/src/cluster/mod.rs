@@ -429,7 +429,8 @@ pub async fn watch_leader_changes(
 }
 
 /// Build a `ClientTlsConfig` from `TlsParams`.
-/// The CA cert is required for peer verification; client cert/key are used for mTLS.
+/// Client cert/key are always set (used as the mTLS identity). CA cert is optional:
+/// when present it is used for peer verification; when absent the system trust store is used.
 async fn build_client_tls(
     tls: Option<&TlsParams>,
 ) -> Result<Option<ClientTlsConfig>, Box<dyn std::error::Error>> {
@@ -492,8 +493,9 @@ impl ClusterManager {
     /// on `config.bind_addr`, and either bootstraps a new cluster or joins an
     /// existing one.
     ///
-    /// When `tls_config` is provided and `tls_config.enabled` is true, the
-    /// cluster gRPC server and all outgoing peer connections use mTLS.
+    /// When `tls_config` is `Some`, TLS is enabled on the cluster gRPC server and
+    /// all outgoing peer connections. If `tls_config.ca_file` is also set, client
+    /// certificates are verified (mTLS); otherwise server-TLS only is used.
     pub async fn start(
         config: &ClusterConfig,
         db: Arc<dyn RaftKeyValueStore>,
