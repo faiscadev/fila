@@ -5,8 +5,9 @@
 //! receive `UNAUTHENTICATED`. When auth is disabled (the default), all requests
 //! pass through unconditionally.
 //!
-//! Key-management RPCs (`CreateApiKey`, `RevokeApiKey`, `ListApiKeys`) always
-//! bypass authentication — they are the bootstrap mechanism for issuing keys.
+//! Only `CreateApiKey` bypasses authentication — it must be reachable without a
+//! key so operators can issue the first key (bootstrap problem). Once a key
+//! exists, `RevokeApiKey` and `ListApiKeys` require a valid key.
 
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
