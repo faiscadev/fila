@@ -18,8 +18,8 @@ stories:
     dependsOn: []
   - id: "15.3"
     title: "Per-Queue Access Control"
-    status: pr-open
-    currentPhase: "pr-review"
+    status: done
+    currentPhase: "done"
     branch: "feat/15.3-per-queue-access-control"
     pr: 73
     dependsOn: ["15.2"]
