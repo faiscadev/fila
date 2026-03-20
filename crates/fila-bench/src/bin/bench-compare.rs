@@ -48,7 +48,10 @@ fn main() {
     let result = compare_reports(&baseline, &current, threshold);
 
     if markdown {
-        println!("{}", format_markdown(&result, &baseline.commit, &current.commit));
+        println!(
+            "{}",
+            format_markdown(&result, &baseline.commit, &current.commit)
+        );
     } else {
         print_summary(&result);
     }
