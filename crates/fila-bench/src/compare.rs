@@ -203,6 +203,82 @@ pub fn print_summary(result: &CompareResult) {
     println!("========================================\n");
 }
 
+/// Format a comparison result as a markdown table for use in PR descriptions.
+pub fn format_markdown(
+    result: &CompareResult,
+    baseline_commit: &str,
+    current_commit: &str,
+) -> String {
+    let mut out = String::new();
+
+    out.push_str(&format!(
+        "**Baseline commit:** `{}`  **PR commit:** `{}`  **Threshold:** {:.0}%\n\n",
+        baseline_commit, current_commit, result.threshold_pct
+    ));
+
+    out.push_str("| Benchmark | Baseline | Current | Change | Unit | |\n");
+    out.push_str("|---|---:|---:|---:|---|:---:|\n");
+
+    let mut regressed_count = 0usize;
+    let mut improved_count = 0usize;
+
+    for cmp in &result.comparisons {
+        let baseline_str = if cmp.is_new {
+            "—".to_string()
+        } else {
+            format!("{:.2}", cmp.baseline)
+        };
+
+        let change_str = if cmp.is_new {
+            "new".to_string()
+        } else if cmp.baseline == 0.0 {
+            "n/a".to_string()
+        } else {
+            format!("{:+.1}%", cmp.change_pct)
+        };
+
+        let status_str = if cmp.is_new {
+            "(new)".to_string()
+        } else {
+            match cmp.status {
+                CompareStatus::Regressed => {
+                    regressed_count += 1;
+                    "🔴".to_string()
+                }
+                CompareStatus::Improved => {
+                    improved_count += 1;
+                    "🟢".to_string()
+                }
+                CompareStatus::Unchanged => String::new(),
+            }
+        };
+
+        out.push_str(&format!(
+            "| {} | {} | {:.2} | {} | {} | {} |\n",
+            cmp.name, baseline_str, cmp.current, change_str, cmp.unit, status_str
+        ));
+    }
+
+    let unchanged_count = result.comparisons.len() - regressed_count - improved_count;
+
+    out.push('\n');
+    out.push_str(&format!(
+        "**Summary:** {} regressed, {} improved, {} unchanged",
+        regressed_count, improved_count, unchanged_count
+    ));
+
+    if result.has_regressions {
+        out.push('\n');
+        out.push('\n');
+        out.push_str(&format!(
+            "> ⚠️ **Performance regression detected** — {} metric(s) exceeded the {:.0}% threshold",
+            regressed_count, result.threshold_pct
+        ));
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
