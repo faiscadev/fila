@@ -9,7 +9,11 @@
 //! a `bootstrap_apikey` in `fila.toml` or set `FILA_BOOTSTRAP_APIKEY`. The
 //! bootstrap key is accepted as a valid credential by `validate_api_key` without
 //! a storage lookup, so operators can use it to call `CreateApiKey` and then
-//! remove it from config once real keys are in place.
+//! rotate it out once real keys are in place.
+//!
+//! When a request is authenticated, the middleware injects a `ValidatedKeyId`
+//! extension into the HTTP request. Service handlers extract it to perform
+//! per-queue ACL checks.
 
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
@@ -17,9 +21,16 @@ use std::task::{Context as TaskContext, Poll};
 use fila_core::Broker;
 use tower::{Layer, Service};
 
+/// Request extension injected by the auth middleware for authenticated requests.
+///
+/// Service handlers extract this to perform ACL checks via `broker.check_permission`.
+/// Absent when auth is disabled.
+#[derive(Clone, Debug)]
+pub struct ValidatedKeyId(pub fila_core::broker::auth::CallerKey);
+
 /// gRPC paths that bypass authentication. Empty — all RPCs require a valid key
 /// when auth is enabled. Use `bootstrap_apikey` in config or `FILA_BOOTSTRAP_APIKEY`
-/// to provision the first key without an auth bypass.
+/// to provision the first key without a bypass.
 const AUTH_BYPASS_PATHS: &[&str] = &[];
 
 /// Tower layer that wraps services with API key authentication.
@@ -69,7 +80,7 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: http::Request<B>) -> Self::Future {
+    fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
         // Take the readied service and replace it with a clone so that
         // `self.inner` is ready for the next poll_ready/call cycle.
         // This satisfies the Tower contract: the instance that passed
@@ -82,7 +93,7 @@ where
             return Box::pin(inner.call(req));
         }
 
-        // `CreateApiKey` bypasses authentication (bootstrap).
+        // Check bypass paths (currently empty — all RPCs require auth).
         let path = req.uri().path();
         for bypass in AUTH_BYPASS_PATHS {
             if path == *bypass {
@@ -109,8 +120,11 @@ where
             };
 
             match broker.validate_api_key(&token) {
-                Ok(true) => inner.call(req).await,
-                Ok(false) => Ok(unauthenticated_response()),
+                Ok(Some(caller)) => {
+                    req.extensions_mut().insert(ValidatedKeyId(caller));
+                    inner.call(req).await
+                }
+                Ok(None) => Ok(unauthenticated_response()),
                 Err(e) => {
                     tracing::error!(error = %e, "auth storage error");
                     Ok(internal_error_response())
