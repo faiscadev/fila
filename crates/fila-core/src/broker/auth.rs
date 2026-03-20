@@ -43,6 +43,77 @@ pub struct ApiKeyEntry {
     pub is_superadmin: bool,
 }
 
+/// Returns `true` if every queue matched by `granted` is also matched by `admin`.
+///
+/// Used to enforce the delegation invariant: a caller can only grant a permission
+/// whose pattern scope is a subset of their own admin scope.
+///
+/// | granted \ admin | `"foo"` | `"foo.*"` | `"*"` |
+/// |-----------------|---------|-----------|-------|
+/// | `"foo"`         | true    | false     | true  |
+/// | `"foo.bar"`     | false   | true      | true  |
+/// | `"foo.*"`       | false   | true      | true  |
+/// | `"foo.bar.*"`   | false   | true      | true  |
+/// | `"bar"`         | false   | false     | true  |
+/// | `"*"`           | false   | false     | true  |
+pub fn pattern_subsumed_by(granted: &str, admin: &str) -> bool {
+    if admin == "*" {
+        return true;
+    }
+    if granted == "*" {
+        return false;
+    }
+    if granted == admin {
+        return true;
+    }
+    if let Some(admin_prefix) = admin.strip_suffix(".*") {
+        match granted.strip_suffix(".*") {
+            Some(granted_prefix) => {
+                // e.g. admin:"foo.*", granted:"foo.bar.*" → granted_prefix starts with "foo."
+                granted_prefix.starts_with(&format!("{admin_prefix}."))
+            }
+            None => {
+                // e.g. admin:"foo.*", granted:"foo.bar" → "foo.bar" starts with "foo."
+                granted.starts_with(&format!("{admin_prefix}."))
+            }
+        }
+    } else {
+        // admin is an exact name and granted != admin → not subsumed
+        false
+    }
+}
+
+/// Returns `true` if the entry has any `admin` permission on any queue
+/// (including `is_superadmin`).
+pub fn has_any_admin_permission(entry: &ApiKeyEntry) -> bool {
+    entry.is_superadmin || entry.permissions.iter().any(|(k, _)| k == "admin")
+}
+
+/// Returns `true` if the caller can grant the given `(kind, pattern)` permission.
+///
+/// Superadmins can grant anything. Other callers can only grant a permission
+/// whose pattern is subsumed by one of their own `admin` grants.
+pub fn caller_can_grant(caller: &ApiKeyEntry, _kind: &str, pattern: &str) -> bool {
+    if caller.is_superadmin {
+        return true;
+    }
+    caller
+        .permissions
+        .iter()
+        .any(|(k, p)| k == "admin" && pattern_subsumed_by(pattern, p))
+}
+
+/// Returns `true` if the caller has `admin` permission covering `queue`.
+pub fn caller_has_queue_admin(caller: &ApiKeyEntry, queue: &str) -> bool {
+    if caller.is_superadmin {
+        return true;
+    }
+    caller
+        .permissions
+        .iter()
+        .any(|(k, p)| k == "admin" && pattern_matches(p, queue))
+}
+
 /// Returns `true` if `pattern` matches `queue`.
 ///
 /// Pattern rules:
@@ -101,6 +172,133 @@ pub fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── pattern_subsumed_by ──────────────────────────────────────────────────
+
+    #[test]
+    fn subsumed_by_star_always_true() {
+        assert!(pattern_subsumed_by("*", "*"));
+        assert!(pattern_subsumed_by("foo", "*"));
+        assert!(pattern_subsumed_by("foo.*", "*"));
+        assert!(pattern_subsumed_by("foo.bar", "*"));
+    }
+
+    #[test]
+    fn wildcard_granted_only_subsumed_by_star() {
+        assert!(!pattern_subsumed_by("*", "foo"));
+        assert!(!pattern_subsumed_by("*", "foo.*"));
+    }
+
+    #[test]
+    fn exact_subsumed_by_matching_prefix_wildcard() {
+        assert!(pattern_subsumed_by("foo.bar", "foo.*"));
+        assert!(pattern_subsumed_by("foo.bar.baz", "foo.*"));
+        assert!(!pattern_subsumed_by("foo", "foo.*")); // "foo.*" does not cover "foo"
+        assert!(!pattern_subsumed_by("bar", "foo.*"));
+    }
+
+    #[test]
+    fn prefix_wildcard_subsumed_by_broader_prefix_wildcard() {
+        assert!(pattern_subsumed_by("foo.bar.*", "foo.*"));
+        assert!(pattern_subsumed_by("foo.*", "foo.*")); // same
+        assert!(!pattern_subsumed_by("foo.*", "foo.bar.*")); // broader, not subsumed
+        assert!(!pattern_subsumed_by("bar.*", "foo.*"));
+    }
+
+    #[test]
+    fn exact_subsumed_by_same_exact() {
+        assert!(pattern_subsumed_by("orders", "orders"));
+        assert!(!pattern_subsumed_by("orders", "payments"));
+        assert!(!pattern_subsumed_by("orders.us", "orders")); // exact admin doesn't cover sub-names
+    }
+
+    // ── caller_can_grant ─────────────────────────────────────────────────────
+
+    fn make_entry(perms: Vec<(&str, &str)>, is_superadmin: bool) -> ApiKeyEntry {
+        ApiKeyEntry {
+            key_id: "k".into(),
+            name: "test".into(),
+            hashed_key: "h".into(),
+            created_at_ms: 0,
+            expires_at_ms: None,
+            permissions: perms
+                .into_iter()
+                .map(|(k, p)| (k.into(), p.into()))
+                .collect(),
+            is_superadmin,
+        }
+    }
+
+    #[test]
+    fn superadmin_can_grant_anything() {
+        let caller = make_entry(vec![], true);
+        assert!(caller_can_grant(&caller, "produce", "*"));
+        assert!(caller_can_grant(&caller, "admin", "*"));
+        assert!(caller_can_grant(&caller, "consume", "orders"));
+    }
+
+    #[test]
+    fn admin_star_can_grant_any_pattern() {
+        let caller = make_entry(vec![("admin", "*")], false);
+        assert!(caller_can_grant(&caller, "produce", "orders"));
+        assert!(caller_can_grant(&caller, "consume", "payments.*"));
+        assert!(caller_can_grant(&caller, "admin", "orders"));
+        assert!(caller_can_grant(&caller, "produce", "*"));
+    }
+
+    #[test]
+    fn admin_queue_can_grant_within_scope() {
+        let caller = make_entry(vec![("admin", "orders.*")], false);
+        assert!(caller_can_grant(&caller, "produce", "orders.us"));
+        assert!(caller_can_grant(&caller, "consume", "orders.eu"));
+        assert!(caller_can_grant(&caller, "admin", "orders.us"));
+        assert!(!caller_can_grant(&caller, "produce", "payments"));
+        assert!(!caller_can_grant(&caller, "produce", "*"));
+        assert!(!caller_can_grant(&caller, "produce", "orders")); // "orders" not in "orders.*"
+    }
+
+    #[test]
+    fn admin_exact_queue_can_grant_exact_only() {
+        let caller = make_entry(vec![("admin", "orders")], false);
+        assert!(caller_can_grant(&caller, "produce", "orders"));
+        assert!(caller_can_grant(&caller, "consume", "orders"));
+        assert!(caller_can_grant(&caller, "admin", "orders"));
+        assert!(!caller_can_grant(&caller, "produce", "orders.us"));
+        assert!(!caller_can_grant(&caller, "produce", "payments"));
+    }
+
+    // ── caller_has_queue_admin ───────────────────────────────────────────────
+
+    #[test]
+    fn superadmin_has_admin_on_any_queue() {
+        let caller = make_entry(vec![], true);
+        assert!(caller_has_queue_admin(&caller, "orders"));
+        assert!(caller_has_queue_admin(&caller, "anything"));
+    }
+
+    #[test]
+    fn admin_star_has_admin_on_any_queue() {
+        let caller = make_entry(vec![("admin", "*")], false);
+        assert!(caller_has_queue_admin(&caller, "orders"));
+        assert!(caller_has_queue_admin(&caller, "payments"));
+    }
+
+    #[test]
+    fn admin_prefix_has_admin_on_matching_queues() {
+        let caller = make_entry(vec![("admin", "orders.*")], false);
+        assert!(caller_has_queue_admin(&caller, "orders.us"));
+        assert!(caller_has_queue_admin(&caller, "orders.eu"));
+        assert!(!caller_has_queue_admin(&caller, "orders")); // not matched by "orders.*"
+        assert!(!caller_has_queue_admin(&caller, "payments"));
+    }
+
+    #[test]
+    fn produce_permission_does_not_grant_queue_admin() {
+        let caller = make_entry(vec![("produce", "orders")], false);
+        assert!(!caller_has_queue_admin(&caller, "orders"));
+    }
+
+    // ── pattern_star_matches_anything (existing) ─────────────────────────────
 
     #[test]
     fn pattern_star_matches_anything() {

@@ -45,10 +45,12 @@ impl AdminService {
         Self { broker, cluster }
     }
 
-    /// Check that the request's validated key has `admin:*` permission.
+    /// Check that the request's validated key has `admin:*` permission (or is superadmin).
     ///
-    /// Returns `Ok(())` when auth is disabled (no `ValidatedKeyId` extension) or
-    /// when the key has admin access. Returns `PERMISSION_DENIED` otherwise.
+    /// Used for global operations (config, stats, revoke, list) that are not
+    /// scoped to a specific queue or permission set.
+    ///
+    /// Returns `Ok(())` when auth is disabled or the key has global admin access.
     fn check_admin<T>(&self, request: &tonic::Request<T>) -> Result<(), Status> {
         let key_id = match request.extensions().get::<ValidatedKeyId>() {
             Some(k) => &k.0,
@@ -66,6 +68,32 @@ impl AdminService {
             ))
         }
     }
+
+    /// Check that the request's validated key has *any* admin permission.
+    ///
+    /// Used for scoped operations (create_queue, delete_queue, create_api_key,
+    /// set_acl) where a per-queue admin key (`admin:orders`) is sufficient.
+    /// The caller's `key_id` is returned so the handler can perform additional
+    /// scope checks.
+    ///
+    /// Returns `Ok(None)` when auth is disabled (all operations permitted).
+    fn require_any_admin<T>(&self, request: &tonic::Request<T>) -> Result<Option<String>, Status> {
+        let key_id = match request.extensions().get::<ValidatedKeyId>() {
+            Some(k) => k.0.clone(),
+            None => return Ok(None), // auth disabled
+        };
+        let ok = self
+            .broker
+            .has_any_admin(&key_id)
+            .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+        if ok {
+            Ok(Some(key_id))
+        } else {
+            Err(Status::permission_denied(
+                "key does not have admin permission",
+            ))
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -75,11 +103,25 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<CreateQueueRequest>,
     ) -> Result<Response<CreateQueueResponse>, Status> {
-        self.check_admin(&request)?;
+        let caller_key_id = self.require_any_admin(&request)?;
         let req = request.into_inner();
 
         if req.name.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
+        }
+
+        // Scope check: caller must have admin permission covering this queue name.
+        if let Some(ref kid) = caller_key_id {
+            let ok = self
+                .broker
+                .caller_has_queue_admin(kid, &req.name)
+                .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+            if !ok {
+                return Err(Status::permission_denied(format!(
+                    "key does not have admin permission on queue \"{}\"",
+                    req.name
+                )));
+            }
         }
         tracing::Span::current().record("queue_id", req.name.as_str());
 
@@ -160,11 +202,25 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<DeleteQueueRequest>,
     ) -> Result<Response<DeleteQueueResponse>, Status> {
-        self.check_admin(&request)?;
+        let caller_key_id = self.require_any_admin(&request)?;
         let req = request.into_inner();
 
         if req.queue.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
+        }
+
+        // Scope check: caller must have admin permission covering this queue.
+        if let Some(ref kid) = caller_key_id {
+            let ok = self
+                .broker
+                .caller_has_queue_admin(kid, &req.queue)
+                .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+            if !ok {
+                return Err(Status::permission_denied(format!(
+                    "key does not have admin permission on queue \"{}\"",
+                    req.queue
+                )));
+            }
         }
         tracing::Span::current().record("queue_id", req.queue.as_str());
 
@@ -483,10 +539,25 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<CreateApiKeyRequest>,
     ) -> Result<Response<CreateApiKeyResponse>, Status> {
-        self.check_admin(&request)?;
+        let caller_key_id = self.require_any_admin(&request)?;
         let req = request.into_inner();
         if req.name.is_empty() {
             return Err(Status::invalid_argument("name must not be empty"));
+        }
+        // Only superadmins can create other superadmin keys — admins cannot
+        // elevate a new key beyond their own privilege level.
+        if req.is_superadmin {
+            if let Some(ref kid) = caller_key_id {
+                let ok = self
+                    .broker
+                    .is_superadmin(kid)
+                    .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+                if !ok {
+                    return Err(Status::permission_denied(
+                        "only superadmin keys can create other superadmin keys",
+                    ));
+                }
+            }
         }
         let expires_at = if req.expires_at_ms == 0 {
             None
@@ -553,7 +624,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<SetAclRequest>,
     ) -> Result<Response<SetAclResponse>, Status> {
-        self.check_admin(&request)?;
+        let caller_key_id = self.require_any_admin(&request)?;
         let req = request.into_inner();
         if req.key_id.is_empty() {
             return Err(Status::invalid_argument("key_id must not be empty"));
@@ -565,6 +636,23 @@ impl FilaAdmin for AdminService {
                     "invalid permission kind \"{}\"; must be one of: produce, consume, admin",
                     p.kind
                 )));
+            }
+        }
+        // Delegation scope check: caller can only grant permissions within their own admin scope.
+        if let Some(ref kid) = caller_key_id {
+            let perms: Vec<(String, String)> = req
+                .permissions
+                .iter()
+                .map(|p| (p.kind.clone(), p.pattern.clone()))
+                .collect();
+            let ok = self
+                .broker
+                .caller_can_grant_all(kid, &perms)
+                .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+            if !ok {
+                return Err(Status::permission_denied(
+                    "one or more permissions exceed the caller's admin scope",
+                ));
             }
         }
         let permissions = req
