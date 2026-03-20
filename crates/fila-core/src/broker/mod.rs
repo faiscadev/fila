@@ -282,10 +282,7 @@ impl Broker {
     }
 
     /// Get the ACL permissions for a key.
-    pub fn get_acl(
-        &self,
-        key_id: &str,
-    ) -> crate::error::StorageResult<Option<auth::ApiKeyEntry>> {
+    pub fn get_acl(&self, key_id: &str) -> crate::error::StorageResult<Option<auth::ApiKeyEntry>> {
         use auth::ApiKeyEntry;
 
         let sk = auth::storage_key(key_id);

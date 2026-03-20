@@ -589,11 +589,7 @@ async fn cmd_auth_create(
     }
 }
 
-async fn cmd_auth_acl_set(
-    client: &mut AdminClient,
-    key_id: String,
-    permissions: Vec<String>,
-) {
+async fn cmd_auth_acl_set(client: &mut AdminClient, key_id: String, permissions: Vec<String>) {
     let parsed: Vec<AclPermission> = match permissions
         .iter()
         .map(|p| {
@@ -771,9 +767,10 @@ async fn main() {
             AuthCommands::Revoke { key_id } => cmd_auth_revoke(&mut client, key_id).await,
             AuthCommands::List => cmd_auth_list(&mut client).await,
             AuthCommands::Acl(acl_cmd) => match acl_cmd {
-                AclCommands::Set { key_id, permissions } => {
-                    cmd_auth_acl_set(&mut client, key_id, permissions).await
-                }
+                AclCommands::Set {
+                    key_id,
+                    permissions,
+                } => cmd_auth_acl_set(&mut client, key_id, permissions).await,
                 AclCommands::Get { key_id } => cmd_auth_acl_get(&mut client, key_id).await,
             },
         },

@@ -75,7 +75,11 @@ impl FilaService for HotPathService {
         if let Some(ref kid) = key_id {
             let permitted = self
                 .broker
-                .check_permission(kid, fila_core::broker::auth::Permission::Produce, &req.queue)
+                .check_permission(
+                    kid,
+                    fila_core::broker::auth::Permission::Produce,
+                    &req.queue,
+                )
                 .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
             if !permitted {
                 return Err(Status::permission_denied(format!(
@@ -190,7 +194,11 @@ impl FilaService for HotPathService {
         if let Some(ref kid) = key_id {
             let permitted = self
                 .broker
-                .check_permission(kid, fila_core::broker::auth::Permission::Consume, &req.queue)
+                .check_permission(
+                    kid,
+                    fila_core::broker::auth::Permission::Consume,
+                    &req.queue,
+                )
                 .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
             if !permitted {
                 return Err(Status::permission_denied(format!(

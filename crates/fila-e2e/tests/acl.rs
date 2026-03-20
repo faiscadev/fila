@@ -12,8 +12,7 @@ fn cli_create_regular_key(addr: &str, name: &str) -> (String, String) {
     assert!(
         out.success,
         "auth create failed: stderr={}\nstdout={}",
-        out.stderr,
-        out.stdout
+        out.stderr, out.stdout
     );
     let key_id = out
         .stdout
@@ -32,10 +31,7 @@ fn cli_create_regular_key(addr: &str, name: &str) -> (String, String) {
     (key_id, token)
 }
 
-fn assert_permission_denied_enqueue(
-    result: Result<String, fila_sdk::EnqueueError>,
-    context: &str,
-) {
+fn assert_permission_denied_enqueue(result: Result<String, fila_sdk::EnqueueError>, context: &str) {
     match result {
         Ok(_) => panic!("{context}: expected PERMISSION_DENIED, got Ok"),
         Err(fila_sdk::EnqueueError::Status(fila_sdk::StatusError::Rpc { code, .. }))
@@ -73,9 +69,7 @@ async fn key_without_permissions_cannot_enqueue() {
     .await
     .expect("connect");
 
-    let result = client
-        .enqueue("acl-test-q", Default::default(), b"x")
-        .await;
+    let result = client.enqueue("acl-test-q", Default::default(), b"x").await;
     assert_permission_denied_enqueue(result, "key without permissions");
 }
 
@@ -87,7 +81,13 @@ async fn key_with_produce_permission_can_enqueue() {
     let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
     let out = cli_run(
         &addr,
-        &["--api-key", &admin_token, "queue", "create", "produce-test-q"],
+        &[
+            "--api-key",
+            &admin_token,
+            "queue",
+            "create",
+            "produce-test-q",
+        ],
     );
     assert!(out.success, "create queue: {}", out.stderr);
 
@@ -130,10 +130,7 @@ async fn key_with_produce_permission_cannot_enqueue_to_other_queue() {
 
     let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
     for q in &["queue-a", "queue-b"] {
-        let out = cli_run(
-            &addr,
-            &["--api-key", &admin_token, "queue", "create", q],
-        );
+        let out = cli_run(&addr, &["--api-key", &admin_token, "queue", "create", q]);
         assert!(out.success, "create queue {q}: {}", out.stderr);
     }
 
@@ -179,10 +176,7 @@ async fn wildcard_produce_permission_allows_any_queue() {
 
     let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
     for q in &["wc-queue-1", "wc-queue-2"] {
-        let out = cli_run(
-            &addr,
-            &["--api-key", &admin_token, "queue", "create", q],
-        );
+        let out = cli_run(&addr, &["--api-key", &admin_token, "queue", "create", q]);
         assert!(out.success, "create queue {q}: {}", out.stderr);
     }
 
@@ -210,7 +204,10 @@ async fn wildcard_produce_permission_allows_any_queue() {
 
     for q in &["wc-queue-1", "wc-queue-2"] {
         let result = client.enqueue(q, Default::default(), b"hello").await;
-        assert!(result.is_ok(), "{q}: expected Ok with wildcard, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "{q}: expected Ok with wildcard, got: {result:?}"
+        );
     }
 }
 
@@ -235,10 +232,7 @@ async fn superadmin_key_bypasses_acl() {
     let result = client
         .enqueue("super-test-q", Default::default(), b"hello")
         .await;
-    assert!(
-        result.is_ok(),
-        "superadmin should bypass ACL: {result:?}"
-    );
+    assert!(result.is_ok(), "superadmin should bypass ACL: {result:?}");
 }
 
 /// Admin operations require a key with `admin:*` permission (or superadmin).
@@ -270,13 +264,7 @@ async fn admin_operations_require_admin_permission() {
     // Attempt to create a queue using the produce-only key → PERMISSION_DENIED.
     let out = cli_run(
         &addr,
-        &[
-            "--api-key",
-            &token,
-            "queue",
-            "create",
-            "should-fail-queue",
-        ],
+        &["--api-key", &token, "queue", "create", "should-fail-queue"],
     );
     assert!(
         !out.success,

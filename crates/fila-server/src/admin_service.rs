@@ -56,11 +56,7 @@ impl AdminService {
         };
         let permitted = self
             .broker
-            .check_permission(
-                key_id,
-                fila_core::broker::auth::Permission::Admin,
-                "*",
-            )
+            .check_permission(key_id, fila_core::broker::auth::Permission::Admin, "*")
             .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
         if permitted {
             Ok(())
