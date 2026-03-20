@@ -1,5 +1,18 @@
 use sha2::{Digest, Sha256};
 
+/// The identity of a validated API key caller.
+///
+/// Two structurally distinct cases: the bootstrap credential (accepted without
+/// a storage lookup, always superadmin) and a stored key identified by its UUID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallerKey {
+    /// Accepted without a storage lookup when `bootstrap_apikey` is configured.
+    /// Has full superadmin privileges.
+    Bootstrap,
+    /// A stored API key, identified by its UUID key_id.
+    Key(String),
+}
+
 /// The action being performed on a queue — used for ACL checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {

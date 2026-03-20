@@ -180,18 +180,19 @@ impl Broker {
 
     /// Validate a plaintext API key token.
     ///
-    /// Returns `Some(key_id)` if the token matches a stored, non-expired key;
-    /// `None` if the token is invalid, not found, or expired.
-    /// This is called on every authenticated RPC — designed to be fast
-    /// (SHA-256 hash + prefix scan over a small number of keys).
-    pub fn validate_api_key(&self, token: &str) -> crate::error::StorageResult<Option<String>> {
-        use auth::{hash_key, now_ms, ApiKeyEntry, API_KEY_PREFIX};
+    /// Returns `Some(CallerKey::Bootstrap)` for the bootstrap credential,
+    /// `Some(CallerKey::Key(key_id))` for a valid stored key, or `None` if
+    /// the token is invalid, not found, or expired.
+    pub fn validate_api_key(
+        &self,
+        token: &str,
+    ) -> crate::error::StorageResult<Option<auth::CallerKey>> {
+        use auth::{hash_key, now_ms, ApiKeyEntry, CallerKey, API_KEY_PREFIX};
 
         // Bootstrap key short-circuits the storage lookup.
-        // Returns a reserved synthetic key_id recognized by check_permission as superadmin.
         if let Some(ref bootstrap) = self.bootstrap_api_key {
             if token == bootstrap.as_str() {
-                return Ok(Some("__bootstrap__".to_string()));
+                return Ok(Some(CallerKey::Bootstrap));
             }
         }
 
@@ -209,50 +210,47 @@ impl Broker {
                 }
             };
             if entry.hashed_key == hashed {
-                // Check expiry.
                 if let Some(exp) = entry.expires_at_ms {
                     if now > exp {
                         return Ok(None);
                     }
                 }
-                return Ok(Some(entry.key_id));
+                return Ok(Some(CallerKey::Key(entry.key_id)));
             }
         }
         Ok(None)
     }
 
-    /// Check whether `key_id` has the requested permission on `queue`.
+    /// Check whether `caller` has the requested permission on `queue`.
     ///
-    /// Returns `Ok(true)` if the key exists and has the permission,
-    /// `Ok(false)` if the key is not found or the permission is not granted,
-    /// `Err` only on storage failure.
-    /// When auth is disabled, this method is never called.
+    /// Returns `Ok(true)` if permitted, `Ok(false)` if not found or not granted,
+    /// `Err` only on storage failure. When auth is disabled this method is never called.
     pub fn check_permission(
         &self,
-        key_id: &str,
+        caller: &auth::CallerKey,
         perm: auth::Permission,
         queue: &str,
     ) -> crate::error::StorageResult<bool> {
-        use auth::{has_permission, ApiKeyEntry};
+        use auth::{has_permission, ApiKeyEntry, CallerKey};
 
-        // Bootstrap key is a synthetic superadmin — always permitted.
-        if key_id == "__bootstrap__" {
-            return Ok(true);
-        }
-
-        let storage_key = auth::storage_key(key_id);
-        let raw = match self.storage.get_state(&storage_key)? {
-            Some(v) => v,
-            None => return Ok(false),
-        };
-        let entry = match serde_json::from_slice::<ApiKeyEntry>(&raw) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for permission check");
-                return Ok(false);
+        match caller {
+            CallerKey::Bootstrap => Ok(true),
+            CallerKey::Key(key_id) => {
+                let storage_key = auth::storage_key(key_id);
+                let raw = match self.storage.get_state(&storage_key)? {
+                    Some(v) => v,
+                    None => return Ok(false),
+                };
+                let entry = match serde_json::from_slice::<ApiKeyEntry>(&raw) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for permission check");
+                        return Ok(false);
+                    }
+                };
+                Ok(has_permission(&entry, perm, queue))
             }
-        };
-        Ok(has_permission(&entry, perm, queue))
+        }
     }
 
     /// Set ACL permissions for a key. Replaces any existing permissions.
@@ -283,101 +281,109 @@ impl Broker {
         Ok(true)
     }
 
-    /// Returns `true` if `key_id` has any admin permission (is_superadmin or admin:<queue>).
-    pub fn has_any_admin(&self, key_id: &str) -> crate::error::StorageResult<bool> {
-        use auth::{has_any_admin_permission, ApiKeyEntry};
+    /// Returns `true` if `caller` has any admin permission (is_superadmin or admin:<queue>).
+    pub fn has_any_admin(&self, caller: &auth::CallerKey) -> crate::error::StorageResult<bool> {
+        use auth::{has_any_admin_permission, ApiKeyEntry, CallerKey};
 
-        if key_id == "__bootstrap__" {
-            return Ok(true);
-        }
-        let sk = auth::storage_key(key_id);
-        let raw = match self.storage.get_state(&sk)? {
-            Some(v) => v,
-            None => return Ok(false),
-        };
-        match serde_json::from_slice::<ApiKeyEntry>(&raw) {
-            Ok(entry) => Ok(has_any_admin_permission(&entry)),
-            Err(e) => {
-                tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for has_any_admin");
-                Ok(false)
+        match caller {
+            CallerKey::Bootstrap => Ok(true),
+            CallerKey::Key(key_id) => {
+                let sk = auth::storage_key(key_id);
+                let raw = match self.storage.get_state(&sk)? {
+                    Some(v) => v,
+                    None => return Ok(false),
+                };
+                match serde_json::from_slice::<ApiKeyEntry>(&raw) {
+                    Ok(entry) => Ok(has_any_admin_permission(&entry)),
+                    Err(e) => {
+                        tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for has_any_admin");
+                        Ok(false)
+                    }
+                }
             }
         }
     }
 
-    /// Returns `true` if `key_id` is a superadmin.
-    pub fn is_superadmin(&self, key_id: &str) -> crate::error::StorageResult<bool> {
-        use auth::ApiKeyEntry;
+    /// Returns `true` if `caller` is a superadmin.
+    pub fn is_superadmin(&self, caller: &auth::CallerKey) -> crate::error::StorageResult<bool> {
+        use auth::{ApiKeyEntry, CallerKey};
 
-        if key_id == "__bootstrap__" {
-            return Ok(true);
-        }
-        let sk = auth::storage_key(key_id);
-        let raw = match self.storage.get_state(&sk)? {
-            Some(v) => v,
-            None => return Ok(false),
-        };
-        match serde_json::from_slice::<ApiKeyEntry>(&raw) {
-            Ok(entry) => Ok(entry.is_superadmin),
-            Err(e) => {
-                tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for is_superadmin");
-                Ok(false)
+        match caller {
+            CallerKey::Bootstrap => Ok(true),
+            CallerKey::Key(key_id) => {
+                let sk = auth::storage_key(key_id);
+                let raw = match self.storage.get_state(&sk)? {
+                    Some(v) => v,
+                    None => return Ok(false),
+                };
+                match serde_json::from_slice::<ApiKeyEntry>(&raw) {
+                    Ok(entry) => Ok(entry.is_superadmin),
+                    Err(e) => {
+                        tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for is_superadmin");
+                        Ok(false)
+                    }
+                }
             }
         }
     }
 
-    /// Returns `true` if `key_id` has admin permission covering `queue`.
+    /// Returns `true` if `caller` has admin permission covering `queue`.
     pub fn caller_has_queue_admin(
         &self,
-        key_id: &str,
+        caller: &auth::CallerKey,
         queue: &str,
     ) -> crate::error::StorageResult<bool> {
-        use auth::{caller_has_queue_admin, ApiKeyEntry};
+        use auth::{caller_has_queue_admin, ApiKeyEntry, CallerKey};
 
-        if key_id == "__bootstrap__" {
-            return Ok(true);
-        }
-        let sk = auth::storage_key(key_id);
-        let raw = match self.storage.get_state(&sk)? {
-            Some(v) => v,
-            None => return Ok(false),
-        };
-        match serde_json::from_slice::<ApiKeyEntry>(&raw) {
-            Ok(entry) => Ok(caller_has_queue_admin(&entry, queue)),
-            Err(e) => {
-                tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for caller_has_queue_admin");
-                Ok(false)
+        match caller {
+            CallerKey::Bootstrap => Ok(true),
+            CallerKey::Key(key_id) => {
+                let sk = auth::storage_key(key_id);
+                let raw = match self.storage.get_state(&sk)? {
+                    Some(v) => v,
+                    None => return Ok(false),
+                };
+                match serde_json::from_slice::<ApiKeyEntry>(&raw) {
+                    Ok(entry) => Ok(caller_has_queue_admin(&entry, queue)),
+                    Err(e) => {
+                        tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for caller_has_queue_admin");
+                        Ok(false)
+                    }
+                }
             }
         }
     }
 
-    /// Returns `true` if `key_id` can grant all of the given `permissions`.
+    /// Returns `true` if `caller` can grant all of the given `permissions`.
     ///
     /// Each `(kind, pattern)` in `permissions` must be within the caller's admin scope.
     pub fn caller_can_grant_all(
         &self,
-        key_id: &str,
+        caller: &auth::CallerKey,
         permissions: &[(String, String)],
     ) -> crate::error::StorageResult<bool> {
-        use auth::{caller_can_grant, ApiKeyEntry};
+        use auth::{caller_can_grant, ApiKeyEntry, CallerKey};
 
-        if key_id == "__bootstrap__" {
-            return Ok(true);
-        }
-        let sk = auth::storage_key(key_id);
-        let raw = match self.storage.get_state(&sk)? {
-            Some(v) => v,
-            None => return Ok(false),
-        };
-        let entry = match serde_json::from_slice::<ApiKeyEntry>(&raw) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for caller_can_grant_all");
-                return Ok(false);
+        match caller {
+            CallerKey::Bootstrap => Ok(true),
+            CallerKey::Key(key_id) => {
+                let sk = auth::storage_key(key_id);
+                let raw = match self.storage.get_state(&sk)? {
+                    Some(v) => v,
+                    None => return Ok(false),
+                };
+                let entry = match serde_json::from_slice::<ApiKeyEntry>(&raw) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for caller_can_grant_all");
+                        return Ok(false);
+                    }
+                };
+                Ok(permissions
+                    .iter()
+                    .all(|(kind, pattern)| caller_can_grant(&entry, kind, pattern)))
             }
-        };
-        Ok(permissions
-            .iter()
-            .all(|(kind, pattern)| caller_can_grant(&entry, kind, pattern)))
+        }
     }
 
     /// Get the ACL permissions for a key.
@@ -519,14 +525,11 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_api_key_returns_synthetic_key_id() {
+    fn bootstrap_api_key_returns_bootstrap_variant() {
         let (broker, _dir) = broker_with_auth("my-bootstrap-key");
         assert_eq!(
-            broker
-                .validate_api_key("my-bootstrap-key")
-                .unwrap()
-                .as_deref(),
-            Some("__bootstrap__")
+            broker.validate_api_key("my-bootstrap-key").unwrap(),
+            Some(auth::CallerKey::Bootstrap)
         );
     }
 
@@ -548,22 +551,23 @@ mod tests {
     #[test]
     fn bootstrap_has_any_admin() {
         let (broker, _dir) = broker_with_auth("boot");
-        assert!(broker.has_any_admin("__bootstrap__").unwrap());
+        assert!(broker.has_any_admin(&auth::CallerKey::Bootstrap).unwrap());
     }
 
     #[test]
     fn bootstrap_is_superadmin() {
         let (broker, _dir) = broker_with_auth("boot");
-        assert!(broker.is_superadmin("__bootstrap__").unwrap());
+        assert!(broker.is_superadmin(&auth::CallerKey::Bootstrap).unwrap());
     }
 
     #[test]
     fn superadmin_key_has_any_admin_and_queue_admin() {
         let (broker, _dir) = broker_with_auth("boot");
         let (key_id, _) = broker.create_api_key("sa", None, true).unwrap();
-        assert!(broker.has_any_admin(&key_id).unwrap());
-        assert!(broker.is_superadmin(&key_id).unwrap());
-        assert!(broker.caller_has_queue_admin(&key_id, "any-queue").unwrap());
+        let caller = auth::CallerKey::Key(key_id);
+        assert!(broker.has_any_admin(&caller).unwrap());
+        assert!(broker.is_superadmin(&caller).unwrap());
+        assert!(broker.caller_has_queue_admin(&caller, "any-queue").unwrap());
     }
 
     #[test]
@@ -573,10 +577,11 @@ mod tests {
         broker
             .set_acl(&key_id, vec![("admin".into(), "*".into())])
             .unwrap();
-        assert!(broker.has_any_admin(&key_id).unwrap());
-        assert!(!broker.is_superadmin(&key_id).unwrap());
-        assert!(broker.caller_has_queue_admin(&key_id, "orders").unwrap());
-        assert!(broker.caller_has_queue_admin(&key_id, "payments").unwrap());
+        let caller = auth::CallerKey::Key(key_id);
+        assert!(broker.has_any_admin(&caller).unwrap());
+        assert!(!broker.is_superadmin(&caller).unwrap());
+        assert!(broker.caller_has_queue_admin(&caller, "orders").unwrap());
+        assert!(broker.caller_has_queue_admin(&caller, "payments").unwrap());
     }
 
     #[test]
@@ -586,10 +591,11 @@ mod tests {
         broker
             .set_acl(&key_id, vec![("admin".into(), "orders.*".into())])
             .unwrap();
-        assert!(broker.has_any_admin(&key_id).unwrap());
-        assert!(broker.caller_has_queue_admin(&key_id, "orders.us").unwrap());
-        assert!(!broker.caller_has_queue_admin(&key_id, "payments").unwrap());
-        assert!(!broker.caller_has_queue_admin(&key_id, "orders").unwrap());
+        let caller = auth::CallerKey::Key(key_id);
+        assert!(broker.has_any_admin(&caller).unwrap());
+        assert!(broker.caller_has_queue_admin(&caller, "orders.us").unwrap());
+        assert!(!broker.caller_has_queue_admin(&caller, "payments").unwrap());
+        assert!(!broker.caller_has_queue_admin(&caller, "orders").unwrap());
     }
 
     #[test]
@@ -599,8 +605,9 @@ mod tests {
         broker
             .set_acl(&key_id, vec![("produce".into(), "*".into())])
             .unwrap();
-        assert!(!broker.has_any_admin(&key_id).unwrap());
-        assert!(!broker.caller_has_queue_admin(&key_id, "orders").unwrap());
+        let caller = auth::CallerKey::Key(key_id);
+        assert!(!broker.has_any_admin(&caller).unwrap());
+        assert!(!broker.caller_has_queue_admin(&caller, "orders").unwrap());
     }
 
     #[test]
@@ -610,28 +617,28 @@ mod tests {
         broker
             .set_acl(&key_id, vec![("admin".into(), "orders.*".into())])
             .unwrap();
-        // Can grant produce/consume/admin within orders.*
+        let caller = auth::CallerKey::Key(key_id);
         let in_scope = vec![
             ("produce".into(), "orders.us".into()),
             ("consume".into(), "orders.eu".into()),
             ("admin".into(), "orders.us".into()),
         ];
-        assert!(broker.caller_can_grant_all(&key_id, &in_scope).unwrap());
-        // Cannot grant outside scope
+        assert!(broker.caller_can_grant_all(&caller, &in_scope).unwrap());
         let out_of_scope = vec![("produce".into(), "payments".into())];
-        assert!(!broker.caller_can_grant_all(&key_id, &out_of_scope).unwrap());
+        assert!(!broker.caller_can_grant_all(&caller, &out_of_scope).unwrap());
     }
 
     #[test]
-    fn admin_star_cannot_grant_superadmin_via_permissions() {
+    fn admin_star_can_grant_any_permission_pattern() {
         let (broker, _dir) = broker_with_auth("boot");
         let (key_id, _) = broker.create_api_key("admin-star", None, false).unwrap();
         broker
             .set_acl(&key_id, vec![("admin".into(), "*".into())])
             .unwrap();
-        // admin:* can grant any permission pattern (not the is_superadmin flag itself,
-        // which is checked separately at the service layer)
+        let caller = auth::CallerKey::Key(key_id);
+        // admin:* can grant any permission pattern; superadmin creation is a
+        // separate check at the service layer (is_superadmin flag, not a permission)
         let perms = vec![("produce".into(), "*".into())];
-        assert!(broker.caller_can_grant_all(&key_id, &perms).unwrap());
+        assert!(broker.caller_can_grant_all(&caller, &perms).unwrap());
     }
 }

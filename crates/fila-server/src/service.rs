@@ -61,7 +61,7 @@ impl FilaService for HotPathService {
         &self,
         request: Request<EnqueueRequest>,
     ) -> Result<Response<EnqueueResponse>, Status> {
-        let key_id = request
+        let caller = request
             .extensions()
             .get::<ValidatedKeyId>()
             .map(|k| k.0.clone());
@@ -72,11 +72,11 @@ impl FilaService for HotPathService {
         }
 
         // ACL check: produce permission on this queue.
-        if let Some(ref kid) = key_id {
+        if let Some(ref caller) = caller {
             let permitted = self
                 .broker
                 .check_permission(
-                    kid,
+                    caller,
                     fila_core::broker::auth::Permission::Produce,
                     &req.queue,
                 )
@@ -180,7 +180,7 @@ impl FilaService for HotPathService {
         &self,
         request: Request<ConsumeRequest>,
     ) -> Result<Response<Self::ConsumeStream>, Status> {
-        let key_id = request
+        let caller = request
             .extensions()
             .get::<ValidatedKeyId>()
             .map(|k| k.0.clone());
@@ -191,11 +191,11 @@ impl FilaService for HotPathService {
         }
 
         // ACL check: consume permission on this queue.
-        if let Some(ref kid) = key_id {
+        if let Some(ref caller) = caller {
             let permitted = self
                 .broker
                 .check_permission(
-                    kid,
+                    caller,
                     fila_core::broker::auth::Permission::Consume,
                     &req.queue,
                 )
@@ -282,7 +282,7 @@ impl FilaService for HotPathService {
 
     #[instrument(skip(self), fields(queue_id, msg_id))]
     async fn ack(&self, request: Request<AckRequest>) -> Result<Response<AckResponse>, Status> {
-        let key_id = request
+        let caller = request
             .extensions()
             .get::<ValidatedKeyId>()
             .map(|k| k.0.clone());
@@ -293,11 +293,11 @@ impl FilaService for HotPathService {
         }
 
         // ACL check: consume permission on this queue (ack is part of the consume lifecycle).
-        if let Some(ref kid) = key_id {
+        if let Some(ref caller) = caller {
             let permitted = self
                 .broker
                 .check_permission(
-                    kid,
+                    caller,
                     fila_core::broker::auth::Permission::Consume,
                     &req.queue,
                 )
@@ -374,7 +374,7 @@ impl FilaService for HotPathService {
 
     #[instrument(skip(self), fields(queue_id, msg_id))]
     async fn nack(&self, request: Request<NackRequest>) -> Result<Response<NackResponse>, Status> {
-        let key_id = request
+        let caller = request
             .extensions()
             .get::<ValidatedKeyId>()
             .map(|k| k.0.clone());
@@ -385,11 +385,11 @@ impl FilaService for HotPathService {
         }
 
         // ACL check: consume permission on this queue (nack is part of the consume lifecycle).
-        if let Some(ref kid) = key_id {
+        if let Some(ref caller) = caller {
             let permitted = self
                 .broker
                 .check_permission(
-                    kid,
+                    caller,
                     fila_core::broker::auth::Permission::Consume,
                     &req.queue,
                 )

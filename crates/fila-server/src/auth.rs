@@ -26,7 +26,7 @@ use tower::{Layer, Service};
 /// Service handlers extract this to perform ACL checks via `broker.check_permission`.
 /// Absent when auth is disabled.
 #[derive(Clone, Debug)]
-pub struct ValidatedKeyId(pub String);
+pub struct ValidatedKeyId(pub fila_core::broker::auth::CallerKey);
 
 /// gRPC paths that bypass authentication. Empty — all RPCs require a valid key
 /// when auth is enabled. Use `bootstrap_apikey` in config or `FILA_BOOTSTRAP_APIKEY`
@@ -120,9 +120,8 @@ where
             };
 
             match broker.validate_api_key(&token) {
-                Ok(Some(key_id)) => {
-                    // Inject the validated key_id so service handlers can check ACL.
-                    req.extensions_mut().insert(ValidatedKeyId(key_id));
+                Ok(Some(caller)) => {
+                    req.extensions_mut().insert(ValidatedKeyId(caller));
                     inner.call(req).await
                 }
                 Ok(None) => Ok(unauthenticated_response()),

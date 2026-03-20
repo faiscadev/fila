@@ -52,13 +52,13 @@ impl AdminService {
     ///
     /// Returns `Ok(())` when auth is disabled or the key has global admin access.
     fn check_admin<T>(&self, request: &tonic::Request<T>) -> Result<(), Status> {
-        let key_id = match request.extensions().get::<ValidatedKeyId>() {
+        let caller = match request.extensions().get::<ValidatedKeyId>() {
             Some(k) => &k.0,
             None => return Ok(()), // auth disabled
         };
         let permitted = self
             .broker
-            .check_permission(key_id, fila_core::broker::auth::Permission::Admin, "*")
+            .check_permission(caller, fila_core::broker::auth::Permission::Admin, "*")
             .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
         if permitted {
             Ok(())
@@ -73,21 +73,23 @@ impl AdminService {
     ///
     /// Used for scoped operations (create_queue, delete_queue, create_api_key,
     /// set_acl) where a per-queue admin key (`admin:orders`) is sufficient.
-    /// The caller's `key_id` is returned so the handler can perform additional
-    /// scope checks.
+    /// The caller is returned so the handler can perform additional scope checks.
     ///
     /// Returns `Ok(None)` when auth is disabled (all operations permitted).
-    fn require_any_admin<T>(&self, request: &tonic::Request<T>) -> Result<Option<String>, Status> {
-        let key_id = match request.extensions().get::<ValidatedKeyId>() {
+    fn require_any_admin<T>(
+        &self,
+        request: &tonic::Request<T>,
+    ) -> Result<Option<fila_core::broker::auth::CallerKey>, Status> {
+        let caller = match request.extensions().get::<ValidatedKeyId>() {
             Some(k) => k.0.clone(),
             None => return Ok(None), // auth disabled
         };
         let ok = self
             .broker
-            .has_any_admin(&key_id)
+            .has_any_admin(&caller)
             .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
         if ok {
-            Ok(Some(key_id))
+            Ok(Some(caller))
         } else {
             Err(Status::permission_denied(
                 "key does not have admin permission",
@@ -103,7 +105,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<CreateQueueRequest>,
     ) -> Result<Response<CreateQueueResponse>, Status> {
-        let caller_key_id = self.require_any_admin(&request)?;
+        let caller = self.require_any_admin(&request)?;
         let req = request.into_inner();
 
         if req.name.is_empty() {
@@ -111,10 +113,10 @@ impl FilaAdmin for AdminService {
         }
 
         // Scope check: caller must have admin permission covering this queue name.
-        if let Some(ref kid) = caller_key_id {
+        if let Some(ref caller) = caller {
             let ok = self
                 .broker
-                .caller_has_queue_admin(kid, &req.name)
+                .caller_has_queue_admin(caller, &req.name)
                 .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
             if !ok {
                 return Err(Status::permission_denied(format!(
@@ -202,7 +204,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<DeleteQueueRequest>,
     ) -> Result<Response<DeleteQueueResponse>, Status> {
-        let caller_key_id = self.require_any_admin(&request)?;
+        let caller = self.require_any_admin(&request)?;
         let req = request.into_inner();
 
         if req.queue.is_empty() {
@@ -210,10 +212,10 @@ impl FilaAdmin for AdminService {
         }
 
         // Scope check: caller must have admin permission covering this queue.
-        if let Some(ref kid) = caller_key_id {
+        if let Some(ref caller) = caller {
             let ok = self
                 .broker
-                .caller_has_queue_admin(kid, &req.queue)
+                .caller_has_queue_admin(caller, &req.queue)
                 .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
             if !ok {
                 return Err(Status::permission_denied(format!(
@@ -539,7 +541,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<CreateApiKeyRequest>,
     ) -> Result<Response<CreateApiKeyResponse>, Status> {
-        let caller_key_id = self.require_any_admin(&request)?;
+        let caller = self.require_any_admin(&request)?;
         let req = request.into_inner();
         if req.name.is_empty() {
             return Err(Status::invalid_argument("name must not be empty"));
@@ -547,10 +549,10 @@ impl FilaAdmin for AdminService {
         // Only superadmins can create other superadmin keys — admins cannot
         // elevate a new key beyond their own privilege level.
         if req.is_superadmin {
-            if let Some(ref kid) = caller_key_id {
+            if let Some(ref caller) = caller {
                 let ok = self
                     .broker
-                    .is_superadmin(kid)
+                    .is_superadmin(caller)
                     .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
                 if !ok {
                     return Err(Status::permission_denied(
@@ -624,7 +626,7 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<SetAclRequest>,
     ) -> Result<Response<SetAclResponse>, Status> {
-        let caller_key_id = self.require_any_admin(&request)?;
+        let caller = self.require_any_admin(&request)?;
         let req = request.into_inner();
         if req.key_id.is_empty() {
             return Err(Status::invalid_argument("key_id must not be empty"));
@@ -639,7 +641,7 @@ impl FilaAdmin for AdminService {
             }
         }
         // Delegation scope check: caller can only grant permissions within their own admin scope.
-        if let Some(ref kid) = caller_key_id {
+        if let Some(ref caller) = caller {
             let perms: Vec<(String, String)> = req
                 .permissions
                 .iter()
@@ -647,7 +649,7 @@ impl FilaAdmin for AdminService {
                 .collect();
             let ok = self
                 .broker
-                .caller_can_grant_all(kid, &perms)
+                .caller_can_grant_all(caller, &perms)
                 .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
             if !ok {
                 return Err(Status::permission_denied(
