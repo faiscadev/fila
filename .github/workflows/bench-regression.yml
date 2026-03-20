@@ -61,8 +61,8 @@ jobs:
         continue-on-error: true
         run: |
           if [ -f bench-baseline.json ]; then
-            ./target/release/bench-compare bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD
-            ./target/release/bench-compare --markdown bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD > bench-comparison.md || true
+            set -o pipefail
+            ./target/release/bench-compare --markdown bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD | tee bench-comparison.md
           else
             echo "No baseline found — this is expected for the first run."
             echo "Baselines are created when PRs merge to main."
