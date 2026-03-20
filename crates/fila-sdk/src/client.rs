@@ -4,7 +4,7 @@ use std::time::Duration;
 use fila_proto::fila_service_client::FilaServiceClient;
 use fila_proto::{AckRequest, ConsumeRequest, EnqueueRequest, NackRequest};
 use tokio_stream::{Stream, StreamExt};
-use tonic::transport::Channel;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use crate::error::{
     ack_status_error, consume_status_error, enqueue_status_error, nack_status_error, status_error,
@@ -23,22 +23,42 @@ pub struct ConsumeMessage {
 }
 
 /// Options for connecting to a Fila broker.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConnectOptions {
     pub addr: String,
     pub timeout: Option<Duration>,
+    /// PEM-encoded CA certificate for verifying the server's certificate.
+    /// Required when connecting to a TLS-enabled broker.
+    pub tls_ca_cert_pem: Option<Vec<u8>>,
+    /// PEM-encoded client certificate for mTLS authentication.
+    pub tls_client_cert_pem: Option<Vec<u8>>,
+    /// PEM-encoded client private key for mTLS authentication.
+    pub tls_client_key_pem: Option<Vec<u8>>,
 }
 
 impl ConnectOptions {
     pub fn new(addr: impl Into<String>) -> Self {
         Self {
             addr: addr.into(),
-            timeout: None,
+            ..Default::default()
         }
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Set the CA certificate for verifying the server's TLS certificate.
+    pub fn with_tls_ca_cert(mut self, ca_cert_pem: Vec<u8>) -> Self {
+        self.tls_ca_cert_pem = Some(ca_cert_pem);
+        self
+    }
+
+    /// Set the client certificate and key for mTLS authentication.
+    pub fn with_tls_identity(mut self, cert_pem: Vec<u8>, key_pem: Vec<u8>) -> Self {
+        self.tls_client_cert_pem = Some(cert_pem);
+        self.tls_client_key_pem = Some(key_pem);
         self
     }
 }
@@ -62,12 +82,28 @@ impl FilaClient {
     }
 
     /// Connect to a Fila broker with custom options.
+    ///
+    /// When TLS fields are set in `options`, the connection uses TLS/mTLS.
+    /// The address should use `https://` when TLS is enabled.
     pub async fn connect_with_options(options: ConnectOptions) -> Result<Self, ConnectError> {
         let mut endpoint = Channel::from_shared(options.addr)
             .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
 
         if let Some(timeout) = options.timeout {
             endpoint = endpoint.timeout(timeout);
+        }
+
+        // Apply TLS config when CA cert is provided.
+        if let Some(ca_pem) = options.tls_ca_cert_pem {
+            let mut tls = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+            if let (Some(cert_pem), Some(key_pem)) =
+                (options.tls_client_cert_pem, options.tls_client_key_pem)
+            {
+                tls = tls.identity(Identity::from_pem(cert_pem, key_pem));
+            }
+            endpoint = endpoint
+                .tls_config(tls)
+                .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
         }
 
         let channel = endpoint.connect().await?;

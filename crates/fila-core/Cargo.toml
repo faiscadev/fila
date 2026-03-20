@@ -24,7 +24,7 @@ opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
 toml.workspace = true
-tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net"] }
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net", "fs"] }
 mlua.workspace = true
 openraft.workspace = true
 nonempty.workspace = true

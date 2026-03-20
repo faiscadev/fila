@@ -79,6 +79,12 @@ Example: The `QueueRouter` phase 2 docs initially described only FIFO partitioni
 
 **Rule:** Before committing phase 2 design comments, verify them against the research doc. Incomplete forward-looking docs mislead future developers.
 
+## Mid-Epic Story Additions
+
+When a new story is added to an epic during implementation (e.g., a performance optimization or discovered requirement that wasn't in the original plan), the dev agent **MUST** create a story spec file in `_bmad-output/implementation-artifacts/stories/` before or alongside the implementation. The file must follow the same format as other story files in the epic.
+
+This applies even when the story is small, fast, or "obviously scoped." A story tracked only in `sprint-status.yaml` and git history creates gaps in the retrospective record and makes it harder for future agents to understand what was built and why.
+
 ## PR Review — Cubic Automated Review
 
 This project uses **Cubic**, an automated AI reviewer that runs on every PR. You MUST check Cubic's findings before considering a story complete.

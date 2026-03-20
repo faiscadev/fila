@@ -1,48 +1,26 @@
-epic: "Epic 14: Clustering & Horizontal Scaling"
-epicNumber: 14
-startedAt: "2026-03-18T00:00:00Z"
-completedAt: "2026-03-19T13:03:58Z"
-currentPrIndex: 5
+epic: "Epic 15: Authentication & Security"
+epicNumber: 15
+startedAt: "2026-03-20T00:00:00Z"
+currentPrIndex: 0
 prChain:
-  - storyId: "14.1"
-    storyKey: "14-1-raft-integration-single-node-mode"
-    title: "Raft Integration & Single-Node Mode"
-    branch: "feat/14.1-raft-integration-single-node-mode"
-    pr: 56
+  - storyId: "15.1"
+    storyKey: "15-1-mtls-transport-security"
+    title: "mTLS Transport Security"
+    branch: "feat/15.1-mtls-transport-security"
+    pr: 71
     baseBranch: "main"
-    status: merged
-  - storyId: "14.2"
-    storyKey: "14-2-queue-level-raft-groups-assignment"
-    title: "Queue-Level Raft Groups & Assignment"
-    branch: "feat/14.2-queue-level-raft-groups-assignment"
-    pr: 57
-    baseBranch: "main"
-    status: merged
-  - storyId: "14.3"
-    storyKey: "14-3-request-routing-transparent-delivery"
-    title: "Request Routing & Transparent Delivery"
-    branch: "feat/14.3-request-routing-transparent-delivery"
-    pr: 58
-    baseBranch: "main"
-    status: merged
-  - storyId: "14.4"
-    storyKey: "14-4-replication-failover-recovery"
-    title: "Replication, Failover & Recovery"
-    branch: "feat/14.4-replication-failover-recovery"
-    pr: 59
-    baseBranch: "main"
-    status: merged
-  - storyId: "14.5"
-    storyKey: "14-5-cluster-observability-scaling-validation"
-    title: "Cluster Observability & Scaling Validation"
-    branch: "feat/14.5-cluster-observability-scaling-validation"
-    pr: 60
-    baseBranch: "main"
-    status: merged
-  - storyId: "14.6"
-    storyKey: "14-6-protobuf-cluster-serialization"
-    title: "Replace serde_json with Protobuf for Cluster Serialization"
-    branch: "feat/14.6-protobuf-cluster-serialization"
-    pr: 62
-    baseBranch: "main"
-    status: merged
+    status: reviewing
+  - storyId: "15.2"
+    storyKey: "15-2-api-key-authentication"
+    title: "API Key Authentication"
+    branch: "feat/15.2-api-key-authentication"
+    pr: 72
+    baseBranch: "feat/15.1-mtls-transport-security"
+    status: pending
+  - storyId: "15.3"
+    storyKey: "15-3-per-queue-access-control"
+    title: "Per-Queue Access Control"
+    branch: "feat/15.3-per-queue-access-control"
+    pr: 73
+    baseBranch: "feat/15.2-api-key-authentication"
+    status: pending

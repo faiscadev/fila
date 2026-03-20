@@ -1,73 +1,26 @@
-epic: "Epic 14: Clustering & Horizontal Scaling"
+epic: "Epic 15: Authentication & Security"
 baseBranch: main
-startedAt: "2026-03-11"
+startedAt: "2026-03-19"
 stories:
-  - id: "14.1"
-    title: "Raft Integration & Single-Node Mode"
-    status: completed
-    currentPhase: ""
-    branch: "feat/14.1-raft-integration-single-node-mode"
-    pr: 56
+  - id: "15.1"
+    title: "mTLS Transport Security"
+    status: done
+    currentPhase: "done"
+    branch: "feat/15.1-mtls-transport-security"
+    pr: 71
     dependsOn: []
-  - id: "14.2"
-    title: "Queue-Level Raft Groups & Assignment"
-    status: completed
+  - id: "15.2"
+    title: "API Key Authentication"
+    status: pending
     currentPhase: ""
-    branch: "feat/14.2-queue-level-raft-groups-assignment"
-    pr: 57
-    dependsOn: ["14.1"]
-  - id: "14.3"
-    title: "Request Routing & Transparent Delivery"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: []
+  - id: "15.3"
+    title: "Per-Queue Access Control"
+    status: pending
     currentPhase: ""
-    branch: "feat/14.3-request-routing-transparent-delivery"
-    pr: 58
-    dependsOn: ["14.2"]
-  - id: "14.4"
-    title: "Replication, Failover & Recovery"
-    status: completed
-    currentPhase: ""
-    branch: "feat/14.4-replication-failover-recovery"
-    pr: 59
-    dependsOn: ["14.1", "14.2", "14.3"]
-  - id: "14.5"
-    title: "Cluster Observability & Scaling Validation"
-    status: completed
-    currentPhase: ""
-    branch: "feat/14.5-cluster-observability-scaling-validation"
-    pr: 60
-    dependsOn: ["14.1", "14.2", "14.3", "14.4"]
+    branch: ""
+    pr: null
+    dependsOn: ["15.2"]
 skippedIssues: []
-retroNotes:
-  - category: "process-failure"
-    summary: "10 Cubic review findings went unaddressed during implementation phase"
-    details: |
-      PR #56 (Story 14.1): 1 of 6 Cubic findings unaddressed (0xFF upper-bound edge case)
-      PR #57 (Story 14.2): 1 of 4 Cubic findings unaddressed (substring error matching)
-      PR #58 (Story 14.3): All 5 Cubic findings addressed ✓
-      PR #59 (Story 14.4): ALL 8 Cubic findings unaddressed — review step completely skipped
-      PR #60 (Story 14.5): All 2 Cubic findings addressed ✓
-      Root cause: Story 14.4 appears to have skipped the Cubic review gate entirely.
-      Stories 14.1 and 14.2 addressed most findings but left one each.
-      Total: 10/25 Cubic findings (40%) went unaddressed during implementation.
-    action: "Investigate why the Cubic review step was skipped in 14.4 and partially in 14.1/14.2"
-  - category: "process-failure"
-    summary: "cargo fmt not run before commit+push during review fix phase"
-    details: |
-      During the epic review fix cycle, the reviewer committed Cubic fixes
-      without running `cargo fmt` first, causing CI Format check failures
-      on PRs #59 and #60. Required a second force-push round to fix.
-    action: "Ensure cargo fmt is always run before committing Rust code — consider adding a pre-commit hook"
-  - category: "process-failure"
-    summary: "Cubic finding responses posted as standalone PR reviews instead of inline replies"
-    details: |
-      During the epic review fix cycle, dismissals and fix confirmations were
-      initially posted as standalone PR review comments (gh pr review --comment)
-      instead of replying directly to the specific Cubic inline comments.
-      This makes it harder to follow the conversation thread on each finding.
-    action: "Always reply to Cubic comments inline (gh api .../comments/{id}/replies) — not as standalone PR reviews"
-completedAt: "2026-03-12"
-summary:
-  total: 5
-  completed: 5
-  skipped: 0

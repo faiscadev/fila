@@ -19,7 +19,7 @@ rust-version = "1.75"
 
 [workspace.dependencies]
 # gRPC + Protobuf (versions must match)
-tonic = "0.14"
+tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
@@ -44,6 +44,7 @@ rocksdb = "0.24"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 openraft = { version = "0.9", features = ["serde"] }
 nonempty = "0.12"
+rcgen = "0.12"
 
 tokio-stream = "0.1"
 tower = "0.5"

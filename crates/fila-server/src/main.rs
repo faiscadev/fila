@@ -6,14 +6,28 @@ mod trace_context;
 use std::path::Path;
 use std::sync::Arc;
 
-use fila_core::{Broker, BrokerConfig, RocksDbEngine};
+use fila_core::{Broker, BrokerConfig, RocksDbEngine, TlsParams};
 use fila_proto::fila_admin_server::FilaAdminServer;
 use fila_proto::fila_service_server::FilaServiceServer;
-use tonic::transport::Server;
+use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tracing::info;
 
 use admin_service::AdminService;
 use service::HotPathService;
+
+/// Build a `ServerTlsConfig` from `TlsParams`.
+/// `ca_file` present → mTLS (verify client certs); absent → server-TLS only.
+async fn load_server_tls(tls: &TlsParams) -> Result<ServerTlsConfig, Box<dyn std::error::Error>> {
+    let cert_pem = tokio::fs::read(&tls.cert_file).await?;
+    let key_pem = tokio::fs::read(&tls.key_file).await?;
+    let identity = Identity::from_pem(cert_pem, key_pem);
+    let mut server_tls = ServerTlsConfig::new().identity(identity);
+    if let Some(ref ca_file) = tls.ca_file {
+        let ca_pem = tokio::fs::read(ca_file).await?;
+        server_tls = server_tls.client_ca_root(Certificate::from_pem(ca_pem));
+    }
+    Ok(server_tls)
+}
 
 fn load_config() -> BrokerConfig {
     let paths = ["fila.toml", "/etc/fila/fila.toml"];
@@ -59,6 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Conditionally start cluster manager (Raft consensus).
     let cluster_config = config.cluster.clone();
+    let tls_params = config.tls.clone();
     let (meta_event_tx, meta_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let cluster_manager = if cluster_config.enabled {
         Some(
@@ -67,6 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&rocksdb) as _,
                 Arc::clone(&storage),
                 Some(meta_event_tx),
+                tls_params.as_ref(),
             )
             .await?,
         )
@@ -110,9 +126,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hot_path_service = HotPathService::new(Arc::clone(&broker), cluster_handle);
 
     let addr = listen_addr.parse()?;
-    info!(%addr, "starting gRPC server");
+    info!(%addr, tls = tls_params.is_some(), "starting gRPC server");
 
-    let serve_result = Server::builder()
+    let mut server_builder = Server::builder();
+    if let Some(ref tls) = tls_params {
+        let server_tls = load_server_tls(tls).await?;
+        server_builder = server_builder.tls_config(server_tls)?;
+    }
+
+    let serve_result = server_builder
         .layer(trace_context::TraceContextLayer)
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))

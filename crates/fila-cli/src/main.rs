@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
@@ -6,14 +7,27 @@ use fila_proto::{
     CreateQueueRequest, DeleteQueueRequest, GetConfigRequest, GetStatsRequest, ListConfigRequest,
     ListQueuesRequest, QueueConfig, RedriveRequest, SetConfigRequest,
 };
-use tonic::transport::Channel;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 #[derive(Parser)]
 #[command(name = "fila", about = "Fila message broker CLI")]
 struct Cli {
-    /// Broker address
+    /// Broker address (use https:// when TLS is enabled)
     #[arg(long, default_value = "http://localhost:5555", global = true)]
     addr: String,
+
+    /// CA certificate for verifying the server's TLS certificate.
+    /// Required for any TLS connection.
+    #[arg(long, global = true)]
+    tls_ca_cert: Option<PathBuf>,
+
+    /// Client certificate for mTLS. Requires --tls-key and --tls-ca-cert.
+    #[arg(long, global = true, requires = "tls_key", requires = "tls_ca_cert")]
+    tls_cert: Option<PathBuf>,
+
+    /// Client private key for mTLS. Requires --tls-cert.
+    #[arg(long, global = true, requires = "tls_cert")]
+    tls_key: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -101,14 +115,78 @@ enum ConfigCommands {
     },
 }
 
-async fn connect(addr: &str) -> FilaAdminClient<Channel> {
-    match FilaAdminClient::connect(addr.to_string()).await {
-        Ok(client) => client,
-        Err(e) => {
-            eprintln!("Error: cannot connect to broker at {addr}: {e}");
-            process::exit(1);
+async fn connect(
+    addr: &str,
+    tls_ca_cert: Option<&PathBuf>,
+    tls_cert: Option<&PathBuf>,
+    tls_key: Option<&PathBuf>,
+) -> FilaAdminClient<Channel> {
+    let channel = if let Some(ca_path) = tls_ca_cert {
+        let ca_pem = match std::fs::read(ca_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Error: cannot read CA cert {}: {e}", ca_path.display());
+                process::exit(1);
+            }
+        };
+        let mut tls = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+        if let (Some(cert_path), Some(key_path)) = (tls_cert, tls_key) {
+            let cert_pem = match std::fs::read(cert_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!(
+                        "Error: cannot read client cert {}: {e}",
+                        cert_path.display()
+                    );
+                    process::exit(1);
+                }
+            };
+            let key_pem = match std::fs::read(key_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error: cannot read client key {}: {e}", key_path.display());
+                    process::exit(1);
+                }
+            };
+            tls = tls.identity(Identity::from_pem(cert_pem, key_pem));
         }
-    }
+        let endpoint = match Channel::from_shared(addr.to_string()) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("Error: invalid broker address {addr}: {e}");
+                process::exit(1);
+            }
+        };
+        let endpoint = match endpoint.tls_config(tls) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("Error: TLS configuration failed: {e}");
+                process::exit(1);
+            }
+        };
+        match endpoint.connect().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error: cannot connect to broker at {addr}: {e}");
+                process::exit(1);
+            }
+        }
+    } else {
+        match Channel::from_shared(addr.to_string()) {
+            Ok(e) => match e.connect().await {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error: cannot connect to broker at {addr}: {e}");
+                    process::exit(1);
+                }
+            },
+            Err(e) => {
+                eprintln!("Error: invalid broker address {addr}: {e}");
+                process::exit(1);
+            }
+        }
+    };
+    FilaAdminClient::new(channel)
 }
 
 fn format_rpc_error(status: tonic::Status, context: &str) -> String {
@@ -397,7 +475,13 @@ async fn cmd_redrive(client: &mut FilaAdminClient<Channel>, dlq_name: String, co
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let mut client = connect(&cli.addr).await;
+    let mut client = connect(
+        &cli.addr,
+        cli.tls_ca_cert.as_ref(),
+        cli.tls_cert.as_ref(),
+        cli.tls_key.as_ref(),
+    )
+    .await;
 
     match cli.command {
         Commands::Queue(cmd) => match cmd {

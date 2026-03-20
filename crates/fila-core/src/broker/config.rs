@@ -9,6 +9,9 @@ pub struct BrokerConfig {
     pub lua: LuaConfig,
     pub telemetry: TelemetryConfig,
     pub cluster: ClusterConfig,
+    /// TLS configuration. `None` (the default) disables TLS entirely.
+    /// Presence of this section in `fila.toml` enables TLS.
+    pub tls: Option<TlsParams>,
 }
 
 /// Cluster configuration for Raft-based horizontal scaling.
@@ -34,6 +37,23 @@ pub struct ClusterConfig {
     pub heartbeat_interval_ms: u64,
     /// Number of applied log entries before triggering a snapshot.
     pub snapshot_threshold: u64,
+}
+
+/// TLS parameters. Presence in `BrokerConfig.tls` (i.e. a `[tls]` section in
+/// `fila.toml`) enables TLS; absence disables it entirely.
+///
+/// `cert_file` and `key_file` are always required — they are the server
+/// identity. `ca_file` is optional: when set, client certificates are
+/// verified against it (mTLS); when absent, the server uses one-way TLS.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TlsParams {
+    /// Path to the server's PEM-encoded certificate chain.
+    pub cert_file: String,
+    /// Path to the server's PEM-encoded private key.
+    pub key_file: String,
+    /// Path to the CA certificate used to verify client certificates (mTLS).
+    /// When absent, client certificates are not required (server-TLS only).
+    pub ca_file: Option<String>,
 }
 
 /// Server configuration (gRPC listen address).
@@ -288,5 +308,40 @@ mod tests {
         "#;
         let config: BrokerConfig = toml::from_str(toml_str).unwrap();
         assert!(config.telemetry.otlp_endpoint.is_none());
+    }
+
+    #[test]
+    fn tls_absent_means_disabled() {
+        let config: BrokerConfig = toml::from_str("").unwrap();
+        assert!(config.tls.is_none());
+    }
+
+    #[test]
+    fn tls_server_only_parsing() {
+        let toml_str = r#"
+            [tls]
+            cert_file = "server.crt"
+            key_file = "server.key"
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        let tls = config.tls.as_ref().unwrap();
+        assert_eq!(tls.cert_file, "server.crt");
+        assert_eq!(tls.key_file, "server.key");
+        assert!(tls.ca_file.is_none());
+    }
+
+    #[test]
+    fn tls_mtls_parsing() {
+        let toml_str = r#"
+            [tls]
+            cert_file = "server.crt"
+            key_file = "server.key"
+            ca_file = "ca.crt"
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        let tls = config.tls.as_ref().unwrap();
+        assert_eq!(tls.cert_file, "server.crt");
+        assert_eq!(tls.key_file, "server.key");
+        assert_eq!(tls.ca_file.as_deref(), Some("ca.crt"));
     }
 }
