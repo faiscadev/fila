@@ -415,14 +415,20 @@ mod tests {
     #[test]
     fn bootstrap_api_key_is_accepted() {
         let (broker, _dir) = broker_with_auth("my-bootstrap-key");
-        assert!(broker.validate_api_key("my-bootstrap-key").unwrap().is_some());
+        assert!(broker
+            .validate_api_key("my-bootstrap-key")
+            .unwrap()
+            .is_some());
     }
 
     #[test]
     fn bootstrap_api_key_returns_synthetic_key_id() {
         let (broker, _dir) = broker_with_auth("my-bootstrap-key");
         assert_eq!(
-            broker.validate_api_key("my-bootstrap-key").unwrap().as_deref(),
+            broker
+                .validate_api_key("my-bootstrap-key")
+                .unwrap()
+                .as_deref(),
             Some("__bootstrap__")
         );
     }
