@@ -30,6 +30,9 @@ pub struct Broker {
     storage: Arc<dyn StorageEngine>,
     /// Whether API key authentication is enabled. Set from `BrokerConfig.auth`.
     pub auth_enabled: bool,
+    /// Bootstrap API key accepted without a storage lookup.
+    /// `None` when not configured. Matched by plain string equality.
+    bootstrap_api_key: Option<String>,
 }
 
 impl Broker {
@@ -70,6 +73,7 @@ impl Broker {
             scheduler_thread: Some(handle),
             storage,
             auth_enabled: config.auth.is_some(),
+            bootstrap_api_key: config.auth.map(|a| a.bootstrap_apikey),
         })
     }
 
@@ -177,6 +181,13 @@ impl Broker {
     /// (SHA-256 hash + prefix scan over a small number of keys).
     pub fn validate_api_key(&self, token: &str) -> crate::error::StorageResult<bool> {
         use auth::{hash_key, now_ms, ApiKeyEntry, API_KEY_PREFIX};
+
+        // Bootstrap key short-circuits the storage lookup.
+        if let Some(ref bootstrap) = self.bootstrap_api_key {
+            if token == bootstrap.as_str() {
+                return Ok(true);
+            }
+        }
 
         let hashed = hash_key(token);
         let now = now_ms();
@@ -295,5 +306,42 @@ mod tests {
         let (broker, _dir) = test_broker();
         drop(broker);
         // If we get here without hanging, the Drop impl worked
+    }
+
+    fn broker_with_auth(bootstrap_key: &str) -> (Broker, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
+        let config = BrokerConfig {
+            scheduler: config::SchedulerConfig {
+                command_channel_capacity: 100,
+                idle_timeout_ms: 10,
+                quantum: 1000,
+            },
+            auth: Some(config::AuthConfig {
+                bootstrap_apikey: bootstrap_key.to_string(),
+            }),
+            ..Default::default()
+        };
+        let broker = Broker::new(config, storage).unwrap();
+        (broker, dir)
+    }
+
+    #[test]
+    fn bootstrap_api_key_is_accepted() {
+        let (broker, _dir) = broker_with_auth("my-bootstrap-key");
+        assert!(broker.validate_api_key("my-bootstrap-key").unwrap());
+    }
+
+    #[test]
+    fn bootstrap_api_key_wrong_value_rejected() {
+        let (broker, _dir) = broker_with_auth("my-bootstrap-key");
+        assert!(!broker.validate_api_key("wrong-key").unwrap());
+    }
+
+    #[test]
+    fn non_bootstrap_key_falls_through_to_storage() {
+        let (broker, _dir) = broker_with_auth("my-bootstrap-key");
+        // "other-key" is not the bootstrap key and no stored keys exist → rejected
+        assert!(!broker.validate_api_key("other-key").unwrap());
     }
 }

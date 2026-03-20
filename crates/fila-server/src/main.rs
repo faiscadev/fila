@@ -60,13 +60,22 @@ fn load_config() -> BrokerConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = load_config();
+    let mut config = load_config();
 
     // Initialize telemetry (logging + optional OTel export).
     // Must happen after config is loaded but before anything else.
     let telemetry_guard = fila_core::telemetry::init_telemetry(&config.telemetry);
 
     let listen_addr = config.server.listen_addr.clone();
+
+    // FILA_BOOTSTRAP_APIKEY overrides (or sets) the bootstrap key from config.
+    // Setting the env var also implicitly enables auth when no [auth] section exists.
+    if let Ok(key) = std::env::var("FILA_BOOTSTRAP_APIKEY") {
+        match &mut config.auth {
+            Some(auth) => auth.bootstrap_apikey = key,
+            auth @ None => *auth = Some(fila_core::AuthConfig { bootstrap_apikey: key }),
+        }
+    }
 
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
     let rocksdb = Arc::new(RocksDbEngine::open(&data_dir)?);

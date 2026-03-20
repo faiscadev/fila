@@ -5,9 +5,11 @@
 //! receive `UNAUTHENTICATED`. When auth is disabled (the default), all requests
 //! pass through unconditionally.
 //!
-//! Only `CreateApiKey` bypasses authentication — it must be reachable without a
-//! key so operators can issue the first key (bootstrap problem). Once a key
-//! exists, `RevokeApiKey` and `ListApiKeys` require a valid key.
+//! No RPC bypasses authentication. To provision the first API key, configure
+//! a `bootstrap_apikey` in `fila.toml` or set `FILA_BOOTSTRAP_APIKEY`. The
+//! bootstrap key is accepted as a valid credential by `validate_api_key` without
+//! a storage lookup, so operators can use it to call `CreateApiKey` and then
+//! remove it from config once real keys are in place.
 
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
@@ -15,12 +17,10 @@ use std::task::{Context as TaskContext, Poll};
 use fila_core::Broker;
 use tower::{Layer, Service};
 
-/// gRPC paths that bypass authentication.
-///
-/// Only `CreateApiKey` is exempt — it must be reachable without a key so
-/// operators can issue the first key (bootstrap problem). Once a key exists,
-/// `RevokeApiKey` and `ListApiKeys` require a valid key.
-const AUTH_BYPASS_PATHS: &[&str] = &["/fila.v1.FilaAdmin/CreateApiKey"];
+/// gRPC paths that bypass authentication. Empty — all RPCs require a valid key
+/// when auth is enabled. Use `bootstrap_apikey` in config or `FILA_BOOTSTRAP_APIKEY`
+/// to provision the first key without an auth bypass.
+const AUTH_BYPASS_PATHS: &[&str] = &[];
 
 /// Tower layer that wraps services with API key authentication.
 #[derive(Clone)]

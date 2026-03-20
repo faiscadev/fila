@@ -62,10 +62,20 @@ pub struct TlsParams {
 /// Authentication configuration. Presence in `BrokerConfig.auth` (i.e. an `[auth]` section
 /// in `fila.toml`) enables API key authentication; absence disables it entirely.
 ///
-/// When enabled, every gRPC RPC must include `authorization: Bearer <key>` metadata,
-/// except for the key-management RPCs (`CreateApiKey`, `RevokeApiKey`, `ListApiKeys`).
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct AuthConfig {}
+/// When enabled, every gRPC RPC must include `authorization: Bearer <key>` metadata.
+/// `bootstrap_apikey` is required: it is a permanent operator key accepted without a storage
+/// lookup, enabling operators to provision the first real API key. It can also be set (or
+/// overridden) via the `FILA_BOOTSTRAP_APIKEY` environment variable.
+///
+/// It is impossible to enable auth without a `bootstrap_apikey` — the type enforces this.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    /// A permanent operator key accepted without storage lookup.
+    /// Required when auth is enabled. Use it to provision the first real API key,
+    /// then keep it as a recovery backdoor or rotate it to a long-lived secret.
+    /// Can be overridden via the `FILA_BOOTSTRAP_APIKEY` environment variable.
+    pub bootstrap_apikey: String,
+}
 
 /// Server configuration (gRPC listen address).
 #[derive(Debug, Clone, Deserialize)]
