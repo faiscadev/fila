@@ -117,6 +117,19 @@ async fn auth_disabled_requests_succeed_without_key() {
     );
 }
 
+/// Assert that an EnqueueError is specifically UNAUTHENTICATED.
+fn assert_unauthenticated(result: Result<String, fila_sdk::EnqueueError>, context: &str) {
+    match result {
+        Ok(_) => panic!("{context}: expected UNAUTHENTICATED, got Ok"),
+        Err(fila_sdk::EnqueueError::Status(fila_sdk::StatusError::Rpc { code, .. }))
+            if code == tonic::Code::Unauthenticated =>
+        {
+            // correct
+        }
+        Err(e) => panic!("{context}: expected UNAUTHENTICATED, got: {e:?}"),
+    }
+}
+
 /// AC 2: auth enabled, request without key → UNAUTHENTICATED.
 #[tokio::test]
 async fn auth_enabled_request_without_key_is_rejected() {
@@ -124,11 +137,11 @@ async fn auth_enabled_request_without_key_is_rejected() {
 
     let client = fila_sdk::FilaClient::connect(&addr).await.expect("connect");
 
-    // Any RPC without a key should fail with UNAUTHENTICATED.
-    // We use enqueue; queue doesn't need to exist — auth check happens first.
+    // Auth check happens before queue lookup, so UNAUTHENTICATED is returned
+    // even for a non-existent queue.
     let result = client.enqueue("any-queue", Default::default(), b"x").await;
 
-    assert!(result.is_err(), "expected UNAUTHENTICATED error, got Ok");
+    assert_unauthenticated(result, "missing key");
 }
 
 /// AC 3: auth enabled, invalid key → UNAUTHENTICATED.
@@ -144,10 +157,7 @@ async fn auth_enabled_invalid_key_is_rejected() {
 
     let result = client.enqueue("any-queue", Default::default(), b"x").await;
 
-    assert!(
-        result.is_err(),
-        "expected UNAUTHENTICATED for invalid key, got Ok"
-    );
+    assert_unauthenticated(result, "invalid key");
 }
 
 /// AC 4: auth enabled, valid key → request succeeds.
@@ -197,15 +207,12 @@ async fn auth_enabled_revoked_key_is_rejected() {
     .await
     .expect("connect");
 
-    // Revoke the key.
-    let out = cli_run(&addr, &["auth", "revoke", &key_id]);
+    // Revoke the key using itself for auth (RevokeApiKey requires a valid key).
+    let out = cli_run(&addr, &["--api-key", &token, "auth", "revoke", &key_id]);
     assert!(out.success, "revoke: {}", out.stderr);
 
     // Now the same key should be rejected.
     let result = client.enqueue("any-queue", Default::default(), b"x").await;
 
-    assert!(
-        result.is_err(),
-        "expected UNAUTHENTICATED after revoke, got Ok"
-    );
+    assert_unauthenticated(result, "revoked key");
 }

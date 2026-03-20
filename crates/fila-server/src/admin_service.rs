@@ -452,6 +452,9 @@ impl FilaAdmin for AdminService {
         request: Request<CreateApiKeyRequest>,
     ) -> Result<Response<CreateApiKeyResponse>, Status> {
         let req = request.into_inner();
+        if req.name.is_empty() {
+            return Err(Status::invalid_argument("name must not be empty"));
+        }
         let expires_at = if req.expires_at_ms == 0 {
             None
         } else {

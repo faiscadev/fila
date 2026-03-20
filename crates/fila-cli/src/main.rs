@@ -155,11 +155,13 @@ struct ApiKeyInterceptor(Option<String>);
 impl tonic::service::Interceptor for ApiKeyInterceptor {
     fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
         if let Some(ref key) = self.0 {
-            if let Ok(val) =
-                tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
-            {
-                req.metadata_mut().insert("authorization", val);
-            }
+            let val = tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
+                .map_err(|_| {
+                    tonic::Status::invalid_argument(
+                        "api key contains characters invalid for http headers",
+                    )
+                })?;
+            req.metadata_mut().insert("authorization", val);
         }
         Ok(req)
     }

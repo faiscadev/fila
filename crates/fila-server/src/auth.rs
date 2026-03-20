@@ -14,14 +14,12 @@ use std::task::{Context as TaskContext, Poll};
 use fila_core::Broker;
 use tower::{Layer, Service};
 
-/// gRPC path suffixes that bypass authentication.
-/// These are the key-management RPCs — they must be accessible without a key
-/// so operators can issue the first key.
-const AUTH_BYPASS_PATHS: &[&str] = &[
-    "/fila.v1.FilaAdmin/CreateApiKey",
-    "/fila.v1.FilaAdmin/RevokeApiKey",
-    "/fila.v1.FilaAdmin/ListApiKeys",
-];
+/// gRPC paths that bypass authentication.
+///
+/// Only `CreateApiKey` is exempt — it must be reachable without a key so
+/// operators can issue the first key (bootstrap problem). Once a key exists,
+/// `RevokeApiKey` and `ListApiKeys` require a valid key.
+const AUTH_BYPASS_PATHS: &[&str] = &["/fila.v1.FilaAdmin/CreateApiKey"];
 
 /// Tower layer that wraps services with API key authentication.
 #[derive(Clone)]
@@ -71,18 +69,23 @@ where
     }
 
     fn call(&mut self, req: http::Request<B>) -> Self::Future {
+        // Take the readied service and replace it with a clone so that
+        // `self.inner` is ready for the next poll_ready/call cycle.
+        // This satisfies the Tower contract: the instance that passed
+        // poll_ready must be the one used for the actual call.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+
         // When auth is disabled, pass through unconditionally.
         if !self.broker.auth_enabled {
-            let fut = self.inner.call(req);
-            return Box::pin(fut);
+            return Box::pin(inner.call(req));
         }
 
-        // Key-management RPCs bypass authentication.
+        // `CreateApiKey` bypasses authentication (bootstrap).
         let path = req.uri().path();
         for bypass in AUTH_BYPASS_PATHS {
             if path == *bypass {
-                let fut = self.inner.call(req);
-                return Box::pin(fut);
+                return Box::pin(inner.call(req));
             }
         }
 
@@ -95,7 +98,6 @@ where
             .map(|s| s.to_string());
 
         let broker = Arc::clone(&self.broker);
-        let mut inner = self.inner.clone();
 
         Box::pin(async move {
             let token = match token {

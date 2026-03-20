@@ -183,17 +183,22 @@ impl Broker {
         let entries = self
             .storage
             .list_state_by_prefix(API_KEY_PREFIX, usize::MAX)?;
-        for (_, value) in entries {
-            if let Ok(entry) = serde_json::from_slice::<ApiKeyEntry>(&value) {
-                if entry.hashed_key == hashed {
-                    // Check expiry.
-                    if let Some(exp) = entry.expires_at_ms {
-                        if now > exp {
-                            return Ok(false);
-                        }
-                    }
-                    return Ok(true);
+        for (key, value) in entries {
+            let entry = match serde_json::from_slice::<ApiKeyEntry>(&value) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!(storage_key = %key, error = %e, "failed to deserialize api key entry during validation — skipping");
+                    continue;
                 }
+            };
+            if entry.hashed_key == hashed {
+                // Check expiry.
+                if let Some(exp) = entry.expires_at_ms {
+                    if now > exp {
+                        return Ok(false);
+                    }
+                }
+                return Ok(true);
             }
         }
         Ok(false)

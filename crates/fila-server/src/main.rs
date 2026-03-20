@@ -135,9 +135,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_builder = server_builder.tls_config(server_tls)?;
     }
 
+    // Layer order: last `.layer()` becomes outermost (first to receive requests).
+    // AuthLayer must be inner so auth runs within the trace context span.
     let serve_result = server_builder
-        .layer(trace_context::TraceContextLayer)
         .layer(auth::AuthLayer::new(Arc::clone(&broker)))
+        .layer(trace_context::TraceContextLayer)
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))
         .serve_with_shutdown(addr, shutdown_signal())
