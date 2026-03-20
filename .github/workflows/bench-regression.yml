@@ -57,10 +57,12 @@ jobs:
 
       - name: Compare against baseline
         if: github.event_name == 'pull_request'
+        id: compare
         continue-on-error: true
         run: |
           if [ -f bench-baseline.json ]; then
             ./target/release/bench-compare bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD
+            ./target/release/bench-compare --markdown bench-baseline.json bench-aggregated.json $REGRESSION_THRESHOLD > bench-comparison.md || true
           else
             echo "No baseline found — this is expected for the first run."
             echo "Baselines are created when PRs merge to main."
@@ -89,6 +91,7 @@ jobs:
           path: |
             bench-aggregated.json
             bench-run-*.json
+            bench-comparison.md
           retention-days: 30
 
   bench-comment:
@@ -113,14 +116,20 @@ jobs:
           # Build the benchmark results section
           {
             echo "<!-- bench-results-start -->"
-            echo "## Benchmark Results (median of 3 runs)"
-            echo ""
-            jq -r '"**Commit:** `\(.commit)`  "' bench-aggregated.json
-            jq -r '"**Time:** \(.timestamp)"' bench-aggregated.json
-            echo ""
-            echo "| Benchmark | Value | Unit |"
-            echo "|---|---:|---|"
-            jq -r '.benchmarks[] | "| \(.name) | \(.value | tostring) | \(.unit) |"' bench-aggregated.json
+            if [ -f bench-comparison.md ]; then
+              echo "## Benchmark Results (vs main baseline)"
+              echo ""
+              cat bench-comparison.md
+            else
+              echo "## Benchmark Results (median of 3 runs, no baseline yet)"
+              echo ""
+              jq -r '"**Commit:** `\(.commit)`  "' bench-aggregated.json
+              jq -r '"**Time:** \(.timestamp)"' bench-aggregated.json
+              echo ""
+              echo "| Benchmark | Value | Unit |"
+              echo "|---|---:|---|"
+              jq -r '.benchmarks[] | "| \(.name) | \(.value | tostring) | \(.unit) |"' bench-aggregated.json
+            fi
             echo "<!-- bench-results-end -->"
           } > /tmp/bench-section.md
 

@@ -1,20 +1,27 @@
-use fila_bench::compare::{compare_reports, print_summary};
+use fila_bench::compare::{compare_reports, format_markdown, print_summary};
 use fila_bench::report::BenchReport;
 use std::process;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: bench-compare <baseline.json> <current.json> [threshold_pct]");
+
+    let markdown = args.iter().any(|a| a == "--markdown");
+    let positional: Vec<&String> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
+
+    if positional.len() < 2 {
+        eprintln!(
+            "Usage: bench-compare [--markdown] <baseline.json> <current.json> [threshold_pct]"
+        );
+        eprintln!("  --markdown:    output a markdown table instead of plain text");
         eprintln!("  threshold_pct: regression threshold percentage (default: 10)");
         process::exit(2);
     }
 
-    let baseline_path = &args[1];
-    let current_path = &args[2];
-    let threshold: f64 = match args.get(3) {
+    let baseline_path = positional[0];
+    let current_path = positional[1];
+    let threshold: f64 = match positional.get(2) {
         Some(s) => s.parse().unwrap_or_else(|_| {
-            eprintln!("Error: invalid threshold value '{s}' — must be a number");
+            eprintln!("Error: invalid threshold value '{}' — must be a number", s);
             process::exit(2);
         }),
         None => 10.0,
@@ -39,7 +46,12 @@ fn main() {
     });
 
     let result = compare_reports(&baseline, &current, threshold);
-    print_summary(&result);
+
+    if markdown {
+        println!("{}", format_markdown(&result, &baseline.commit, &current.commit));
+    } else {
+        print_summary(&result);
+    }
 
     if result.has_regressions {
         process::exit(1);
