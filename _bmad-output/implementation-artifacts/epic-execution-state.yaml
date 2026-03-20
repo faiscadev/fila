@@ -18,9 +18,9 @@ stories:
     dependsOn: []
   - id: "15.3"
     title: "Per-Queue Access Control"
-    status: in-progress
-    currentPhase: "dev"
+    status: pr-open
+    currentPhase: "pr-review"
     branch: "feat/15.3-per-queue-access-control"
-    pr: null
+    pr: 73
     dependsOn: ["15.2"]
 skippedIssues: []

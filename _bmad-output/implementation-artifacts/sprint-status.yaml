@@ -160,7 +160,7 @@ development_status:
   epic-15: in-progress
   15-1-mtls-transport-security: done
   15-2-api-key-authentication: done
-  15-3-per-queue-access-control: in-progress
+  15-3-per-queue-access-control: review
   epic-15-retrospective: optional
 
   # Epic 16: Release Engineering & SDK Compatibility
