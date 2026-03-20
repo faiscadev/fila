@@ -1,6 +1,6 @@
 mod helpers;
 
-use helpers::{cli_create_superadmin_key, cli_run, start_auth_server};
+use helpers::{cli_create_superadmin_key, cli_run, start_auth_server, TEST_BOOTSTRAP_KEY};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -8,7 +8,17 @@ use helpers::{cli_create_superadmin_key, cli_run, start_auth_server};
 
 /// Create a regular (non-superadmin) API key via CLI and return (key_id, token).
 fn cli_create_regular_key(addr: &str, name: &str) -> (String, String) {
-    let out = cli_run(addr, &["auth", "create", "--name", name]);
+    let out = cli_run(
+        addr,
+        &[
+            "--api-key",
+            TEST_BOOTSTRAP_KEY,
+            "auth",
+            "create",
+            "--name",
+            name,
+        ],
+    );
     assert!(
         out.success,
         "auth create failed: stderr={}\nstdout={}",
