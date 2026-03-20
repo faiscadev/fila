@@ -73,7 +73,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(key) = std::env::var("FILA_BOOTSTRAP_APIKEY") {
         match &mut config.auth {
             Some(auth) => auth.bootstrap_apikey = key,
-            auth @ None => *auth = Some(fila_core::AuthConfig { bootstrap_apikey: key }),
+            auth @ None => {
+                *auth = Some(fila_core::AuthConfig {
+                    bootstrap_apikey: key,
+                })
+            }
         }
     }
 

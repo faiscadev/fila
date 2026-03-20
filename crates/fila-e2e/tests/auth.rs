@@ -2,9 +2,11 @@ mod helpers;
 
 use helpers::{cli_run, TestServer};
 
+const TEST_BOOTSTRAP_KEY: &str = "test-bootstrap-key-for-e2e";
+
 /// Start a fila-server with API key authentication enabled.
 ///
-/// Returns (TestServer, addr).
+/// Returns (TestServer, addr). Use `TEST_BOOTSTRAP_KEY` as the initial credential.
 fn start_auth_server() -> (TestServer, String) {
     use std::net::TcpListener;
 
@@ -16,7 +18,7 @@ fn start_auth_server() -> (TestServer, String) {
 
     let data_dir = tempfile::tempdir().expect("temp dir");
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\n"
+        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\nbootstrap_apikey = \"{TEST_BOOTSTRAP_KEY}\"\n"
     );
     let config_path = data_dir.path().join("fila.toml");
     std::fs::write(&config_path, config_content).expect("write config");
@@ -60,9 +62,19 @@ fn start_auth_server() -> (TestServer, String) {
     (server, http_addr)
 }
 
-/// Create an API key via CLI and return (key_id, token).
+/// Create an API key via CLI using the bootstrap key and return (key_id, token).
 fn cli_create_key(addr: &str, name: &str) -> (String, String) {
-    let out = cli_run(addr, &["auth", "create", "--name", name]);
+    let out = cli_run(
+        addr,
+        &[
+            "--api-key",
+            TEST_BOOTSTRAP_KEY,
+            "auth",
+            "create",
+            "--name",
+            name,
+        ],
+    );
     assert!(
         out.success,
         "auth create failed: stderr={}\nstdout={}",
