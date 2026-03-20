@@ -111,10 +111,12 @@ impl Broker {
     ///
     /// The plaintext token is returned exactly once and never stored.
     /// Only the SHA-256 hash is persisted in the state store.
+    /// When `is_superadmin` is true, the key bypasses all ACL checks.
     pub fn create_api_key(
         &self,
         name: &str,
         expires_at_ms: Option<u64>,
+        is_superadmin: bool,
     ) -> crate::error::StorageResult<(String, String)> {
         use auth::{hash_key, now_ms, storage_key, ApiKeyEntry};
         use uuid::Uuid;
@@ -129,12 +131,14 @@ impl Broker {
             hashed_key: hashed,
             created_at_ms: now_ms(),
             expires_at_ms,
+            permissions: vec![],
+            is_superadmin,
         };
         let value = serde_json::to_vec(&entry)
             .map_err(|e| crate::error::StorageError::Serialization(e.to_string()))?;
         self.storage.put_state(&storage_key(&key_id), &value)?;
 
-        tracing::info!(key_id = %key_id, name = %name, "api key created");
+        tracing::info!(key_id = %key_id, name = %name, is_superadmin, "api key created");
         Ok((key_id, token))
     }
 
@@ -176,16 +180,18 @@ impl Broker {
 
     /// Validate a plaintext API key token.
     ///
-    /// Returns `true` if the token matches a stored, non-expired key.
+    /// Returns `Some(key_id)` if the token matches a stored, non-expired key;
+    /// `None` if the token is invalid, not found, or expired.
     /// This is called on every authenticated RPC — designed to be fast
     /// (SHA-256 hash + prefix scan over a small number of keys).
-    pub fn validate_api_key(&self, token: &str) -> crate::error::StorageResult<bool> {
+    pub fn validate_api_key(&self, token: &str) -> crate::error::StorageResult<Option<String>> {
         use auth::{hash_key, now_ms, ApiKeyEntry, API_KEY_PREFIX};
 
         // Bootstrap key short-circuits the storage lookup.
+        // Returns a reserved synthetic key_id recognized by check_permission as superadmin.
         if let Some(ref bootstrap) = self.bootstrap_api_key {
             if token == bootstrap.as_str() {
-                return Ok(true);
+                return Ok(Some("__bootstrap__".to_string()));
             }
         }
 
@@ -194,11 +200,11 @@ impl Broker {
         let entries = self
             .storage
             .list_state_by_prefix(API_KEY_PREFIX, usize::MAX)?;
-        for (key, value) in entries {
+        for (storage_key, value) in entries {
             let entry = match serde_json::from_slice::<ApiKeyEntry>(&value) {
                 Ok(e) => e,
                 Err(e) => {
-                    tracing::warn!(storage_key = %key, error = %e, "failed to deserialize api key entry during validation — skipping");
+                    tracing::warn!(storage_key = %storage_key, error = %e, "failed to deserialize api key entry during validation — skipping");
                     continue;
                 }
             };
@@ -206,13 +212,94 @@ impl Broker {
                 // Check expiry.
                 if let Some(exp) = entry.expires_at_ms {
                     if now > exp {
-                        return Ok(false);
+                        return Ok(None);
                     }
                 }
-                return Ok(true);
+                return Ok(Some(entry.key_id));
             }
         }
-        Ok(false)
+        Ok(None)
+    }
+
+    /// Check whether `key_id` has the requested permission on `queue`.
+    ///
+    /// Returns `Ok(())` if permitted, `Err(PermissionDenied)` otherwise.
+    /// When auth is disabled, this method is never called.
+    pub fn check_permission(
+        &self,
+        key_id: &str,
+        perm: auth::Permission,
+        queue: &str,
+    ) -> crate::error::StorageResult<bool> {
+        use auth::{has_permission, ApiKeyEntry};
+
+        // Bootstrap key is a synthetic superadmin — always permitted.
+        if key_id == "__bootstrap__" {
+            return Ok(true);
+        }
+
+        let storage_key = auth::storage_key(key_id);
+        let raw = match self.storage.get_state(&storage_key)? {
+            Some(v) => v,
+            None => return Ok(false),
+        };
+        let entry = match serde_json::from_slice::<ApiKeyEntry>(&raw) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for permission check");
+                return Ok(false);
+            }
+        };
+        Ok(has_permission(&entry, perm, queue))
+    }
+
+    /// Set ACL permissions for a key. Replaces any existing permissions.
+    pub fn set_acl(
+        &self,
+        key_id: &str,
+        permissions: Vec<(String, String)>,
+    ) -> crate::error::StorageResult<bool> {
+        use auth::ApiKeyEntry;
+
+        let sk = auth::storage_key(key_id);
+        let raw = match self.storage.get_state(&sk)? {
+            Some(v) => v,
+            None => return Ok(false),
+        };
+        let mut entry = match serde_json::from_slice::<ApiKeyEntry>(&raw) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for set_acl");
+                return Ok(false);
+            }
+        };
+        entry.permissions = permissions;
+        let value = serde_json::to_vec(&entry)
+            .map_err(|e| crate::error::StorageError::Serialization(e.to_string()))?;
+        self.storage.put_state(&sk, &value)?;
+        tracing::info!(key_id = %key_id, "api key acl updated");
+        Ok(true)
+    }
+
+    /// Get the ACL permissions for a key.
+    pub fn get_acl(
+        &self,
+        key_id: &str,
+    ) -> crate::error::StorageResult<Option<auth::ApiKeyEntry>> {
+        use auth::ApiKeyEntry;
+
+        let sk = auth::storage_key(key_id);
+        let raw = match self.storage.get_state(&sk)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        match serde_json::from_slice::<ApiKeyEntry>(&raw) {
+            Ok(e) => Ok(Some(e)),
+            Err(e) => {
+                tracing::warn!(key_id = %key_id, error = %e, "failed to deserialize api key entry for get_acl");
+                Ok(None)
+            }
+        }
     }
 }
 
@@ -329,19 +416,28 @@ mod tests {
     #[test]
     fn bootstrap_api_key_is_accepted() {
         let (broker, _dir) = broker_with_auth("my-bootstrap-key");
-        assert!(broker.validate_api_key("my-bootstrap-key").unwrap());
+        assert!(broker.validate_api_key("my-bootstrap-key").unwrap().is_some());
+    }
+
+    #[test]
+    fn bootstrap_api_key_returns_synthetic_key_id() {
+        let (broker, _dir) = broker_with_auth("my-bootstrap-key");
+        assert_eq!(
+            broker.validate_api_key("my-bootstrap-key").unwrap().as_deref(),
+            Some("__bootstrap__")
+        );
     }
 
     #[test]
     fn bootstrap_api_key_wrong_value_rejected() {
         let (broker, _dir) = broker_with_auth("my-bootstrap-key");
-        assert!(!broker.validate_api_key("wrong-key").unwrap());
+        assert!(broker.validate_api_key("wrong-key").unwrap().is_none());
     }
 
     #[test]
     fn non_bootstrap_key_falls_through_to_storage() {
         let (broker, _dir) = broker_with_auth("my-bootstrap-key");
         // "other-key" is not the bootstrap key and no stored keys exist → rejected
-        assert!(!broker.validate_api_key("other-key").unwrap());
+        assert!(broker.validate_api_key("other-key").unwrap().is_none());
     }
 }

@@ -4,9 +4,9 @@ use std::process;
 use clap::{Parser, Subcommand};
 use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::{
-    CreateApiKeyRequest, CreateQueueRequest, DeleteQueueRequest, GetConfigRequest, GetStatsRequest,
-    ListApiKeysRequest, ListConfigRequest, ListQueuesRequest, QueueConfig, RedriveRequest,
-    RevokeApiKeyRequest, SetConfigRequest,
+    AclPermission, CreateApiKeyRequest, CreateQueueRequest, DeleteQueueRequest, GetAclRequest,
+    GetConfigRequest, GetStatsRequest, ListApiKeysRequest, ListConfigRequest, ListQueuesRequest,
+    QueueConfig, RedriveRequest, RevokeApiKeyRequest, SetAclRequest, SetConfigRequest,
 };
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
@@ -136,6 +136,10 @@ enum AuthCommands {
         /// Expiry as Unix timestamp in milliseconds (optional; omit for no expiry)
         #[arg(long)]
         expires_at: Option<u64>,
+
+        /// Grant this key superadmin privileges (bypasses all ACL checks)
+        #[arg(long)]
+        superadmin: bool,
     },
 
     /// Revoke an API key by its key ID
@@ -146,6 +150,33 @@ enum AuthCommands {
 
     /// List all API keys
     List,
+
+    /// Manage per-queue ACL permissions for an API key
+    #[command(subcommand)]
+    Acl(AclCommands),
+}
+
+#[derive(Subcommand)]
+enum AclCommands {
+    /// Set ACL permissions for an API key (replaces existing permissions)
+    ///
+    /// Each permission is `<kind>:<pattern>` where kind is one of:
+    /// produce, consume, admin — and pattern is a queue name or wildcard
+    /// (e.g. `*`, `orders.*`).
+    Set {
+        /// Key ID to configure
+        key_id: String,
+
+        /// Permission entries in `<kind>:<pattern>` format (repeatable)
+        #[arg(long = "perm", value_name = "KIND:PATTERN")]
+        permissions: Vec<String>,
+    },
+
+    /// Get ACL permissions for an API key
+    Get {
+        /// Key ID to inspect
+        key_id: String,
+    },
 }
 
 /// Interceptor that attaches an API key as `authorization: Bearer <key>`.
@@ -527,23 +558,106 @@ async fn cmd_redrive(client: &mut AdminClient, dlq_name: String, count: u64) {
     }
 }
 
-async fn cmd_auth_create(client: &mut AdminClient, name: String, expires_at: Option<u64>) {
+async fn cmd_auth_create(
+    client: &mut AdminClient,
+    name: String,
+    expires_at: Option<u64>,
+    is_superadmin: bool,
+) {
     match client
         .create_api_key(CreateApiKeyRequest {
             name: name.clone(),
             expires_at_ms: expires_at.unwrap_or(0),
+            is_superadmin,
         })
         .await
     {
         Ok(resp) => {
             let r = resp.into_inner();
             println!("Created API key \"{name}\"");
-            println!("  Key ID : {}", r.key_id);
-            println!("  Token  : {}", r.key);
+            println!("  Key ID     : {}", r.key_id);
+            println!("  Token      : {}", r.key);
+            if r.is_superadmin {
+                println!("  Superadmin : yes");
+            }
             println!("Store the token securely — it will not be shown again.");
         }
         Err(status) => {
             eprintln!("{}", format_rpc_error(status, "api key"));
+            process::exit(1);
+        }
+    }
+}
+
+async fn cmd_auth_acl_set(
+    client: &mut AdminClient,
+    key_id: String,
+    permissions: Vec<String>,
+) {
+    let parsed: Vec<AclPermission> = match permissions
+        .iter()
+        .map(|p| {
+            let (kind, pattern) = p.split_once(':').ok_or(p.as_str())?;
+            Ok(AclPermission {
+                kind: kind.to_string(),
+                pattern: pattern.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, &str>>()
+    {
+        Ok(v) => v,
+        Err(bad) => {
+            eprintln!(
+                "Error: invalid permission format \"{bad}\" — expected <kind>:<pattern> (e.g. produce:orders)"
+            );
+            process::exit(1);
+        }
+    };
+
+    match client
+        .set_acl(SetAclRequest {
+            key_id: key_id.clone(),
+            permissions: parsed,
+        })
+        .await
+    {
+        Ok(_) => println!("ACL updated for key {key_id}"),
+        Err(status) => {
+            eprintln!(
+                "{}",
+                format_rpc_error(status, &format!("api key \"{key_id}\""))
+            );
+            process::exit(1);
+        }
+    }
+}
+
+async fn cmd_auth_acl_get(client: &mut AdminClient, key_id: String) {
+    match client
+        .get_acl(GetAclRequest {
+            key_id: key_id.clone(),
+        })
+        .await
+    {
+        Ok(resp) => {
+            let r = resp.into_inner();
+            println!("Key ID : {}", r.key_id);
+            if r.is_superadmin {
+                println!("Superadmin: yes (all permissions granted)");
+            } else if r.permissions.is_empty() {
+                println!("Permissions: (none)");
+            } else {
+                println!("Permissions:");
+                for p in &r.permissions {
+                    println!("  {}:{}", p.kind, p.pattern);
+                }
+            }
+        }
+        Err(status) => {
+            eprintln!(
+                "{}",
+                format_rpc_error(status, &format!("api key \"{key_id}\""))
+            );
             process::exit(1);
         }
     }
@@ -649,11 +763,19 @@ async fn main() {
         },
         Commands::Redrive { dlq_name, count } => cmd_redrive(&mut client, dlq_name, count).await,
         Commands::Auth(cmd) => match cmd {
-            AuthCommands::Create { name, expires_at } => {
-                cmd_auth_create(&mut client, name, expires_at).await
-            }
+            AuthCommands::Create {
+                name,
+                expires_at,
+                superadmin,
+            } => cmd_auth_create(&mut client, name, expires_at, superadmin).await,
             AuthCommands::Revoke { key_id } => cmd_auth_revoke(&mut client, key_id).await,
             AuthCommands::List => cmd_auth_list(&mut client).await,
+            AuthCommands::Acl(acl_cmd) => match acl_cmd {
+                AclCommands::Set { key_id, permissions } => {
+                    cmd_auth_acl_set(&mut client, key_id, permissions).await
+                }
+                AclCommands::Get { key_id } => cmd_auth_acl_get(&mut client, key_id).await,
+            },
         },
     }
 }

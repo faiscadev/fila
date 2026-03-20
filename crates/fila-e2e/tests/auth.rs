@@ -1,106 +1,6 @@
 mod helpers;
 
-use helpers::{cli_run, TestServer};
-
-const TEST_BOOTSTRAP_KEY: &str = "test-bootstrap-key-for-e2e";
-
-/// Start a fila-server with API key authentication enabled.
-///
-/// Returns (TestServer, addr). Use `TEST_BOOTSTRAP_KEY` as the initial credential.
-fn start_auth_server() -> (TestServer, String) {
-    use std::net::TcpListener;
-
-    let port = {
-        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
-        l.local_addr().unwrap().port()
-    };
-    let addr = format!("127.0.0.1:{port}");
-
-    let data_dir = tempfile::tempdir().expect("temp dir");
-    let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\nbootstrap_apikey = \"{TEST_BOOTSTRAP_KEY}\"\n"
-    );
-    let config_path = data_dir.path().join("fila.toml");
-    std::fs::write(&config_path, config_content).expect("write config");
-
-    let binary = {
-        let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        p.pop(); // crates/
-        p.pop(); // workspace root
-        p.push("target");
-        p.push("debug");
-        p.push("fila-server");
-        p
-    };
-    assert!(
-        binary.exists(),
-        "fila-server binary not found at {binary:?}. Run `cargo build` first."
-    );
-
-    let child = std::process::Command::new(&binary)
-        .env(
-            "FILA_DATA_DIR",
-            data_dir.path().join("data").to_str().unwrap(),
-        )
-        .current_dir(data_dir.path())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("start fila-server with auth");
-
-    // Poll TCP until the server is reachable.
-    let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(10) {
-        if std::net::TcpStream::connect(&addr).is_ok() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-
-    let http_addr = format!("http://{addr}");
-    let server = TestServer::from_parts(child, http_addr.clone(), data_dir);
-    (server, http_addr)
-}
-
-/// Create an API key via CLI using the bootstrap key and return (key_id, token).
-fn cli_create_key(addr: &str, name: &str) -> (String, String) {
-    let out = cli_run(
-        addr,
-        &[
-            "--api-key",
-            TEST_BOOTSTRAP_KEY,
-            "auth",
-            "create",
-            "--name",
-            name,
-        ],
-    );
-    assert!(
-        out.success,
-        "auth create failed: stderr={}\nstdout={}",
-        out.stderr, out.stdout
-    );
-    // stdout format:
-    //   Created API key "name"
-    //     Key ID : <key_id>
-    //     Token  : <token>
-    //   Store the token...
-    let key_id = out
-        .stdout
-        .lines()
-        .find(|l| l.contains("Key ID"))
-        .and_then(|l| l.split(':').nth(1))
-        .map(|s| s.trim().to_string())
-        .expect("key_id in output");
-    let token = out
-        .stdout
-        .lines()
-        .find(|l| l.contains("Token"))
-        .and_then(|l| l.split(':').nth(1))
-        .map(|s| s.trim().to_string())
-        .expect("token in output");
-    (key_id, token)
-}
+use helpers::{cli_create_superadmin_key, cli_run, start_auth_server, TestServer};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Tests
@@ -177,8 +77,8 @@ async fn auth_enabled_invalid_key_is_rejected() {
 async fn auth_enabled_valid_key_allows_request() {
     let (_server, addr) = start_auth_server();
 
-    // Create a key via CLI (key-management RPCs bypass auth).
-    let (_, token) = cli_create_key(&addr, "test-key");
+    // Create a superadmin key via CLI (superadmin needed for queue create).
+    let (_, token) = cli_create_superadmin_key(&addr, "test-key");
 
     // Create the queue first using the valid key.
     let out = cli_run(
@@ -209,8 +109,8 @@ async fn auth_enabled_valid_key_allows_request() {
 async fn auth_enabled_revoked_key_is_rejected() {
     let (_server, addr) = start_auth_server();
 
-    // Create a key.
-    let (key_id, token) = cli_create_key(&addr, "revoke-test-key");
+    // Create a superadmin key (superadmin needed so revoke itself works).
+    let (key_id, token) = cli_create_superadmin_key(&addr, "revoke-test-key");
 
     // Verify the key works first.
     let client = fila_sdk::FilaClient::connect_with_options(

@@ -301,6 +301,98 @@ pub fn create_queue_with_scripts_cli(
     );
 }
 
+/// Bootstrap API key used by `start_auth_server` and `cli_create_superadmin_key`.
+pub const TEST_BOOTSTRAP_KEY: &str = "test-bootstrap-key-for-e2e";
+
+/// Start a fila-server with API key authentication enabled.
+///
+/// Returns (TestServer, http_addr). Use `TEST_BOOTSTRAP_KEY` as the initial credential.
+pub fn start_auth_server() -> (TestServer, String) {
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+
+    let data_dir = tempfile::tempdir().expect("temp dir");
+    let config_content = format!(
+        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\nbootstrap_apikey = \"{TEST_BOOTSTRAP_KEY}\"\n"
+    );
+    let config_path = data_dir.path().join("fila.toml");
+    std::fs::write(&config_path, config_content).expect("write config");
+
+    let binary = server_binary();
+    assert!(
+        binary.exists(),
+        "fila-server binary not found at {binary:?}. Run `cargo build` first."
+    );
+
+    let child = Command::new(&binary)
+        .env(
+            "FILA_DATA_DIR",
+            data_dir.path().join("data").to_str().unwrap(),
+        )
+        .current_dir(data_dir.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start fila-server with auth");
+
+    // Poll TCP until the server is reachable.
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(10) {
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let http_addr = format!("http://{addr}");
+    let server = TestServer::from_parts(child, http_addr.clone(), data_dir);
+    (server, http_addr)
+}
+
+/// Create a superadmin API key via CLI and return (key_id, token).
+///
+/// Superadmin keys bypass all ACL checks and are suitable for tests that
+/// need to perform admin operations (queue create, acl set, etc.).
+pub fn cli_create_superadmin_key(addr: &str, name: &str) -> (String, String) {
+    let out = cli_run(
+        addr,
+        &[
+            "--api-key",
+            TEST_BOOTSTRAP_KEY,
+            "auth",
+            "create",
+            "--name",
+            name,
+            "--superadmin",
+        ],
+    );
+    assert!(
+        out.success,
+        "auth create --superadmin failed: stderr={}\nstdout={}",
+        out.stderr, out.stdout
+    );
+    // stdout format:
+    //   Created API key "name"
+    //     Key ID     : <key_id>
+    //     Token      : <token>
+    //   Store the token...
+    let key_id = out
+        .stdout
+        .lines()
+        .find(|l| l.contains("Key ID"))
+        .and_then(|l| l.split(':').nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("key_id in output");
+    let token = out
+        .stdout
+        .lines()
+        .find(|l| l.contains("Token"))
+        .and_then(|l| l.split(':').nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("token in output");
+    (key_id, token)
+}
+
 /// Connect an SDK client to the given server address.
 pub async fn sdk_client(addr: &str) -> fila_sdk::FilaClient {
     fila_sdk::FilaClient::connect(addr)

@@ -13,6 +13,7 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, instrument};
 use uuid::Uuid;
 
+use crate::auth::ValidatedKeyId;
 use crate::error::IntoStatus;
 
 /// Map cluster write errors to appropriate gRPC status codes.
@@ -60,10 +61,28 @@ impl FilaService for HotPathService {
         &self,
         request: Request<EnqueueRequest>,
     ) -> Result<Response<EnqueueResponse>, Status> {
+        let key_id = request
+            .extensions()
+            .get::<ValidatedKeyId>()
+            .map(|k| k.0.clone());
         let req = request.into_inner();
 
         if req.queue.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
+        }
+
+        // ACL check: produce permission on this queue.
+        if let Some(ref kid) = key_id {
+            let permitted = self
+                .broker
+                .check_permission(kid, fila_core::broker::auth::Permission::Produce, &req.queue)
+                .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+            if !permitted {
+                return Err(Status::permission_denied(format!(
+                    "key does not have produce permission on queue \"{}\"",
+                    req.queue
+                )));
+            }
         }
 
         let now_ns = std::time::SystemTime::now()
@@ -157,10 +176,28 @@ impl FilaService for HotPathService {
         &self,
         request: Request<ConsumeRequest>,
     ) -> Result<Response<Self::ConsumeStream>, Status> {
+        let key_id = request
+            .extensions()
+            .get::<ValidatedKeyId>()
+            .map(|k| k.0.clone());
         let req = request.into_inner();
 
         if req.queue.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
+        }
+
+        // ACL check: consume permission on this queue.
+        if let Some(ref kid) = key_id {
+            let permitted = self
+                .broker
+                .check_permission(kid, fila_core::broker::auth::Permission::Consume, &req.queue)
+                .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+            if !permitted {
+                return Err(Status::permission_denied(format!(
+                    "key does not have consume permission on queue \"{}\"",
+                    req.queue
+                )));
+            }
         }
 
         tracing::Span::current().record("queue_id", req.queue.as_str());
