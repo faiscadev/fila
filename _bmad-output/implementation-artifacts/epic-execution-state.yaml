@@ -4,10 +4,10 @@ startedAt: "2026-03-19"
 stories:
   - id: "15.1"
     title: "mTLS Transport Security"
-    status: in-progress
-    currentPhase: "dev"
+    status: done
+    currentPhase: "done"
     branch: "feat/15.1-mtls-transport-security"
-    pr: null
+    pr: 71
     dependsOn: []
   - id: "15.2"
     title: "API Key Authentication"

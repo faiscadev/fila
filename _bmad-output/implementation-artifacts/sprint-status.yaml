@@ -158,7 +158,7 @@ development_status:
 
   # Epic 15: Authentication & Security
   epic-15: in-progress
-  15-1-mtls-transport-security: in-progress
+  15-1-mtls-transport-security: done
   15-2-api-key-authentication: backlog
   15-3-per-queue-access-control: backlog
   epic-15-retrospective: optional
