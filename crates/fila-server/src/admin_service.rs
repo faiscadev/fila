@@ -504,7 +504,17 @@ impl FilaAdmin for AdminService {
                 .broker
                 .list_api_keys()
                 .map_err(|e| Status::internal(format!("storage error: {e}")))?;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
             let has_admin_key = existing.iter().any(|k| {
+                // Expired keys do not count — they can no longer be used to grant admin access.
+                if let Some(exp) = k.expires_at_ms {
+                    if now_ms > exp {
+                        return false;
+                    }
+                }
                 k.is_superadmin
                     || k.permissions
                         .iter()
