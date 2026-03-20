@@ -44,8 +44,8 @@ so that I can control which clients can access the broker.
 - [x] Task 3: Domain types + storage (AC: 4, 5)
   - [x] 3.1 Add `sha2 = "0.10"` to workspace `Cargo.toml` (dev dep for fila-core)
   - [x] 3.2 Define `ApiKeyId` (UUID) and `ApiKeyEntry` (key_id, name, hashed_key, created_at, expires_at) in `broker/auth.rs`
-  - [x] 3.3 Add `create_api_key`, `revoke_api_key`, `list_api_keys`, `validate_api_key_hash` methods to `StorageEngine` trait
-  - [x] 3.4 Implement in `RocksDbEngine` using column family `auth` with key `api_key:<key_id>` → JSON `ApiKeyEntry`
+  - [x] 3.3 No new `StorageEngine` trait methods added — broker uses existing `put_state`/`get_state`/`delete_state`/`list_state_by_prefix` via the `api_key:` prefix
+  - [x] 3.4 Storage: `list_state_by_prefix(API_KEY_PREFIX, ...)` in the default column family, key `api_key:<key_id>` → JSON `ApiKeyEntry`
   - [x] 3.5 Add validation helper: SHA-256 hash token, scan all keys to find matching hash
 
 - [x] Task 4: Broker methods (AC: 4, 5, 6)
@@ -59,7 +59,7 @@ so that I can control which clients can access the broker.
   - [x] 5.3 Middleware extracts `authorization` header, parses `Bearer <token>`, hashes token, validates via broker
   - [x] 5.4 When auth disabled: pass through unconditionally
   - [x] 5.5 Apply layer in `fila-server/src/main.rs` between `TraceContextLayer` and the services
-  - [x] 5.6 Admin RPCs for key management (`CreateApiKey`, `RevokeApiKey`, `ListApiKeys`) bypass auth (they're the mechanism for key issuance)
+  - [x] 5.6 No RPCs bypass auth — key-management RPCs require a valid credential. Use `bootstrap_apikey` (config or `FILA_BOOTSTRAP_APIKEY` env var) to provision the first real key
 
 - [x] Task 6: Admin service wire-up (AC: 5)
   - [x] 6.1 Implement `CreateApiKey`, `RevokeApiKey`, `ListApiKeys` handlers in `admin_service.rs`
@@ -89,7 +89,8 @@ type = "api_key"
 ```rust
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthConfig {
-    // In the future, other auth types (JWT, etc.) could be added here.
+    /// Required — impossible to enable auth without a bootstrap key.
+    pub bootstrap_apikey: String,
 }
 ```
 
