@@ -223,7 +223,9 @@ impl Broker {
 
     /// Check whether `key_id` has the requested permission on `queue`.
     ///
-    /// Returns `Ok(())` if permitted, `Err(PermissionDenied)` otherwise.
+    /// Returns `Ok(true)` if the key exists and has the permission,
+    /// `Ok(false)` if the key is not found or the permission is not granted,
+    /// `Err` only on storage failure.
     /// When auth is disabled, this method is never called.
     pub fn check_permission(
         &self,

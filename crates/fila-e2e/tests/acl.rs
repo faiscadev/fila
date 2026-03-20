@@ -240,12 +240,11 @@ async fn superadmin_key_bypasses_acl() {
 async fn admin_operations_require_admin_permission() {
     let (_server, addr) = start_auth_server();
 
-    // Key with only produce:* — should fail admin operations.
-    let (key_id, token) = cli_create_regular_key(&addr, "producer-only");
-
-    // Grant produce:* but not admin.
-    // We need a superadmin key to call set_acl.
+    // Create the superadmin key first (bootstrap — no keys exist yet).
     let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+
+    // Create a regular key and grant it produce:* but not admin.
+    let (key_id, token) = cli_create_regular_key(&addr, "producer-only");
     let out = cli_run(
         &addr,
         &[
@@ -268,11 +267,13 @@ async fn admin_operations_require_admin_permission() {
     );
     assert!(
         !out.success,
-        "create queue with produce-only key should fail"
+        "create queue with produce-only key should fail; stdout={} stderr={}",
+        out.stdout, out.stderr
     );
+    // The CLI wraps the gRPC PERMISSION_DENIED status as "Error: key does not have admin permission".
     assert!(
-        out.stderr.contains("permission") || out.stderr.contains("Error"),
-        "expected permission error, got: {}",
+        out.stderr.contains("admin permission"),
+        "expected admin permission error, got: {}",
         out.stderr
     );
 }

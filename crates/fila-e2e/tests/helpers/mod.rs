@@ -324,7 +324,7 @@ pub fn start_auth_server() -> (TestServer, String) {
         "fila-server binary not found at {binary:?}. Run `cargo build` first."
     );
 
-    let child = Command::new(&binary)
+    let mut child = Command::new(&binary)
         .env(
             "FILA_DATA_DIR",
             data_dir.path().join("data").to_str().unwrap(),
@@ -335,14 +335,31 @@ pub fn start_auth_server() -> (TestServer, String) {
         .spawn()
         .expect("start fila-server with auth");
 
+    // Drain stderr so the process does not block on a full pipe.
+    let stderr = child.stderr.take().expect("stderr");
+    let reader = BufReader::new(stderr);
+    std::thread::spawn(move || {
+        for line in reader.lines() {
+            if line.is_err() {
+                break;
+            }
+        }
+    });
+
     // Poll TCP until the server is reachable.
     let start = std::time::Instant::now();
+    let mut connected = false;
     while start.elapsed() < Duration::from_secs(10) {
         if std::net::TcpStream::connect(&addr).is_ok() {
+            connected = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(
+        connected,
+        "fila-server (auth mode) did not become reachable at {addr} within 10s"
+    );
 
     let http_addr = format!("http://{addr}");
     let server = TestServer::from_parts(child, http_addr.clone(), data_dir);

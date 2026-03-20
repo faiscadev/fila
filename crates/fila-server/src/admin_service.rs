@@ -487,6 +487,23 @@ impl FilaAdmin for AdminService {
         if req.name.is_empty() {
             return Err(Status::invalid_argument("name must not be empty"));
         }
+        // `CreateApiKey` bypasses authentication (bootstrap), so we cannot rely on the
+        // auth middleware to inject a `ValidatedKeyId`.  To prevent privilege escalation
+        // after bootstrap, we block `is_superadmin: true` requests once at least one key
+        // already exists.  Operators who need a second superadmin key must use an existing
+        // admin key + `SetAcl` to grant admin permissions to a newly-created regular key.
+        if req.is_superadmin && self.broker.auth_enabled {
+            let existing = self
+                .broker
+                .list_api_keys()
+                .map_err(|e| Status::internal(format!("storage error: {e}")))?;
+            if !existing.is_empty() {
+                return Err(Status::permission_denied(
+                    "superadmin key creation is only permitted during bootstrap (before any keys exist); \
+                     use an existing key with admin permission to manage access",
+                ));
+            }
+        }
         let expires_at = if req.expires_at_ms == 0 {
             None
         } else {
