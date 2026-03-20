@@ -1,7 +1,8 @@
 epic: "Epic 15: Authentication & Security"
 epicNumber: 15
 startedAt: "2026-03-20T00:00:00Z"
-currentPrIndex: 1
+completedAt: "2026-03-20T00:00:00Z"
+currentPrIndex: 2
 prChain:
   - storyId: "15.1"
     storyKey: "15-1-mtls-transport-security"
@@ -16,11 +17,11 @@ prChain:
     branch: "feat/15.2-api-key-authentication"
     pr: 72
     baseBranch: "main"
-    status: reviewing
+    status: merged
   - storyId: "15.3"
     storyKey: "15-3-per-queue-access-control"
     title: "Per-Queue Access Control"
     branch: "feat/15.3-per-queue-access-control"
     pr: 73
-    baseBranch: "feat/15.2-api-key-authentication"
-    status: pending
+    baseBranch: "main"
+    status: merged
