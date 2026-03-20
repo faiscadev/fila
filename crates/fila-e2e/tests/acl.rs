@@ -330,6 +330,160 @@ fn cli_acl_get_shows_permissions() {
     );
 }
 
+/// Key without consume permission cannot nack.
+#[tokio::test]
+async fn key_without_consume_permission_cannot_nack() {
+    let (_server, addr) = start_auth_server();
+
+    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+    let out = cli_run(
+        &addr,
+        &["--api-key", &admin_token, "queue", "create", "nack-acl-q"],
+    );
+    assert!(out.success, "create queue: {}", out.stderr);
+
+    // A key with only produce permission cannot nack.
+    let (key_id, token) = cli_create_regular_key(&addr, "produce-only-key");
+    let out = cli_run(
+        &addr,
+        &[
+            "--api-key",
+            &admin_token,
+            "auth",
+            "acl",
+            "set",
+            &key_id,
+            "--perm",
+            "produce:nack-acl-q",
+        ],
+    );
+    assert!(out.success, "set acl: {}", out.stderr);
+
+    let client = fila_sdk::FilaClient::connect_with_options(
+        fila_sdk::ConnectOptions::new(&addr).with_api_key(&token),
+    )
+    .await
+    .expect("connect");
+
+    // The ACL check fires before any message lookup, so a bogus message_id is fine here.
+    let result = client
+        .nack("nack-acl-q", "00000000-0000-0000-0000-000000000000", "err")
+        .await;
+    match result {
+        Err(fila_sdk::NackError::Status(fila_sdk::StatusError::Rpc { code, .. }))
+            if code == tonic::Code::PermissionDenied => {}
+        other => panic!("expected PERMISSION_DENIED, got: {other:?}"),
+    }
+}
+
+/// `fila auth acl set` rejects unknown permission kinds.
+#[test]
+fn cli_acl_set_rejects_invalid_kind() {
+    let (_server, addr) = start_auth_server();
+
+    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+    let (key_id, _) = cli_create_regular_key(&addr, "target-key");
+
+    let out = cli_run(
+        &addr,
+        &[
+            "--api-key",
+            &admin_token,
+            "auth",
+            "acl",
+            "set",
+            &key_id,
+            "--perm",
+            "read:some-queue",
+        ],
+    );
+    assert!(
+        !out.success,
+        "expected failure for invalid kind; stdout={} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stderr.contains("invalid permission kind") || out.stderr.contains("invalid"),
+        "expected invalid kind error, got: {}",
+        out.stderr
+    );
+}
+
+/// A key with admin permission can create a new API key (non-superadmin).
+#[test]
+fn key_with_admin_permission_can_create_api_key() {
+    let (_server, addr) = start_auth_server();
+
+    // Bootstrap creates the first superadmin.
+    let (_, admin_token) = cli_create_superadmin_key(&addr, "superadmin");
+
+    // Create a key with admin:* and verify it can create another key.
+    let (key_id, admin_key_token) = cli_create_regular_key(&addr, "admin-key");
+    let out = cli_run(
+        &addr,
+        &[
+            "--api-key",
+            &admin_token,
+            "auth",
+            "acl",
+            "set",
+            &key_id,
+            "--perm",
+            "admin:*",
+        ],
+    );
+    assert!(out.success, "set acl: {}", out.stderr);
+
+    let out = cli_run(
+        &addr,
+        &[
+            "--api-key",
+            &admin_key_token,
+            "auth",
+            "create",
+            "--name",
+            "new-key",
+        ],
+    );
+    assert!(
+        out.success,
+        "admin key should be able to create keys; stderr={} stdout={}",
+        out.stderr, out.stdout
+    );
+}
+
+/// A key without admin permission cannot create a new API key.
+#[test]
+fn key_without_admin_permission_cannot_create_api_key() {
+    let (_server, addr) = start_auth_server();
+
+    let (_, _) = cli_create_superadmin_key(&addr, "admin");
+    // Regular key with no permissions at all.
+    let (_, no_perm_token) = cli_create_regular_key(&addr, "no-perm-key");
+
+    let out = cli_run(
+        &addr,
+        &[
+            "--api-key",
+            &no_perm_token,
+            "auth",
+            "create",
+            "--name",
+            "sneaky-key",
+        ],
+    );
+    assert!(
+        !out.success,
+        "non-admin key should not be able to create keys; stdout={} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stderr.contains("admin permission") || out.stderr.contains("permission"),
+        "expected permission error, got: {}",
+        out.stderr
+    );
+}
+
 /// `fila auth acl get` shows superadmin status.
 #[test]
 fn cli_acl_get_shows_superadmin() {

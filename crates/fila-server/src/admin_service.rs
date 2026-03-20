@@ -483,49 +483,10 @@ impl FilaAdmin for AdminService {
         &self,
         request: Request<CreateApiKeyRequest>,
     ) -> Result<Response<CreateApiKeyResponse>, Status> {
+        self.check_admin(&request)?;
         let req = request.into_inner();
         if req.name.is_empty() {
             return Err(Status::invalid_argument("name must not be empty"));
-        }
-        // `CreateApiKey` bypasses authentication (bootstrap), so we cannot rely on the
-        // auth middleware to inject a `ValidatedKeyId`.  To prevent privilege escalation,
-        // we block `is_superadmin: true` once an admin-capable key (superadmin or a key
-        // with `admin:*` permission) already exists.  Non-admin keys do not block bootstrap,
-        // so a deployment that only has produce/consume keys can still create its first
-        // superadmin key without being permanently locked out.
-        //
-        // TOCTOU note: the list-then-write pattern has an inherent race window.  Concurrent
-        // bootstrap requests arriving in the same nanosecond could each see an empty admin
-        // set and both create superadmin keys.  This is an operator-level operation (CLI /
-        // one-time setup), so the practical risk is negligible and does not warrant the
-        // complexity of distributed compare-and-swap locking.
-        if req.is_superadmin && self.broker.auth_enabled {
-            let existing = self
-                .broker
-                .list_api_keys()
-                .map_err(|e| Status::internal(format!("storage error: {e}")))?;
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let has_admin_key = existing.iter().any(|k| {
-                // Expired keys do not count — they can no longer be used to grant admin access.
-                if let Some(exp) = k.expires_at_ms {
-                    if now_ms > exp {
-                        return false;
-                    }
-                }
-                k.is_superadmin
-                    || k.permissions
-                        .iter()
-                        .any(|(kind, pattern)| kind == "admin" && pattern == "*")
-            });
-            if has_admin_key {
-                return Err(Status::permission_denied(
-                    "superadmin key creation is only permitted when no admin-capable key exists; \
-                     use an existing key with admin permission to manage access",
-                ));
-            }
         }
         let expires_at = if req.expires_at_ms == 0 {
             None
@@ -596,6 +557,15 @@ impl FilaAdmin for AdminService {
         let req = request.into_inner();
         if req.key_id.is_empty() {
             return Err(Status::invalid_argument("key_id must not be empty"));
+        }
+        const VALID_KINDS: &[&str] = &["produce", "consume", "admin"];
+        for p in &req.permissions {
+            if !VALID_KINDS.contains(&p.kind.as_str()) {
+                return Err(Status::invalid_argument(format!(
+                    "invalid permission kind \"{}\"; must be one of: produce, consume, admin",
+                    p.kind
+                )));
+            }
         }
         let permissions = req
             .permissions

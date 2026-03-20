@@ -335,16 +335,11 @@ pub fn start_auth_server() -> (TestServer, String) {
         .spawn()
         .expect("start fila-server with auth");
 
-    // Drain stderr so the process does not block on a full pipe.
+    // Drain stdout and stderr so the process does not block on a full pipe.
+    let stdout = child.stdout.take().expect("stdout");
+    std::thread::spawn(move || for _ in BufReader::new(stdout).lines() {});
     let stderr = child.stderr.take().expect("stderr");
-    let reader = BufReader::new(stderr);
-    std::thread::spawn(move || {
-        for line in reader.lines() {
-            if line.is_err() {
-                break;
-            }
-        }
-    });
+    std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
     // Poll TCP until the server is reachable.
     let start = std::time::Instant::now();

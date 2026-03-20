@@ -282,10 +282,32 @@ impl FilaService for HotPathService {
 
     #[instrument(skip(self), fields(queue_id, msg_id))]
     async fn ack(&self, request: Request<AckRequest>) -> Result<Response<AckResponse>, Status> {
+        let key_id = request
+            .extensions()
+            .get::<ValidatedKeyId>()
+            .map(|k| k.0.clone());
         let req = request.into_inner();
 
         if req.queue.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
+        }
+
+        // ACL check: consume permission on this queue (ack is part of the consume lifecycle).
+        if let Some(ref kid) = key_id {
+            let permitted = self
+                .broker
+                .check_permission(
+                    kid,
+                    fila_core::broker::auth::Permission::Consume,
+                    &req.queue,
+                )
+                .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+            if !permitted {
+                return Err(Status::permission_denied(format!(
+                    "key does not have consume permission on queue \"{}\"",
+                    req.queue
+                )));
+            }
         }
         if req.message_id.is_empty() {
             return Err(Status::invalid_argument("message_id must not be empty"));
@@ -352,11 +374,34 @@ impl FilaService for HotPathService {
 
     #[instrument(skip(self), fields(queue_id, msg_id))]
     async fn nack(&self, request: Request<NackRequest>) -> Result<Response<NackResponse>, Status> {
+        let key_id = request
+            .extensions()
+            .get::<ValidatedKeyId>()
+            .map(|k| k.0.clone());
         let req = request.into_inner();
 
         if req.queue.is_empty() {
             return Err(Status::invalid_argument("queue name must not be empty"));
         }
+
+        // ACL check: consume permission on this queue (nack is part of the consume lifecycle).
+        if let Some(ref kid) = key_id {
+            let permitted = self
+                .broker
+                .check_permission(
+                    kid,
+                    fila_core::broker::auth::Permission::Consume,
+                    &req.queue,
+                )
+                .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+            if !permitted {
+                return Err(Status::permission_denied(format!(
+                    "key does not have consume permission on queue \"{}\"",
+                    req.queue
+                )));
+            }
+        }
+
         if req.message_id.is_empty() {
             return Err(Status::invalid_argument("message_id must not be empty"));
         }
