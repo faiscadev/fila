@@ -24,6 +24,18 @@ struct TestServerOptions {
 }
 
 impl TestServer {
+    /// Construct a TestServer from a pre-spawned child process.
+    ///
+    /// Used by tests that need custom server configuration (e.g. TLS) and
+    /// spawn the process themselves.
+    pub fn from_parts(child: std::process::Child, addr: String, data_dir: tempfile::TempDir) -> Self {
+        Self {
+            child: Some(child),
+            addr,
+            data_dir: Some(data_dir),
+        }
+    }
+
     /// Start a new fila-server instance on a random port.
     pub fn start() -> Self {
         Self::start_with_options(TestServerOptions::default())

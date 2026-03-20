@@ -551,6 +551,7 @@ mod tests {
                 meta_raft: Arc::clone(&raft),
                 multi_raft: Arc::clone(&multi_raft),
                 node_id,
+                tls: None,
                 client_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             });
 

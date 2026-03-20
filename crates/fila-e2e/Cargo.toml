@@ -12,6 +12,8 @@ description = "Blackbox end-to-end tests for Fila message broker"
 
 [dev-dependencies]
 fila-sdk = { workspace = true }
+tonic = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tempfile = "3"
+rcgen = { workspace = true }
