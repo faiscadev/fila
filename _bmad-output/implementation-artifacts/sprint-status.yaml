@@ -172,8 +172,8 @@ development_status:
   epic-16-retrospective: done
 
   # Epic 16.5: Stability Hardening & Test Coverage
-  epic-16.5: backlog
-  16.5-1-cluster-e2e-test-suite: backlog
+  epic-16.5: in-progress
+  16.5-1-cluster-e2e-test-suite: in-progress
   16.5-2-tls-auth-edge-case-hardening: backlog
   16.5-3-ci-code-coverage-quality-gates: backlog
   epic-16.5-retrospective: optional
