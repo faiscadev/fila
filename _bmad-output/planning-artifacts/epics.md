@@ -371,7 +371,7 @@ So that I can monitor the cluster as a single system and trust that adding nodes
 **And** per-queue stats show which node is the Raft leader for each queue
 **And** cluster health is reported: node count, per-queue leader distribution, replication status per queue group
 **And** OTel metrics include cluster-level dimensions: `node_id` labels on existing metrics, cluster-level rollup metrics
-**And** the CLI `fila stats` shows cluster-wide summary when connected to any node
+**And** the CLI `fila queue inspect` shows cluster-wide summary when connected to any node
 
 **Given** a 2-node cluster is benchmarked using the Epic 12 benchmark suite
 **When** throughput is measured across multiple queues
@@ -514,7 +514,7 @@ So that I can trust multi-node deployments in production.
 **And** a test verifies: leader node killed → new leader elected → consumer reconnects → zero message loss
 **And** a test verifies: non-leader node receives request → forwards to leader → client gets correct response transparently
 **And** a test verifies: node rejoins after crash → catches up from Raft log → becomes eligible for leadership
-**And** a test verifies: `fila stats` on any node returns cluster-wide aggregated counts
+**And** a test verifies: `fila queue inspect` on any node returns cluster-wide aggregated counts
 **And** cluster e2e tests spawn 3 fila-server processes with `cluster.enabled = true` and distinct ports (client + cluster ports)
 **And** test helpers manage multi-node lifecycle: start cluster, stop/kill individual nodes, wait for leader election
 **And** CI pipeline runs cluster e2e tests (new workflow or extended e2e.yml)
