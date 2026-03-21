@@ -36,7 +36,7 @@ impl TestCluster {
         let mut nodes = Vec::with_capacity(n);
 
         // Start node 0 first (bootstrap). Give it a moment to initialize Raft.
-        let node0 = start_cluster_node(0, client_ports[0], cluster_ports[0], &[], &cluster_ports);
+        let node0 = start_cluster_node(0, client_ports[0], cluster_ports[0], &[]);
         nodes.push(Some(node0));
 
         // Brief delay to let node 0 bootstrap its single-node Raft cluster
@@ -46,7 +46,7 @@ impl TestCluster {
         let seed = format!("127.0.0.1:{}", cluster_ports[0]);
         for i in 1..n {
             let node =
-                start_cluster_node(i, client_ports[i], cluster_ports[i], &[&seed], &cluster_ports);
+                start_cluster_node(i, client_ports[i], cluster_ports[i], &[&seed]);
             nodes.push(Some(node));
         }
 
@@ -104,7 +104,6 @@ impl TestCluster {
             self.client_ports[i],
             self.cluster_ports[i],
             &seed_refs,
-            &self.cluster_ports,
             data_dir,
         );
         self.nodes[i] = Some(node);
@@ -132,17 +131,9 @@ fn start_cluster_node(
     client_port: u16,
     cluster_port: u16,
     seeds: &[&str],
-    all_cluster_ports: &[u16],
 ) -> ClusterNode {
     let data_dir = tempfile::tempdir().expect("create temp dir");
-    write_cluster_config(
-        &data_dir,
-        index,
-        client_port,
-        cluster_port,
-        seeds,
-        all_cluster_ports,
-    );
+    write_cluster_config(&data_dir, index, client_port, cluster_port, seeds);
     spawn_and_wait(data_dir, client_port)
 }
 
@@ -151,18 +142,10 @@ fn restart_cluster_node(
     client_port: u16,
     cluster_port: u16,
     seeds: &[&str],
-    all_cluster_ports: &[u16],
     data_dir: tempfile::TempDir,
 ) -> ClusterNode {
     // Rewrite config (it's already there but let's be safe)
-    write_cluster_config(
-        &data_dir,
-        index,
-        client_port,
-        cluster_port,
-        seeds,
-        all_cluster_ports,
-    );
+    write_cluster_config(&data_dir, index, client_port, cluster_port, seeds);
     spawn_and_wait(data_dir, client_port)
 }
 
@@ -172,7 +155,6 @@ fn write_cluster_config(
     client_port: u16,
     cluster_port: u16,
     seeds: &[&str],
-    _all_cluster_ports: &[u16],
 ) {
     let node_id = index as u64 + 1; // node IDs are 1-based
     let addr = format!("127.0.0.1:{client_port}");
