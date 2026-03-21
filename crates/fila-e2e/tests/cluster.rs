@@ -58,17 +58,18 @@ fn parse_replicas(output: &str) -> u32 {
 fn find_leader_index(cluster: &helpers::cluster::TestCluster, queue: &str) -> usize {
     let output = queue_inspect(cluster.addr(0), queue);
     let leader_node_id = parse_leader_node_id(&output);
-    assert!(
-        leader_node_id > 0,
-        "no leader found for queue '{queue}'"
-    );
+    assert!(leader_node_id > 0, "no leader found for queue '{queue}'");
     (leader_node_id - 1) as usize // node IDs are 1-based
 }
 
 /// Helper: find a non-leader node index for a queue.
 fn find_non_leader_index(cluster: &helpers::cluster::TestCluster, queue: &str) -> usize {
     let leader = find_leader_index(cluster, queue);
-    if leader == 0 { 1 } else { 0 }
+    if leader == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 /// AC 1: Enqueue on node A, consume on node B (leader), ack on node C — full cross-node lifecycle.
@@ -198,11 +199,7 @@ async fn cluster_leader_forwarding() {
     // Enqueue via non-leader — should be forwarded to leader transparently
     let client = helpers::sdk_client(cluster.addr(non_leader)).await;
     let msg_id = client
-        .enqueue(
-            "forwarding-q",
-            HashMap::new(),
-            b"forwarded-msg".to_vec(),
-        )
+        .enqueue("forwarding-q", HashMap::new(), b"forwarded-msg".to_vec())
         .await
         .expect("enqueue via non-leader should succeed (transparent forwarding)");
     assert!(!msg_id.is_empty());
@@ -241,7 +238,11 @@ async fn cluster_node_rejoin_catchup() {
     let client = helpers::sdk_client(cluster.addr(leader)).await;
     for i in 0..3 {
         client
-            .enqueue("rejoin-q", HashMap::new(), format!("before-{i}").into_bytes())
+            .enqueue(
+                "rejoin-q",
+                HashMap::new(),
+                format!("before-{i}").into_bytes(),
+            )
             .await
             .expect("enqueue before crash");
     }
@@ -254,7 +255,11 @@ async fn cluster_node_rejoin_catchup() {
     // Enqueue more messages while node is down
     for i in 0..3 {
         client
-            .enqueue("rejoin-q", HashMap::new(), format!("during-{i}").into_bytes())
+            .enqueue(
+                "rejoin-q",
+                HashMap::new(),
+                format!("during-{i}").into_bytes(),
+            )
             .await
             .expect("enqueue while node down");
     }
