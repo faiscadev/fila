@@ -22,6 +22,7 @@ mod helpers;
 
 use rcgen::{BasicConstraints, Certificate, CertificateParams, IsCa};
 use std::collections::HashMap;
+use std::io::BufRead;
 use std::time::Duration;
 
 /// Generate a CA cert, server cert signed by CA, and client cert signed by CA.
@@ -107,7 +108,7 @@ fn start_mtls_server(
         "fila-server binary not found at {binary:?}"
     );
 
-    let child = std::process::Command::new(&binary)
+    let mut child = std::process::Command::new(&binary)
         .env(
             "FILA_DATA_DIR",
             data_dir.path().join("data").to_str().unwrap(),
@@ -118,13 +119,25 @@ fn start_mtls_server(
         .spawn()
         .expect("start fila-server with mTLS");
 
+    // Drain stdout/stderr so the child process doesn't block on full pipes.
+    let stdout = child.stdout.take().expect("stdout");
+    std::thread::spawn(move || for _ in std::io::BufReader::new(stdout).lines() {});
+    let stderr = child.stderr.take().expect("stderr");
+    std::thread::spawn(move || for _ in std::io::BufReader::new(stderr).lines() {});
+
     let start = std::time::Instant::now();
+    let mut connected = false;
     while start.elapsed() < Duration::from_secs(10) {
         if std::net::TcpStream::connect(&addr).is_ok() {
+            connected = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(
+        connected,
+        "mTLS fila-server did not become reachable at {addr} within 10s"
+    );
 
     let https_addr = format!("https://{addr}");
     let server = helpers::TestServer::from_parts(child, https_addr.clone(), data_dir);
@@ -147,16 +160,25 @@ async fn mtls_valid_client_cert_succeeds() {
     .await
     .expect("mTLS connection with valid client cert should succeed");
 
-    // Verify we can actually make RPCs
-    helpers::cli_run(
-        &addr.replace("https://", "http://"),
-        &["queue", "create", "mtls-test"],
-    );
-    // Note: CLI doesn't support TLS for admin ops in this test; use SDK for data ops instead.
-    // The queue may not exist, but the connection itself is the proof.
-    let _ = client
+    // Verify data RPCs actually work over mTLS by enqueuing to any queue.
+    // The enqueue will fail with "queue not found" (no admin setup over mTLS),
+    // but a successful connection + gRPC round-trip proves mTLS works.
+    // A TLS handshake failure would surface as a transport error, not a queue error.
+    let result = client
         .enqueue("mtls-test", HashMap::new(), b"test".to_vec())
         .await;
+    match result {
+        Ok(_) => {} // queue happened to exist — fine
+        Err(e) => {
+            let err_str = format!("{e:?}");
+            // "not found" means the gRPC call succeeded (mTLS worked) but queue doesn't exist.
+            // Any TLS/transport error would be a different message.
+            assert!(
+                err_str.contains("not found") || err_str.contains("NotFound"),
+                "expected queue-not-found error proving mTLS round-trip, got: {e:?}"
+            );
+        }
+    }
 }
 
 /// AC 2: mTLS required but no client cert → connection rejected.
@@ -238,7 +260,7 @@ async fn tls_expired_cert_rejected() {
         p
     };
 
-    let child = std::process::Command::new(&binary)
+    let mut child = std::process::Command::new(&binary)
         .env(
             "FILA_DATA_DIR",
             data_dir.path().join("data").to_str().unwrap(),
@@ -249,13 +271,26 @@ async fn tls_expired_cert_rejected() {
         .spawn()
         .expect("start server with expired cert");
 
+    // Drain stdout/stderr so the child process doesn't block on full pipes.
+    let stdout = child.stdout.take().expect("stdout");
+    std::thread::spawn(move || for _ in std::io::BufReader::new(stdout).lines() {});
+    let stderr = child.stderr.take().expect("stderr");
+    std::thread::spawn(move || for _ in std::io::BufReader::new(stderr).lines() {});
+
+    // Assert the server actually started (TCP reachable) before testing TLS rejection.
     let start = std::time::Instant::now();
+    let mut connected = false;
     while start.elapsed() < Duration::from_secs(10) {
         if std::net::TcpStream::connect(&addr).is_ok() {
+            connected = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(
+        connected,
+        "fila-server with expired cert did not become reachable at {addr} within 10s"
+    );
 
     let _server = helpers::TestServer::from_parts(child, format!("https://{addr}"), data_dir);
 
