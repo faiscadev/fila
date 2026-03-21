@@ -18,9 +18,9 @@ stories:
     dependsOn: []
   - id: "16.5.3"
     title: "CI Code Coverage & Quality Gates"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/16.5.3-ci-code-coverage-quality-gates"
     pr: null
     dependsOn: ["16.5.1", "16.5.2"]
 skippedIssues: []
