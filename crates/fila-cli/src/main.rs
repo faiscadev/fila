@@ -5,14 +5,15 @@ use clap::{Parser, Subcommand};
 use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::{
     AclPermission, CreateApiKeyRequest, CreateQueueRequest, DeleteQueueRequest, GetAclRequest,
-    GetConfigRequest, GetStatsRequest, ListApiKeysRequest, ListConfigRequest, ListQueuesRequest,
-    QueueConfig, RedriveRequest, RevokeApiKeyRequest, SetAclRequest, SetConfigRequest,
+    GetConfigRequest, GetServerInfoRequest, GetStatsRequest, ListApiKeysRequest, ListConfigRequest,
+    ListQueuesRequest, QueueConfig, RedriveRequest, RevokeApiKeyRequest, SetAclRequest,
+    SetConfigRequest,
 };
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 #[derive(Parser)]
-#[command(name = "fila", about = "Fila message broker CLI")]
+#[command(name = "fila", version, about = "Fila message broker CLI")]
 struct Cli {
     /// Broker address (use https:// when TLS is enabled)
     #[arg(long, default_value = "http://localhost:5555", global = true)]
@@ -62,6 +63,9 @@ enum Commands {
     /// Manage API keys
     #[command(subcommand)]
     Auth(AuthCommands),
+
+    /// Show server version, proto version, and supported features
+    ServerInfo,
 }
 
 #[derive(Subcommand)]
@@ -679,6 +683,28 @@ async fn cmd_auth_revoke(client: &mut AdminClient, key_id: String) {
     }
 }
 
+async fn cmd_server_info(client: &mut AdminClient) {
+    match client
+        .get_server_info(GetServerInfoRequest {})
+        .await
+    {
+        Ok(resp) => {
+            let info = resp.into_inner();
+            println!("Server version : {}", info.server_version);
+            println!("Proto version  : {}", info.proto_version);
+            if info.features.is_empty() {
+                println!("Features       : (none)");
+            } else {
+                println!("Features       : {}", info.features.join(", "));
+            }
+        }
+        Err(status) => {
+            eprintln!("{}", format_rpc_error(status, "server info"));
+            process::exit(1);
+        }
+    }
+}
+
 async fn cmd_auth_list(client: &mut AdminClient) {
     match client.list_api_keys(ListApiKeysRequest {}).await {
         Ok(resp) => {
@@ -758,6 +784,7 @@ async fn main() {
             ConfigCommands::List { prefix } => cmd_config_list(&mut client, prefix).await,
         },
         Commands::Redrive { dlq_name, count } => cmd_redrive(&mut client, dlq_name, count).await,
+        Commands::ServerInfo => cmd_server_info(&mut client).await,
         Commands::Auth(cmd) => match cmd {
             AuthCommands::Create {
                 name,

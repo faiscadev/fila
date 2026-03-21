@@ -1,15 +1,24 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::fila_service_client::FilaServiceClient;
-use fila_proto::{AckRequest, ConsumeRequest, EnqueueRequest, NackRequest};
+use fila_proto::{AckRequest, ConsumeRequest, EnqueueRequest, GetServerInfoRequest, NackRequest};
 use tokio_stream::{Stream, StreamExt};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use crate::error::{
     ack_status_error, consume_status_error, enqueue_status_error, nack_status_error, status_error,
-    AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError,
+    AckError, ConnectError, ConsumeError, EnqueueError, NackError, ServerInfoError, StatusError,
 };
+
+/// Server metadata returned by `GetServerInfo`.
+#[derive(Debug, Clone)]
+pub struct ServerInfo {
+    pub server_version: String,
+    pub proto_version: String,
+    pub features: Vec<String>,
+}
 
 /// A consumed message received from the broker.
 #[derive(Debug, Clone)]
@@ -81,6 +90,7 @@ impl ConnectOptions {
 #[derive(Debug, Clone)]
 pub struct FilaClient {
     inner: FilaServiceClient<Channel>,
+    channel: Channel,
     /// API key sent as `authorization: Bearer <key>` on every request.
     api_key: Option<String>,
 }
@@ -90,9 +100,14 @@ impl FilaClient {
     ///
     /// The address should include the scheme, e.g. `http://localhost:5555`.
     pub async fn connect(addr: impl Into<String>) -> Result<Self, ConnectError> {
-        let inner = FilaServiceClient::connect(addr.into()).await?;
+        let channel = Channel::from_shared(addr.into())
+            .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?
+            .connect()
+            .await?;
+        let inner = FilaServiceClient::new(channel.clone());
         Ok(Self {
             inner,
+            channel,
             api_key: None,
         })
     }
@@ -123,9 +138,10 @@ impl FilaClient {
         }
 
         let channel = endpoint.connect().await?;
-        let inner = FilaServiceClient::new(channel);
+        let inner = FilaServiceClient::new(channel.clone());
         Ok(Self {
             inner,
+            channel,
             api_key: options.api_key,
         })
     }
@@ -244,5 +260,28 @@ impl FilaClient {
             .map_err(nack_status_error)?;
 
         Ok(())
+    }
+
+    /// Query the broker for server version, proto version, and supported features.
+    ///
+    /// This RPC does not require authentication. It can be used before
+    /// authenticating to check compatibility.
+    pub async fn get_server_info(&self) -> Result<ServerInfo, ServerInfoError> {
+        let mut admin = FilaAdminClient::new(self.channel.clone());
+        let resp = admin
+            .get_server_info(GetServerInfoRequest {})
+            .await
+            .map_err(|s| ServerInfoError::Status(status_error(s)))?;
+        let inner = resp.into_inner();
+        Ok(ServerInfo {
+            server_version: inner.server_version,
+            proto_version: inner.proto_version,
+            features: inner.features,
+        })
+    }
+
+    /// Returns the SDK version (compile-time constant).
+    pub fn sdk_version() -> &'static str {
+        env!("CARGO_PKG_VERSION")
     }
 }

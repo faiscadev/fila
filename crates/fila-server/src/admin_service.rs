@@ -8,11 +8,12 @@ use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
     AclPermission, ApiKeyInfo, ConfigEntry, CreateApiKeyRequest, CreateApiKeyResponse,
     CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
-    GetAclRequest, GetAclResponse, GetConfigRequest, GetConfigResponse, GetStatsRequest,
-    GetStatsResponse, ListApiKeysRequest, ListApiKeysResponse, ListConfigRequest,
-    ListConfigResponse, ListQueuesRequest, ListQueuesResponse, PerFairnessKeyStats,
-    PerThrottleKeyStats, QueueInfo, RedriveRequest, RedriveResponse, RevokeApiKeyRequest,
-    RevokeApiKeyResponse, SetAclRequest, SetAclResponse, SetConfigRequest, SetConfigResponse,
+    GetAclRequest, GetAclResponse, GetConfigRequest, GetConfigResponse, GetServerInfoRequest,
+    GetServerInfoResponse, GetStatsRequest, GetStatsResponse, ListApiKeysRequest,
+    ListApiKeysResponse, ListConfigRequest, ListConfigResponse, ListQueuesRequest,
+    ListQueuesResponse, PerFairnessKeyStats, PerThrottleKeyStats, QueueInfo, RedriveRequest,
+    RedriveResponse, RevokeApiKeyRequest, RevokeApiKeyResponse, SetAclRequest, SetAclResponse,
+    SetConfigRequest, SetConfigResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::instrument;
@@ -700,6 +701,33 @@ impl FilaAdmin for AdminService {
             None => Err(Status::not_found("api key not found")),
         }
     }
+
+    /// Returns server version, proto version, and supported features.
+    ///
+    /// This RPC does not require authentication — clients use it to negotiate
+    /// compatibility before authenticating.
+    #[instrument(skip(self))]
+    async fn get_server_info(
+        &self,
+        _request: Request<GetServerInfoRequest>,
+    ) -> Result<Response<GetServerInfoResponse>, Status> {
+        let features = vec![
+            "fair_scheduling".to_string(),
+            "throttling".to_string(),
+            "lua_scripting".to_string(),
+            "tls".to_string(),
+            "api_key_auth".to_string(),
+            "acl".to_string(),
+            "clustering".to_string(),
+            "dlq".to_string(),
+            "redrive".to_string(),
+        ];
+        Ok(Response::new(GetServerInfoResponse {
+            server_version: env!("CARGO_PKG_VERSION").to_string(),
+            proto_version: "v1".to_string(),
+            features,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -1108,6 +1136,60 @@ mod tests {
             assert_eq!(
                 q.leader_node_id, 0,
                 "single-node queue should have leader_node_id=0"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn get_server_info_returns_valid_version() {
+        let (svc, _dir) = test_admin_service();
+
+        let resp = svc
+            .get_server_info(Request::new(fila_proto::GetServerInfoRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        // Version matches semver pattern.
+        let parts: Vec<&str> = resp.server_version.split('.').collect();
+        assert_eq!(parts.len(), 3, "version should be MAJOR.MINOR.PATCH");
+        for part in &parts {
+            part.parse::<u32>()
+                .expect("each version segment should be a number");
+        }
+    }
+
+    #[tokio::test]
+    async fn get_server_info_returns_proto_v1() {
+        let (svc, _dir) = test_admin_service();
+
+        let resp = svc
+            .get_server_info(Request::new(fila_proto::GetServerInfoRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.proto_version, "v1");
+    }
+
+    #[tokio::test]
+    async fn get_server_info_returns_expected_features() {
+        let (svc, _dir) = test_admin_service();
+
+        let resp = svc
+            .get_server_info(Request::new(fila_proto::GetServerInfoRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(!resp.features.is_empty(), "features list should not be empty");
+        // Check that key features are present.
+        let expected = ["fair_scheduling", "throttling", "lua_scripting", "tls", "api_key_auth", "acl", "clustering", "dlq", "redrive"];
+        for feat in &expected {
+            assert!(
+                resp.features.iter().any(|f| f == feat),
+                "expected feature '{feat}' not found in {:?}",
+                resp.features
             );
         }
     }

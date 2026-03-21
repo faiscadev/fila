@@ -66,6 +66,12 @@ pub enum NackError {
     Status(#[from] StatusError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ServerInfoError {
+    #[error(transparent)]
+    Status(StatusError),
+}
+
 // --- Mapping helpers ---
 
 pub(crate) fn status_error(status: tonic::Status) -> StatusError {

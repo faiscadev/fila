@@ -20,6 +20,9 @@ service FilaAdmin {
   // Per-key ACL management.
   rpc SetAcl(SetAclRequest) returns (SetAclResponse);
   rpc GetAcl(GetAclRequest) returns (GetAclResponse);
+
+  // Server metadata (unauthenticated — clients use this to negotiate compatibility).
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
 }
 
 message CreateQueueRequest {
@@ -194,4 +197,17 @@ message GetAclResponse {
   string key_id = 1;
   repeated AclPermission permissions = 2;
   bool is_superadmin = 3;
+}
+
+// --- Server Info ---
+
+message GetServerInfoRequest {}
+
+message GetServerInfoResponse {
+  /// Server version (semver, e.g. "0.1.0").
+  string server_version = 1;
+  /// Proto API version (e.g. "v1").
+  string proto_version = 2;
+  /// Supported feature flags.
+  repeated string features = 3;
 }

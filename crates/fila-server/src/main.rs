@@ -7,11 +7,16 @@ mod trace_context;
 use std::path::Path;
 use std::sync::Arc;
 
+use clap::Parser;
 use fila_core::{Broker, BrokerConfig, RocksDbEngine, TlsParams};
 use fila_proto::fila_admin_server::FilaAdminServer;
 use fila_proto::fila_service_server::FilaServiceServer;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tracing::info;
+
+#[derive(Parser)]
+#[command(name = "fila-server", version, about = "Fila message broker server")]
+struct Args {}
 
 use admin_service::AdminService;
 use service::HotPathService;
@@ -60,6 +65,9 @@ fn load_config() -> BrokerConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parse CLI args (handles --version, --help).
+    let _args = Args::parse();
+
     let mut config = load_config();
 
     // Initialize telemetry (logging + optional OTel export).

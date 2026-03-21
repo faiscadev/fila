@@ -28,10 +28,10 @@ use tower::{Layer, Service};
 #[derive(Clone, Debug)]
 pub struct ValidatedKeyId(pub fila_core::broker::auth::CallerKey);
 
-/// gRPC paths that bypass authentication. Empty — all RPCs require a valid key
-/// when auth is enabled. Use `bootstrap_apikey` in config or `FILA_BOOTSTRAP_APIKEY`
-/// to provision the first key without a bypass.
-const AUTH_BYPASS_PATHS: &[&str] = &[];
+/// gRPC paths that bypass authentication.
+/// `GetServerInfo` is unauthenticated so clients can query server version and
+/// features before providing credentials (compatibility negotiation).
+const AUTH_BYPASS_PATHS: &[&str] = &["/fila.v1.FilaAdmin/GetServerInfo"];
 
 /// Tower layer that wraps services with API key authentication.
 #[derive(Clone)]
