@@ -1,27 +1,21 @@
-epic: "Epic 15: Authentication & Security"
-epicNumber: 15
-startedAt: "2026-03-20T00:00:00Z"
-completedAt: "2026-03-20T00:00:00Z"
-currentPrIndex: 2
+epic: "Epic 16: Release Engineering & SDK Compatibility"
+epicNumber: 16
+startedAt: "2026-03-21T00:00:00Z"
+completedAt: "2026-03-21T14:10:00Z"
+yoloMode: false
+currentPrIndex: 1
 prChain:
-  - storyId: "15.1"
-    storyKey: "15-1-mtls-transport-security"
-    title: "mTLS Transport Security"
-    branch: "feat/15.1-mtls-transport-security"
-    pr: 71
+  - storyId: "16.1"
+    storyKey: "16-1-versioning-compatibility-policy"
+    title: "Versioning & Compatibility Policy"
+    branch: "feat/16.1-versioning-compatibility-policy"
+    pr: 77
     baseBranch: "main"
     status: merged
-  - storyId: "15.2"
-    storyKey: "15-2-api-key-authentication"
-    title: "API Key Authentication"
-    branch: "feat/15.2-api-key-authentication"
-    pr: 72
-    baseBranch: "main"
-    status: merged
-  - storyId: "15.3"
-    storyKey: "15-3-per-queue-access-control"
-    title: "Per-Queue Access Control"
-    branch: "feat/15.3-per-queue-access-control"
-    pr: 75
+  - storyId: "16.2"
+    storyKey: "16-2-sdk-auth-feature-parity"
+    title: "SDK Auth Feature Parity"
+    branch: "feat/16.2-sdk-auth-feature-parity"
+    pr: 78
     baseBranch: "main"
     status: merged
