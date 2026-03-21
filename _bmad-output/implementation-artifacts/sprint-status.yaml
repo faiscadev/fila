@@ -163,11 +163,12 @@ development_status:
   15-3-per-queue-access-control: done
   epic-15-retrospective: done
 
-  # Epic 16: Release Engineering & SDK Compatibility
-  epic-16: backlog
-  16-1-versioning-scheme-sdk-compatibility-matrix: backlog
+  # Epic 16: Release Engineering & SDK Compatibility (reshaped 2026-03-20)
+  # Original 3 stories → 2. Story 16.3 (stability release branches) dropped as premature.
+  # Story 16.1 slimmed to docs-only (no RPC, no code changes).
+  epic-16: in-progress
+  16-1-versioning-compatibility-policy: in-progress
   16-2-sdk-auth-feature-parity: backlog
-  16-3-stability-release-branches-backport-workflow: backlog
   epic-16-retrospective: optional
 
   # Epic 17: Developer Experience

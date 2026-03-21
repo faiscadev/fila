@@ -176,7 +176,7 @@ Fila exposes two gRPC services on the same port:
 - `GetStats` — queue depth, in-flight, per-key fairness stats
 - `Redrive` — move messages from DLQ back to source
 
-See [docs/api-reference.md](docs/api-reference.md) for the full reference.
+See [docs/api-reference.md](docs/api-reference.md) for the full reference, and [docs/compatibility.md](docs/compatibility.md) for the versioning and compatibility policy.
 
 ## Architecture
 

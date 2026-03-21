@@ -81,8 +81,8 @@ FR70: Epic 14 — Cluster-wide aggregated queue stats
 FR71: Epic 15 — mTLS for transport security
 FR72: Epic 15 — API key authentication
 FR73: Epic 15 — Per-queue access control policies
-FR74: Epic 16 — SDK-server compatibility matrix
-FR75: Epic 16 — Stability release branches with backported fixes
+FR74: Epic 16 — Versioning & compatibility policy docs
+FR75: Deferred — Stability release branches (premature pre-1.0)
 FR76: Epic 17 — Web-based management GUI
 FR77: Epic 17 — Broker-managed consumer groups
 FR78: Epic 17 — Built-in Lua helpers for common patterns
@@ -109,8 +109,8 @@ Operators can deploy Fila in real production environments with transport securit
 **NFRs addressed:** NFR27, NFR28, NFR29
 
 ### Epic 16: Release Engineering & SDK Compatibility
-Teams get stability guarantees and version compatibility contracts. An SDK-server compatibility matrix documents which SDK versions work with which server versions. Operators can deploy stability release branches with backported fixes. Versioning scheme (semver/calver) formalized.
-**FRs covered:** FR74, FR75
+Versioning policy and proto backward compatibility formalized. All 5 external SDKs updated with TLS and API key auth support. Reshaped from 3 to 2 stories — stability release branches deferred pre-1.0.
+**FRs covered:** FR74
 
 ### Epic 17: Developer Experience
 Operators can monitor queues and visualize real-time scheduling state via a web-based management GUI. Consumers can join broker-managed consumer groups with automatic rebalancing. Script authors get built-in Lua helpers for common patterns — exponential backoff, tenant routing — reducing boilerplate.
@@ -448,27 +448,25 @@ So that I can restrict which clients can produce to or consume from specific que
 
 ## Epic 16: Release Engineering & SDK Compatibility
 
-Teams get stability guarantees and version compatibility contracts. An SDK-server compatibility matrix documents which SDK versions work with which server versions. All 5 external SDKs are updated with TLS and API key auth support (feature parity with Rust SDK). Operators can deploy stability release branches with backported fixes. Versioning scheme formalized.
+> **Reshaped 2026-03-20:** Original 3-story epic reduced to 2. Story 16.3 (stability release branches) dropped as premature — no users to serve backport workflows pre-1.0. Story 16.1 slimmed to docs-only (no GetServerInfo RPC, no --version flags, no SDK changes). Story 16.2 (SDK auth parity) unchanged — closes the critical gap from Epic 15.
 
-### Story 16.1: Versioning Scheme & SDK Compatibility Matrix
+Versioning policy and proto backward compatibility formalized. All 5 external SDKs updated with TLS and API key auth support (feature parity with Rust SDK).
+
+### Story 16.1: Versioning & Compatibility Policy
 
 As a developer,
-I want to consult an SDK-server compatibility matrix with documented guarantees,
-So that I know which SDK versions work with which server versions.
+I want documented versioning and proto backward compatibility policies,
+So that I understand the stability guarantees when depending on Fila.
 
 **Acceptance Criteria:**
 
 **Given** Fila server and 6 SDKs are independently versioned
 **When** the versioning scheme is formalized
-**Then** the server adopts semantic versioning (semver): MAJOR.MINOR.PATCH
-**And** MAJOR bumps indicate breaking proto/API changes
-**And** MINOR bumps indicate new features (backward compatible)
-**And** PATCH bumps indicate bug fixes
-**And** a `docs/compatibility.md` documents the SDK-server compatibility matrix: minimum server version per SDK version, supported proto versions, deprecation policy
-**And** the server exposes a `GetServerInfo` RPC returning: server version, proto version, supported features
-**And** SDKs can query `GetServerInfo` at connection time for optional compatibility verification
-**And** the compatibility document is published alongside release notes
-**And** the proto backward compatibility policy is formalized: field additions only within a MAJOR version, no field removals or type changes
+**Then** a `docs/compatibility.md` documents:
+**And** the semver versioning policy: MAJOR = breaking proto/API changes, MINOR = new features (backward compatible), PATCH = bug fixes
+**And** the proto backward compatibility policy: field additions only within a MAJOR version, no field removals or type changes, field numbers never reused
+**And** the deprecation policy: minimum 1 MINOR version deprecation window before removal
+**And** the document is linked from the main README
 
 ### Story 16.2: SDK Auth Feature Parity
 
@@ -488,26 +486,6 @@ So that I can connect securely to a Fila server that has auth enabled.
 **And** each SDK's integration tests include at least one TLS test and one API key auth test
 **And** each SDK's CI pipeline provisions fila-server with auth enabled for integration tests
 **And** backward compatible: when no TLS/auth options are set, behavior is identical to before
-
-### Story 16.3: Stability Release Branches & Backport Workflow
-
-As an operator,
-I want to deploy stability release branches with backported fixes,
-So that I can get bug fixes without adopting new features or risking regressions.
-
-**Acceptance Criteria:**
-
-**Given** the server follows semantic versioning (from Story 16.1)
-**When** a new MINOR version is released (e.g., 1.2.0)
-**Then** a `release/1.x` branch is created from the release tag
-**And** critical bug fixes and security patches can be cherry-picked from main into the release branch
-**And** a PATCH release (e.g., 1.2.1) is tagged from the release branch
-**And** the release CI pipeline builds release binaries and Docker images for PATCH releases
-**And** `CHANGELOG.md` documents which fixes are backported to which release branches
-**And** a `docs/release-policy.md` documents: release cadence, support window (N-1 minor versions receive patches), backport criteria (security, data loss, critical bugs only)
-**And** the bleeding-edge release workflow (existing) continues unchanged for the main branch
-**And** at least the 2 most recent minor release branches receive security and critical bug fixes
-**And** the workflow is verified by creating a test release branch, cherry-picking a fix, tagging a patch release, and confirming CI builds artifacts
 
 ---
 
