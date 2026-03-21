@@ -18,5 +18,5 @@ path = "src/main.rs"
 fila-proto.workspace = true
 clap.workspace = true
 tokio.workspace = true
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls-native-roots"] }
 tonic-prost.workspace = true

@@ -18,13 +18,19 @@ struct Cli {
     #[arg(long, default_value = "http://localhost:5555", global = true)]
     addr: String,
 
+    /// Enable TLS using the system trust store.
+    /// Use when the server has a certificate from a public or system-trusted CA.
+    /// Not needed when --tls-ca-cert is provided (TLS is implied).
+    #[arg(long, global = true)]
+    tls: bool,
+
     /// CA certificate for verifying the server's TLS certificate.
-    /// Required for any TLS connection.
+    /// Use for self-signed certificates. Implies --tls.
     #[arg(long, global = true)]
     tls_ca_cert: Option<PathBuf>,
 
-    /// Client certificate for mTLS. Requires --tls-key and --tls-ca-cert.
-    #[arg(long, global = true, requires = "tls_key", requires = "tls_ca_cert")]
+    /// Client certificate for mTLS. Requires --tls-key and either --tls or --tls-ca-cert.
+    #[arg(long, global = true, requires = "tls_key")]
     tls_cert: Option<PathBuf>,
 
     /// Client private key for mTLS. Requires --tls-cert.
@@ -202,20 +208,25 @@ type AdminClient = FilaAdminClient<InterceptedService<Channel, ApiKeyInterceptor
 
 async fn connect(
     addr: &str,
+    tls: bool,
     tls_ca_cert: Option<&PathBuf>,
     tls_cert: Option<&PathBuf>,
     tls_key: Option<&PathBuf>,
     api_key: Option<String>,
 ) -> AdminClient {
-    let channel = if let Some(ca_path) = tls_ca_cert {
-        let ca_pem = match std::fs::read(ca_path) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("Error: cannot read CA cert {}: {e}", ca_path.display());
-                process::exit(1);
-            }
-        };
-        let mut tls = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+    let tls_enabled = tls || tls_ca_cert.is_some();
+    let channel = if tls_enabled {
+        let mut tls_config = ClientTlsConfig::new();
+        if let Some(ca_path) = tls_ca_cert {
+            let ca_pem = match std::fs::read(ca_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error: cannot read CA cert {}: {e}", ca_path.display());
+                    process::exit(1);
+                }
+            };
+            tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
+        }
         if let (Some(cert_path), Some(key_path)) = (tls_cert, tls_key) {
             let cert_pem = match std::fs::read(cert_path) {
                 Ok(b) => b,
@@ -234,7 +245,7 @@ async fn connect(
                     process::exit(1);
                 }
             };
-            tls = tls.identity(Identity::from_pem(cert_pem, key_pem));
+            tls_config = tls_config.identity(Identity::from_pem(cert_pem, key_pem));
         }
         let endpoint = match Channel::from_shared(addr.to_string()) {
             Ok(e) => e,
@@ -243,7 +254,7 @@ async fn connect(
                 process::exit(1);
             }
         };
-        let endpoint = match endpoint.tls_config(tls) {
+        let endpoint = match endpoint.tls_config(tls_config) {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("Error: TLS configuration failed: {e}");
@@ -724,6 +735,7 @@ async fn main() {
     let cli = Cli::parse();
     let mut client = connect(
         &cli.addr,
+        cli.tls,
         cli.tls_ca_cert.as_ref(),
         cli.tls_cert.as_ref(),
         cli.tls_key.as_ref(),

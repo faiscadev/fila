@@ -12,7 +12,7 @@ categories = ["network-programming", "api-bindings"]
 
 [dependencies]
 fila-proto.workspace = true
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls-native-roots"] }
 tokio-stream.workspace = true
 thiserror.workspace = true
 
