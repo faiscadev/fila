@@ -45,6 +45,14 @@ input_file_patterns:
     description: "Brownfield project documentation (optional)"
     sharded: "{project_knowledge}/index.md"
     load_strategy: "INDEX_GUIDED"
+  retrospective:
+    description: "Most recent epic retrospective (optional — auto-detected as change trigger source)"
+    whole: "{implementation_artifacts}/epic-*-retro-*.md"
+    load_strategy: "LATEST_ONLY"
+  sprint_status:
+    description: "Sprint status with epic/story/chore tracking (optional)"
+    whole: "{implementation_artifacts}/sprint-status.yaml"
+    load_strategy: "FULL_LOAD"
 
 installed_path: "{project-root}/_bmad/bmm/workflows/4-implementation/correct-course"
 template: false

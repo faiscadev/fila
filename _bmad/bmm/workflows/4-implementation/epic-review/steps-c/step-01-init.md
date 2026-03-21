@@ -117,6 +117,7 @@ Create {stateFile} with the following structure:
 epic: "{epic-name}"
 epicNumber: {N}
 startedAt: "{current date/time}"
+yoloMode: false  # set to true if user selects YOLO mode in step 7
 currentPrIndex: 0
 prChain:
   - storyId: "X.1"
@@ -136,7 +137,7 @@ prChain:
   # ... repeat for all stories
 ```
 
-### 7. Present Chain Overview
+### 7. Present Chain Overview and Select Mode
 
 Display the PR chain to the user:
 
@@ -150,18 +151,24 @@ PR chain discovered ({N} PRs):
 | 2 | {title} | #{pr} | {branch} | {base} |
 | ... | | | | |
 
-**Proceeding to first PR...**"
+**Select review mode:**
 
-### 8. Auto-Proceed to Review
+**[N]** Normal — you review and merge each PR on GitHub (default)
+**[Y]** YOLO — I review, address findings, and merge everything autonomously"
 
 #### Menu Handling Logic:
 
-- After chain overview is presented, immediately load, read entire file, then execute {nextStepFile}
+- **IF N (or empty/default):** Set `yoloMode: false` in the state file. Proceed to step 8.
+- **IF Y:** Set `yoloMode: true` in the state file. Proceed to step 8.
+- **IF Any other:** Help user respond, then redisplay menu.
+
+### 8. Proceed to Review
+
+After mode is selected, display: "**Proceeding to first PR...**"
 
 #### EXECUTION RULES:
 
-- This is an auto-proceed step with no user choices at this point
-- Proceed directly to step-02 after presenting the chain
+- Load, read entire file, then execute {nextStepFile}
 
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 

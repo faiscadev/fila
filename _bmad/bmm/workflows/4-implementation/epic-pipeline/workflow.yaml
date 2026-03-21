@@ -1,0 +1,32 @@
+name: epic-pipeline
+description: "Autonomous orchestrator that chains execute-epic, epic-review, retrospective, and correct-course in a continuous loop until all epics are done"
+author: "BMad"
+
+# Critical variables from config
+config_source: "{project-root}/_bmad/bmm/config.yaml"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+date: system-generated
+planning_artifacts: "{config_source}:planning_artifacts"
+implementation_artifacts: "{config_source}:implementation_artifacts"
+output_folder: "{implementation_artifacts}"
+
+# Workflow components
+installed_path: "{project-root}/_bmad/bmm/workflows/4-implementation/epic-pipeline"
+instructions: "{installed_path}/workflow.md"
+
+# Variables and inputs
+variables:
+  sprint_status: "{implementation_artifacts}/sprint-status.yaml"
+  epics_file: "{planning_artifacts}/epics.md"
+  pipeline_state: "{output_folder}/pipeline-state.yaml"
+
+# Sub-workflow paths
+sub_workflows:
+  execute_epic: "{project-root}/_bmad/bmm/workflows/4-implementation/execute-epic/workflow.yaml"
+  epic_review: "{project-root}/_bmad/bmm/workflows/4-implementation/epic-review/workflow.yaml"
+  retrospective: "{project-root}/_bmad/bmm/workflows/4-implementation/retrospective/workflow.yaml"
+  correct_course: "{project-root}/_bmad/bmm/workflows/4-implementation/correct-course/workflow.yaml"
+
+# Project context
+project_context: "**/project-context.md"

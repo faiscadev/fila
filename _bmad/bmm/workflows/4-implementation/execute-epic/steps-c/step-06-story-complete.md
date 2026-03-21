@@ -69,11 +69,11 @@ Mark the story's status as `completed` in the state file.
 
 Load the FULL sprint-status.yaml file. Find the development_status entry for the current story key. Update its value to "done". Save the file, preserving ALL comments and structure including STATUS DEFINITIONS. Do NOT commit yet — commit all tracking changes together in step 1d.
 
-### 1c. Sync Story Artifact Status to "done"
+### 1c. Sync Story Artifact Status to "review"
 
-**CRITICAL:** Update the story artifact file's `Status:` line to "done". This prevents the status mismatch problem (story artifacts stuck on a previous status while sprint-status says "done") that accumulated across Epics 1-7.
+Update the story artifact file's `Status:` line to "review". The story is not truly "done" until the PR is merged on main — at this point the PR is open for review, so "review" is the semantically correct status.
 
-Load the story artifact file (in `_bmad-output/implementation-artifacts/`). Change the `Status:` line to `Status: done` (regardless of its current value). Save but do NOT commit yet — commit all tracking changes together in step 1d.
+Load the story artifact file (in `_bmad-output/implementation-artifacts/`). Change the `Status:` line to `Status: review` (regardless of its current value). Save but do NOT commit yet — commit all tracking changes together in step 1d.
 
 ### 1d. Commit and Push All Tracking Files
 
