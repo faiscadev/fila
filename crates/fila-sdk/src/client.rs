@@ -125,10 +125,18 @@ impl FilaClient {
             endpoint = endpoint.timeout(timeout);
         }
 
+        // Validate partial mTLS: cert and key must both be provided or both absent.
+        let has_cert = options.tls_client_cert_pem.is_some();
+        let has_key = options.tls_client_key_pem.is_some();
+        if has_cert != has_key {
+            return Err(ConnectError::InvalidArgument(
+                "tls_client_cert_pem and tls_client_key_pem must both be provided for mTLS"
+                    .to_string(),
+            ));
+        }
+
         // Apply TLS config when explicitly enabled, CA cert is provided, or client identity is set.
-        let has_client_identity =
-            options.tls_client_cert_pem.is_some() || options.tls_client_key_pem.is_some();
-        let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some() || has_client_identity;
+        let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some() || has_cert;
         if tls_enabled {
             let mut tls = ClientTlsConfig::new();
             if let Some(ca_pem) = options.tls_ca_cert_pem {
