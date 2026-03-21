@@ -168,7 +168,7 @@ development_status:
   # Story 16.1 slimmed to docs-only (no RPC, no code changes).
   epic-16: in-progress
   16-1-versioning-compatibility-policy: done
-  16-2-sdk-auth-feature-parity: in-progress
+  16-2-sdk-auth-feature-parity: review
   epic-16-retrospective: optional
 
   # Epic 17: Developer Experience
