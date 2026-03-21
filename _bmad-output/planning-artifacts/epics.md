@@ -83,6 +83,7 @@ FR72: Epic 15 — API key authentication
 FR73: Epic 15 — Per-queue access control policies
 FR74: Epic 16 — Versioning & compatibility policy docs
 FR75: Deferred — Stability release branches (premature pre-1.0)
+Stability/hardening — Epic 16.5 (quality infrastructure, strengthens NFR22-29 coverage, no new FRs)
 FR76: Epic 17 — Web-based management GUI
 FR77: Epic 17 — Broker-managed consumer groups
 FR78: Epic 17 — Built-in Lua helpers for common patterns
@@ -111,6 +112,10 @@ Operators can deploy Fila in real production environments with transport securit
 ### Epic 16: Release Engineering & SDK Compatibility
 Versioning policy and proto backward compatibility formalized. All 5 external SDKs updated with TLS and API key auth support. Reshaped from 3 to 2 stories — stability release branches deferred pre-1.0.
 **FRs covered:** FR74
+
+### Epic 16.5: Stability Hardening & Test Coverage
+Systematic hardening of the highest-risk subsystems — clustering, TLS, and auth — through blackbox e2e testing, edge case coverage, and CI-integrated code coverage. Ensures the foundation is solid before building DX features in Epic 17. Triggered by Epic 16 retro finding: "silent TLS downgrade is a universal SDK bug pattern."
+**FRs covered:** (hardening — strengthens NFR22-29 coverage, no new FRs)
 
 ### Epic 17: Developer Experience
 Operators can monitor queues and visualize real-time scheduling state via a web-based management GUI. Consumers can join broker-managed consumer groups with automatic rebalancing. Script authors get built-in Lua helpers for common patterns — exponential backoff, tenant routing — reducing boilerplate.
@@ -486,6 +491,79 @@ So that I can connect securely to a Fila server that has auth enabled.
 **And** each SDK's integration tests include at least one TLS test and one API key auth test
 **And** each SDK's CI pipeline provisions fila-server with auth enabled for integration tests
 **And** backward compatible: when no TLS/auth options are set, behavior is identical to before
+
+---
+
+## Epic 16.5: Stability Hardening & Test Coverage
+
+Systematic hardening of the highest-risk subsystems — clustering, TLS, and auth — through blackbox e2e testing, edge case coverage, and CI-integrated code coverage. Ensures the foundation is solid before building DX features in Epic 17.
+
+> **Context:** Epic 16 retrospective surfaced "silent TLS downgrade is a universal SDK bug pattern" — all 5 external SDKs had identical bug where partial mTLS config silently fell back to plaintext. Codebase gap analysis revealed: no cluster e2e tests (Epic 14 has only unit tests for Raft), mTLS not tested at e2e level, no code coverage metrics in CI. This is a "sharpen the saw" epic — harden what's built before adding new features.
+
+### Story 16.5.1: Cluster E2E Test Suite
+
+As an operator,
+I want blackbox e2e tests proving cluster failover, leader routing, and replication work end-to-end,
+So that I can trust multi-node deployments in production.
+
+**Acceptance Criteria:**
+
+**Given** the fila-e2e test suite and a multi-node cluster (3 nodes)
+**When** cluster e2e tests execute
+**Then** a test verifies: enqueue on node A, consume on node B, ack on node C — full cross-node lifecycle
+**And** a test verifies: leader node killed → new leader elected → consumer reconnects → zero message loss
+**And** a test verifies: non-leader node receives request → forwards to leader → client gets correct response transparently
+**And** a test verifies: node rejoins after crash → catches up from Raft log → becomes eligible for leadership
+**And** a test verifies: `fila stats` on any node returns cluster-wide aggregated counts
+**And** cluster e2e tests spawn 3 fila-server processes with `cluster.enabled = true` and distinct ports (client + cluster ports)
+**And** test helpers manage multi-node lifecycle: start cluster, stop/kill individual nodes, wait for leader election
+**And** CI pipeline runs cluster e2e tests (new workflow or extended e2e.yml)
+**And** tests have reasonable timeouts accounting for Raft election (10s failover window per NFR23)
+
+### Story 16.5.2: TLS & Auth Edge Case Hardening
+
+As a security-conscious operator,
+I want comprehensive TLS and auth edge case tests,
+So that security bypass patterns (like silent TLS downgrade) are caught automatically.
+
+**Acceptance Criteria:**
+
+**Given** the fila-e2e test suite
+**When** TLS edge case tests execute
+**Then** a test verifies: mTLS with client certificate — server validates client cert, connection succeeds
+**And** a test verifies: mTLS without client cert — server rejects connection when client auth is required
+**And** a test verifies: partial mTLS config (cert+key without CA) — connection fails explicitly, never silently downgrades to plaintext (the "silent TLS downgrade" pattern)
+**And** a test verifies: expired certificate — connection rejected with clear error
+**And** a test verifies: TLS enabled on server, plaintext client — connection rejected
+
+**Given** auth edge case tests execute
+**When** API key and ACL edge cases are tested
+**Then** a test verifies: key revocation takes effect immediately — revoked key rejected on next request
+**And** a test verifies: permission removal takes effect immediately — previously-authorized operation rejected
+**And** a test verifies: bootstrap key can only create keys, cannot perform data operations (produce/consume)
+**And** a test verifies: superadmin key revocation — revoked superadmin loses all access
+
+**Given** these are universal patterns
+**When** test templates are established
+**Then** a documented TLS test checklist exists (in docs/ or test comments) that lists the mandatory scenarios any future SDK or TLS change must cover
+**And** the checklist includes the "silent downgrade" pattern explicitly as a P0 test case
+
+### Story 16.5.3: CI Code Coverage & Quality Gates
+
+As a developer,
+I want code coverage reporting in CI with visibility into under-tested areas,
+So that quality gaps are surfaced before they become production incidents.
+
+**Acceptance Criteria:**
+
+**Given** the CI pipeline
+**When** coverage reporting is configured
+**Then** `cargo-llvm-cov` (or equivalent) runs on every PR and reports line coverage for all crates
+**And** coverage results are posted as a PR comment or CI check summary showing per-crate coverage percentages
+**And** the auth module (`fila-core/src/auth/`), TLS configuration paths, and cluster module (`fila-core/src/cluster/`) have coverage explicitly reported
+**And** a coverage baseline is established and stored (similar to benchmark baselines)
+**And** coverage regressions (new code with 0% coverage in security-critical paths) are flagged in CI — not as a hard gate initially, but as a visible warning
+**And** the coverage workflow is triggered on the feature branch to verify it works before merge (per CLAUDE.md CI workflow verification rule)
 
 ---
 
