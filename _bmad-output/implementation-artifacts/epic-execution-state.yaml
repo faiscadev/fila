@@ -4,8 +4,8 @@ startedAt: "2026-03-21"
 stories:
   - id: "16.5.1"
     title: "Cluster E2E Test Suite"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/16.5.1-cluster-e2e-test-suite"
     pr: 79
     dependsOn: []
