@@ -7,9 +7,18 @@
 
 <section n="1" title="Understand the Trigger and Context">
 
+<check-item id="1.0">
+<prompt>Check if trigger source is a retrospective</prompt>
+<action>If trigger_source is "retrospective": group confirmed items by type (action items, tech debt, GH issues, prep tasks, significant discoveries)</action>
+<action>For each group, assess priority and impact on epics.md</action>
+<action>Items MUST map to: new stories in existing epics, new mini-epics (if no existing epic fits), modifications to existing stories, or epic reordering. NEVER create standalone chore entries — all actionable work belongs in an epic.</action>
+<action>If trigger_source is "manual": mark N/A and proceed to 1.1</action>
+<status>[ ] Done / [ ] N/A / [ ] Action-needed</status>
+</check-item>
+
 <check-item id="1.1">
-<prompt>Identify the triggering story that revealed this issue</prompt>
-<action>Document story ID and brief description</action>
+<prompt>Identify the triggering story or source that revealed this issue</prompt>
+<action>Document story ID, retrospective reference, or external source and brief description</action>
 <status>[ ] Done / [ ] N/A / [ ] Action-needed</status>
 </check-item>
 
@@ -21,6 +30,8 @@
   - Misunderstanding of original requirements
   - Strategic pivot or market change
   - Failed approach requiring different solution
+  - Retrospective action item (process, tech debt, or quality improvement)
+  - PR review finding (bug, refactor, or feature gap)
 <action>Write clear problem statement</action>
 <status>[ ] Done / [ ] N/A / [ ] Action-needed</status>
 </check-item>
@@ -258,6 +269,7 @@
 <action>If epics were removed: Remove corresponding entries</action>
 <action>If epics were renumbered: Update epic IDs and story references</action>
 <action>If stories were added/removed: Update story entries within affected epics</action>
+<action>ANTI-ORPHAN VALIDATION: Verify NO standalone chore entries (pattern: `chore-*: backlog`) were created. Every actionable item must belong to an epic. Genuinely deferred items must have an explicit reason documented.</action>
 <status>[ ] Done / [ ] N/A / [ ] Action-needed</status>
 </check-item>
 

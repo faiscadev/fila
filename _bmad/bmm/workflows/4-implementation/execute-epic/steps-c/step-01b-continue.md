@@ -67,6 +67,18 @@ Load {stateFile} and parse:
 - Which story is in-progress (if any)
 - What phase the in-progress story is in (currentPhase)
 
+### 1b. Cross-Reference Sprint Status (Stale State Detection)
+
+Load sprint-status.yaml and find the epic's entry (e.g., `epic-4`, `epic-5`).
+
+- **If the epic is marked `done` in sprint-status but the state file has stories that are NOT completed/skipped:**
+  - The state file is stale — the epic was completed in a previous session but state tracking was lost.
+  - For each in-progress or pending story: verify via `gh pr view` that its branch PR was merged. If merged, auto-correct the story status to `completed` and populate the PR number. If no PR exists or it was not merged, mark the story as `skipped` with reason "stale — epic already done per sprint-status".
+  - Save the corrected state file.
+  - Add `completedAt` with the current date/time to the state file.
+  - Display: "**Stale state detected — sprint-status already marks this epic as done. Auto-corrected [N] stories. Looking for next epic...**"
+  - Route to the "completedAt exists" branch in step 3 (look up next epic in backlog).
+
 ### 2. Display Progress Summary
 
 Display:
@@ -90,7 +102,11 @@ Based on the state:
 
 - **If no story is "in-progress":** Find the first story with status "pending":
   - If found → load, read entirely, then execute {storySetupStep}
-  - If not found (all completed or skipped) → load, read entirely, then execute {epicCompleteStep}
+  - If not found (all completed or skipped) AND the state file has a `completedAt` field (epic was already finalized in a previous session):
+    - Look up sprint-status.yaml to find the next epic in `backlog` status
+    - If a next epic exists → delete the current state file, display "**Previous epic already complete. Starting next epic: [epic name]...**", then re-execute step-01-init.md (which will create a fresh state file for the new epic)
+    - If no next epic in backlog → display "**All epics complete. Nothing to execute.**" and halt
+  - If not found (all completed or skipped) AND no `completedAt` field (epic just finished in this session) → load, read entirely, then execute {epicCompleteStep}
 
 #### EXECUTION RULES:
 
@@ -102,6 +118,8 @@ Based on the state:
 ### ✅ SUCCESS:
 
 - State file read and parsed correctly
+- Sprint-status cross-referenced to detect stale state
+- Stale stories auto-corrected when epic already done in sprint-status
 - Progress summary displayed
 - Routed to the correct step based on state
 - No completed work re-executed
@@ -112,5 +130,6 @@ Based on the state:
 - Re-executing completed stories
 - Routing to wrong step for current phase
 - Halting for user input
+- Ignoring sprint-status when state file is stale (trying to dev an already-merged story)
 
 **Master Rule:** Skipping steps, optimizing sequences, or not following exact instructions is FORBIDDEN and constitutes SYSTEM FAILURE.

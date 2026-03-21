@@ -11,8 +11,48 @@
 
 <step n="1" goal="Initialize Change Navigation">
   <action>Load {project_context} for coding standards and project-wide patterns (if exists)</action>
-  <action>Confirm change trigger and gather user description of the issue</action>
-  <action>Ask: "What specific issue or change has been identified that requires navigation?"</action>
+
+  <action>Determine trigger source — retrospective-driven or general:</action>
+
+  <check if="retrospective content was loaded during document discovery">
+    <action>RETROSPECTIVE-DRIVEN PATH: A recent retrospective document was found.</action>
+    <action>Extract all actionable items from the retrospective:</action>
+      - **Action Items**: Process improvements, documentation needs, team agreements
+      - **Technical Debt**: Items flagged with severity and priority
+      - **Open GitHub Issues**: Bugs, refactors, or features identified during PR reviews
+      - **Backlog Chores**: Items listed under backlog/chores in sprint-status.yaml
+      - **Significant Discoveries**: Findings that may require epic-level changes
+    <action>Also check {sprint_status} for chore entries in backlog (pattern: `chore-*: backlog`) — these often correspond to retro items and should be absorbed into epic stories</action>
+
+    <critical>NO ORPHAN CHORES: Every actionable item MUST be routed to a story within an epic. If no existing epic fits, create a new mini-epic. NEVER create standalone chore entries (e.g., `chore-*: backlog`) in sprint-status.yaml — items that become standalone chores are never prioritized and rot in the backlog. The only acceptable non-epic entries are genuinely deferred items explicitly marked with a reason (blocked, post-MVP, waiting on external dependency).</critical>
+
+    <action>Present the extracted items to the user as the change triggers:</action>
+
+    <output>
+    "I found a recent retrospective with actionable items that may require changes to the project plan. Here's what I extracted:"
+
+    **From Retrospective:**
+    {{list_extracted_items_grouped_by_category}}
+
+    **From Sprint Status (backlog chores):**
+    {{list_backlog_chores_if_any}}
+
+    "Which of these items should we incorporate into the project plan? You can select all, some, or add additional items."
+    </output>
+
+    <action>WAIT for user to confirm which items to address</action>
+    <action>Set {{change_triggers}} = user-confirmed items</action>
+    <action>Set {{trigger_source}} = "retrospective"</action>
+  </check>
+
+  <check if="no retrospective content was loaded">
+    <action>GENERAL-PURPOSE PATH: No retrospective found — use standard trigger discovery.</action>
+    <action>Ask: "What specific issue or change has been identified that requires navigation?"</action>
+    <action>WAIT for user to describe the change trigger</action>
+    <action>Set {{change_triggers}} = user-described issue</action>
+    <action>Set {{trigger_source}} = "manual"</action>
+  </check>
+
   <action>Verify access to required project documents:</action>
     - PRD (Product Requirements Document)
     - Current Epics and Stories
@@ -30,7 +70,7 @@
 
 <step n="0.5" goal="Discover and load project documents">
   <invoke-protocol name="discover_inputs" />
-  <note>After discovery, these content variables are available: {prd_content}, {epics_content}, {architecture_content}, {ux_design_content}, {tech_spec_content}, {document_project_content}</note>
+  <note>After discovery, these content variables are available: {prd_content}, {epics_content}, {architecture_content}, {ux_design_content}, {tech_spec_content}, {document_project_content}, {retrospective_content} (optional), {sprint_status_content} (optional)</note>
 </step>
 
 <step n="2" goal="Execute Change Analysis Checklist">
@@ -48,6 +88,13 @@
 
 <step n="3" goal="Draft Specific Change Proposals">
 <action>Based on checklist findings, create explicit edit proposals for each identified artifact</action>
+
+<critical>ROUTING RULE: All actionable items MUST become stories within an epic:
+  - If the item fits an existing epic: add it as a new story in that epic
+  - If no existing epic fits: create a new mini-epic with the item as its first story
+  - NEVER create standalone chore entries in sprint-status.yaml (e.g., `chore-*: backlog`)
+  - Genuinely deferred items (blocked externally, post-MVP, waiting on dependency) are the ONLY exception — mark them explicitly as deferred with reason, not as backlog chores
+</critical>
 
 <action>For Story changes:</action>
 

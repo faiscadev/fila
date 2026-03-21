@@ -317,6 +317,7 @@ If not merged, report the error and retry once. If still not merged after retry,
 
 Execute the same post-merge steps as the normal Merge Handler (section 6b through 6e):
 - Update story artifact status to "done" (6b)
+- Update story artifact content if review changed scope (6b2)
 - Write review process notes (6c)
 - Update review state file (6d)
 - Route to next step (6e)
@@ -336,14 +337,55 @@ gh pr view {pr-number} --json state,mergedAt
 
 If not merged, inform the user and return to menu.
 
-#### 6b. Update Story Artifact
+#### 6b. Update Story Artifact and Sprint Status
 
 Read the story's artifact file from {implementation_artifacts}/{storyKey}.md.
 Update the Status line to "done".
-Commit:
+
+**Update sprint-status.yaml (main-only tracking):**
+Since epic-review runs on main after merge, this is the correct place to sync sprint-status:
+1. Read the FULL sprint-status.yaml file
+2. Find the development_status entry for this story's key
+3. Update its value to "done"
+4. Save the file, preserving ALL comments and structure including STATUS DEFINITIONS
+
+Commit both changes together:
 ```
-fix: update story {storyId} status to done
+chore: mark story {storyId} done in sprint-status and story artifact
 ```
+
+#### 6b2. Update Story Artifact Content (if review changed scope)
+
+After updating the status, check whether the PR review process introduced significant scope changes that make the story artifact stale.
+
+1. **Read the story artifact** from `{implementation_artifacts}/{storyKey}.md`
+2. **Get the PR diff and summary:**
+   ```bash
+   # Show a high-level summary of changes
+   gh pr diff {pr-number} --stat
+
+   # Show the full diff for detailed comparison
+   gh pr diff {pr-number}
+   ```
+3. **Compare the story artifact against the actual merged changes:**
+   - Review the Acceptance Criteria section — were any ACs satisfied via a different approach than the story described?
+   - Review the Dev Notes / technical approach — did the implementation deviate from the planned approach?
+   - Review the Tasks section — were tasks added, removed, or fundamentally changed during review?
+4. **Determine if divergence is significant.** Significant divergence includes:
+   - Architecture changes (e.g., different mode, different component, different integration pattern)
+   - ACs satisfied via a fundamentally different approach than described
+   - New components or files not anticipated in the story
+   - Removed or replaced approaches from the original plan
+   - Renegotiated acceptance criteria during review
+5. **If significant divergence is detected:**
+   - Update the story artifact's Acceptance Criteria to reflect the final outcomes
+   - Update the Dev Notes / technical approach to describe what was actually implemented
+   - Update the Completion Notes to mention the review-driven changes
+   - Commit:
+     ```
+     chore: update story {storyId} artifact to reflect review changes
+     ```
+6. **If no significant divergence:** Skip — no update needed. The story artifact already accurately describes the shipped state.
 
 #### 6c. Write Review Process Notes
 

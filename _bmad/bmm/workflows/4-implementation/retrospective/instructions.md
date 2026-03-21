@@ -1415,13 +1415,20 @@ Retrospective document was saved successfully, but {sprint_status_file} may need
    - Track progress on commitments
    - Adjust timelines if needed
 
-{{#if epic_update_needed}} 4. **IMPORTANT: Schedule Epic {{next_epic_num}} planning review session**
+{{#if action_items_exist}}
+4. **Run `correct-course` to incorporate retro findings into the project plan**
+   - correct-course will auto-detect this retrospective and extract action items, tech debt, and GH issues
+   - It will propose specific changes to epics.md (new stories, chores, epic modifications)
+   - This ensures retro findings are not forgotten — they become part of the backlog
+   {{#if epic_update_needed}}
+   - ⚠️ Significant discoveries were flagged — correct-course should also address epic-level changes
+   {{/if}}
 
-- Significant discoveries from Epic {{epic_number}} require epic updates
-- Review and update affected stories
-- Align team on revised approach
-- Do NOT start Epic {{next_epic_num}} until review is complete
-  {{else}}
+5. **Begin Epic {{next_epic_num}} when ready**
+   - After correct-course has updated the plan, start creating stories with SM agent's `create-story`
+   - Epic will be marked as `in-progress` automatically when first story is created
+   - Ensure all critical path items are done first
+{{else}}
 
 4. **Begin Epic {{next_epic_num}} when ready**
    - Start creating stories with SM agent's `create-story`
