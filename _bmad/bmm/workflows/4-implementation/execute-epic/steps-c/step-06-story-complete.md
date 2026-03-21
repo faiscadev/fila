@@ -63,19 +63,21 @@ Load {stateFile} and update the current story:
 Clear `currentPhase` (set to empty string).
 Mark the story's status as `completed` in the state file.
 
-### 1b. Sync Story Artifact Status to "review"
+### 1b. Update Sprint Status to "done"
 
-Update the story artifact file's `Status:` line to "review".
+**CRITICAL:** Update sprint-status.yaml to reflect story completion. This is the step that keeps sprint-status in sync — skipping it causes stale tracking.
 
-Load the story artifact file (in `_bmad-output/implementation-artifacts/`). Change the `Status:` line to `Status: review` (regardless of its current value). Save but do NOT commit yet — commit all tracking changes together in step 1c.
+Load the FULL sprint-status.yaml file. Find the development_status entry for the current story key. Update its value to "done". Save the file, preserving ALL comments and structure including STATUS DEFINITIONS. Do NOT commit yet — commit all tracking changes together in step 1d.
 
-**Note:** Sprint-status.yaml is NOT updated on feature branches. The epic-review workflow's finalize step handles all sprint-status updates on main after PR merge.
+### 1c. Sync Story Artifact Status to "review"
 
-### 1c. Commit and Push Tracking Files
+Update the story artifact file's `Status:` line to "review". The story is not truly "done" until the PR is merged on main — at this point the PR is open for review, so "review" is the semantically correct status.
 
-**CRITICAL:** Before switching to a new branch for the next story, commit and push tracking file changes (state file, story artifact) on the current branch in a single commit. The state file reverts to main's version when switching branches — if not committed first, progress is lost.
+Load the story artifact file (in `_bmad-output/implementation-artifacts/`). Change the `Status:` line to `Status: review` (regardless of its current value). Save but do NOT commit yet — commit all tracking changes together in step 1d.
 
-**Do NOT include sprint-status.yaml** — it is only updated on main.
+### 1d. Commit and Push All Tracking Files
+
+**CRITICAL:** Before switching to a new branch for the next story, commit and push ALL tracking file changes (state file, sprint-status, story artifact) on the current branch in a single commit. The state file reverts to main's version when switching branches — if not committed first, progress is lost.
 
 ### 2. Check for Remaining Stories
 

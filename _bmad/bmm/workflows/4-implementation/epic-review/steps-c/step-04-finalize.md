@@ -56,9 +56,7 @@ Read {stateFile} to get the complete PR chain. Verify ALL PRs have status "merge
 
 If any PR is NOT merged, this step was reached in error. Report the issue and halt.
 
-### 2. Update Sprint Status (Authoritative Main-Only Update)
-
-**CRITICAL:** This is the ONLY place where sprint-status.yaml is updated. Feature branches do NOT modify sprint-status.yaml — all status transitions are applied here on main after merge.
+### 2. Update Sprint Status
 
 Read {sprintStatusFile}. For each story in the PR chain:
 
