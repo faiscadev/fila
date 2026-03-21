@@ -136,9 +136,17 @@ async fn get_server_info_succeeds_without_auth() {
 
     // No API key provided — should still succeed because GetServerInfo is unauthenticated.
     let client = fila_sdk::FilaClient::connect(&addr).await.expect("connect");
-    let info = client.get_server_info().await.expect("get_server_info should succeed without auth");
+    let info = client
+        .get_server_info()
+        .await
+        .expect(
+            "get_server_info should succeed without auth",
+        );
 
-    assert!(!info.server_version.is_empty(), "server_version should not be empty");
+    assert!(
+        !info.server_version.is_empty(),
+        "server_version should not be empty"
+    );
     assert_eq!(info.proto_version, "v1");
     assert!(
         info.features.contains(&"fair_scheduling".to_string()),
@@ -151,16 +159,30 @@ async fn get_server_info_succeeds_without_auth() {
 #[tokio::test]
 async fn get_server_info_returns_valid_data() {
     let server = helpers::TestServer::start();
-    let client = fila_sdk::FilaClient::connect(server.addr()).await.expect("connect");
-    let info = client.get_server_info().await.expect("get_server_info");
+    let client = fila_sdk::FilaClient::connect(server.addr())
+        .await
+        .expect("connect");
+    let info = client
+        .get_server_info()
+        .await
+        .expect("get_server_info");
 
     // Verify semver format.
-    let parts: Vec<&str> = info.server_version.split('.').collect();
-    assert_eq!(parts.len(), 3, "version should be MAJOR.MINOR.PATCH");
+    let parts: Vec<&str> =
+        info.server_version.split('.').collect();
+    assert_eq!(
+        parts.len(),
+        3,
+        "version should be MAJOR.MINOR.PATCH"
+    );
     for part in &parts {
-        part.parse::<u32>().expect("each version segment should be a number");
+        part.parse::<u32>()
+            .expect("each version segment should be a number");
     }
 
     assert_eq!(info.proto_version, "v1");
-    assert!(!info.features.is_empty(), "features list should not be empty");
+    assert!(
+        !info.features.is_empty(),
+        "features list should not be empty"
+    );
 }
