@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "16.5.2"
     title: "TLS & Auth Edge Case Hardening"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/16.5.2-tls-auth-edge-case-hardening"
     pr: null
     dependsOn: []
   - id: "16.5.3"
