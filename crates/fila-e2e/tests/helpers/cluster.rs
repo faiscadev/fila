@@ -195,11 +195,9 @@ fn spawn_and_wait(data_dir: tempfile::TempDir, client_port: u16) -> ClusterNode 
         "fila-server binary not found at {binary:?}. Run `cargo build` first."
     );
 
+    let data_path = data_dir.path().join("data");
     let mut child = Command::new(&binary)
-        .env(
-            "FILA_DATA_DIR",
-            data_dir.path().join("data").to_str().unwrap(),
-        )
+        .env("FILA_DATA_DIR", &data_path)
         .current_dir(data_dir.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
