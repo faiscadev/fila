@@ -5,7 +5,7 @@ stories:
   - id: "16.1"
     title: "Versioning Scheme & SDK Compatibility Matrix"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "code-review"
     branch: "feat/16.1-versioning-sdk-compatibility"
     pr: null
     dependsOn: []
