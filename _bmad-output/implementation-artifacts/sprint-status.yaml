@@ -169,7 +169,7 @@ development_status:
   epic-16: done
   16-1-versioning-compatibility-policy: done
   16-2-sdk-auth-feature-parity: done
-  epic-16-retrospective: optional
+  epic-16-retrospective: done
 
   # Epic 17: Developer Experience
   epic-17: backlog

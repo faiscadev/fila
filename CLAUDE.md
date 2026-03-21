@@ -85,6 +85,18 @@ When a new story is added to an epic during implementation (e.g., a performance 
 
 This applies even when the story is small, fast, or "obviously scoped." A story tracked only in `sprint-status.yaml` and git history creates gaps in the retrospective record and makes it harder for future agents to understand what was built and why.
 
+## External Repository Changes
+
+Stories that modify external repositories (e.g., SDK repos like fila-go, fila-python, fila-js, fila-ruby, fila-java) **MUST** open pull requests in those repos, not push directly to main. This applies to all changes, especially security-sensitive code (TLS, auth).
+
+**Rules:**
+1. Every external repo change goes through a PR with Cubic review
+2. Story ACs for multi-repo stories should list all repos and expected PRs
+3. The execute-epic workflow must record PR numbers for external repos alongside the main repo PR
+4. Epic-review must verify that each external repo PR was properly reviewed before the story is marked done
+
+This rule was added after Epic 16, where 5 external SDKs received auth/TLS code pushed directly to main. Retroactive PRs caught 28 Cubic findings (5 P1s including silent TLS downgrade).
+
 ## PR Review — Cubic Automated Review
 
 This project uses **Cubic**, an automated AI reviewer that runs on every PR. You MUST check Cubic's findings before considering a story complete.
