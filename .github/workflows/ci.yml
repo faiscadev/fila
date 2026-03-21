@@ -35,19 +35,85 @@ jobs:
       - run: cargo clippy --workspace --examples -- -D warnings
 
   test:
-    name: Test
+    name: Test + Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: taiki-e/install-action@34ac9396e2ddcdd0baa9d56f88b84e09f95c0c77 # cargo-nextest
-      - run: cargo build --workspace
-      - run: cargo nextest run
+      - uses: taiki-e/install-action@34ac9396e2ddcdd0baa9d56f88b84e09f95c0c77 # cargo-nextest + cargo-llvm-cov
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - name: Build workspace
+        run: cargo build --workspace
+      - name: Run tests with coverage
+        run: cargo llvm-cov nextest --workspace --exclude fila-bench --exclude fila-e2e --no-fail-fast --json --summary-only --output-path coverage.json
+      - name: Display coverage summary
+        if: always()
+        run: |
+          [ -f coverage.json ] || exit 0
+
+          echo "## Code Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Extract overall totals
+          TOTAL_LINES=$(jq '.data[0].totals.lines.count' coverage.json)
+          COVERED_LINES=$(jq '.data[0].totals.lines.covered' coverage.json)
+          TOTAL_PCT=$(jq '.data[0].totals.lines.percent' coverage.json)
+
+          echo "### Overall: ${TOTAL_PCT}% line coverage (${COVERED_LINES}/${TOTAL_LINES} lines)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Per-crate breakdown
+          echo "### Per-Crate Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Crate | Lines | Covered | Coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|---------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          for crate in fila-core fila-server fila-sdk fila-proto fila-cli; do
+            CRATE_LINES=$(jq "[.data[0].files[] | select(.filename | startswith(\"crates/${crate}/\")) | .summary.lines.count] | add // 0" coverage.json)
+            CRATE_COVERED=$(jq "[.data[0].files[] | select(.filename | startswith(\"crates/${crate}/\")) | .summary.lines.covered] | add // 0" coverage.json)
+            if [ "$CRATE_LINES" -gt 0 ]; then
+              CRATE_PCT=$(echo "scale=1; $CRATE_COVERED * 100 / $CRATE_LINES" | bc)
+            else
+              CRATE_PCT="0.0"
+            fi
+            echo "| ${crate} | ${CRATE_LINES} | ${CRATE_COVERED} | ${CRATE_PCT}% |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Security-critical path coverage
+          echo "### Security-Critical Paths" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Path | Lines | Covered | Coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|---------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          for path in "crates/fila-core/src/broker/auth.rs" "crates/fila-server/src/auth.rs" "crates/fila-core/src/cluster/" "crates/fila-core/src/broker/config.rs"; do
+            if echo "$path" | grep -q '/$'; then
+              PATH_LINES=$(jq "[.data[0].files[] | select(.filename | startswith(\"${path}\")) | .summary.lines.count] | add // 0" coverage.json)
+              PATH_COVERED=$(jq "[.data[0].files[] | select(.filename | startswith(\"${path}\")) | .summary.lines.covered] | add // 0" coverage.json)
+            else
+              PATH_LINES=$(jq ".data[0].files[] | select(.filename == \"${path}\") | .summary.lines.count // 0" coverage.json)
+              PATH_COVERED=$(jq ".data[0].files[] | select(.filename == \"${path}\") | .summary.lines.covered // 0" coverage.json)
+              PATH_LINES=${PATH_LINES:-0}
+              PATH_COVERED=${PATH_COVERED:-0}
+            fi
+            if [ "$PATH_LINES" -gt 0 ] 2>/dev/null; then
+              PATH_PCT=$(echo "scale=1; $PATH_COVERED * 100 / $PATH_LINES" | bc)
+            else
+              PATH_PCT="N/A"
+              PATH_LINES="0"
+              PATH_COVERED="0"
+            fi
+            echo "| ${path} | ${PATH_LINES} | ${PATH_COVERED} | ${PATH_PCT}% |" >> $GITHUB_STEP_SUMMARY
+          done
 
   publish-dry-run:
     name: Publish Dry Run
