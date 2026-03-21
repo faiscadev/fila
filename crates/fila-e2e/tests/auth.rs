@@ -139,9 +139,7 @@ async fn get_server_info_succeeds_without_auth() {
     let info = client
         .get_server_info()
         .await
-        .expect(
-            "get_server_info should succeed without auth",
-        );
+        .expect("get_server_info should succeed without auth");
 
     assert!(
         !info.server_version.is_empty(),
@@ -162,19 +160,11 @@ async fn get_server_info_returns_valid_data() {
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await
         .expect("connect");
-    let info = client
-        .get_server_info()
-        .await
-        .expect("get_server_info");
+    let info = client.get_server_info().await.expect("get_server_info");
 
     // Verify semver format.
-    let parts: Vec<&str> =
-        info.server_version.split('.').collect();
-    assert_eq!(
-        parts.len(),
-        3,
-        "version should be MAJOR.MINOR.PATCH"
-    );
+    let parts: Vec<&str> = info.server_version.split('.').collect();
+    assert_eq!(parts.len(), 3, "version should be MAJOR.MINOR.PATCH");
     for part in &parts {
         part.parse::<u32>()
             .expect("each version segment should be a number");

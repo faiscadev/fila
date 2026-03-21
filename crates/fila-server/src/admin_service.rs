@@ -1182,9 +1182,22 @@ mod tests {
             .unwrap()
             .into_inner();
 
-        assert!(!resp.features.is_empty(), "features list should not be empty");
+        assert!(
+            !resp.features.is_empty(),
+            "features list should not be empty"
+        );
         // Check that key features are present.
-        let expected = ["fair_scheduling", "throttling", "lua_scripting", "tls", "api_key_auth", "acl", "clustering", "dlq", "redrive"];
+        let expected = [
+            "fair_scheduling",
+            "throttling",
+            "lua_scripting",
+            "tls",
+            "api_key_auth",
+            "acl",
+            "clustering",
+            "dlq",
+            "redrive",
+        ];
         for feat in &expected {
             assert!(
                 resp.features.iter().any(|f| f == feat),
