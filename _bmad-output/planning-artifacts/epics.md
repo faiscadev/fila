@@ -448,7 +448,7 @@ So that I can restrict which clients can produce to or consume from specific que
 
 ## Epic 16: Release Engineering & SDK Compatibility
 
-Teams get stability guarantees and version compatibility contracts. An SDK-server compatibility matrix documents which SDK versions work with which server versions. Operators can deploy stability release branches with backported fixes. Versioning scheme formalized.
+Teams get stability guarantees and version compatibility contracts. An SDK-server compatibility matrix documents which SDK versions work with which server versions. All 5 external SDKs are updated with TLS and API key auth support (feature parity with Rust SDK). Operators can deploy stability release branches with backported fixes. Versioning scheme formalized.
 
 ### Story 16.1: Versioning Scheme & SDK Compatibility Matrix
 
@@ -470,7 +470,26 @@ So that I know which SDK versions work with which server versions.
 **And** the compatibility document is published alongside release notes
 **And** the proto backward compatibility policy is formalized: field additions only within a MAJOR version, no field removals or type changes
 
-### Story 16.2: Stability Release Branches & Backport Workflow
+### Story 16.2: SDK Auth Feature Parity
+
+As a developer using a non-Rust SDK,
+I want TLS and API key authentication support in all 5 external SDKs,
+So that I can connect securely to a Fila server that has auth enabled.
+
+**Acceptance Criteria:**
+
+**Given** the Fila server supports mTLS (Epic 15, Story 15.1) and API key auth (Story 15.2)
+**When** each external SDK is updated
+**Then** fila-go, fila-python, fila-js, fila-ruby, and fila-java each support:
+**And** TLS connection options: CA certificate, client certificate, client key (for mTLS)
+**And** API key authentication: attaching `authorization: Bearer <key>` metadata to every outgoing RPC
+**And** updated proto definitions reflecting the new admin RPCs (CreateApiKey, RevokeApiKey, ListApiKeys, SetAcl, GetAcl)
+**And** each SDK's README documents TLS and API key usage
+**And** each SDK's integration tests include at least one TLS test and one API key auth test
+**And** each SDK's CI pipeline provisions fila-server with auth enabled for integration tests
+**And** backward compatible: when no TLS/auth options are set, behavior is identical to before
+
+### Story 16.3: Stability Release Branches & Backport Workflow
 
 As an operator,
 I want to deploy stability release branches with backported fixes,

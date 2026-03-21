@@ -830,11 +830,12 @@ Bob (Scrum Master): "I want specific, achievable actions with clear owners. Not 
 <critical>ENCODE OR DROP RULE: Every action item MUST identify a specific target file where it will be encoded. Action items that live only in the retro document have ~30% follow-through and are effectively ignored. Acceptable targets (in priority order):
 - **Workflow files** (PREFERRED) — Steps added to existing workflows (dev-story, execute-epic, create-story, retrospective, etc.). Most process learnings belong here — structural enforcement is the most reliable.
 - **Story/epic definitions** — Requirements baked into epics.md or story files
+- **New stories for future epics** — When the retro identifies missing work (feature gaps, unfinished cross-cutting concerns, deferred scope), add the story directly to epics.md with full ACs AND add the corresponding entry to {sprint_status_file}. A "recommendation" to add a story later is NOT encoding — write the story now or drop it.
 - **Code changes** — A concrete task/PR to execute before the next epic
 - **CLAUDE.md** (SOMETIMES) — Project instructions that all agents read every session. Only for cross-cutting rules that don't fit in a specific workflow.
 - **Memory files** (RARELY) — Only for epic results tracking and codebase state. Do NOT encode process learnings here — they belong in workflows.
 
-If an action item cannot be mapped to one of these targets, it must be either converted into a concrete file change or explicitly dropped. Do NOT create "team agreements" that exist only in the retro document — they will not be followed.</critical>
+If an action item cannot be mapped to one of these targets, it must be either converted into a concrete file change or explicitly dropped. Do NOT create "team agreements" or "recommendations" that exist only in the retro document — they will not be followed.</critical>
 
 <action>For each proposed action item, identify the target file and change type. Present action items in a table with columns: Action, Target File, Change Type. Discuss with {user_name} which items to encode and which to drop.</action>
 
@@ -1322,6 +1323,7 @@ Bob (Scrum Master): "See you all when prep work is done. Meeting adjourned!"
 <action>For each action item with a target file identified in Step 8 (in priority order):</action>
 - If target is a workflow file (PREFERRED) → Edit the workflow instructions to add the new step/rule
 - If target is epics.md or a story file → Edit the planning artifact with updated requirements
+- If target is a new story for a future epic → Write the full story with ACs into epics.md AND add the entry to {sprint_status_file}. Renumber existing stories if needed. A story is not "tracked" until it exists in both files.
 - If target is a code change → Note it as a pre-epic task (code changes happen outside the retro)
 - If target is CLAUDE.md (SOMETIMES) → Edit the project CLAUDE.md file with the new instruction
 - If target is memory files (RARELY, epic results only) → Write/update the relevant memory file. Only for epic results tracking and codebase state — never for process learnings

@@ -161,12 +161,13 @@ development_status:
   15-1-mtls-transport-security: done
   15-2-api-key-authentication: done
   15-3-per-queue-access-control: done
-  epic-15-retrospective: optional
+  epic-15-retrospective: done
 
   # Epic 16: Release Engineering & SDK Compatibility
   epic-16: backlog
   16-1-versioning-scheme-sdk-compatibility-matrix: backlog
-  16-2-stability-release-branches-backport-workflow: backlog
+  16-2-sdk-auth-feature-parity: backlog
+  16-3-stability-release-branches-backport-workflow: backlog
   epic-16-retrospective: optional
 
   # Epic 17: Developer Experience
