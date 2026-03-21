@@ -684,10 +684,7 @@ async fn cmd_auth_revoke(client: &mut AdminClient, key_id: String) {
 }
 
 async fn cmd_server_info(client: &mut AdminClient) {
-    match client
-        .get_server_info(GetServerInfoRequest {})
-        .await
-    {
+    match client.get_server_info(GetServerInfoRequest {}).await {
         Ok(resp) => {
             let info = resp.into_inner();
             println!("Server version : {}", info.server_version);
