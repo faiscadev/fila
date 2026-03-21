@@ -83,6 +83,23 @@ jobs:
           path: bench-baseline.json
           key: bench-baseline-${{ github.sha }}
 
+      - name: Display benchmark summary
+        if: always() && hashFiles('bench-aggregated.json') != ''
+        run: |
+          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f bench-comparison.md ]; then
+            echo "### vs main baseline" >> $GITHUB_STEP_SUMMARY
+            cat bench-comparison.md >> $GITHUB_STEP_SUMMARY
+          else
+            jq -r '"**Commit:** `\(.commit)`  "' bench-aggregated.json >> $GITHUB_STEP_SUMMARY
+            jq -r '"**Time:** \(.timestamp)"' bench-aggregated.json >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Benchmark | Value | Unit |" >> $GITHUB_STEP_SUMMARY
+            echo "|---|---:|---|" >> $GITHUB_STEP_SUMMARY
+            jq -r '.benchmarks[] | "| \(.name) | \(.value | tostring) | \(.unit) |"' bench-aggregated.json >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

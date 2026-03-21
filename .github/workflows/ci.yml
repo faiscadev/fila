@@ -62,23 +62,23 @@ jobs:
           echo "## Code Coverage Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Extract overall totals
+          # Extract overall totals (filenames are absolute paths, use contains for matching)
           TOTAL_LINES=$(jq '.data[0].totals.lines.count' coverage.json)
           COVERED_LINES=$(jq '.data[0].totals.lines.covered' coverage.json)
-          TOTAL_PCT=$(jq '.data[0].totals.lines.percent' coverage.json)
+          TOTAL_PCT=$(jq '.data[0].totals.lines.percent | . * 10 | round / 10' coverage.json)
 
           echo "### Overall: ${TOTAL_PCT}% line coverage (${COVERED_LINES}/${TOTAL_LINES} lines)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Per-crate breakdown
+          # Per-crate breakdown (paths are absolute, match on /crates/<name>/)
           echo "### Per-Crate Coverage" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Crate | Lines | Covered | Coverage |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|---------|----------|" >> $GITHUB_STEP_SUMMARY
 
           for crate in fila-core fila-server fila-sdk fila-proto fila-cli; do
-            CRATE_LINES=$(jq "[.data[0].files[] | select(.filename | startswith(\"crates/${crate}/\")) | .summary.lines.count] | add // 0" coverage.json)
-            CRATE_COVERED=$(jq "[.data[0].files[] | select(.filename | startswith(\"crates/${crate}/\")) | .summary.lines.covered] | add // 0" coverage.json)
+            CRATE_LINES=$(jq "[.data[0].files[] | select(.filename | contains(\"/crates/${crate}/\")) | .summary.lines.count] | add // 0" coverage.json)
+            CRATE_COVERED=$(jq "[.data[0].files[] | select(.filename | contains(\"/crates/${crate}/\")) | .summary.lines.covered] | add // 0" coverage.json)
             if [ "$CRATE_LINES" -gt 0 ]; then
               CRATE_PCT=$(echo "scale=1; $CRATE_COVERED * 100 / $CRATE_LINES" | bc)
             else
@@ -97,13 +97,13 @@ jobs:
 
           for path in "crates/fila-core/src/broker/auth.rs" "crates/fila-server/src/auth.rs" "crates/fila-core/src/cluster/" "crates/fila-core/src/broker/config.rs"; do
             if echo "$path" | grep -q '/$'; then
-              PATH_LINES=$(jq "[.data[0].files[] | select(.filename | startswith(\"${path}\")) | .summary.lines.count] | add // 0" coverage.json)
-              PATH_COVERED=$(jq "[.data[0].files[] | select(.filename | startswith(\"${path}\")) | .summary.lines.covered] | add // 0" coverage.json)
+              # Directory — match all files containing this path segment
+              PATH_LINES=$(jq "[.data[0].files[] | select(.filename | contains(\"/${path}\")) | .summary.lines.count] | add // 0" coverage.json)
+              PATH_COVERED=$(jq "[.data[0].files[] | select(.filename | contains(\"/${path}\")) | .summary.lines.covered] | add // 0" coverage.json)
             else
-              PATH_LINES=$(jq ".data[0].files[] | select(.filename == \"${path}\") | .summary.lines.count // 0" coverage.json)
-              PATH_COVERED=$(jq ".data[0].files[] | select(.filename == \"${path}\") | .summary.lines.covered // 0" coverage.json)
-              PATH_LINES=${PATH_LINES:-0}
-              PATH_COVERED=${PATH_COVERED:-0}
+              # Single file — match on path suffix
+              PATH_LINES=$(jq "[.data[0].files[] | select(.filename | endswith(\"/${path}\")) | .summary.lines.count] | add // 0" coverage.json)
+              PATH_COVERED=$(jq "[.data[0].files[] | select(.filename | endswith(\"/${path}\")) | .summary.lines.covered] | add // 0" coverage.json)
             fi
             if [ "$PATH_LINES" -gt 0 ] 2>/dev/null; then
               PATH_PCT=$(echo "scale=1; $PATH_COVERED * 100 / $PATH_LINES" | bc)
