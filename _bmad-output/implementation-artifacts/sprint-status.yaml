@@ -167,8 +167,8 @@ development_status:
   # Original 3 stories → 2. Story 16.3 (stability release branches) dropped as premature.
   # Story 16.1 slimmed to docs-only (no RPC, no code changes).
   epic-16: in-progress
-  16-1-versioning-compatibility-policy: review
-  16-2-sdk-auth-feature-parity: backlog
+  16-1-versioning-compatibility-policy: done
+  16-2-sdk-auth-feature-parity: review
   epic-16-retrospective: optional
 
   # Epic 17: Developer Experience

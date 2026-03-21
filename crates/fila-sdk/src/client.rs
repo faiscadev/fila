@@ -27,8 +27,12 @@ pub struct ConsumeMessage {
 pub struct ConnectOptions {
     pub addr: String,
     pub timeout: Option<Duration>,
+    /// Enable TLS using the operating system's trust store.
+    /// When true without `tls_ca_cert_pem`, the system root certificates are used
+    /// to verify the server's certificate (e.g., Let's Encrypt, corporate CAs).
+    pub tls: bool,
     /// PEM-encoded CA certificate for verifying the server's certificate.
-    /// Required when connecting to a TLS-enabled broker.
+    /// When set, implies `tls: true` and overrides the system trust store.
     pub tls_ca_cert_pem: Option<Vec<u8>>,
     /// PEM-encoded client certificate for mTLS authentication.
     pub tls_client_cert_pem: Option<Vec<u8>>,
@@ -52,7 +56,19 @@ impl ConnectOptions {
         self
     }
 
+    /// Enable TLS using the operating system's trust store.
+    ///
+    /// Use this when the Fila server has a certificate signed by a public CA
+    /// (e.g., Let's Encrypt) or a corporate CA already in the system trust store.
+    /// No CA certificate PEM is needed.
+    pub fn with_tls(mut self) -> Self {
+        self.tls = true;
+        self
+    }
+
     /// Set the CA certificate for verifying the server's TLS certificate.
+    ///
+    /// Implies TLS enabled. Use this for self-signed certificates.
     pub fn with_tls_ca_cert(mut self, ca_cert_pem: Vec<u8>) -> Self {
         self.tls_ca_cert_pem = Some(ca_cert_pem);
         self
@@ -109,9 +125,25 @@ impl FilaClient {
             endpoint = endpoint.timeout(timeout);
         }
 
-        // Apply TLS config when CA cert is provided.
-        if let Some(ca_pem) = options.tls_ca_cert_pem {
-            let mut tls = ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_pem));
+        // Validate partial mTLS: cert and key must both be provided or both absent.
+        let has_cert = options.tls_client_cert_pem.is_some();
+        let has_key = options.tls_client_key_pem.is_some();
+        if has_cert != has_key {
+            return Err(ConnectError::InvalidArgument(
+                "tls_client_cert_pem and tls_client_key_pem must both be provided for mTLS"
+                    .to_string(),
+            ));
+        }
+
+        // Apply TLS config when explicitly enabled, CA cert is provided, or client identity is set.
+        let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some() || has_cert;
+        if tls_enabled {
+            let mut tls = ClientTlsConfig::new();
+            if let Some(ca_pem) = options.tls_ca_cert_pem {
+                tls = tls.ca_certificate(Certificate::from_pem(ca_pem));
+            }
+            // Without ca_certificate, tonic uses the system trust store
+            // (via tls-native-roots feature).
             if let (Some(cert_pem), Some(key_pem)) =
                 (options.tls_client_cert_pem, options.tls_client_key_pem)
             {
