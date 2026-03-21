@@ -214,7 +214,7 @@ async fn connect(
     tls_key: Option<&PathBuf>,
     api_key: Option<String>,
 ) -> AdminClient {
-    let tls_enabled = tls || tls_ca_cert.is_some();
+    let tls_enabled = tls || tls_ca_cert.is_some() || tls_cert.is_some();
     let channel = if tls_enabled {
         let mut tls_config = ClientTlsConfig::new();
         if let Some(ca_path) = tls_ca_cert {

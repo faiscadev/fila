@@ -125,8 +125,10 @@ impl FilaClient {
             endpoint = endpoint.timeout(timeout);
         }
 
-        // Apply TLS config when explicitly enabled or when CA cert is provided.
-        let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some();
+        // Apply TLS config when explicitly enabled, CA cert is provided, or client identity is set.
+        let has_client_identity =
+            options.tls_client_cert_pem.is_some() || options.tls_client_key_pem.is_some();
+        let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some() || has_client_identity;
         if tls_enabled {
             let mut tls = ClientTlsConfig::new();
             if let Some(ca_pem) = options.tls_ca_cert_pem {
