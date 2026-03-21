@@ -26,8 +26,11 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-nextest
 
+      - name: Build workspace (provides binaries for integration tests)
+        run: cargo build --workspace
+
       - name: Generate coverage
-        run: cargo llvm-cov nextest --workspace --exclude fila-bench --exclude fila-e2e --json --summary-only --output-path coverage.json
+        run: cargo llvm-cov nextest --workspace --exclude fila-bench --exclude fila-e2e --no-fail-fast --json --summary-only --output-path coverage.json
 
       - name: Display coverage summary
         run: |
