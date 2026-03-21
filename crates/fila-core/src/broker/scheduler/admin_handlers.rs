@@ -230,7 +230,7 @@ impl Scheduler {
             msg.leased_at = None;
 
             // Save fields needed after encoding before consuming msg
-            let msg_id = msg.id.clone();
+            let msg_id = msg.id;
             let fairness_key = msg.fairness_key.clone();
             let weight = msg.weight;
             let throttle_keys = msg.throttle_keys.clone();

@@ -45,8 +45,7 @@ impl TestCluster {
         // Start remaining nodes that join via node 0
         let seed = format!("127.0.0.1:{}", cluster_ports[0]);
         for i in 1..n {
-            let node =
-                start_cluster_node(i, client_ports[i], cluster_ports[i], &[&seed]);
+            let node = start_cluster_node(i, client_ports[i], cluster_ports[i], &[&seed]);
             nodes.push(Some(node));
         }
 
