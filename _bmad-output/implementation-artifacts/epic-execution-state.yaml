@@ -1,31 +1,26 @@
-epic: "Epic 16.5: Stability Hardening & Test Coverage"
+epic: "Epic 17: Cluster Hardening"
 baseBranch: main
 startedAt: "2026-03-21"
 stories:
-  - id: "16.5.1"
-    title: "Cluster E2E Test Suite"
+  - id: "17.1"
+    title: "Cluster Error Clarity & Ack/Nack Performance"
     status: completed
     currentPhase: ""
-    branch: "feat/16.5.1-cluster-e2e-test-suite"
-    pr: 79
+    branch: "feat/17.1-cluster-error-clarity-ack-nack-performance"
+    pr: 82
     dependsOn: []
-  - id: "16.5.2"
-    title: "TLS & Auth Edge Case Hardening"
+  - id: "17.2"
+    title: "Consume Leader Hint & SDK Reconnect"
     status: completed
     currentPhase: ""
-    branch: "feat/16.5.2-tls-auth-edge-case-hardening"
-    pr: 80
+    branch: "feat/17.2-consume-leader-hint-sdk-reconnect"
+    pr: 83
+    dependsOn: ["17.1"]
+  - id: "17.3"
+    title: "Automatic Queue-to-Node Assignment"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/17.3-automatic-queue-to-node-assignment"
+    pr: null
     dependsOn: []
-  - id: "16.5.3"
-    title: "CI Code Coverage & Quality Gates"
-    status: completed
-    currentPhase: ""
-    branch: "feat/16.5.3-ci-code-coverage-quality-gates"
-    pr: 81
-    dependsOn: ["16.5.1", "16.5.2"]
-completedAt: "2026-03-21"
-summary:
-  total: 3
-  completed: 3
-  skipped: 0
 skippedIssues: []
