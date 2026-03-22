@@ -28,6 +28,8 @@ pub enum MetaStoreEvent {
         queue_id: String,
         members: NonEmpty<(NodeId, String)>,
         config: Box<QueueConfig>,
+        /// Which node should bootstrap (become initial leader) for this queue.
+        preferred_leader: NodeId,
     },
     QueueGroupDeleted {
         queue_id: String,
@@ -463,6 +465,7 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                             queue_id,
                             members,
                             config,
+                            preferred_leader,
                         } => {
                             self.state_machine
                                 .queue_groups
@@ -484,6 +487,7 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                                         queue_id: queue_id.clone(),
                                         members: member_pairs,
                                         config: Box::new(config.clone()),
+                                        preferred_leader: *preferred_leader,
                                     });
                                 } else {
                                     tracing::error!(
@@ -585,10 +589,14 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                     .cloned()
                     .collect();
                 if let Some(member_pairs) = NonEmpty::from_vec(member_pairs) {
+                    // Snapshot restores don't need preferred_leader — groups are
+                    // already initialized and Raft won't re-bootstrap.
+                    let first_member = member_pairs.first().0;
                     let _ = tx.send(MetaStoreEvent::QueueGroupCreated {
                         queue_id: queue_id.clone(),
                         members: member_pairs,
                         config: Box::new(QueueConfig::new(queue_id.clone())),
+                        preferred_leader: first_member,
                     });
                 } else {
                     tracing::error!(queue_id, "no member addresses found in snapshot membership");

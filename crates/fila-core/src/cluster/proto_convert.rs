@@ -585,11 +585,13 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
                 queue_id,
                 members,
                 config,
+                preferred_leader,
             } => Some(Request::CreateQueueGroup(
                 fila_proto::ClusterCreateQueueGroup {
                     queue_id,
                     members,
                     config: Some(fila_proto::ClusterQueueConfig::from(config)),
+                    preferred_leader,
                 },
             )),
             ClusterRequest::DeleteQueueGroup { queue_id } => Some(Request::DeleteQueueGroup(
@@ -651,14 +653,18 @@ impl TryFrom<fila_proto::ClusterRequestProto> for ClusterRequest {
                 dlq_queue_id: rd.dlq_queue_id,
                 count: rd.count,
             }),
-            Request::CreateQueueGroup(cqg) => Ok(ClusterRequest::CreateQueueGroup {
-                queue_id: cqg.queue_id,
-                members: cqg.members,
-                config: cqg
-                    .config
-                    .ok_or(ConvertError::MissingField("create_queue_group.config"))?
-                    .into(),
-            }),
+            Request::CreateQueueGroup(cqg) => {
+                let preferred_leader = cqg.preferred_leader;
+                Ok(ClusterRequest::CreateQueueGroup {
+                    queue_id: cqg.queue_id,
+                    members: cqg.members,
+                    config: cqg
+                        .config
+                        .ok_or(ConvertError::MissingField("create_queue_group.config"))?
+                        .into(),
+                    preferred_leader,
+                })
+            }
             Request::DeleteQueueGroup(dqg) => Ok(ClusterRequest::DeleteQueueGroup {
                 queue_id: dqg.queue_id,
             }),
@@ -1220,6 +1226,7 @@ mod tests {
             queue_id: "q1".into(),
             members: vec![1, 2, 3],
             config: QueueConfig::new("q1".into()),
+            preferred_leader: 2,
         };
         let proto = fila_proto::ClusterRequestProto::from(original);
         let roundtripped: ClusterRequest = proto.try_into().unwrap();
@@ -1228,10 +1235,12 @@ mod tests {
                 queue_id,
                 members,
                 config,
+                preferred_leader,
             } => {
                 assert_eq!(queue_id, "q1");
                 assert_eq!(members, vec![1, 2, 3]);
                 assert_eq!(config.name, "q1");
+                assert_eq!(preferred_leader, 2);
             }
             _ => panic!("expected CreateQueueGroup"),
         }

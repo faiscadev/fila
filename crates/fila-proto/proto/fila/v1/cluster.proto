@@ -163,7 +163,7 @@ message ClusterSetConfig { string key = 1; string value = 2; }
 message ClusterSetThrottleRate { string key = 1; double rate_per_second = 2; double burst = 3; }
 message ClusterRemoveThrottleRate { string key = 1; }
 message ClusterRedrive { string dlq_queue_id = 1; uint64 count = 2; }
-message ClusterCreateQueueGroup { string queue_id = 1; repeated uint64 members = 2; ClusterQueueConfig config = 3; }
+message ClusterCreateQueueGroup { string queue_id = 1; repeated uint64 members = 2; ClusterQueueConfig config = 3; uint64 preferred_leader = 4; }
 message ClusterDeleteQueueGroup { string queue_id = 1; }
 
 /// Full QueueConfig for internal cluster use (all 7 fields, vs admin.proto's 3).

@@ -41,6 +41,9 @@ pub struct ClusterHandle {
     pub meta_raft: Arc<Raft<TypeConfig>>,
     pub multi_raft: Arc<MultiRaftManager>,
     pub node_id: NodeId,
+    /// Number of nodes per queue Raft group. When the cluster has more nodes,
+    /// only a subset is selected for each queue.
+    pub replication_factor: usize,
     /// TLS config for outgoing cluster connections. `None` when TLS is disabled.
     tls: Option<Arc<ClientTlsConfig>>,
     /// Cached gRPC clients for forwarding writes to leader nodes.
@@ -270,6 +273,7 @@ pub async fn process_meta_events(
                 queue_id,
                 members,
                 config,
+                preferred_leader,
             } => {
                 // Mark the queue as expected before creating the group so that
                 // requests arriving during creation get NodeNotReady (not NotFound).
@@ -301,7 +305,10 @@ pub async fn process_meta_events(
                 }
 
                 // Start the queue's Raft group.
-                if let Err(e) = multi_raft.create_group(&queue_id, &members).await {
+                if let Err(e) = multi_raft
+                    .create_group(&queue_id, &members, preferred_leader)
+                    .await
+                {
                     tracing::error!(queue_id, error = %e, "failed to create queue raft group");
                 }
             }
@@ -486,6 +493,8 @@ pub struct ClusterManager {
     broker_slot: Arc<std::sync::OnceLock<Arc<crate::Broker>>>,
     /// TLS config for outgoing cluster connections. Propagated to `ClusterHandle`.
     client_tls: Option<Arc<ClientTlsConfig>>,
+    /// Number of nodes per queue Raft group. Propagated to `ClusterHandle`.
+    replication_factor: usize,
 }
 
 impl ClusterManager {
@@ -660,6 +669,7 @@ impl ClusterManager {
             shutdown_tx,
             broker_slot,
             client_tls,
+            replication_factor: config.replication_factor,
         })
     }
 
@@ -763,6 +773,7 @@ impl ClusterManager {
             meta_raft: Arc::clone(&self.raft),
             multi_raft: Arc::clone(&self.multi_raft),
             node_id: self.node_id,
+            replication_factor: self.replication_factor,
             tls: self.client_tls.clone(),
             client_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         })

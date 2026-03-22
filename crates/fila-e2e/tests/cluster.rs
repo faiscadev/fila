@@ -284,6 +284,43 @@ async fn cluster_node_rejoin_catchup() {
     );
 }
 
+/// AC: Creating 6 queues on a 3-node cluster results in roughly balanced leadership.
+/// No node should have more than 3 leaderships (i.e., no node leads all queues).
+#[tokio::test]
+async fn cluster_balanced_queue_leadership() {
+    let cluster = helpers::cluster::TestCluster::start(3);
+
+    // Create 6 queues. The assignment strategy should distribute leadership
+    // across the 3 nodes, not pile everything on the lowest node ID.
+    for i in 0..6 {
+        create_cluster_queue(cluster.addr(0), &format!("balanced-{i}"));
+    }
+
+    // Count leaderships per node.
+    let mut leadership_counts: HashMap<u64, usize> = HashMap::new();
+    for i in 0..6 {
+        let output = queue_inspect(cluster.addr(0), &format!("balanced-{i}"));
+        let leader = parse_leader_node_id(&output);
+        assert!(leader > 0, "queue balanced-{i} has no leader");
+        *leadership_counts.entry(leader).or_insert(0) += 1;
+    }
+
+    // Verify balance: no node should have more than 3 out of 6 queues.
+    for (&node_id, &count) in &leadership_counts {
+        assert!(
+            count <= 3,
+            "node {node_id} leads {count} queues (max allowed: 3 out of 6)"
+        );
+    }
+
+    // Verify multiple nodes are used (not all on one node).
+    assert!(
+        leadership_counts.len() >= 2,
+        "expected at least 2 different leaders, got leaders: {:?}",
+        leadership_counts
+    );
+}
+
 /// AC 5: `fila queue inspect` on any node returns cluster metadata (leader, replicas).
 ///
 /// In the current architecture, the message depth is only accurate on the leader node

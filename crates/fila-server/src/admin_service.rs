@@ -33,6 +33,66 @@ fn cluster_write_err_to_status(err: ClusterWriteError) -> Status {
     }
 }
 
+/// Count current queue leaderships per node across all queue Raft groups.
+async fn count_leaderships(
+    cluster: &ClusterHandle,
+    candidates: &[u64],
+) -> std::collections::HashMap<u64, usize> {
+    let groups = cluster.multi_raft.snapshot_groups().await;
+
+    let mut counts: std::collections::HashMap<u64, usize> =
+        candidates.iter().map(|&id| (id, 0)).collect();
+
+    for (_queue_id, raft) in &groups {
+        if let Some(leader) = raft.current_leader().await {
+            if let Some(count) = counts.get_mut(&leader) {
+                *count += 1;
+            }
+        }
+    }
+
+    counts
+}
+
+/// Select which nodes should participate in a new queue's Raft group,
+/// and which node should be the preferred leader.
+///
+/// When the cluster has more nodes than `replication_factor`, only the
+/// N least-loaded nodes are selected. The preferred leader is the node
+/// with the fewest leaderships among the selected members.
+async fn select_members_and_leader(
+    all_members: &[u64],
+    cluster: &ClusterHandle,
+) -> (Vec<u64>, u64) {
+    let rf = cluster.replication_factor;
+    let counts = count_leaderships(cluster, all_members).await;
+
+    // Select subset if cluster is larger than replication factor.
+    let selected: Vec<u64> = if all_members.len() > rf && rf > 0 {
+        let mut sorted: Vec<u64> = all_members.to_vec();
+        sorted.sort_by_key(|&id| {
+            let count = counts.get(&id).copied().unwrap_or(0);
+            (count, id)
+        });
+        sorted.truncate(rf);
+        sorted
+    } else {
+        all_members.to_vec()
+    };
+
+    // Preferred leader: least-loaded among selected (tie-break: lowest ID).
+    let preferred = selected
+        .iter()
+        .copied()
+        .min_by_key(|&id| {
+            let count = counts.get(&id).copied().unwrap_or(0);
+            (count, id)
+        })
+        .unwrap_or_else(|| selected.first().copied().unwrap_or(1));
+
+    (selected, preferred)
+}
+
 /// gRPC admin service implementation. Wraps a Broker to send commands
 /// to the scheduler thread.
 pub struct AdminService {
@@ -165,12 +225,20 @@ impl FilaAdmin for AdminService {
             // The meta state machine event handler will create the queue
             // in the local scheduler and start the queue's Raft group on
             // all nodes.
-            let (members, _member_addrs) = cluster.meta_members();
+            let (all_members, _member_addrs) = cluster.meta_members();
+
+            // Select which nodes participate and the preferred leader.
+            // When the cluster is larger than replication_factor, only a
+            // subset of least-loaded nodes are selected.
+            let (members, preferred_leader) =
+                select_members_and_leader(&all_members, cluster.as_ref()).await;
+
             let resp = cluster
                 .write_to_meta(ClusterRequest::CreateQueueGroup {
                     queue_id: req.name.clone(),
                     members,
                     config,
+                    preferred_leader,
                 })
                 .await
                 .map_err(cluster_write_err_to_status)?;
