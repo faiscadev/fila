@@ -1,6 +1,6 @@
 # Story 19.2: Documentation Website & Deployment Guides
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -43,35 +43,35 @@ so that I can evaluate Fila quickly and deploy it confidently in production.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Configure mdBook (AC: 1)
-  - [ ] 1.1: Create `book.toml` in project root
-  - [ ] 1.2: Create `docs/SUMMARY.md` with table of contents linking all existing docs
-  - [ ] 1.3: Verify `mdbook build` produces a working site
+- [x] Task 1: Configure mdBook (AC: 1)
+  - [x] 1.1: Create `book.toml` in project root
+  - [x] 1.2: Create `docs/SUMMARY.md` with table of contents linking all existing docs
+  - [x] 1.3: Verify `mdbook build` produces a working site
 
-- [ ] Task 2: Create systemd deployment (AC: 2)
-  - [ ] 2.1: Create `deploy/fila.service` systemd unit file
-  - [ ] 2.2: Create `deploy/fila.toml` example production config
+- [x] Task 2: Create systemd deployment (AC: 2)
+  - [x] 2.1: Create `deploy/fila.service` systemd unit file
+  - [x] 2.2: Create `deploy/fila.toml` example production config
 
-- [ ] Task 3: Create Helm chart (AC: 3)
-  - [ ] 3.1: Create `deploy/helm/fila/Chart.yaml`
-  - [ ] 3.2: Create `deploy/helm/fila/values.yaml` with configurable options
-  - [ ] 3.3: Create deployment template (Deployment for single-node, StatefulSet for clustered)
-  - [ ] 3.4: Create Service, ConfigMap templates
-  - [ ] 3.5: Create optional PVC template for persistent storage
+- [x] Task 3: Create Helm chart (AC: 3)
+  - [x] 3.1: Create `deploy/helm/fila/Chart.yaml`
+  - [x] 3.2: Create `deploy/helm/fila/values.yaml` with configurable options
+  - [x] 3.3: Create deployment template (Deployment for single-node, StatefulSet for clustered)
+  - [x] 3.4: Create Service, ConfigMap templates
+  - [x] 3.5: Create optional PVC template for persistent storage
 
-- [ ] Task 4: Create docker-compose cluster config (AC: 4)
-  - [ ] 4.1: Create `deploy/docker-compose.cluster.yml` with 3 Fila nodes
-  - [ ] 4.2: Create node config files for the 3-node cluster
+- [x] Task 4: Create docker-compose cluster config (AC: 4)
+  - [x] 4.1: Create `deploy/docker-compose.cluster.yml` with 3 Fila nodes
+  - [x] 4.2: Create node config files for the 3-node cluster
 
-- [ ] Task 5: Write deployment guide (AC: 5)
-  - [ ] 5.1: Create `docs/deployment.md` with all deployment methods
-  - [ ] 5.2: Add production checklist section
+- [x] Task 5: Write deployment guide (AC: 5)
+  - [x] 5.1: Create `docs/deployment.md` with all deployment methods
+  - [x] 5.2: Add production checklist section
 
-- [ ] Task 6: Create GitHub Pages workflow (AC: 6)
-  - [ ] 6.1: Create `.github/workflows/docs.yml` to build mdBook and deploy to GitHub Pages
+- [x] Task 6: Create GitHub Pages workflow (AC: 6)
+  - [x] 6.1: Create `.github/workflows/docs.yml` to build mdBook and deploy to GitHub Pages
 
-- [ ] Task 7: Update sprint-status.yaml
-  - [ ] 7.1: Mark story 19-2 as in-progress
+- [x] Task 7: Update sprint-status.yaml
+  - [x] 7.1: Mark story 19-2 as in-progress
 
 ## Dev Notes
 
@@ -151,6 +151,35 @@ Claude Opus 4.6 (1M context)
 
 ### Debug Log References
 
+None.
+
 ### Completion Notes List
 
+- mdBook chosen for Rust-native simplicity; builds in <1s from existing markdown
+- Helm chart uses conditional Deployment vs StatefulSet based on cluster.enabled
+- Docker Compose cluster uses Docker's internal DNS for peer discovery (node1, node2, node3)
+- GitHub Pages workflow triggers only on docs/ or book.toml changes
+- All existing markdown docs work as-is with mdBook, just needed SUMMARY.md navigation
+
 ### File List
+
+- `book.toml` — NEW: mdBook configuration
+- `.gitignore` — MODIFIED: added /book/ build output
+- `docs/SUMMARY.md` — NEW: mdBook table of contents
+- `docs/introduction.md` — NEW: landing page (from README)
+- `docs/deployment.md` — NEW: comprehensive deployment guide
+- `deploy/fila.service` — NEW: systemd unit file
+- `deploy/fila.toml` — NEW: example production config
+- `deploy/helm/fila/Chart.yaml` — NEW: Helm chart metadata
+- `deploy/helm/fila/values.yaml` — NEW: configurable chart values
+- `deploy/helm/fila/templates/_helpers.tpl` — NEW: Helm template helpers
+- `deploy/helm/fila/templates/configmap.yaml` — NEW: ConfigMap with TOML config
+- `deploy/helm/fila/templates/deployment.yaml` — NEW: single-node Deployment
+- `deploy/helm/fila/templates/statefulset.yaml` — NEW: clustered StatefulSet
+- `deploy/helm/fila/templates/service.yaml` — NEW: Service + headless Service
+- `deploy/helm/fila/templates/pvc.yaml` — NEW: optional PVC for single-node
+- `deploy/docker-compose.cluster.yml` — NEW: 3-node cluster compose
+- `deploy/cluster/node1.toml` — NEW: node1 cluster config
+- `deploy/cluster/node2.toml` — NEW: node2 cluster config
+- `deploy/cluster/node3.toml` — NEW: node3 cluster config
+- `.github/workflows/docs.yml` — NEW: GitHub Pages deployment workflow
