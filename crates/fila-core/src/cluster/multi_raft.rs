@@ -88,16 +88,12 @@ impl MultiRaftManager {
         // otherwise fall back to the smallest member ID. The fallback handles
         // legacy Raft log entries that predate the preferred_leader field (where
         // the deserialized value is 0) and guards against invalid IDs.
-        let bootstrap_node = if preferred_leader > 0
-            && members.iter().any(|(id, _)| *id == preferred_leader)
-        {
-            preferred_leader
-        } else {
-            members
-                .iter()
-                .map(|(id, _)| *id)
-                .fold(u64::MAX, u64::min)
-        };
+        let bootstrap_node =
+            if preferred_leader > 0 && members.iter().any(|(id, _)| *id == preferred_leader) {
+                preferred_leader
+            } else {
+                members.iter().map(|(id, _)| *id).fold(u64::MAX, u64::min)
+            };
         if self.node_id == bootstrap_node {
             let member_map: std::collections::BTreeMap<_, _> = members
                 .iter()
