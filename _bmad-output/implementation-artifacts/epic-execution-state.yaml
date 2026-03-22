@@ -18,8 +18,8 @@ stories:
     dependsOn: []
   - id: "19.3"
     title: "SDK & Integration Guides"
-    status: in-progress
-    currentPhase: "setup"
+    status: completed
+    currentPhase: ""
     branch: "feat/19.3-sdk-integration-guides"
     pr: null
     dependsOn: []

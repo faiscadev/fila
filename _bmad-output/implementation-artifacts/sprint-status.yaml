@@ -194,7 +194,7 @@ development_status:
   epic-19: in-progress
   19-1-built-in-lua-helpers: done
   19-2-documentation-website-deployment-guides: done
-  19-3-sdk-integration-guides: in-progress
+  19-3-sdk-integration-guides: done
   epic-19-retrospective: optional
 
   # Epic 20: Web Management GUI

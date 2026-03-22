@@ -1,6 +1,6 @@
 # Story 19.3: SDK & Integration Guides
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -33,22 +33,22 @@ so that I can integrate Fila into my application quickly in my language of choic
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create per-SDK quick start guide (AC: 1, 3)
-  - [ ] 1.1: Create `docs/sdk-quickstart.md` with sections for each SDK
-  - [ ] 1.2: Add security section (TLS + API key) per SDK
+- [x] Task 1: Create per-SDK quick start guide (AC: 1, 3)
+  - [x] 1.1: Create `docs/sdk-quickstart.md` with sections for each SDK
+  - [x] 1.2: Add security section (TLS + API key) per SDK
 
-- [ ] Task 2: Create integration patterns guide (AC: 2)
-  - [ ] 2.1: Create `docs/integration-patterns.md`
-  - [ ] 2.2: Document producer/consumer, fan-out, request-reply patterns
+- [x] Task 2: Create integration patterns guide (AC: 2)
+  - [x] 2.1: Create `docs/integration-patterns.md`
+  - [x] 2.2: Document producer/consumer, fan-out, request-reply patterns
 
-- [ ] Task 3: Create troubleshooting guide (AC: 4)
-  - [ ] 3.1: Create `docs/troubleshooting.md` with common issues and solutions
+- [x] Task 3: Create troubleshooting guide (AC: 4)
+  - [x] 3.1: Create `docs/troubleshooting.md` with common issues and solutions
 
-- [ ] Task 4: Update navigation (AC: 5)
-  - [ ] 4.1: Update `docs/SUMMARY.md` with new pages
+- [x] Task 4: Update navigation (AC: 5)
+  - [x] 4.1: Update `docs/SUMMARY.md` with new pages
 
-- [ ] Task 5: Update sprint-status.yaml
-  - [ ] 5.1: Mark story 19-3 as in-progress
+- [x] Task 5: Update sprint-status.yaml
+  - [x] 5.1: Mark story 19-3 as in-progress
 
 ## Dev Notes
 
@@ -84,6 +84,18 @@ Claude Opus 4.6 (1M context)
 
 ### Debug Log References
 
+None.
+
 ### Completion Notes List
 
+- Consumer group examples skipped (Epic 18 deferred)
+- SDK quickstart covers all 6 SDKs with consistent structure
+- Integration patterns use Python and Go examples (most readable for tutorials)
+- Troubleshooting covers both single-node and cluster scenarios
+
 ### File List
+
+- `docs/sdk-quickstart.md` — NEW: per-SDK quick start guide with security section
+- `docs/integration-patterns.md` — NEW: producer/consumer, fan-out, request-reply patterns
+- `docs/troubleshooting.md` — NEW: common issues and solutions
+- `docs/SUMMARY.md` — MODIFIED: added new pages to navigation
