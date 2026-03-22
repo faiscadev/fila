@@ -1,6 +1,6 @@
 # Story 19.1: Built-in Lua Helpers
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -46,44 +46,44 @@ so that I can implement standard scheduling policies without writing boilerplate
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `helpers.rs` module in `crates/fila-core/src/lua/` (AC: 1)
-  - [ ] 1.1: Create `crates/fila-core/src/lua/helpers.rs` with a `register_helpers(lua: &Lua)` function
-  - [ ] 1.2: In `register_helpers`, create a `helpers` table and set it on the existing `fila` global: `fila.helpers = helpers_table`
-  - [ ] 1.3: Add `pub mod helpers;` to `crates/fila-core/src/lua/mod.rs`
-  - [ ] 1.4: Call `helpers::register_helpers(&lua)` in `LuaEngine::new()` after `register_fila_api`
+- [x] Task 1: Create `helpers.rs` module in `crates/fila-core/src/lua/` (AC: 1)
+  - [x] 1.1: Create `crates/fila-core/src/lua/helpers.rs` with a `register_helpers(lua: &Lua)` function
+  - [x] 1.2: In `register_helpers`, create a `helpers` table and set it on the existing `fila` global: `fila.helpers = helpers_table`
+  - [x] 1.3: Add `pub mod helpers;` to `crates/fila-core/src/lua/mod.rs`
+  - [x] 1.4: Call `helpers::register_helpers(&lua)` in `LuaEngine::new()` after `register_fila_api`
 
-- [ ] Task 2: Implement `fila.helpers.exponential_backoff` (AC: 2)
-  - [ ] 2.1: Register Lua function `exponential_backoff(attempts, base_ms, max_ms)` on helpers table
-  - [ ] 2.2: Compute delay: `base_ms * 2^(attempts-1)`, cap at `max_ms`
-  - [ ] 2.3: Add jitter: multiply by random factor in [0.75, 1.25] using `math.random()`
-  - [ ] 2.4: Handle edge cases: `attempts <= 0` → return `base_ms`, large exponents → cap before overflow
+- [x] Task 2: Implement `fila.helpers.exponential_backoff` (AC: 2)
+  - [x] 2.1: Register Lua function `exponential_backoff(attempts, base_ms, max_ms)` on helpers table
+  - [x] 2.2: Compute delay: `base_ms * 2^(attempts-1)`, cap at `max_ms`
+  - [x] 2.3: Add jitter: multiply by random factor in [0.75, 1.25] using `math.random()`
+  - [x] 2.4: Handle edge cases: `attempts <= 0` → return `base_ms`, large exponents → cap before overflow
 
-- [ ] Task 3: Implement `fila.helpers.tenant_route` (AC: 3)
-  - [ ] 3.1: Register Lua function `tenant_route(msg, header_name)` on helpers table
-  - [ ] 3.2: Extract `msg.headers[header_name]`, return `{ fairness_key = value }` or `{ fairness_key = "default" }` if nil
+- [x] Task 3: Implement `fila.helpers.tenant_route` (AC: 3)
+  - [x] 3.1: Register Lua function `tenant_route(msg, header_name)` on helpers table
+  - [x] 3.2: Extract `msg.headers[header_name]`, return `{ fairness_key = value }` or `{ fairness_key = "default" }` if nil
 
-- [ ] Task 4: Implement `fila.helpers.rate_limit_keys` (AC: 4)
-  - [ ] 4.1: Register Lua function `rate_limit_keys(msg, patterns)` on helpers table
-  - [ ] 4.2: Iterate patterns, replace `{placeholder}` with `msg.headers[placeholder]`
-  - [ ] 4.3: Omit keys where any referenced header is missing
+- [x] Task 4: Implement `fila.helpers.rate_limit_keys` (AC: 4)
+  - [x] 4.1: Register Lua function `rate_limit_keys(msg, patterns)` on helpers table
+  - [x] 4.2: Iterate patterns, replace `{placeholder}` with `msg.headers[placeholder]`
+  - [x] 4.3: Omit keys where any referenced header is missing
 
-- [ ] Task 5: Implement `fila.helpers.max_retries` (AC: 5)
-  - [ ] 5.1: Register Lua function `max_retries(attempts, max)` on helpers table
-  - [ ] 5.2: Return `{ action = "retry" }` if `attempts < max`, else `{ action = "dlq" }`
+- [x] Task 5: Implement `fila.helpers.max_retries` (AC: 5)
+  - [x] 5.1: Register Lua function `max_retries(attempts, max)` on helpers table
+  - [x] 5.2: Return `{ action = "retry" }` if `attempts < max`, else `{ action = "dlq" }`
 
-- [ ] Task 6: Unit tests (AC: 7)
-  - [ ] 6.1: Test `exponential_backoff` — normal case, zero attempts, large exponents, jitter range
-  - [ ] 6.2: Test `tenant_route` — present header, missing header, nil msg.headers
-  - [ ] 6.3: Test `rate_limit_keys` — valid patterns, missing headers omitted, empty patterns
-  - [ ] 6.4: Test `max_retries` — below max, at max, above max, zero max
-  - [ ] 6.5: Test helpers are accessible alongside `fila.get()` (no interference)
+- [x] Task 6: Unit tests (AC: 7)
+  - [x] 6.1: Test `exponential_backoff` — normal case, zero attempts, large exponents, jitter range
+  - [x] 6.2: Test `tenant_route` — present header, missing header, nil msg.headers
+  - [x] 6.3: Test `rate_limit_keys` — valid patterns, missing headers omitted, empty patterns
+  - [x] 6.4: Test `max_retries` — below max, at max, above max, zero max
+  - [x] 6.5: Test helpers are accessible alongside `fila.get()` (no interference)
 
-- [ ] Task 7: Update documentation (AC: 6)
-  - [ ] 7.1: Add "Built-in Helpers" section to `docs/lua-patterns.md` with API reference
-  - [ ] 7.2: Add usage examples showing helpers in `on_enqueue` and `on_failure` scripts
+- [x] Task 7: Update documentation (AC: 6)
+  - [x] 7.1: Add "Built-in Helpers" section to `docs/lua-patterns.md` with API reference
+  - [x] 7.2: Add usage examples showing helpers in `on_enqueue` and `on_failure` scripts
 
-- [ ] Task 8: Update sprint-status.yaml
-  - [ ] 8.1: Mark story 19-1 as in-progress, epic-19 as in-progress
+- [x] Task 8: Update sprint-status.yaml
+  - [x] 8.1: Mark story 19-1 as in-progress, epic-19 as in-progress
 
 ## Dev Notes
 
@@ -172,6 +172,18 @@ Claude Opus 4.6 (1M context)
 
 ### Debug Log References
 
+None.
+
 ### Completion Notes List
 
+- Helpers implemented as Rust closures via `lua.create_function()`, registered on the existing `fila` global table as `fila.helpers`
+- Jitter uses Lua's `math.random()` (available in sandbox) via `lua.load("math.random()").eval()` — avoids adding `rand` dependency
+- Exponent capped at 52 to prevent f64 overflow before `min(max_ms)` can apply
+- All 17 tests pass; full workspace test suite passes with zero regressions
+- `rate_limit_keys` omits patterns with missing headers rather than inserting empty strings
+
 ### File List
+
+- `crates/fila-core/src/lua/helpers.rs` — NEW: 4 helper functions + 17 unit tests
+- `crates/fila-core/src/lua/mod.rs` — MODIFIED: added `pub mod helpers;` and `register_helpers()` call
+- `docs/lua-patterns.md` — MODIFIED: added "Built-in Helpers" section with API reference and examples
