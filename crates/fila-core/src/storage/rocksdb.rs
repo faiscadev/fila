@@ -17,6 +17,8 @@ const CF_LEASE_EXPIRY: &str = "lease_expiry";
 const CF_QUEUES: &str = "queues";
 const CF_STATE: &str = "state";
 const CF_RAFT_LOG: &str = "raft_log";
+/// Message index: maps `{queue_id}:{msg_id}` → full message key for O(1) ack/nack.
+const CF_MSG_INDEX: &str = "msg_index";
 
 /// All column family names (excluding `default` which RocksDB creates automatically).
 const COLUMN_FAMILIES: &[&str] = &[
@@ -26,6 +28,7 @@ const COLUMN_FAMILIES: &[&str] = &[
     CF_QUEUES,
     CF_STATE,
     CF_RAFT_LOG,
+    CF_MSG_INDEX,
 ];
 
 type DB = DBWithThreadMode<MultiThreaded>;
@@ -298,6 +301,23 @@ impl StorageEngine for RocksDbEngine {
         Ok(result)
     }
 
+    fn put_msg_index(&self, key: &[u8], msg_key: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_MSG_INDEX)?;
+        self.db.put_cf(&cf, key, msg_key)?;
+        Ok(())
+    }
+
+    fn get_msg_index(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
+        let cf = self.cf(CF_MSG_INDEX)?;
+        Ok(self.db.get_cf(&cf, key)?.map(|v| v.to_vec()))
+    }
+
+    fn delete_msg_index(&self, key: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_MSG_INDEX)?;
+        self.db.delete_cf(&cf, key)?;
+        Ok(())
+    }
+
     fn apply_mutations(&self, mutations: Vec<Mutation>) -> StorageResult<()> {
         let mut batch = WriteBatch::default();
 
@@ -332,6 +352,12 @@ impl StorageEngine for RocksDbEngine {
                 }
                 Mutation::DeleteState { key } => {
                     batch.delete_cf(&self.cf(CF_STATE)?, &key);
+                }
+                Mutation::PutMsgIndex { key, value } => {
+                    batch.put_cf(&self.cf(CF_MSG_INDEX)?, &key, &value);
+                }
+                Mutation::DeleteMsgIndex { key } => {
+                    batch.delete_cf(&self.cf(CF_MSG_INDEX)?, &key);
                 }
             }
         }

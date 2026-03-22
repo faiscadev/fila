@@ -20,6 +20,11 @@ pub enum Mutation {
     DeleteQueue { key: Vec<u8> },
     PutState { key: Vec<u8>, value: Vec<u8> },
     DeleteState { key: Vec<u8> },
+    /// Store message index: maps `{queue_id}:{msg_id}` → full message key.
+    /// Enables O(1) ack/nack by avoiding full queue scans to locate a message.
+    PutMsgIndex { key: Vec<u8>, value: Vec<u8> },
+    /// Delete a message index entry.
+    DeleteMsgIndex { key: Vec<u8> },
 }
 
 /// Storage engine trait for all persistence operations.
@@ -96,6 +101,18 @@ pub trait StorageEngine: Send + Sync {
         prefix: &str,
         limit: usize,
     ) -> StorageResult<Vec<(String, Vec<u8>)>>;
+
+    // --- Message index store ---
+    // Maps `{queue_id}:{msg_id}` → full message key for O(1) ack/nack lookups.
+
+    /// Store a message index entry mapping a lookup key to the full message key.
+    fn put_msg_index(&self, key: &[u8], msg_key: &[u8]) -> StorageResult<()>;
+
+    /// Look up the full message key from a message index entry.
+    fn get_msg_index(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>>;
+
+    /// Delete a message index entry.
+    fn delete_msg_index(&self, key: &[u8]) -> StorageResult<()>;
 
     // --- Batch mutations ---
 

@@ -634,92 +634,128 @@ impl FilaRaftStore {
                     message.enqueued_at,
                     &message.id,
                 );
+                let idx_key = crate::storage::keys::msg_index_key(queue_id, &message.id);
                 let proto = fila_proto::Message::from(message.clone());
                 let msg_value = proto.encode_to_vec();
                 storage
-                    .apply_mutations(vec![Mutation::PutMessage {
-                        key: msg_key,
-                        value: msg_value,
-                    }])
+                    .apply_mutations(vec![
+                        Mutation::PutMessage {
+                            key: msg_key.clone(),
+                            value: msg_value,
+                        },
+                        Mutation::PutMsgIndex {
+                            key: idx_key,
+                            value: msg_key,
+                        },
+                    ])
                     .map_err(|e| StorageError::IO {
                         source: openraft::StorageIOError::apply(log_id, &e),
                     })?;
             }
             super::types::ClusterRequest::Ack { queue_id, msg_id } => {
-                // Find the message by scanning, then delete message + lease + lease_expiry.
-                let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                let messages =
-                    storage
-                        .list_messages(&msg_prefix)
-                        .map_err(|e| StorageError::IO {
-                            source: openraft::StorageIOError::apply(log_id, &e),
-                        })?;
-                for (key, msg) in messages {
-                    if msg.id == *msg_id {
-                        let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-                        let mut mutations = vec![Mutation::DeleteMessage { key }];
-                        // Clean up lease and lease_expiry entries.
-                        if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
-                            mutations.push(Mutation::DeleteLease { key: lease_key });
-                            if let Some(expiry_ts) =
-                                crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
-                            {
-                                let expiry_key = crate::storage::keys::lease_expiry_key(
-                                    expiry_ts, queue_id, msg_id,
-                                );
-                                mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
-                            }
-                        }
+                // O(1) lookup via message index, with fallback to scan for
+                // backward compatibility with Raft entries committed before
+                // the index was introduced.
+                let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
+                let msg_key_opt = storage.get_msg_index(&idx_key).ok().flatten();
+
+                let msg_key = if let Some(key) = msg_key_opt {
+                    Some(key)
+                } else {
+                    // Fallback: scan all messages in the queue (O(n)).
+                    let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+                    let messages =
                         storage
-                            .apply_mutations(mutations)
+                            .list_messages(&msg_prefix)
                             .map_err(|e| StorageError::IO {
                                 source: openraft::StorageIOError::apply(log_id, &e),
                             })?;
-                        return Ok(());
+                    messages
+                        .into_iter()
+                        .find(|(_, msg)| msg.id == *msg_id)
+                        .map(|(key, _)| key)
+                };
+
+                if let Some(key) = msg_key {
+                    let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+                    let mut mutations = vec![
+                        Mutation::DeleteMessage { key },
+                        Mutation::DeleteMsgIndex { key: idx_key },
+                    ];
+                    if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
+                        mutations.push(Mutation::DeleteLease { key: lease_key });
+                        if let Some(expiry_ts) =
+                            crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
+                        {
+                            let expiry_key = crate::storage::keys::lease_expiry_key(
+                                expiry_ts, queue_id, msg_id,
+                            );
+                            mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
+                        }
                     }
+                    storage
+                        .apply_mutations(mutations)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
                 }
             }
             super::types::ClusterRequest::Nack {
                 queue_id, msg_id, ..
             } => {
-                // Nack: increment attempt count, clear leased_at, delete lease + lease_expiry.
-                let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                let messages =
+                // O(1) lookup via message index, with fallback scan.
+                let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
+                let msg_key_opt = storage.get_msg_index(&idx_key).ok().flatten();
+
+                let found = if let Some(key) = msg_key_opt {
+                    // O(1) direct get.
                     storage
-                        .list_messages(&msg_prefix)
+                        .get_message(&key)
                         .map_err(|e| StorageError::IO {
                             source: openraft::StorageIOError::apply(log_id, &e),
-                        })?;
-                for (key, msg) in messages {
-                    if msg.id == *msg_id {
-                        let mut updated = msg;
-                        updated.attempt_count += 1;
-                        updated.leased_at = None;
-                        let proto = fila_proto::Message::from(updated);
-                        let msg_value = proto.encode_to_vec();
-                        let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-                        let mut mutations = vec![Mutation::PutMessage {
-                            key,
-                            value: msg_value,
-                        }];
-                        if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
-                            mutations.push(Mutation::DeleteLease { key: lease_key });
-                            if let Some(expiry_ts) =
-                                crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
-                            {
-                                let expiry_key = crate::storage::keys::lease_expiry_key(
-                                    expiry_ts, queue_id, msg_id,
-                                );
-                                mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
-                            }
-                        }
+                        })?
+                        .map(|msg| (key, msg))
+                } else {
+                    // Fallback: scan all messages in the queue (O(n)).
+                    let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+                    let messages =
                         storage
-                            .apply_mutations(mutations)
+                            .list_messages(&msg_prefix)
                             .map_err(|e| StorageError::IO {
                                 source: openraft::StorageIOError::apply(log_id, &e),
                             })?;
-                        return Ok(());
+                    messages
+                        .into_iter()
+                        .find(|(_, msg)| msg.id == *msg_id)
+                };
+
+                if let Some((key, msg)) = found {
+                    let mut updated = msg;
+                    updated.attempt_count += 1;
+                    updated.leased_at = None;
+                    let proto = fila_proto::Message::from(updated);
+                    let msg_value = proto.encode_to_vec();
+                    let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+                    let mut mutations = vec![Mutation::PutMessage {
+                        key,
+                        value: msg_value,
+                    }];
+                    if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
+                        mutations.push(Mutation::DeleteLease { key: lease_key });
+                        if let Some(expiry_ts) =
+                            crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
+                        {
+                            let expiry_key = crate::storage::keys::lease_expiry_key(
+                                expiry_ts, queue_id, msg_id,
+                            );
+                            mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
+                        }
                     }
+                    storage
+                        .apply_mutations(mutations)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
                 }
             }
             // Queue-level data operations are Enqueue, Ack, Nack only.
