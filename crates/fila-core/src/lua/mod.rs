@@ -53,7 +53,7 @@ impl LuaEngine {
     pub fn new(storage: Arc<dyn StorageEngine>, lua_config: &LuaConfig) -> Result<Self, LuaError> {
         let lua = sandbox::create_sandbox().map_err(LuaError::VmCreation)?;
         bridge::register_fila_api(&lua, storage).map_err(LuaError::BridgeRegistration)?;
-        helpers::register_helpers(&lua).map_err(LuaError::BridgeRegistration)?;
+        helpers::register_helpers(&lua).map_err(LuaError::HelperRegistration)?;
 
         Ok(Self {
             lua,
@@ -288,6 +288,9 @@ pub enum LuaError {
 
     #[error("failed to register fila API bridge: {0}")]
     BridgeRegistration(mlua::Error),
+
+    #[error("failed to register fila helpers: {0}")]
+    HelperRegistration(mlua::Error),
 
     #[error("lua compilation error: {0}")]
     Compilation(mlua::Error),

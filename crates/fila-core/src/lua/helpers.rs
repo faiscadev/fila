@@ -68,13 +68,7 @@ fn create_tenant_route(lua: &Lua) -> mlua::Result<mlua::Function> {
 fn create_rate_limit_keys(lua: &Lua) -> mlua::Result<mlua::Function> {
     lua.create_function(|lua, (msg, patterns): (mlua::Table, mlua::Table)| {
         let result = lua.create_table()?;
-
-        // If msg.headers is missing/nil, return empty array (no headers to substitute)
-        let headers = match msg.get::<mlua::Table>("headers") {
-            Ok(h) => h,
-            Err(_) => return Ok(result),
-        };
-
+        let headers = msg.get::<mlua::Table>("headers").ok();
         let mut index = 1;
 
         for entry in patterns.sequence_values::<String>() {
@@ -95,14 +89,17 @@ fn create_rate_limit_keys(lua: &Lua) -> mlua::Result<mlua::Function> {
                 let end = end + start;
 
                 let key = &resolved[start + 1..end];
-                match headers.get::<String>(key) {
-                    Ok(value) => {
+                let header_value = headers
+                    .as_ref()
+                    .and_then(|h| h.get::<String>(key).ok());
+                match header_value {
+                    Some(value) => {
                         let before = &resolved[..start];
                         let after = &resolved[end + 1..];
                         resolved = format!("{before}{value}{after}");
                         search_from = start + value.len();
                     }
-                    Err(_) => {
+                    None => {
                         all_resolved = false;
                         break;
                     }
@@ -309,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_keys_nil_headers() {
+    fn rate_limit_keys_nil_headers_with_placeholder() {
         let (lua, _dir) = test_lua();
         let result: Vec<String> = lua
             .load(
@@ -322,6 +319,22 @@ mod tests {
             .eval()
             .unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn rate_limit_keys_nil_headers_with_static_pattern() {
+        let (lua, _dir) = test_lua();
+        let result: Vec<String> = lua
+            .load(
+                r#"
+                local msg = {}
+                local keys = fila.helpers.rate_limit_keys(msg, {"static-key"})
+                return keys
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(result, vec!["static-key"]);
     }
 
     #[test]
