@@ -16,9 +16,9 @@ circuit_breaker_cooldown_ms = 10000
 
 # Uncomment to enable TLS
 # [tls]
-# cert_path = "/etc/fila/tls/server.crt"
-# key_path = "/etc/fila/tls/server.key"
-# ca_path = "/etc/fila/tls/ca.crt"  # Enable mTLS
+# cert_file = "/etc/fila/tls/server.crt"
+# key_file = "/etc/fila/tls/server.key"
+# ca_file = "/etc/fila/tls/ca.crt"  # Enable mTLS
 
 # Uncomment to enable API key authentication
 # [auth]

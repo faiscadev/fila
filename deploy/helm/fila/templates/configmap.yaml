@@ -17,13 +17,8 @@ data:
 
     {{- if .Values.tls.enabled }}
     [tls]
-    cert_path = "/etc/fila/tls/tls.crt"
-    key_path = "/etc/fila/tls/tls.key"
-    {{- end }}
-
-    {{- if .Values.auth.bootstrapApiKey }}
-    [auth]
-    bootstrap_apikey = "{{ .Values.auth.bootstrapApiKey }}"
+    cert_file = "/etc/fila/tls/tls.crt"
+    key_file = "/etc/fila/tls/tls.key"
     {{- end }}
 
     {{- if .Values.telemetry.enabled }}
@@ -33,7 +28,6 @@ data:
 
     {{- if .Values.cluster.enabled }}
     [cluster]
-    node_id = FILA_NODE_ID
     bind_addr = "0.0.0.0:{{ .Values.cluster.port }}"
     replication_factor = {{ .Values.cluster.replicationFactor }}
     {{- end }}

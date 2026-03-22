@@ -20,6 +20,14 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["--config", "/etc/fila/fila.toml"]
+          {{- if .Values.auth.bootstrapApiKey }}
+          env:
+            - name: FILA_BOOTSTRAP_APIKEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fila.fullname" . }}-auth
+                  key: bootstrap-apikey
+          {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.service.port }}

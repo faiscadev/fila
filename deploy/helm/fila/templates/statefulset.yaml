@@ -26,6 +26,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- if .Values.auth.bootstrapApiKey }}
+            - name: FILA_BOOTSTRAP_APIKEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fila.fullname" . }}-auth
+                  key: bootstrap-apikey
+            {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.service.port }}
@@ -37,8 +44,10 @@ spec:
             - name: config
               mountPath: /etc/fila
               readOnly: true
+            {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /var/lib/fila
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: tls
               mountPath: /etc/fila/tls
@@ -69,6 +78,7 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- if .Values.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -80,4 +90,5 @@ spec:
         resources:
           requests:
             storage: {{ .Values.persistence.size }}
+  {{- end }}
 {{- end }}

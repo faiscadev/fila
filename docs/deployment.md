@@ -11,7 +11,7 @@ docker run -d \
   --name fila \
   -p 5555:5555 \
   -v fila-data:/var/lib/fila \
-  ghcr.io/faiscadev/fila:dev
+  ghcr.io/faiscadev/fila:latest
 ```
 
 With a custom config file:
@@ -22,7 +22,7 @@ docker run -d \
   -p 5555:5555 \
   -v fila-data:/var/lib/fila \
   -v ./fila.toml:/etc/fila/fila.toml:ro \
-  ghcr.io/faiscadev/fila:dev \
+  ghcr.io/faiscadev/fila:latest \
   fila-server --config /etc/fila/fila.toml
 ```
 
