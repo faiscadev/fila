@@ -84,9 +84,13 @@ FR73: Epic 15 — Per-queue access control policies
 FR74: Epic 16 — Versioning & compatibility policy docs
 FR75: Deferred — Stability release branches (premature pre-1.0)
 Stability/hardening — Epic 16.5 (quality infrastructure, strengthens NFR22-29 coverage, no new FRs)
-FR76: Epic 17 — Web-based management GUI
-FR77: Epic 17 — Broker-managed consumer groups
-FR78: Epic 17 — Built-in Lua helpers for common patterns
+FR76: Epic 20 — Web-based management GUI
+FR77: Epic 18 — Broker-managed consumer groups
+FR78: Epic 19 — Built-in Lua helpers for common patterns (DX epic)
+GH#63: Epic 17 — Distinguish 'node not ready' from 'queue not found' errors
+GH#64: Epic 17 — Ack/nack linear scan fix in Raft apply path
+GH#65: Epic 17 — Consume on non-leader returns leader hint (+ SDK updates)
+GH#66: Epic 17 — Automatic queue-to-node assignment for balanced leadership
 
 ## Epic List
 
@@ -114,12 +118,25 @@ Versioning policy and proto backward compatibility formalized. All 5 external SD
 **FRs covered:** FR74
 
 ### Epic 16.5: Stability Hardening & Test Coverage
-Systematic hardening of the highest-risk subsystems — clustering, TLS, and auth — through blackbox e2e testing, edge case coverage, and CI-integrated code coverage. Ensures the foundation is solid before building DX features in Epic 17. Triggered by Epic 16 retro finding: "silent TLS downgrade is a universal SDK bug pattern."
+Systematic hardening of the highest-risk subsystems — clustering, TLS, and auth — through blackbox e2e testing, edge case coverage, and CI-integrated code coverage. Ensures the foundation is solid before building further features. Triggered by Epic 16 retro finding: "silent TLS downgrade is a universal SDK bug pattern."
 **FRs covered:** (hardening — strengthens NFR22-29 coverage, no new FRs)
 
-### Epic 17: Developer Experience
-Operators can monitor queues and visualize real-time scheduling state via a web-based management GUI. Consumers can join broker-managed consumer groups with automatic rebalancing. Script authors get built-in Lua helpers for common patterns — exponential backoff, tenant routing — reducing boilerplate.
-**FRs covered:** FR76, FR77, FR78
+### Epic 17: Cluster Hardening
+Production-readiness fixes for the Raft clustering layer. Error clarity (distinguish node-not-ready from queue-not-found), performance (eliminate O(n) ack/nack scan in Raft apply path), consume routing (leader hint + SDK reconnect), and load-balanced queue-to-node assignment. All items sourced from GitHub issues #63-#66 discovered during Epic 14 work.
+**FRs covered:** (hardening — improves FR67-FR70 quality, no new FRs)
+**GitHub issues:** #63, #64, #65, #66
+
+### Epic 18: Consumer Groups
+Consumers can join broker-managed consumer groups with automatic rebalancing. Multiple instances of a service share the workload without manual coordination. The broker tracks group membership, distributes messages across members (respecting DRR fairness), and rebalances on join/leave. Works in both single-node and clustered modes.
+**FRs covered:** FR77
+
+### Epic 19: Developer Experience
+Docs website, deployment guides, Helm charts, Lua helpers, and DX sugar. The "make it easy to adopt and operate" epic — shipped after all features are in so documentation covers the complete system. Includes built-in Lua helper functions for common patterns (exponential backoff, tenant routing, rate limit keys, max retries).
+**FRs covered:** FR78
+
+### Epic 20: Web Management GUI
+Operators can monitor queues and visualize real-time scheduling state via a web-based management interface. Read-only dashboard bundled into the server binary, showing queue depths, DRR state, throttle status, consumer connections, and cluster topology. Optional — disabled by default, zero overhead when disabled.
+**FRs covered:** FR76
 
 ---
 
@@ -496,7 +513,7 @@ So that I can connect securely to a Fila server that has auth enabled.
 
 ## Epic 16.5: Stability Hardening & Test Coverage
 
-Systematic hardening of the highest-risk subsystems — clustering, TLS, and auth — through blackbox e2e testing, edge case coverage, and CI-integrated code coverage. Ensures the foundation is solid before building DX features in Epic 17.
+Systematic hardening of the highest-risk subsystems — clustering, TLS, and auth — through blackbox e2e testing, edge case coverage, and CI-integrated code coverage. Ensures the foundation is solid before building further features.
 
 > **Context:** Epic 16 retrospective surfaced "silent TLS downgrade is a universal SDK bug pattern" — all 5 external SDKs had identical bug where partial mTLS config silently fell back to plaintext. Codebase gap analysis revealed: no cluster e2e tests (Epic 14 has only unit tests for Raft), mTLS not tested at e2e level, no code coverage metrics in CI. This is a "sharpen the saw" epic — harden what's built before adding new features.
 
@@ -567,30 +584,75 @@ So that quality gaps are surfaced before they become production incidents.
 
 ---
 
-## Epic 17: Developer Experience
+## Epic 17: Cluster Hardening
 
-Operators can monitor queues and visualize real-time scheduling state via a web-based management GUI. Consumers can join broker-managed consumer groups with automatic rebalancing. Script authors get built-in Lua helpers for common patterns — exponential backoff, tenant routing — reducing boilerplate.
+Production-readiness fixes for the Raft clustering layer. All items sourced from GitHub issues #63-#66 discovered during Epic 14 work and Cubic PR reviews.
 
-### Story 17.1: Built-in Lua Helpers
+### Story 17.1: Cluster Error Clarity & Ack/Nack Performance
 
-As a script author,
-I want built-in Lua helper functions for common patterns,
-So that I can implement standard scheduling policies without writing boilerplate.
+As an operator,
+I want clear error messages that distinguish transient cluster state from real failures, and efficient ack/nack processing,
+So that clients can make correct retry decisions and cluster performance scales with queue depth.
 
 **Acceptance Criteria:**
 
-**Given** the Lua sandbox provides `fila.get()` and standard libraries
-**When** built-in helpers are loaded
-**Then** the Lua environment includes a `fila.helpers` module available to all scripts
-**And** `fila.helpers.exponential_backoff(attempts, base_ms, max_ms)` returns delay in milliseconds with jitter
-**And** `fila.helpers.tenant_route(msg, header_name)` extracts a header value as fairness_key with safe defaults for missing headers
-**And** `fila.helpers.rate_limit_keys(msg, patterns)` generates throttle key arrays from header patterns
-**And** `fila.helpers.max_retries(attempts, max)` returns `{action = "retry"}` or `{action = "dlq"}` based on attempt count
-**And** helpers are documented in `docs/lua-patterns.md` (update existing doc with helper API reference)
-**And** helpers are unit tested in Rust (via mlua) with edge cases: nil headers, missing keys, zero attempts, overflow values
-**And** existing user scripts continue to work unchanged — helpers are additive, not replacing any existing API
+**Given** a node is joining the cluster and hasn't caught up on Raft log entries
+**When** a client sends a request for a queue whose Raft group isn't locally available yet
+**Then** the server returns gRPC `UNAVAILABLE` (not `NOT_FOUND`) with a `NodeNotReady` error variant
+**And** clients/load balancers can distinguish "queue doesn't exist" from "node is still catching up"
+**And** `ClusterWriteError` has a new `NodeNotReady` variant mapped to gRPC `UNAVAILABLE`
 
-### Story 17.2: Broker-Managed Consumer Groups
+**Given** a message is acked or nacked in clustered mode
+**When** the Raft state machine applies the ack/nack entry
+**Then** the storage key is included in `ClusterRequest::Ack`/`ClusterRequest::Nack` (passed through Raft from the leader)
+**And** followers perform a direct key lookup instead of scanning all messages in the queue
+**And** ack/nack is O(1) regardless of queue depth (previously O(n))
+
+**GitHub issues:** #63, #64
+
+### Story 17.2: Consume Leader Hint & SDK Reconnect
+
+As a consumer,
+I want to connect to any cluster node and be transparently routed to the queue's leader,
+So that I don't need to know which node leads which queue.
+
+**Acceptance Criteria:**
+
+**Given** a client calls `Consume` on a node that is not the Raft leader for the requested queue
+**When** the server detects the non-leader condition
+**Then** the server returns an error with the leader's client address (e.g., `NOT_LEADER { leader_addr: "node2:5555" }`)
+**And** the Rust SDK (`fila-sdk`) handles this error transparently — reconnects to the hinted leader and retries
+**And** all 5 external SDKs (Go, Python, JS, Ruby, Java) handle the leader hint and reconnect transparently
+**And** if the hinted leader is unavailable, the SDK falls back to the original error (no infinite redirect loops)
+**And** e2e tests verify: consume on non-leader redirects to leader, consumer receives messages after redirect
+
+**GitHub issues:** #65
+
+### Story 17.3: Automatic Queue-to-Node Assignment
+
+As an operator,
+I want the cluster to automatically distribute queue leadership across nodes,
+So that I don't end up with all queues on one node after scaling or restarts.
+
+**Acceptance Criteria:**
+
+**Given** a new queue is created in a multi-node cluster
+**When** the system assigns which nodes participate in the queue's Raft group
+**Then** the assignment distributes leadership across available nodes (not all queues on the same leader)
+**And** a load-aware or round-robin strategy selects the preferred leader based on current queue distribution
+**And** for clusters larger than the replication factor, the system selects which N nodes out of M participate
+**And** the admin API exposes the current queue-to-node mapping
+**And** e2e tests verify: creating 6 queues on a 3-node cluster results in roughly balanced leadership (no node has more than 3)
+
+**GitHub issue:** #66
+
+---
+
+## Epic 18: Consumer Groups
+
+Consumers can join broker-managed consumer groups with automatic rebalancing. Multiple instances of a service share the workload without manual coordination.
+
+### Story 18.1: Broker-Managed Consumer Groups
 
 As a consumer,
 I want to join a consumer group with automatic rebalancing,
@@ -611,7 +673,69 @@ So that multiple instances of my service share the workload without manual coord
 **And** consumers without a `consumer_group` parameter behave as before — independent consumers (backward compatible)
 **And** integration tests verify: 3 consumers in a group each receive ~33% of messages, one consumer disconnects and remaining 2 each receive ~50%, new consumer joins and rebalancing redistributes
 
-### Story 17.3: Web Management GUI
+---
+
+## Epic 19: Developer Experience
+
+Docs website, deployment guides, Helm charts, Lua helpers, and DX sugar. Shipped after all features are in so documentation covers the complete system.
+
+### Story 19.1: Built-in Lua Helpers
+
+As a script author,
+I want built-in Lua helper functions for common patterns,
+So that I can implement standard scheduling policies without writing boilerplate.
+
+**Acceptance Criteria:**
+
+**Given** the Lua sandbox provides `fila.get()` and standard libraries
+**When** built-in helpers are loaded
+**Then** the Lua environment includes a `fila.helpers` module available to all scripts
+**And** `fila.helpers.exponential_backoff(attempts, base_ms, max_ms)` returns delay in milliseconds with jitter
+**And** `fila.helpers.tenant_route(msg, header_name)` extracts a header value as fairness_key with safe defaults for missing headers
+**And** `fila.helpers.rate_limit_keys(msg, patterns)` generates throttle key arrays from header patterns
+**And** `fila.helpers.max_retries(attempts, max)` returns `{action = "retry"}` or `{action = "dlq"}` based on attempt count
+**And** helpers are documented in `docs/lua-patterns.md` (update existing doc with helper API reference)
+**And** helpers are unit tested in Rust (via mlua) with edge cases: nil headers, missing keys, zero attempts, overflow values
+**And** existing user scripts continue to work unchanged — helpers are additive, not replacing any existing API
+
+### Story 19.2: Documentation Website & Deployment Guides
+
+As an evaluator or operator,
+I want a polished documentation website with deployment guides,
+So that I can evaluate Fila quickly and deploy it confidently in production.
+
+**Acceptance Criteria:**
+
+*Story ACs to be refined during story creation — high-level scope:*
+- Static docs website (e.g., mdBook, Docusaurus, or similar) published from `docs/`
+- Production deployment guide: systemd, Docker Compose, Kubernetes
+- Helm chart for Kubernetes deployment (single-node and clustered modes)
+- Configuration reference with all options, defaults, and examples
+- Migration/upgrade guide covering version compatibility
+- Getting started guide updated for all deployment methods
+
+### Story 19.3: SDK & Integration Guides
+
+As a developer,
+I want comprehensive SDK guides and integration examples,
+So that I can integrate Fila into my application quickly in my language of choice.
+
+**Acceptance Criteria:**
+
+*Story ACs to be refined during story creation — high-level scope:*
+- Per-SDK quick start guides (Rust, Go, Python, JS, Ruby, Java)
+- Common integration patterns: producer/consumer, fan-out, request-reply
+- Consumer group usage examples (depends on Epic 18)
+- TLS and API key configuration per SDK
+- Troubleshooting guide for common issues
+
+---
+
+## Epic 20: Web Management GUI
+
+Operators can monitor queues and visualize real-time scheduling state via a web-based management interface. Read-only dashboard bundled into the server binary. Optional — disabled by default, zero overhead when disabled.
+
+### Story 20.1: Web Management GUI
 
 As an operator,
 I want a web-based management interface to monitor queues and scheduling state,

@@ -178,9 +178,26 @@ development_status:
   16.5-3-ci-code-coverage-quality-gates: done
   epic-16.5-retrospective: done
 
-  # Epic 17: Developer Experience
+  # Epic 17: Cluster Hardening (GH issues #63-#66)
   epic-17: backlog
-  17-1-built-in-lua-helpers: backlog
-  17-2-broker-managed-consumer-groups: backlog
-  17-3-web-management-gui: backlog
+  17-1-cluster-error-clarity-ack-nack-performance: backlog
+  17-2-consume-leader-hint-sdk-reconnect: backlog
+  17-3-automatic-queue-to-node-assignment: backlog
   epic-17-retrospective: optional
+
+  # Epic 18: Consumer Groups
+  epic-18: backlog
+  18-1-broker-managed-consumer-groups: backlog
+  epic-18-retrospective: optional
+
+  # Epic 19: Developer Experience (docs website, Helm, Lua helpers, guides)
+  epic-19: backlog
+  19-1-built-in-lua-helpers: backlog
+  19-2-documentation-website-deployment-guides: backlog
+  19-3-sdk-integration-guides: backlog
+  epic-19-retrospective: optional
+
+  # Epic 20: Web Management GUI
+  epic-20: backlog
+  20-1-web-management-gui: backlog
+  epic-20-retrospective: optional
