@@ -225,8 +225,13 @@ impl FilaService for HotPathService {
                     // Include the leader's client address in gRPC metadata so
                     // SDKs can transparently reconnect to the correct node.
                     if let Some(addr) = cluster.get_queue_leader_client_addr(&req.queue).await {
-                        if let Ok(val) = addr.parse() {
-                            status.metadata_mut().insert("x-fila-leader-addr", val);
+                        // Don't advertise wildcard addresses (0.0.0.0) — they're
+                        // not routable from clients. Only send the hint when the
+                        // leader's address is a concrete host.
+                        if !addr.starts_with("0.0.0.0") {
+                            if let Ok(val) = addr.parse() {
+                                status.metadata_mut().insert("x-fila-leader-addr", val);
+                            }
                         }
                     }
                     return Err(status);
