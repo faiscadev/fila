@@ -1,6 +1,6 @@
 # Story 17.2: Consume Leader Hint & SDK Reconnect
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -52,20 +52,20 @@ so that I don't need to know which node leads which queue.
   - [x] 3.2: If present, create new gRPC connection to leader addr and retry consume once
   - [x] 3.3: If redirect fails, return original error (no infinite loops)
 
-- [ ] Task 4: External SDK updates — Go (AC: 3)
-  - [ ] 4.1-4.3: PR in fila-go repo (background agent)
+- [x] Task 4: External SDK updates — Go (AC: 3)
+  - [x] 4.1-4.3: PR fila-go#2
 
-- [ ] Task 5: External SDK updates — Python (AC: 3)
-  - [ ] 5.1-5.3: PR in fila-python repo (background agent)
+- [x] Task 5: External SDK updates — Python (AC: 3)
+  - [x] 5.1-5.3: PR fila-python#2
 
-- [ ] Task 6: External SDK updates — JavaScript (AC: 3)
-  - [ ] 6.1-6.3: PR in fila-js repo (background agent)
+- [x] Task 6: External SDK updates — JavaScript (AC: 3)
+  - [x] 6.1-6.3: PR fila-js#2
 
-- [ ] Task 7: External SDK updates — Ruby (AC: 3)
-  - [ ] 7.1-7.3: PR in fila-ruby repo (background agent)
+- [x] Task 7: External SDK updates — Ruby (AC: 3)
+  - [x] 7.1-7.3: PR fila-ruby#2
 
-- [ ] Task 8: External SDK updates — Java (AC: 3)
-  - [ ] 8.1-8.3: PR in fila-java repo (background agent)
+- [x] Task 8: External SDK updates — Java (AC: 3)
+  - [x] 8.1-8.3: PR fila-java#2
 
 - [x] Task 9: E2E test for consume leader redirect (AC: 5)
   - [x] 9.1: New test `cluster_consume_leader_redirect` in `crates/fila-e2e/tests/cluster.rs`
@@ -150,6 +150,24 @@ Claude Opus 4.6 (1M context)
 
 ### Debug Log References
 
+None.
+
 ### Completion Notes List
 
+- Used gRPC metadata (`x-fila-leader-addr`) on UNAVAILABLE status rather than modifying the ConsumeResponse proto. Standard gRPC pattern — no proto changes needed.
+- Client address mapping uses a `HashMap<NodeId, String>` on `MultiRaftManager`. Populated via AddNodeRequest.client_addr on join, and register_client_addr at startup. Added GetNodeInfo RPC as fallback discovery.
+- ClusterManager.start() now takes `client_listen_addr` parameter — breaking API change for callers. Updated main.rs and all test call sites.
+- SDK reconnect uses http:// by default for leader URL. TLS clusters would need the SDK to preserve and reuse TLS config for the redirect connection — the Rust SDK currently doesn't (future improvement for TLS clusters).
+
 ### File List
+
+- `crates/fila-proto/proto/fila/v1/cluster.proto` — MODIFIED: GetNodeInfo RPC, client_addr field on AddNodeRequest, GetNodeInfoRequest/Response messages
+- `crates/fila-core/src/cluster/mod.rs` — MODIFIED: ClusterManager.start() takes client_listen_addr, get_queue_leader_client_addr(), register own client addr
+- `crates/fila-core/src/cluster/multi_raft.rs` — MODIFIED: client_addrs HashMap, register_client_addr/get_client_addr methods
+- `crates/fila-core/src/cluster/grpc_service.rs` — MODIFIED: GetNodeInfo handler, store client_addr from AddNode, node_id/client_addr fields
+- `crates/fila-core/src/cluster/tests.rs` — MODIFIED: updated ClusterGrpcService::new calls
+- `crates/fila-server/src/service.rs` — MODIFIED: x-fila-leader-addr metadata on consume non-leader error
+- `crates/fila-server/src/main.rs` — MODIFIED: pass client_listen_addr to ClusterManager
+- `crates/fila-sdk/src/client.rs` — MODIFIED: extract_leader_hint(), transparent reconnect in consume()
+- `crates/fila-e2e/tests/cluster.rs` — MODIFIED: cluster_consume_leader_redirect test
+- External PRs: fila-go#2, fila-python#2, fila-js#2, fila-ruby#2, fila-java#2
