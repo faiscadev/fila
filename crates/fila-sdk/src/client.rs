@@ -213,14 +213,53 @@ impl FilaClient {
         &self,
         queue: &str,
     ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        let response = self
+        let consume_req = ConsumeRequest {
+            queue: queue.to_string(),
+        };
+
+        let result = self
             .inner
             .clone()
-            .consume(self.request(ConsumeRequest {
-                queue: queue.to_string(),
-            }))
-            .await
-            .map_err(consume_status_error)?;
+            .consume(self.request(consume_req.clone()))
+            .await;
+
+        // If the server returns UNAVAILABLE with a leader hint, transparently
+        // reconnect to the hinted leader and retry once. This handles the
+        // cluster case where consumers must connect to the queue's Raft leader.
+        let response = match result {
+            Ok(resp) => resp,
+            Err(status)
+                if status.code() == tonic::Code::Unavailable
+                    && extract_leader_hint(&status).is_some() =>
+            {
+                let leader_addr = extract_leader_hint(&status).unwrap();
+                // Connect to the hinted leader. Use http:// by default —
+                // the leader address is a host:port from cluster config.
+                let leader_url = if leader_addr.starts_with("http://")
+                    || leader_addr.starts_with("https://")
+                {
+                    leader_addr
+                } else {
+                    format!("http://{leader_addr}")
+                };
+                match FilaServiceClient::connect(leader_url).await {
+                    Ok(mut leader_client) => {
+                        let mut req = tonic::Request::new(consume_req);
+                        if let Some(ref key) = self.api_key {
+                            if let Ok(val) = format!("Bearer {key}").parse() {
+                                req.metadata_mut().insert("authorization", val);
+                            }
+                        }
+                        leader_client.consume(req).await.map_err(consume_status_error)?
+                    }
+                    Err(_) => {
+                        // Leader connection failed — return the original error.
+                        return Err(consume_status_error(status));
+                    }
+                }
+            }
+            Err(status) => return Err(consume_status_error(status)),
+        };
 
         let stream = response.into_inner().filter_map(|result| match result {
             Ok(consume_response) => {
@@ -277,4 +316,14 @@ impl FilaClient {
 
         Ok(())
     }
+}
+
+/// Extract the leader's client address from gRPC error metadata.
+/// Returns `Some(addr)` if the `x-fila-leader-addr` key is present.
+fn extract_leader_hint(status: &tonic::Status) -> Option<String> {
+    status
+        .metadata()
+        .get("x-fila-leader-addr")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }

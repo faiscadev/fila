@@ -219,9 +219,20 @@ impl FilaService for HotPathService {
             match cluster.is_queue_leader(&req.queue).await {
                 Some(true) => { /* This node is the leader — proceed */ }
                 Some(false) => {
-                    return Err(Status::unavailable(
+                    let mut status = Status::unavailable(
                         "this node is not the leader for this queue; reconnect to the leader",
-                    ));
+                    );
+                    // Include the leader's client address in gRPC metadata so
+                    // SDKs can transparently reconnect to the correct node.
+                    if let Some(addr) = cluster.get_queue_leader_client_addr(&req.queue).await
+                    {
+                        if let Ok(val) = addr.parse() {
+                            status
+                                .metadata_mut()
+                                .insert("x-fila-leader-addr", val);
+                        }
+                    }
+                    return Err(status);
                 }
                 None => {
                     return Err(Status::not_found("queue raft group not found"));

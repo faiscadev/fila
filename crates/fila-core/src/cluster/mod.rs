@@ -172,6 +172,15 @@ impl ClusterHandle {
         Some(leader == Some(self.node_id))
     }
 
+    /// Get the leader's client-facing gRPC address for a queue. Returns `None`
+    /// if the queue group doesn't exist, no leader is elected, or the leader's
+    /// client address is unknown.
+    pub async fn get_queue_leader_client_addr(&self, queue_id: &str) -> Option<String> {
+        let raft = self.multi_raft.get_raft(queue_id).await?;
+        let leader_id = raft.current_leader().await?;
+        self.multi_raft.get_client_addr(leader_id).await
+    }
+
     /// Get the current meta Raft membership as member IDs and addresses.
     pub fn meta_members(&self) -> (Vec<u64>, std::collections::HashMap<u64, String>) {
         let metrics = self.meta_raft.metrics().borrow().clone();
@@ -495,6 +504,7 @@ impl ClusterManager {
         broker_storage: Arc<dyn crate::storage::StorageEngine>,
         meta_event_tx: Option<tokio::sync::mpsc::UnboundedSender<MetaStoreEvent>>,
         tls_config: Option<&TlsParams>,
+        client_listen_addr: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let node_id = config.node_id;
 
@@ -535,12 +545,19 @@ impl ClusterManager {
             broker_storage,
         ));
 
+        // Register this node's own client address for leader hint routing.
+        multi_raft
+            .register_client_addr(node_id, client_listen_addr)
+            .await;
+
         // Start cluster gRPC service.
         let broker_slot = Arc::new(std::sync::OnceLock::new());
         let service = ClusterGrpcService::new(
             Arc::clone(&raft),
             Arc::clone(&multi_raft),
             Arc::clone(&broker_slot),
+            node_id,
+            client_listen_addr.to_string(),
         );
         let bind_addr: std::net::SocketAddr = config.bind_addr.parse()?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -585,6 +602,7 @@ impl ClusterManager {
             Self::join_cluster(
                 node_id,
                 &config.bind_addr,
+                client_listen_addr,
                 &config.peers,
                 client_tls.clone(),
             )
@@ -606,6 +624,7 @@ impl ClusterManager {
     async fn join_cluster(
         node_id: u64,
         bind_addr: &str,
+        client_listen_addr: &str,
         peers: &[String],
         tls: Option<Arc<ClientTlsConfig>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -615,6 +634,7 @@ impl ClusterManager {
         let req = AddNodeRequest {
             node_id,
             addr: bind_addr.to_string(),
+            client_addr: client_listen_addr.to_string(),
         };
 
         for peer in peers {
