@@ -33,7 +33,6 @@ fn recovery_preserves_messages_after_restart() {
     tx2.send(SchedulerCommand::RegisterConsumer {
         queue_id: "recover-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -96,7 +95,6 @@ fn recovery_reclaims_expired_leases() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "reclaim-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -171,7 +169,6 @@ fn recovery_does_not_duplicate_reclaimed_messages() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "dup-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -366,7 +363,6 @@ fn recovery_preserves_non_expired_leases() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "active-lease-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();

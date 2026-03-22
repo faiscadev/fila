@@ -185,9 +185,9 @@ development_status:
   17-3-automatic-queue-to-node-assignment: done
   epic-17-retrospective: done
 
-  # Epic 18: Consumer Groups
-  epic-18: done
-  18-1-broker-managed-consumer-groups: done
+  # Epic 18: Consumer Groups (deferred — wrong semantics shipped, reverted)
+  # See _bmad-output/planning-artifacts/research/consumer-group-semantics.md
+  epic-18: deferred
   epic-18-retrospective: done
 
   # Epic 19: Developer Experience (docs website, Helm, Lua helpers, guides)

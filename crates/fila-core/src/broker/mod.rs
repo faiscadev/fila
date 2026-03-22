@@ -16,7 +16,7 @@ use tracing::info;
 use crate::error::{BrokerError, BrokerResult};
 use crate::storage::StorageEngine;
 
-pub use command::{ConsumerGroupInfo, QueueSummary, ReadyMessage, SchedulerCommand};
+pub use command::{QueueSummary, ReadyMessage, SchedulerCommand};
 pub use config::{AuthConfig, BrokerConfig, TlsParams};
 
 use scheduler::Scheduler;

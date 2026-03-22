@@ -11,7 +11,6 @@ fn consumer_receives_enqueued_messages() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "lease-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -61,7 +60,6 @@ fn consumer_receives_pending_messages_on_register() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "pending-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -93,7 +91,6 @@ fn lease_creates_entries_in_storage() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "lease-cf-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -128,7 +125,6 @@ fn multiple_consumers_get_different_messages() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "multi-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: c1_tx,
     })
     .unwrap();
@@ -137,7 +133,6 @@ fn multiple_consumers_get_different_messages() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "multi-queue".to_string(),
         consumer_id: "c2".to_string(),
-        consumer_group: None,
         tx: c2_tx,
     })
     .unwrap();
@@ -198,7 +193,6 @@ fn unregister_consumer_stops_delivery() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "unreg-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -237,7 +231,6 @@ fn enqueue_10_messages_lease_receives_all() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "ten-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -279,7 +272,6 @@ fn delivery_skips_closed_consumer_and_delivers_to_next() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "closed-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: c1_tx,
     })
     .unwrap();
@@ -290,7 +282,6 @@ fn delivery_skips_closed_consumer_and_delivers_to_next() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "closed-queue".to_string(),
         consumer_id: "c2".to_string(),
-        consumer_group: None,
         tx: c2_tx,
     })
     .unwrap();
@@ -331,7 +322,6 @@ fn delivery_rolls_back_lease_when_all_consumers_closed() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "all-closed-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: c1_tx,
     })
     .unwrap();
@@ -341,7 +331,6 @@ fn delivery_rolls_back_lease_when_all_consumers_closed() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "all-closed-queue".to_string(),
         consumer_id: "c2".to_string(),
-        consumer_group: None,
         tx: c2_tx,
     })
     .unwrap();
@@ -388,7 +377,6 @@ fn delivery_skips_full_consumer_and_delivers_to_next() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "full-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: c1_tx,
     })
     .unwrap();
@@ -398,7 +386,6 @@ fn delivery_skips_full_consumer_and_delivers_to_next() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "full-queue".to_string(),
         consumer_id: "c2".to_string(),
-        consumer_group: None,
         tx: c2_tx,
     })
     .unwrap();
@@ -461,7 +448,6 @@ fn delivery_rolls_back_lease_when_all_consumers_full() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "all-full-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: c1_tx,
     })
     .unwrap();
@@ -470,7 +456,6 @@ fn delivery_rolls_back_lease_when_all_consumers_full() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "all-full-queue".to_string(),
         consumer_id: "c2".to_string(),
-        consumer_group: None,
         tx: c2_tx,
     })
     .unwrap();

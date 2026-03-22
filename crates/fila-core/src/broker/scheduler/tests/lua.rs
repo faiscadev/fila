@@ -369,7 +369,6 @@ fn on_failure_retry_requeues_message() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "retry-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -427,7 +426,6 @@ fn on_failure_dlq_moves_message_to_dead_letter_queue() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "main-queue".to_string(),
         consumer_id: "main-consumer".to_string(),
-        consumer_group: None,
         tx: main_tx,
     })
     .unwrap();
@@ -436,7 +434,6 @@ fn on_failure_dlq_moves_message_to_dead_letter_queue() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "main-queue.dlq".to_string(),
         consumer_id: "dlq-consumer".to_string(),
-        consumer_group: None,
         tx: dlq_tx,
     })
     .unwrap();
@@ -518,7 +515,6 @@ fn on_failure_dlq_without_dlq_configured_falls_back_to_retry() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "orphan.dlq".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -577,7 +573,6 @@ fn on_failure_receives_attempt_count_and_error() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "attempts-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -586,7 +581,6 @@ fn on_failure_receives_attempt_count_and_error() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "attempts-queue.dlq".to_string(),
         consumer_id: "dlq-c1".to_string(),
-        consumer_group: None,
         tx: dlq_consumer_tx,
     })
     .unwrap();
@@ -668,7 +662,6 @@ fn on_failure_no_script_uses_default_retry() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "no-script-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -733,7 +726,6 @@ fn recovery_restores_on_failure_scripts() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "recovery-queue".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -754,7 +746,6 @@ fn recovery_restores_on_failure_scripts() {
     tx2.send(SchedulerCommand::RegisterConsumer {
         queue_id: "recovery-queue".to_string(),
         consumer_id: "c2".to_string(),
-        consumer_group: None,
         tx: main_consumer_tx,
     })
     .unwrap();
@@ -763,7 +754,6 @@ fn recovery_restores_on_failure_scripts() {
     tx2.send(SchedulerCommand::RegisterConsumer {
         queue_id: "recovery-queue.dlq".to_string(),
         consumer_id: "dlq-c2".to_string(),
-        consumer_group: None,
         tx: dlq_consumer_tx,
     })
     .unwrap();

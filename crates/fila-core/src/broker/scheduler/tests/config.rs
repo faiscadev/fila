@@ -233,7 +233,6 @@ fn set_config_throttle_rate_enforced_on_delivery() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "config-throttle-q".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -474,7 +473,6 @@ fn lua_e2e_non_throttle_config_via_set_config() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "lua-config-e2e".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();

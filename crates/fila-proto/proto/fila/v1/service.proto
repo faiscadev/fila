@@ -23,10 +23,6 @@ message EnqueueResponse {
 
 message ConsumeRequest {
   string queue = 1;
-  // Optional consumer group name. When set, the broker distributes messages
-  // across all consumers in the same group (each message goes to exactly one
-  // member). When empty, the consumer operates independently (classic behavior).
-  string consumer_group = 2;
 }
 
 message ConsumeResponse {

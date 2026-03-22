@@ -22,7 +22,6 @@ fn get_stats_returns_depth_and_in_flight() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "stats-q".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -242,7 +241,6 @@ fn get_stats_integration_multi_key_with_leases_and_throttle() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "stats-int-q".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -320,7 +318,6 @@ fn get_stats_after_ack_decreases_in_flight_and_depth() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "stats-ack-q".to_string(),
         consumer_id: "c1".to_string(),
-        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();

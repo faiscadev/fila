@@ -126,9 +126,10 @@ Production-readiness fixes for the Raft clustering layer. Error clarity (disting
 **FRs covered:** (hardening — improves FR67-FR70 quality, no new FRs)
 **GitHub issues:** #63, #64, #65, #66
 
-### Epic 18: Consumer Groups
-Consumers can join broker-managed consumer groups with automatic rebalancing. Multiple instances of a service share the workload without manual coordination. The broker tracks group membership, distributes messages across members (respecting DRR fairness), and rebalances on join/leave. Works in both single-node and clustered modes.
+### Epic 18: Consumer Groups (deferred — design rework needed)
+Consumers can join broker-managed consumer groups where each group gets an independent view of every message (Kafka-style semantics). Within a group, messages are distributed so each is processed by exactly one member. Requires fundamental rearchitecture: per-group delivery state, per-group DRR scheduling, per-group ack/nack lifecycle, per-group throttle/Lua hooks. Original implementation (PR #85) shipped wrong semantics (groups split throughput) and was reverted. See `_bmad-output/planning-artifacts/research/consumer-group-semantics.md` for design analysis.
 **FRs covered:** FR77
+**Status:** Deferred. Stories TBD pending design decisions.
 
 ### Epic 19: Developer Experience
 Docs website, deployment guides, Helm charts, Lua helpers, and DX sugar. The "make it easy to adopt and operate" epic — shipped after all features are in so documentation covers the complete system. Includes built-in Lua helper functions for common patterns (exponential backoff, tenant routing, rate limit keys, max retries).
@@ -648,30 +649,15 @@ So that I don't end up with all queues on one node after scaling or restarts.
 
 ---
 
-## Epic 18: Consumer Groups
+## Epic 18: Consumer Groups (deferred — design rework needed)
 
-Consumers can join broker-managed consumer groups with automatic rebalancing. Multiple instances of a service share the workload without manual coordination.
+**Status:** Deferred. Original implementation (PR #85, Story 18.1) reverted — shipped wrong semantics. Design rework required before re-implementation.
 
-### Story 18.1: Broker-Managed Consumer Groups
+**Problem:** The original implementation treated consumer groups as labeled subsets that split message throughput — each group was one delivery target competing with other groups via round-robin. The correct behavior (Kafka-style) is that each consumer group gets an independent view of every message with its own delivery state. Within a group, messages are distributed so each is processed by exactly one member.
 
-As a consumer,
-I want to join a consumer group with automatic rebalancing,
-So that multiple instances of my service share the workload without manual coordination.
+**Design analysis:** See `_bmad-output/planning-artifacts/research/consumer-group-semantics.md`
 
-**Acceptance Criteria:**
-
-**Given** consumers can connect via the Consume RPC
-**When** a consumer specifies a `consumer_group` parameter in the Consume request
-**Then** the broker tracks group membership: which consumers belong to which group for which queue
-**And** messages from the queue are distributed across group members — each message goes to exactly one member
-**And** the distribution respects fairness scheduling (DRR) — the group as a whole receives fairly-scheduled messages, then the broker round-robins within the group
-**And** when a consumer joins or leaves a group, the broker rebalances: redistributes assignment among remaining members
-**And** rebalancing is seamless — in-flight messages are governed by visibility timeout, no message loss
-**And** a consumer that disconnects is removed from the group after its session timeout (configurable, default 30 seconds)
-**And** consumer groups work in both single-node and clustered modes
-**And** the admin API includes `GetConsumerGroups` to inspect group membership and assignment
-**And** consumers without a `consumer_group` parameter behave as before — independent consumers (backward compatible)
-**And** integration tests verify: 3 consumers in a group each receive ~33% of messages, one consumer disconnects and remaining 2 each receive ~50%, new consumer joins and rebalancing redistributes
+**Stories:** TBD — pending resolution of open design questions around per-group scheduling, throttle, and Lua hook semantics.
 
 ---
 

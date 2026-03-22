@@ -11,7 +11,6 @@ use common::*;
 mod ack_nack;
 mod command;
 mod config;
-mod consumer_groups;
 mod delivery;
 mod dlq;
 mod enqueue;
