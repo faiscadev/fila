@@ -83,6 +83,19 @@ pub fn extract_queue_id(key: &[u8]) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Build a message index key: `{queue_id}:{msg_id}`
+///
+/// Same binary layout as `lease_key` — maps a (queue, message) pair to the
+/// full message storage key for O(1) ack/nack lookups. Stored in its own
+/// column family (`msg_index`) to avoid collisions with leases.
+pub fn msg_index_key(queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
+    let mut key = Vec::with_capacity(32);
+    key.extend_from_slice(&encode_string(queue_id));
+    key.push(SEPARATOR);
+    key.extend_from_slice(msg_id.as_bytes());
+    key
+}
+
 /// Build a lease key: `{queue_id}:{msg_id}`
 pub fn lease_key(queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
     let mut key = Vec::with_capacity(32);

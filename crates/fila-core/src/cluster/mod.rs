@@ -59,8 +59,12 @@ pub struct ClusterHandle {
 /// Error from a cluster write operation (client_write or forward).
 #[derive(Debug)]
 pub enum ClusterWriteError {
-    /// The queue's Raft group does not exist on this node.
+    /// The queue's Raft group does not exist anywhere in the cluster.
     QueueGroupNotFound,
+    /// The queue exists in the cluster but this node's Raft group is not
+    /// ready yet (still catching up or being created). Clients should retry
+    /// on another node or wait.
+    NodeNotReady,
     /// No leader is currently known for the target Raft group.
     NoLeader,
     /// Raft consensus error.
@@ -73,6 +77,7 @@ impl std::fmt::Display for ClusterWriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::QueueGroupNotFound => write!(f, "queue raft group not found"),
+            Self::NodeNotReady => write!(f, "node not ready for this queue"),
             Self::NoLeader => write!(f, "no leader available"),
             Self::Raft(e) => write!(f, "raft error: {e}"),
             Self::Forward(e) => write!(f, "forward error: {e}"),
@@ -104,11 +109,16 @@ impl ClusterHandle {
         queue_id: &str,
         request: ClusterRequest,
     ) -> Result<ClusterWriteResult, ClusterWriteError> {
-        let raft = self
-            .multi_raft
-            .get_raft(queue_id)
-            .await
-            .ok_or(ClusterWriteError::QueueGroupNotFound)?;
+        let raft = match self.multi_raft.get_raft(queue_id).await {
+            Some(raft) => raft,
+            None => {
+                return if self.multi_raft.is_queue_expected(queue_id).await {
+                    Err(ClusterWriteError::NodeNotReady)
+                } else {
+                    Err(ClusterWriteError::QueueGroupNotFound)
+                };
+            }
+        };
 
         match raft.client_write(request.clone()).await {
             Ok(resp) => Ok(ClusterWriteResult {
@@ -163,6 +173,15 @@ impl ClusterHandle {
         let raft = self.multi_raft.get_raft(queue_id).await?;
         let leader = raft.current_leader().await;
         Some(leader == Some(self.node_id))
+    }
+
+    /// Get the leader's client-facing gRPC address for a queue. Returns `None`
+    /// if the queue group doesn't exist, no leader is elected, or the leader's
+    /// client address is unknown.
+    pub async fn get_queue_leader_client_addr(&self, queue_id: &str) -> Option<String> {
+        let raft = self.multi_raft.get_raft(queue_id).await?;
+        let leader_id = raft.current_leader().await?;
+        self.multi_raft.get_client_addr(leader_id).await
     }
 
     /// Get the current meta Raft membership as member IDs and addresses.
@@ -256,6 +275,10 @@ pub async fn process_meta_events(
                 config,
                 preferred_leader,
             } => {
+                // Mark the queue as expected before creating the group so that
+                // requests arriving during creation get NodeNotReady (not NotFound).
+                multi_raft.mark_queue_expected(&queue_id).await;
+
                 // Create the queue in the local scheduler.
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::CreateQueue {
@@ -264,6 +287,9 @@ pub async fn process_meta_events(
                     reply: reply_tx,
                 }) {
                     tracing::error!(queue_id, error = %e, "failed to send create queue command");
+                    // Keep expected_queues marked: the queue exists cluster-wide
+                    // even if local setup fails. Clients should get NodeNotReady
+                    // (retry on another node), not QueueGroupNotFound.
                     continue;
                 }
                 match reply_rx.await {
@@ -289,6 +315,7 @@ pub async fn process_meta_events(
             MetaStoreEvent::QueueGroupDeleted { queue_id } => {
                 // Remove the queue's Raft group.
                 multi_raft.remove_group(&queue_id).await;
+                multi_raft.unmark_queue_expected(&queue_id).await;
 
                 // Delete the queue from the local scheduler.
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -486,6 +513,7 @@ impl ClusterManager {
         broker_storage: Arc<dyn crate::storage::StorageEngine>,
         meta_event_tx: Option<tokio::sync::mpsc::UnboundedSender<MetaStoreEvent>>,
         tls_config: Option<&TlsParams>,
+        client_listen_addr: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let node_id = config.node_id;
 
@@ -526,12 +554,19 @@ impl ClusterManager {
             broker_storage,
         ));
 
+        // Register this node's own client address for leader hint routing.
+        multi_raft
+            .register_client_addr(node_id, client_listen_addr)
+            .await;
+
         // Start cluster gRPC service.
         let broker_slot = Arc::new(std::sync::OnceLock::new());
         let service = ClusterGrpcService::new(
             Arc::clone(&raft),
             Arc::clone(&multi_raft),
             Arc::clone(&broker_slot),
+            node_id,
+            client_listen_addr.to_string(),
         );
         let bind_addr: std::net::SocketAddr = config.bind_addr.parse()?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -576,10 +611,54 @@ impl ClusterManager {
             Self::join_cluster(
                 node_id,
                 &config.bind_addr,
+                client_listen_addr,
                 &config.peers,
                 client_tls.clone(),
             )
             .await?;
+        }
+
+        // Discover all cluster members' client addresses via GetNodeInfo RPC.
+        // This runs after join so all nodes are known in the Raft membership.
+        {
+            let metrics = raft.metrics().borrow().clone();
+            let nodes: Vec<(u64, String)> = metrics
+                .membership_config
+                .membership()
+                .nodes()
+                .map(|(&id, n)| (id, n.addr.clone()))
+                .collect();
+            for (peer_id, cluster_addr) in nodes {
+                if peer_id == node_id {
+                    continue; // Already registered our own address
+                }
+                let url = network::normalize_cluster_url(&cluster_addr, client_tls.is_some());
+                match network::connect_channel(&url, client_tls.as_deref()).await {
+                    Ok(channel) => {
+                        let mut client =
+                            fila_proto::fila_cluster_client::FilaClusterClient::new(channel);
+                        match client
+                            .get_node_info(tonic::Request::new(fila_proto::GetNodeInfoRequest {}))
+                            .await
+                        {
+                            Ok(resp) => {
+                                let info = resp.into_inner();
+                                if !info.client_addr.is_empty() {
+                                    multi_raft
+                                        .register_client_addr(info.node_id, &info.client_addr)
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(peer_id, error = %e, "failed to get node info");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(peer_id, error = %e, "failed to connect for node info");
+                    }
+                }
+            }
         }
 
         Ok(Self {
@@ -598,6 +677,7 @@ impl ClusterManager {
     async fn join_cluster(
         node_id: u64,
         bind_addr: &str,
+        client_listen_addr: &str,
         peers: &[String],
         tls: Option<Arc<ClientTlsConfig>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -607,6 +687,7 @@ impl ClusterManager {
         let req = AddNodeRequest {
             node_id,
             addr: bind_addr.to_string(),
+            client_addr: client_listen_addr.to_string(),
         };
 
         for peer in peers {

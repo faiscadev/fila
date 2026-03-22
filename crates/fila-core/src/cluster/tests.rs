@@ -68,6 +68,8 @@ mod tests {
                 Arc::clone(&raft),
                 Arc::clone(&multi_raft),
                 Arc::clone(&broker_slot),
+                node_id,
+                format!("127.0.0.1:{port}"),
             );
             let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -515,6 +517,8 @@ mod tests {
                 Arc::clone(&raft),
                 Arc::clone(&multi_raft),
                 Arc::clone(&broker_slot),
+                node_id,
+                format!("127.0.0.1:{port}"),
             );
             let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();

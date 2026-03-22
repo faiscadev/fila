@@ -20,6 +20,9 @@ use crate::error::IntoStatus;
 fn cluster_write_err_to_status(err: ClusterWriteError) -> Status {
     match err {
         ClusterWriteError::QueueGroupNotFound => Status::not_found("queue raft group not found"),
+        ClusterWriteError::NodeNotReady => {
+            Status::unavailable("node not ready for this queue — retry on another node or wait")
+        }
         ClusterWriteError::NoLeader => Status::unavailable("no leader available"),
         ClusterWriteError::Raft(e) => Status::internal(format!("raft error: {e}")),
         ClusterWriteError::Forward(e) => Status::unavailable(format!("forward error: {e}")),
@@ -216,9 +219,22 @@ impl FilaService for HotPathService {
             match cluster.is_queue_leader(&req.queue).await {
                 Some(true) => { /* This node is the leader — proceed */ }
                 Some(false) => {
-                    return Err(Status::unavailable(
+                    let mut status = Status::unavailable(
                         "this node is not the leader for this queue; reconnect to the leader",
-                    ));
+                    );
+                    // Include the leader's client address in gRPC metadata so
+                    // SDKs can transparently reconnect to the correct node.
+                    if let Some(addr) = cluster.get_queue_leader_client_addr(&req.queue).await {
+                        // Don't advertise wildcard addresses (0.0.0.0) — they're
+                        // not routable from clients. Only send the hint when the
+                        // leader's address is a concrete host.
+                        if !addr.starts_with("0.0.0.0") {
+                            if let Ok(val) = addr.parse() {
+                                status.metadata_mut().insert("x-fila-leader-addr", val);
+                            }
+                        }
+                    }
+                    return Err(status);
                 }
                 None => {
                     return Err(Status::not_found("queue raft group not found"));

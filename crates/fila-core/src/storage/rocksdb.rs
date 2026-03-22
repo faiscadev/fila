@@ -17,6 +17,8 @@ const CF_LEASE_EXPIRY: &str = "lease_expiry";
 const CF_QUEUES: &str = "queues";
 const CF_STATE: &str = "state";
 const CF_RAFT_LOG: &str = "raft_log";
+/// Message index: maps `{queue_id}:{msg_id}` → full message key for O(1) ack/nack.
+const CF_MSG_INDEX: &str = "msg_index";
 
 /// All column family names (excluding `default` which RocksDB creates automatically).
 const COLUMN_FAMILIES: &[&str] = &[
@@ -26,6 +28,7 @@ const COLUMN_FAMILIES: &[&str] = &[
     CF_QUEUES,
     CF_STATE,
     CF_RAFT_LOG,
+    CF_MSG_INDEX,
 ];
 
 type DB = DBWithThreadMode<MultiThreaded>;
@@ -298,6 +301,23 @@ impl StorageEngine for RocksDbEngine {
         Ok(result)
     }
 
+    fn put_msg_index(&self, key: &[u8], msg_key: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_MSG_INDEX)?;
+        self.db.put_cf(&cf, key, msg_key)?;
+        Ok(())
+    }
+
+    fn get_msg_index(&self, key: &[u8]) -> StorageResult<Option<Vec<u8>>> {
+        let cf = self.cf(CF_MSG_INDEX)?;
+        Ok(self.db.get_cf(&cf, key)?.map(|v| v.to_vec()))
+    }
+
+    fn delete_msg_index(&self, key: &[u8]) -> StorageResult<()> {
+        let cf = self.cf(CF_MSG_INDEX)?;
+        self.db.delete_cf(&cf, key)?;
+        Ok(())
+    }
+
     fn apply_mutations(&self, mutations: Vec<Mutation>) -> StorageResult<()> {
         let mut batch = WriteBatch::default();
 
@@ -332,6 +352,12 @@ impl StorageEngine for RocksDbEngine {
                 }
                 Mutation::DeleteState { key } => {
                     batch.delete_cf(&self.cf(CF_STATE)?, &key);
+                }
+                Mutation::PutMsgIndex { key, value } => {
+                    batch.put_cf(&self.cf(CF_MSG_INDEX)?, &key, &value);
+                }
+                Mutation::DeleteMsgIndex { key } => {
+                    batch.delete_cf(&self.cf(CF_MSG_INDEX)?, &key);
                 }
             }
         }
@@ -619,6 +645,70 @@ mod tests {
         assert!(storage.get_lease(&lease_key).unwrap().is_none());
         let expired = storage.list_expired_leases(&up_to).unwrap();
         assert!(expired.is_empty());
+    }
+
+    #[test]
+    fn msg_index_put_get_delete() {
+        let (storage, _dir) = test_storage();
+        let msg = test_message("q1", "tenant_a");
+        let msg_key = keys::message_key(&msg.queue_id, &msg.fairness_key, msg.enqueued_at, &msg.id);
+        let idx_key = keys::msg_index_key("q1", &msg.id);
+
+        storage.put_msg_index(&idx_key, &msg_key).unwrap();
+        let retrieved = storage.get_msg_index(&idx_key).unwrap().unwrap();
+        assert_eq!(retrieved, msg_key);
+
+        storage.delete_msg_index(&idx_key).unwrap();
+        assert!(storage.get_msg_index(&idx_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn msg_index_nonexistent_returns_none() {
+        let (storage, _dir) = test_storage();
+        let id = Uuid::now_v7();
+        let idx_key = keys::msg_index_key("q1", &id);
+        assert!(storage.get_msg_index(&idx_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn msg_index_via_mutations() {
+        let (storage, _dir) = test_storage();
+        let msg = test_message("q1", "default");
+        let msg_key = keys::message_key(&msg.queue_id, &msg.fairness_key, msg.enqueued_at, &msg.id);
+        let idx_key = keys::msg_index_key("q1", &msg.id);
+        let msg_value = fila_proto::Message::from(msg.clone()).encode_to_vec();
+
+        // Write message and index atomically
+        storage
+            .apply_mutations(vec![
+                Mutation::PutMessage {
+                    key: msg_key.clone(),
+                    value: msg_value,
+                },
+                Mutation::PutMsgIndex {
+                    key: idx_key.clone(),
+                    value: msg_key.clone(),
+                },
+            ])
+            .unwrap();
+
+        assert!(storage.get_message(&msg_key).unwrap().is_some());
+        assert_eq!(storage.get_msg_index(&idx_key).unwrap().unwrap(), msg_key);
+
+        // Delete both atomically
+        storage
+            .apply_mutations(vec![
+                Mutation::DeleteMessage {
+                    key: msg_key.clone(),
+                },
+                Mutation::DeleteMsgIndex {
+                    key: idx_key.clone(),
+                },
+            ])
+            .unwrap();
+
+        assert!(storage.get_message(&msg_key).unwrap().is_none());
+        assert!(storage.get_msg_index(&idx_key).unwrap().is_none());
     }
 
     #[test]
