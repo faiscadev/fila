@@ -1,0 +1,53 @@
+# Fila Helm chart values
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/faiscadev/fila
+  tag: dev
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 5555
+
+# Cluster mode (requires replicaCount > 1)
+cluster:
+  enabled: false
+  port: 5556
+  replicationFactor: 3
+
+# Persistence for data directory
+persistence:
+  enabled: false
+  size: 10Gi
+  storageClass: ""
+
+# TLS configuration
+tls:
+  enabled: false
+  certSecret: ""  # Name of Secret containing tls.crt and tls.key
+
+# Authentication
+auth:
+  bootstrapApiKey: ""  # Set to enable API key auth
+
+# Lua script defaults
+lua:
+  defaultTimeoutMs: 10
+  defaultMemoryLimitBytes: 1048576
+  circuitBreakerThreshold: 3
+  circuitBreakerCooldownMs: 10000
+
+# OpenTelemetry
+telemetry:
+  enabled: false
+  otlpEndpoint: "http://otel-collector:4317"
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

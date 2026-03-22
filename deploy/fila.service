@@ -1,0 +1,27 @@
+[Unit]
+Description=Fila Message Broker
+Documentation=https://github.com/faiscadev/fila
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fila
+Group=fila
+ExecStart=/usr/local/bin/fila-server --config /etc/fila/fila.toml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/fila
+PrivateTmp=yes
+
+# Environment
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
