@@ -183,7 +183,7 @@ development_status:
   17-1-cluster-error-clarity-ack-nack-performance: done
   17-2-consume-leader-hint-sdk-reconnect: done
   17-3-automatic-queue-to-node-assignment: done
-  epic-17-retrospective: optional
+  epic-17-retrospective: done
 
   # Epic 18: Consumer Groups
   epic-18: backlog

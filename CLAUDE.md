@@ -79,6 +79,16 @@ Example: The `QueueRouter` phase 2 docs initially described only FIFO partitioni
 
 **Rule:** Before committing phase 2 design comments, verify them against the research doc. Incomplete forward-looking docs mislead future developers.
 
+## Raft Log Backward Compatibility
+
+Any field added to `ClusterRequest` variants that are serialized into the Raft log (e.g., `CreateQueueGroup`, `Enqueue`, `Ack`, `Nack`) **MUST** handle deserialization of entries written before the field existed:
+
+1. Add `#[serde(default)]` to the new field so existing log entries deserialize without error
+2. Use `optional` in proto3 or handle the proto3 default (0 for integers, empty for strings) as "unset"
+3. In the code that consumes the field, provide a fallback when the value is unset/default
+
+This rule was added after Epic 17, where Cubic caught that `preferred_leader: 0` (proto3 default for missing field) would prevent any node from bootstrapping a queue group.
+
 ## Mid-Epic Story Additions
 
 When a new story is added to an epic during implementation (e.g., a performance optimization or discovered requirement that wasn't in the original plan), the dev agent **MUST** create a story spec file in `_bmad-output/implementation-artifacts/stories/` before or alongside the implementation. The file must follow the same format as other story files in the epic.
