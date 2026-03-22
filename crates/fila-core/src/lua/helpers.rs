@@ -67,8 +67,14 @@ fn create_tenant_route(lua: &Lua) -> mlua::Result<mlua::Function> {
 /// Patterns referencing missing headers are omitted from the result.
 fn create_rate_limit_keys(lua: &Lua) -> mlua::Result<mlua::Function> {
     lua.create_function(|lua, (msg, patterns): (mlua::Table, mlua::Table)| {
-        let headers: mlua::Table = msg.get("headers")?;
         let result = lua.create_table()?;
+
+        // If msg.headers is missing/nil, return empty array (no headers to substitute)
+        let headers = match msg.get::<mlua::Table>("headers") {
+            Ok(h) => h,
+            Err(_) => return Ok(result),
+        };
+
         let mut index = 1;
 
         for entry in patterns.sequence_values::<String>() {
@@ -294,6 +300,22 @@ mod tests {
                 r#"
                 local msg = { headers = { provider = "aws" } }
                 local keys = fila.helpers.rate_limit_keys(msg, {})
+                return keys
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn rate_limit_keys_nil_headers() {
+        let (lua, _dir) = test_lua();
+        let result: Vec<String> = lua
+            .load(
+                r#"
+                local msg = {}
+                local keys = fila.helpers.rate_limit_keys(msg, {"provider:{provider}"})
                 return keys
                 "#,
             )
