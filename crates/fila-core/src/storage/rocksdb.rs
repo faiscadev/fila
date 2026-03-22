@@ -648,6 +648,69 @@ mod tests {
     }
 
     #[test]
+    fn msg_index_put_get_delete() {
+        let (storage, _dir) = test_storage();
+        let msg = test_message("q1", "tenant_a");
+        let msg_key = keys::message_key(&msg.queue_id, &msg.fairness_key, msg.enqueued_at, &msg.id);
+        let idx_key = keys::msg_index_key("q1", &msg.id);
+
+        storage.put_msg_index(&idx_key, &msg_key).unwrap();
+        let retrieved = storage.get_msg_index(&idx_key).unwrap().unwrap();
+        assert_eq!(retrieved, msg_key);
+
+        storage.delete_msg_index(&idx_key).unwrap();
+        assert!(storage.get_msg_index(&idx_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn msg_index_nonexistent_returns_none() {
+        let (storage, _dir) = test_storage();
+        let id = Uuid::now_v7();
+        let idx_key = keys::msg_index_key("q1", &id);
+        assert!(storage.get_msg_index(&idx_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn msg_index_via_mutations() {
+        let (storage, _dir) = test_storage();
+        let msg = test_message("q1", "default");
+        let msg_key = keys::message_key(&msg.queue_id, &msg.fairness_key, msg.enqueued_at, &msg.id);
+        let idx_key = keys::msg_index_key("q1", &msg.id);
+        let msg_value = fila_proto::Message::from(msg.clone()).encode_to_vec();
+
+        // Write message and index atomically
+        storage
+            .apply_mutations(vec![
+                Mutation::PutMessage {
+                    key: msg_key.clone(),
+                    value: msg_value,
+                },
+                Mutation::PutMsgIndex {
+                    key: idx_key.clone(),
+                    value: msg_key.clone(),
+                },
+            ])
+            .unwrap();
+
+        assert!(storage.get_message(&msg_key).unwrap().is_some());
+        assert_eq!(
+            storage.get_msg_index(&idx_key).unwrap().unwrap(),
+            msg_key
+        );
+
+        // Delete both atomically
+        storage
+            .apply_mutations(vec![
+                Mutation::DeleteMessage { key: msg_key.clone() },
+                Mutation::DeleteMsgIndex { key: idx_key.clone() },
+            ])
+            .unwrap();
+
+        assert!(storage.get_message(&msg_key).unwrap().is_none());
+        assert!(storage.get_msg_index(&idx_key).unwrap().is_none());
+    }
+
+    #[test]
     fn reopen_preserves_data() {
         let dir = tempfile::tempdir().unwrap();
 

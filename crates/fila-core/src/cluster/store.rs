@@ -804,3 +804,231 @@ impl FilaRaftStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::Message;
+    use crate::storage::{keys, RocksDbEngine, StorageEngine};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn test_storage() -> (Arc<RocksDbEngine>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
+        (storage, dir)
+    }
+
+    fn test_message(queue_id: &str, fairness_key: &str) -> Message {
+        Message {
+            id: uuid::Uuid::now_v7(),
+            queue_id: queue_id.to_string(),
+            headers: HashMap::new(),
+            payload: vec![1, 2, 3],
+            fairness_key: fairness_key.to_string(),
+            weight: 1,
+            throttle_keys: vec![],
+            attempt_count: 0,
+            enqueued_at: 1_000_000_000,
+            leased_at: None,
+        }
+    }
+
+    fn make_store(
+        db: Arc<RocksDbEngine>,
+        storage: Arc<RocksDbEngine>,
+        queue_id: &str,
+    ) -> FilaRaftStore {
+        FilaRaftStore::for_queue(db as Arc<dyn RaftKeyValueStore>, queue_id, storage as Arc<dyn StorageEngine>)
+    }
+
+    fn test_log_id(index: u64) -> LogId<NodeId> {
+        LogId::new(openraft::CommittedLeaderId::new(1, 1), index)
+    }
+
+    #[test]
+    fn enqueue_writes_msg_index() {
+        let (rocksdb, _dir) = test_storage();
+        let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
+        let msg = test_message("q1", "tenant_a");
+
+        let request = super::super::types::ClusterRequest::Enqueue {
+            message: msg.clone(),
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &request, test_log_id(1))
+            .unwrap();
+
+        // Verify message was written.
+        let prefix = keys::message_prefix("q1");
+        let messages = rocksdb.list_messages(&prefix).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].1.id, msg.id);
+
+        // Verify msg_index was written.
+        let idx_key = keys::msg_index_key("q1", &msg.id);
+        let stored_key = rocksdb.get_msg_index(&idx_key).unwrap().unwrap();
+        assert_eq!(stored_key, messages[0].0);
+    }
+
+    #[test]
+    fn ack_uses_index_for_o1_lookup() {
+        let (rocksdb, _dir) = test_storage();
+        let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
+
+        // Enqueue a message (creates both message and index).
+        let msg = test_message("q1", "tenant_a");
+        let enqueue_req = super::super::types::ClusterRequest::Enqueue {
+            message: msg.clone(),
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
+            .unwrap();
+
+        // Verify message and index exist.
+        let prefix = keys::message_prefix("q1");
+        assert_eq!(rocksdb.list_messages(&prefix).unwrap().len(), 1);
+        let idx_key = keys::msg_index_key("q1", &msg.id);
+        assert!(rocksdb.get_msg_index(&idx_key).unwrap().is_some());
+
+        // Ack the message (should use index for O(1) lookup).
+        let ack_req = super::super::types::ClusterRequest::Ack {
+            queue_id: "q1".to_string(),
+            msg_id: msg.id,
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(2))
+            .unwrap();
+
+        // Message and index should both be gone.
+        assert_eq!(rocksdb.list_messages(&prefix).unwrap().len(), 0);
+        assert!(rocksdb.get_msg_index(&idx_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn nack_uses_index_for_o1_lookup() {
+        let (rocksdb, _dir) = test_storage();
+        let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
+
+        // Enqueue a message.
+        let msg = test_message("q1", "tenant_a");
+        let enqueue_req = super::super::types::ClusterRequest::Enqueue {
+            message: msg.clone(),
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
+            .unwrap();
+
+        // Nack the message (should use index for O(1) lookup).
+        let nack_req = super::super::types::ClusterRequest::Nack {
+            queue_id: "q1".to_string(),
+            msg_id: msg.id,
+            error: "test error".to_string(),
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &nack_req, test_log_id(2))
+            .unwrap();
+
+        // Message should still exist with incremented attempt_count.
+        let prefix = keys::message_prefix("q1");
+        let messages = rocksdb.list_messages(&prefix).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].1.attempt_count, 1);
+        assert!(messages[0].1.leased_at.is_none());
+    }
+
+    #[test]
+    fn ack_falls_back_to_scan_without_index() {
+        let (rocksdb, _dir) = test_storage();
+        let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
+
+        // Manually write a message WITHOUT an index entry (simulates
+        // pre-index Raft log entries for backward compatibility).
+        let msg = test_message("q1", "tenant_a");
+        let msg_key = keys::message_key("q1", &msg.fairness_key, msg.enqueued_at, &msg.id);
+        rocksdb.put_message(&msg_key, &msg).unwrap();
+
+        // Verify no index exists.
+        let idx_key = keys::msg_index_key("q1", &msg.id);
+        assert!(rocksdb.get_msg_index(&idx_key).unwrap().is_none());
+
+        // Ack should fall back to O(n) scan and still succeed.
+        let ack_req = super::super::types::ClusterRequest::Ack {
+            queue_id: "q1".to_string(),
+            msg_id: msg.id,
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(1))
+            .unwrap();
+
+        let prefix = keys::message_prefix("q1");
+        assert_eq!(rocksdb.list_messages(&prefix).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn nack_falls_back_to_scan_without_index() {
+        let (rocksdb, _dir) = test_storage();
+        let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
+
+        // Manually write a message without an index entry.
+        let msg = test_message("q1", "tenant_a");
+        let msg_key = keys::message_key("q1", &msg.fairness_key, msg.enqueued_at, &msg.id);
+        rocksdb.put_message(&msg_key, &msg).unwrap();
+
+        // Nack should fall back to scan and still succeed.
+        let nack_req = super::super::types::ClusterRequest::Nack {
+            queue_id: "q1".to_string(),
+            msg_id: msg.id,
+            error: "test".to_string(),
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &nack_req, test_log_id(1))
+            .unwrap();
+
+        let prefix = keys::message_prefix("q1");
+        let messages = rocksdb.list_messages(&prefix).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].1.attempt_count, 1);
+    }
+
+    #[test]
+    fn ack_with_many_messages_uses_index() {
+        let (rocksdb, _dir) = test_storage();
+        let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
+
+        // Enqueue 100 messages.
+        let mut target_id = uuid::Uuid::nil();
+        for i in 0..100 {
+            let mut msg = test_message("q1", "tenant_a");
+            msg.enqueued_at = (i + 1) * 1_000_000_000;
+            if i == 50 {
+                target_id = msg.id;
+            }
+            let req = super::super::types::ClusterRequest::Enqueue {
+                message: msg,
+            };
+            store
+                .apply_to_broker_storage(rocksdb.as_ref(), &req, test_log_id(i + 1))
+                .unwrap();
+        }
+
+        // Verify 100 messages exist.
+        let prefix = keys::message_prefix("q1");
+        assert_eq!(rocksdb.list_messages(&prefix).unwrap().len(), 100);
+
+        // Ack the 51st message — with index this is O(1), not O(100).
+        let ack_req = super::super::types::ClusterRequest::Ack {
+            queue_id: "q1".to_string(),
+            msg_id: target_id,
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(101))
+            .unwrap();
+
+        // 99 messages should remain.
+        assert_eq!(rocksdb.list_messages(&prefix).unwrap().len(), 99);
+        // Index for the acked message should be gone.
+        let idx_key = keys::msg_index_key("q1", &target_id);
+        assert!(rocksdb.get_msg_index(&idx_key).unwrap().is_none());
+    }
+}

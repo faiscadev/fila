@@ -200,3 +200,63 @@ impl MultiRaftManager {
         self.expected_queues.read().await.contains(queue_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn expected_queues_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let rocksdb =
+            Arc::new(crate::storage::RocksDbEngine::open(dir.path()).unwrap());
+        let db: Arc<dyn crate::storage::RaftKeyValueStore> = Arc::clone(&rocksdb) as _;
+        let storage: Arc<dyn crate::storage::StorageEngine> = Arc::clone(&rocksdb) as _;
+
+        let config = Config {
+            cluster_name: "test".to_string(),
+            heartbeat_interval: 100,
+            election_timeout_min: 200,
+            election_timeout_max: 400,
+            ..Default::default()
+        };
+        let config = Arc::new(config.validate().unwrap());
+
+        let mgr = MultiRaftManager::new(1, db, config, storage);
+
+        // Initially no queues expected.
+        assert!(!mgr.is_queue_expected("q1").await);
+
+        // Mark as expected.
+        mgr.mark_queue_expected("q1").await;
+        assert!(mgr.is_queue_expected("q1").await);
+        assert!(!mgr.is_queue_expected("q2").await);
+
+        // Unmark.
+        mgr.unmark_queue_expected("q1").await;
+        assert!(!mgr.is_queue_expected("q1").await);
+    }
+
+    #[tokio::test]
+    async fn get_raft_returns_none_for_unknown_queue() {
+        let dir = tempfile::tempdir().unwrap();
+        let rocksdb =
+            Arc::new(crate::storage::RocksDbEngine::open(dir.path()).unwrap());
+        let db: Arc<dyn crate::storage::RaftKeyValueStore> = Arc::clone(&rocksdb) as _;
+        let storage: Arc<dyn crate::storage::StorageEngine> = Arc::clone(&rocksdb) as _;
+
+        let config = Config {
+            cluster_name: "test".to_string(),
+            heartbeat_interval: 100,
+            election_timeout_min: 200,
+            election_timeout_max: 400,
+            ..Default::default()
+        };
+        let config = Arc::new(config.validate().unwrap());
+
+        let mgr = MultiRaftManager::new(1, db, config, storage);
+
+        // Unknown queue returns None.
+        assert!(mgr.get_raft("nonexistent").await.is_none());
+    }
+}
