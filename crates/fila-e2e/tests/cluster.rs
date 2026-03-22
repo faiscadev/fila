@@ -336,3 +336,49 @@ async fn cluster_stats_cluster_metadata_all_nodes() {
         );
     }
 }
+
+/// AC: Consume on non-leader gets redirected to leader via leader hint,
+/// and the SDK transparently reconnects so the consumer receives messages.
+#[tokio::test]
+async fn cluster_consume_leader_redirect() {
+    let cluster = helpers::cluster::TestCluster::start(3);
+
+    create_cluster_queue(cluster.addr(0), "redirect-q");
+
+    let leader = find_leader_index(&cluster, "redirect-q");
+    let non_leader = find_non_leader_index(&cluster, "redirect-q");
+
+    // Enqueue a message via any node (forwarded to leader).
+    let enqueue_client = helpers::sdk_client(cluster.addr(leader)).await;
+    let mut headers = HashMap::new();
+    headers.insert("test".to_string(), "redirect".to_string());
+    let msg_id = enqueue_client
+        .enqueue("redirect-q", headers, b"redirect-test".to_vec())
+        .await
+        .expect("enqueue should succeed");
+
+    // Connect consumer to NON-LEADER node. The SDK should detect the
+    // leader hint in the UNAVAILABLE error and transparently reconnect
+    // to the leader node.
+    let consumer_client = helpers::sdk_client(cluster.addr(non_leader)).await;
+    let mut stream = consumer_client
+        .consume("redirect-q")
+        .await
+        .expect("consume should succeed after leader redirect");
+
+    // We should receive the message despite connecting to a non-leader.
+    let received = tokio::time::timeout(Duration::from_secs(10), stream.next())
+        .await
+        .expect("should receive message within timeout")
+        .expect("stream should not be empty")
+        .expect("message should not be an error");
+
+    assert_eq!(received.id, msg_id);
+    assert_eq!(received.payload, b"redirect-test");
+
+    // Ack the message (via leader for simplicity).
+    enqueue_client
+        .ack("redirect-q", &msg_id)
+        .await
+        .expect("ack should succeed");
+}
