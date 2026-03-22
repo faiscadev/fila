@@ -371,7 +371,7 @@ So that I can monitor the cluster as a single system and trust that adding nodes
 **And** per-queue stats show which node is the Raft leader for each queue
 **And** cluster health is reported: node count, per-queue leader distribution, replication status per queue group
 **And** OTel metrics include cluster-level dimensions: `node_id` labels on existing metrics, cluster-level rollup metrics
-**And** the CLI `fila queue inspect` shows cluster-wide summary when connected to any node
+**And** the CLI `fila queue inspect <name>` shows that queue's stats when connected to any node
 
 **Given** a 2-node cluster is benchmarked using the Epic 12 benchmark suite
 **When** throughput is measured across multiple queues
