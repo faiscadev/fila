@@ -35,50 +35,41 @@ so that I don't need to know which node leads which queue.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `get_queue_leader_client_addr` to ClusterHandle (AC: 1)
-  - [ ] 1.1: New method on ClusterHandle that returns the leader's client address (not cluster address) for a queue
-  - [ ] 1.2: Use `raft.metrics()` membership to look up leader node → resolve to client listen address
-  - [ ] 1.3: Need a mapping from node_id → client address (cluster address != client address)
+- [x] Task 1: Add client address tracking infrastructure (AC: 1)
+  - [x] 1.1: GetNodeInfo cluster RPC returns node's client-facing gRPC address
+  - [x] 1.2: client_addr field added to AddNodeRequest for join-time registration
+  - [x] 1.3: node_id → client_addr mapping tracked in MultiRaftManager
+  - [x] 1.4: ClusterHandle.get_queue_leader_client_addr() resolves leader's client addr
+  - [x] 1.5: ClusterManager.start() takes client_listen_addr, registers own address
 
-- [ ] Task 2: Server-side leader hint on Consume (AC: 1)
-  - [ ] 2.1: In `service.rs` consume handler, when not leader: get leader client address
-  - [ ] 2.2: Return `Status::unavailable` with gRPC metadata `x-fila-leader-addr: <addr>`
-  - [ ] 2.3: Handle case where leader address is unknown (no hint, just UNAVAILABLE)
+- [x] Task 2: Server-side leader hint on Consume (AC: 1)
+  - [x] 2.1: In `service.rs` consume handler, when not leader: get leader client address
+  - [x] 2.2: Return `Status::unavailable` with gRPC metadata `x-fila-leader-addr: <addr>`
+  - [x] 2.3: If leader address unknown, UNAVAILABLE without hint (graceful degradation)
 
-- [ ] Task 3: Rust SDK transparent reconnect (AC: 2, 4)
-  - [ ] 3.1: In `fila-sdk` consume error handling, extract `x-fila-leader-addr` from status metadata
-  - [ ] 3.2: If present, create new connection to leader addr and retry consume once
-  - [ ] 3.3: If redirect fails, return original error (no infinite loops)
-  - [ ] 3.4: Add `ConsumeError::LeaderRedirect` variant for visibility
+- [x] Task 3: Rust SDK transparent reconnect (AC: 2, 4)
+  - [x] 3.1: extract_leader_hint() extracts `x-fila-leader-addr` from status metadata
+  - [x] 3.2: If present, create new gRPC connection to leader addr and retry consume once
+  - [x] 3.3: If redirect fails, return original error (no infinite loops)
 
 - [ ] Task 4: External SDK updates — Go (AC: 3)
-  - [ ] 4.1: Extract leader hint from gRPC status metadata in consume path
-  - [ ] 4.2: Reconnect and retry transparently (max 1 redirect)
-  - [ ] 4.3: Open PR in fila-go repo
+  - [ ] 4.1-4.3: PR in fila-go repo (background agent)
 
 - [ ] Task 5: External SDK updates — Python (AC: 3)
-  - [ ] 5.1: Extract leader hint from gRPC status trailing metadata
-  - [ ] 5.2: Reconnect and retry transparently
-  - [ ] 5.3: Open PR in fila-python repo
+  - [ ] 5.1-5.3: PR in fila-python repo (background agent)
 
 - [ ] Task 6: External SDK updates — JavaScript (AC: 3)
-  - [ ] 6.1: Extract leader hint from gRPC metadata
-  - [ ] 6.2: Reconnect and retry transparently
-  - [ ] 6.3: Open PR in fila-js repo
+  - [ ] 6.1-6.3: PR in fila-js repo (background agent)
 
 - [ ] Task 7: External SDK updates — Ruby (AC: 3)
-  - [ ] 7.1: Extract leader hint from gRPC metadata
-  - [ ] 7.2: Reconnect and retry transparently
-  - [ ] 7.3: Open PR in fila-ruby repo
+  - [ ] 7.1-7.3: PR in fila-ruby repo (background agent)
 
 - [ ] Task 8: External SDK updates — Java (AC: 3)
-  - [ ] 8.1: Extract leader hint from gRPC metadata
-  - [ ] 8.2: Reconnect and retry transparently
-  - [ ] 8.3: Open PR in fila-java repo
+  - [ ] 8.1-8.3: PR in fila-java repo (background agent)
 
-- [ ] Task 9: E2E test for consume leader redirect (AC: 5)
-  - [ ] 9.1: New test in `crates/fila-e2e/tests/cluster.rs` using TestCluster
-  - [ ] 9.2: Connect consumer to non-leader, verify redirect, verify messages received
+- [x] Task 9: E2E test for consume leader redirect (AC: 5)
+  - [x] 9.1: New test `cluster_consume_leader_redirect` in `crates/fila-e2e/tests/cluster.rs`
+  - [x] 9.2: Connects consumer to non-leader, verifies SDK redirect, receives messages
 
 ## Dev Notes
 
