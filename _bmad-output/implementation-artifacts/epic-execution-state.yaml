@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "17.2"
     title: "Consume Leader Hint & SDK Reconnect"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/17.2-consume-leader-hint-sdk-reconnect"
     pr: null
     dependsOn: ["17.1"]
   - id: "17.3"
