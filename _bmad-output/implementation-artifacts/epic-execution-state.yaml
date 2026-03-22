@@ -19,7 +19,7 @@ stories:
   - id: "17.3"
     title: "Automatic Queue-to-Node Assignment"
     status: in-progress
-    currentPhase: "code-review"
+    currentPhase: "pr-ci"
     branch: "feat/17.3-automatic-queue-to-node-assignment"
     pr: null
     dependsOn: []

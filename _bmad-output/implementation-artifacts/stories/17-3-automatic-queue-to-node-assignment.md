@@ -1,6 +1,6 @@
 # Story 17.3: Automatic Queue-to-Node Assignment
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 

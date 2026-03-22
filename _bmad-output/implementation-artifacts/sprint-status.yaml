@@ -182,7 +182,7 @@ development_status:
   epic-17: in-progress
   17-1-cluster-error-clarity-ack-nack-performance: done
   17-2-consume-leader-hint-sdk-reconnect: done
-  17-3-automatic-queue-to-node-assignment: in-progress
+  17-3-automatic-queue-to-node-assignment: review
   epic-17-retrospective: optional
 
   # Epic 18: Consumer Groups
