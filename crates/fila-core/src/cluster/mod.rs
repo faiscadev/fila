@@ -274,7 +274,9 @@ pub async fn process_meta_events(
                     reply: reply_tx,
                 }) {
                     tracing::error!(queue_id, error = %e, "failed to send create queue command");
-                    multi_raft.unmark_queue_expected(&queue_id).await;
+                    // Keep expected_queues marked: the queue exists cluster-wide
+                    // even if local setup fails. Clients should get NodeNotReady
+                    // (retry on another node), not QueueGroupNotFound.
                     continue;
                 }
                 match reply_rx.await {
@@ -285,7 +287,6 @@ pub async fn process_meta_events(
                     }
                     Err(_) => {
                         tracing::error!(queue_id, "scheduler dropped reply for create queue");
-                        multi_raft.unmark_queue_expected(&queue_id).await;
                         continue;
                     }
                 }
@@ -293,7 +294,6 @@ pub async fn process_meta_events(
                 // Start the queue's Raft group.
                 if let Err(e) = multi_raft.create_group(&queue_id, &members).await {
                     tracing::error!(queue_id, error = %e, "failed to create queue raft group");
-                    multi_raft.unmark_queue_expected(&queue_id).await;
                 }
             }
             MetaStoreEvent::QueueGroupDeleted { queue_id } => {
