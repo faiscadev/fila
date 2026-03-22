@@ -20,6 +20,9 @@ use crate::error::IntoStatus;
 fn cluster_write_err_to_status(err: ClusterWriteError) -> Status {
     match err {
         ClusterWriteError::QueueGroupNotFound => Status::not_found("queue raft group not found"),
+        ClusterWriteError::NodeNotReady => {
+            Status::unavailable("node not ready for this queue — retry on another node or wait")
+        }
         ClusterWriteError::NoLeader => Status::unavailable("no leader available"),
         ClusterWriteError::Raft(e) => Status::internal(format!("raft error: {e}")),
         ClusterWriteError::Forward(e) => Status::unavailable(format!("forward error: {e}")),

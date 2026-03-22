@@ -56,8 +56,12 @@ pub struct ClusterHandle {
 /// Error from a cluster write operation (client_write or forward).
 #[derive(Debug)]
 pub enum ClusterWriteError {
-    /// The queue's Raft group does not exist on this node.
+    /// The queue's Raft group does not exist anywhere in the cluster.
     QueueGroupNotFound,
+    /// The queue exists in the cluster but this node's Raft group is not
+    /// ready yet (still catching up or being created). Clients should retry
+    /// on another node or wait.
+    NodeNotReady,
     /// No leader is currently known for the target Raft group.
     NoLeader,
     /// Raft consensus error.
@@ -70,6 +74,7 @@ impl std::fmt::Display for ClusterWriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::QueueGroupNotFound => write!(f, "queue raft group not found"),
+            Self::NodeNotReady => write!(f, "node not ready for this queue"),
             Self::NoLeader => write!(f, "no leader available"),
             Self::Raft(e) => write!(f, "raft error: {e}"),
             Self::Forward(e) => write!(f, "forward error: {e}"),
@@ -101,11 +106,16 @@ impl ClusterHandle {
         queue_id: &str,
         request: ClusterRequest,
     ) -> Result<ClusterWriteResult, ClusterWriteError> {
-        let raft = self
-            .multi_raft
-            .get_raft(queue_id)
-            .await
-            .ok_or(ClusterWriteError::QueueGroupNotFound)?;
+        let raft = match self.multi_raft.get_raft(queue_id).await {
+            Some(raft) => raft,
+            None => {
+                return if self.multi_raft.is_queue_expected(queue_id).await {
+                    Err(ClusterWriteError::NodeNotReady)
+                } else {
+                    Err(ClusterWriteError::QueueGroupNotFound)
+                };
+            }
+        };
 
         match raft.client_write(request.clone()).await {
             Ok(resp) => Ok(ClusterWriteResult {
@@ -252,6 +262,10 @@ pub async fn process_meta_events(
                 members,
                 config,
             } => {
+                // Mark the queue as expected before creating the group so that
+                // requests arriving during creation get NodeNotReady (not NotFound).
+                multi_raft.mark_queue_expected(&queue_id).await;
+
                 // Create the queue in the local scheduler.
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::CreateQueue {
@@ -260,6 +274,9 @@ pub async fn process_meta_events(
                     reply: reply_tx,
                 }) {
                     tracing::error!(queue_id, error = %e, "failed to send create queue command");
+                    // Keep expected_queues marked: the queue exists cluster-wide
+                    // even if local setup fails. Clients should get NodeNotReady
+                    // (retry on another node), not QueueGroupNotFound.
                     continue;
                 }
                 match reply_rx.await {
@@ -282,6 +299,7 @@ pub async fn process_meta_events(
             MetaStoreEvent::QueueGroupDeleted { queue_id } => {
                 // Remove the queue's Raft group.
                 multi_raft.remove_group(&queue_id).await;
+                multi_raft.unmark_queue_expected(&queue_id).await;
 
                 // Delete the queue from the local scheduler.
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
