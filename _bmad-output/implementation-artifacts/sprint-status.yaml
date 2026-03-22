@@ -176,7 +176,7 @@ development_status:
   16.5-1-cluster-e2e-test-suite: done
   16.5-2-tls-auth-edge-case-hardening: done
   16.5-3-ci-code-coverage-quality-gates: done
-  epic-16.5-retrospective: optional
+  epic-16.5-retrospective: done
 
   # Epic 17: Developer Experience
   epic-17: backlog
