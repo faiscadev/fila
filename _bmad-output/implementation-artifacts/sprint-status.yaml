@@ -179,7 +179,7 @@ development_status:
   epic-16.5-retrospective: done
 
   # Epic 17: Cluster Hardening (GH issues #63-#66)
-  epic-17: in-progress
+  epic-17: done
   17-1-cluster-error-clarity-ack-nack-performance: done
   17-2-consume-leader-hint-sdk-reconnect: done
   17-3-automatic-queue-to-node-assignment: done
