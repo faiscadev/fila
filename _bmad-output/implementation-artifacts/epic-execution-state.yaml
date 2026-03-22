@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "16.5.2"
     title: "TLS & Auth Edge Case Hardening"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/16.5.2-tls-auth-edge-case-hardening"
+    pr: 80
     dependsOn: []
   - id: "16.5.3"
     title: "CI Code Coverage & Quality Gates"

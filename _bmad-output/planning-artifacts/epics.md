@@ -540,7 +540,7 @@ So that security bypass patterns (like silent TLS downgrade) are caught automati
 **When** API key and ACL edge cases are tested
 **Then** a test verifies: key revocation takes effect immediately — revoked key rejected on next request
 **And** a test verifies: permission removal takes effect immediately — previously-authorized operation rejected
-**And** a test verifies: bootstrap key can only create keys, cannot perform data operations (produce/consume)
+**And** a test verifies: bootstrap key has superadmin scope (can perform all operations including data and admin)
 **And** a test verifies: superadmin key revocation — revoked superadmin loses all access
 
 **Given** these are universal patterns
