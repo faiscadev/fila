@@ -41,6 +41,9 @@ pub struct ClusterHandle {
     pub meta_raft: Arc<Raft<TypeConfig>>,
     pub multi_raft: Arc<MultiRaftManager>,
     pub node_id: NodeId,
+    /// Number of nodes per queue Raft group. When the cluster has more nodes,
+    /// only a subset is selected for each queue.
+    pub replication_factor: usize,
     /// TLS config for outgoing cluster connections. `None` when TLS is disabled.
     tls: Option<Arc<ClientTlsConfig>>,
     /// Cached gRPC clients for forwarding writes to leader nodes.
@@ -463,6 +466,8 @@ pub struct ClusterManager {
     broker_slot: Arc<std::sync::OnceLock<Arc<crate::Broker>>>,
     /// TLS config for outgoing cluster connections. Propagated to `ClusterHandle`.
     client_tls: Option<Arc<ClientTlsConfig>>,
+    /// Number of nodes per queue Raft group. Propagated to `ClusterHandle`.
+    replication_factor: usize,
 }
 
 impl ClusterManager {
@@ -585,6 +590,7 @@ impl ClusterManager {
             shutdown_tx,
             broker_slot,
             client_tls,
+            replication_factor: config.replication_factor,
         })
     }
 
@@ -686,6 +692,7 @@ impl ClusterManager {
             meta_raft: Arc::clone(&self.raft),
             multi_raft: Arc::clone(&self.multi_raft),
             node_id: self.node_id,
+            replication_factor: self.replication_factor,
             tls: self.client_tls.clone(),
             client_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         })

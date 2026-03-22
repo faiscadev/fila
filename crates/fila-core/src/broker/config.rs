@@ -40,6 +40,12 @@ pub struct ClusterConfig {
     pub heartbeat_interval_ms: u64,
     /// Number of applied log entries before triggering a snapshot.
     pub snapshot_threshold: u64,
+    /// Number of nodes that participate in each queue's Raft group.
+    /// When the cluster has more nodes than this value, only a subset of
+    /// nodes are selected for each queue (the least-loaded ones).
+    /// When the cluster has fewer or equal nodes, all nodes participate.
+    /// Default: 3.
+    pub replication_factor: usize,
 }
 
 /// TLS parameters. Presence in `BrokerConfig.tls` (i.e. a `[tls]` section in
@@ -168,6 +174,7 @@ impl Default for ClusterConfig {
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
             snapshot_threshold: 10_000,
+            replication_factor: 3,
         }
     }
 }
