@@ -191,8 +191,8 @@ development_status:
   epic-18-retrospective: done
 
   # Epic 19: Developer Experience (docs website, Helm, Lua helpers, guides)
-  epic-19: backlog
-  19-1-built-in-lua-helpers: backlog
+  epic-19: in-progress
+  19-1-built-in-lua-helpers: done
   19-2-documentation-website-deployment-guides: backlog
   19-3-sdk-integration-guides: backlog
   epic-19-retrospective: optional
