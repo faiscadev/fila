@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::{
-    AckError, ConfigError, ConsumerGroupsError, CreateQueueError, DeleteQueueError, EnqueueError,
-    ListQueuesError, NackError, RedriveError, StatsError,
+    AckError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError, ListQueuesError,
+    NackError, RedriveError, StatsError,
 };
 
 /// A message ready for delivery to a consumer.
@@ -31,15 +31,6 @@ pub struct QueueSummary {
     pub leader_node_id: u64,
 }
 
-/// Summary info for a consumer group, returned by GetConsumerGroups.
-#[derive(Debug, Clone)]
-pub struct ConsumerGroupInfo {
-    pub queue: String,
-    pub group_name: String,
-    pub member_count: u32,
-    pub members: Vec<String>,
-}
-
 /// Commands sent from IO threads to the single-threaded scheduler core.
 ///
 /// Each variant that expects a response includes a `tokio::sync::oneshot::Sender`
@@ -63,9 +54,6 @@ pub enum SchedulerCommand {
     RegisterConsumer {
         queue_id: String,
         consumer_id: String,
-        /// Optional consumer group name. When set, this consumer joins the
-        /// named group and messages are distributed across group members.
-        consumer_group: Option<String>,
         tx: tokio::sync::mpsc::Sender<ReadyMessage>,
     },
     UnregisterConsumer {
@@ -112,10 +100,6 @@ pub enum SchedulerCommand {
     },
     ListQueues {
         reply: tokio::sync::oneshot::Sender<Result<Vec<QueueSummary>, ListQueuesError>>,
-    },
-    GetConsumerGroups {
-        queue_filter: Option<String>,
-        reply: tokio::sync::oneshot::Sender<Result<Vec<ConsumerGroupInfo>, ConsumerGroupsError>>,
     },
     /// Rebuild in-memory scheduler state (DRR keys, pending index) for a
     /// single queue. Used when this node becomes the Raft leader for a queue

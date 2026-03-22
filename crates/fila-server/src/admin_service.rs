@@ -6,11 +6,10 @@ use fila_core::{
 };
 use fila_proto::fila_admin_server::FilaAdmin;
 use fila_proto::{
-    AclPermission, ApiKeyInfo, ConfigEntry, ConsumerGroupInfo as ProtoConsumerGroupInfo,
-    ConsumerGroupMember, CreateApiKeyRequest, CreateApiKeyResponse, CreateQueueRequest,
-    CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse, GetAclRequest, GetAclResponse,
-    GetConfigRequest, GetConfigResponse, GetConsumerGroupsRequest, GetConsumerGroupsResponse,
-    GetStatsRequest, GetStatsResponse, ListApiKeysRequest, ListApiKeysResponse, ListConfigRequest,
+    AclPermission, ApiKeyInfo, ConfigEntry, CreateApiKeyRequest, CreateApiKeyResponse,
+    CreateQueueRequest, CreateQueueResponse, DeleteQueueRequest, DeleteQueueResponse,
+    GetAclRequest, GetAclResponse, GetConfigRequest, GetConfigResponse, GetStatsRequest,
+    GetStatsResponse, ListApiKeysRequest, ListApiKeysResponse, ListConfigRequest,
     ListConfigResponse, ListQueuesRequest, ListQueuesResponse, PerFairnessKeyStats,
     PerThrottleKeyStats, QueueInfo, RedriveRequest, RedriveResponse, RevokeApiKeyRequest,
     RevokeApiKeyResponse, SetAclRequest, SetAclResponse, SetConfigRequest, SetConfigResponse,
@@ -771,52 +770,6 @@ impl FilaAdmin for AdminService {
             })),
             None => Err(Status::not_found("api key not found")),
         }
-    }
-
-    #[instrument(skip(self))]
-    async fn get_consumer_groups(
-        &self,
-        request: Request<GetConsumerGroupsRequest>,
-    ) -> Result<Response<GetConsumerGroupsResponse>, Status> {
-        self.check_admin(&request)?;
-        let req = request.into_inner();
-
-        let queue_filter = if req.queue.is_empty() {
-            None
-        } else {
-            Some(req.queue)
-        };
-
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.broker
-            .send_command(SchedulerCommand::GetConsumerGroups {
-                queue_filter,
-                reply: reply_tx,
-            })
-            .map_err(IntoStatus::into_status)?;
-
-        let groups = reply_rx
-            .await
-            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-            .map_err(IntoStatus::into_status)?;
-
-        let proto_groups = groups
-            .into_iter()
-            .map(|g| ProtoConsumerGroupInfo {
-                queue: g.queue,
-                group_name: g.group_name,
-                member_count: g.member_count,
-                members: g
-                    .members
-                    .into_iter()
-                    .map(|id| ConsumerGroupMember { consumer_id: id })
-                    .collect(),
-            })
-            .collect();
-
-        Ok(Response::new(GetConsumerGroupsResponse {
-            groups: proto_groups,
-        }))
     }
 }
 

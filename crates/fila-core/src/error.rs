@@ -131,12 +131,6 @@ pub enum ListQueuesError {
     Storage(#[from] StorageError),
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ConsumerGroupsError {
-    #[error(transparent)]
-    Storage(#[from] StorageError),
-}
-
 // --- Broker lifecycle/channel errors ---
 
 #[derive(Debug, thiserror::Error)]

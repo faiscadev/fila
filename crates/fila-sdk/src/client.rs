@@ -223,32 +223,8 @@ impl FilaClient {
         &self,
         queue: &str,
     ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        self.consume_inner(queue, None).await
-    }
-
-    /// Open a streaming consume connection as a member of a consumer group.
-    ///
-    /// Messages are distributed across all members of the same group for this
-    /// queue — each message goes to exactly one member. When a member disconnects,
-    /// remaining members automatically receive its share.
-    ///
-    /// See [`consume`](Self::consume) for general streaming semantics.
-    pub async fn consume_group(
-        &self,
-        queue: &str,
-        group: &str,
-    ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        self.consume_inner(queue, Some(group)).await
-    }
-
-    async fn consume_inner(
-        &self,
-        queue: &str,
-        group: Option<&str>,
-    ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
         let consume_req = ConsumeRequest {
             queue: queue.to_string(),
-            consumer_group: group.unwrap_or_default().to_string(),
         };
 
         let result = self

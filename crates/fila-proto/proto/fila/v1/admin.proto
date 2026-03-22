@@ -20,9 +20,6 @@ service FilaAdmin {
   // Per-key ACL management.
   rpc SetAcl(SetAclRequest) returns (SetAclResponse);
   rpc GetAcl(GetAclRequest) returns (GetAclResponse);
-
-  // Consumer group inspection.
-  rpc GetConsumerGroups(GetConsumerGroupsRequest) returns (GetConsumerGroupsResponse);
 }
 
 message CreateQueueRequest {
@@ -197,28 +194,4 @@ message GetAclResponse {
   string key_id = 1;
   repeated AclPermission permissions = 2;
   bool is_superadmin = 3;
-}
-
-// --- Consumer Groups ---
-
-message GetConsumerGroupsRequest {
-  // Optional queue filter. When empty, returns groups for all queues.
-  string queue = 1;
-}
-
-/// A single member of a consumer group.
-message ConsumerGroupMember {
-  string consumer_id = 1;
-}
-
-/// A consumer group for a specific queue.
-message ConsumerGroupInfo {
-  string queue = 1;
-  string group_name = 2;
-  uint32 member_count = 3;
-  repeated ConsumerGroupMember members = 4;
-}
-
-message GetConsumerGroupsResponse {
-  repeated ConsumerGroupInfo groups = 1;
 }
