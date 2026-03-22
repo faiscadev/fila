@@ -1,6 +1,6 @@
 use fila_core::{
-    AckError, BrokerError, ConfigError, CreateQueueError, DeleteQueueError, EnqueueError,
-    ListQueuesError, NackError, RedriveError, StatsError,
+    AckError, BrokerError, ConfigError, ConsumerGroupsError, CreateQueueError, DeleteQueueError,
+    EnqueueError, ListQueuesError, NackError, RedriveError, StatsError,
 };
 use tonic::Status;
 
@@ -87,6 +87,14 @@ impl IntoStatus for ListQueuesError {
     fn into_status(self) -> Status {
         match self {
             ListQueuesError::Storage(e) => Status::internal(e.to_string()),
+        }
+    }
+}
+
+impl IntoStatus for ConsumerGroupsError {
+    fn into_status(self) -> Status {
+        match self {
+            ConsumerGroupsError::Storage(e) => Status::internal(e.to_string()),
         }
     }
 }

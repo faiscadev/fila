@@ -15,14 +15,19 @@ use crate::lua::LuaEngine;
 use crate::storage::{Mutation, StorageEngine};
 
 mod admin_handlers;
+mod consumer_groups;
 mod delivery;
 mod handlers;
 mod metrics_recording;
 mod recovery;
 
+use consumer_groups::ConsumerGroupManager;
+
 /// A registered consumer waiting for messages.
 pub(super) struct ConsumerEntry {
     pub(super) queue_id: String,
+    /// Optional consumer group this consumer belongs to.
+    pub(super) consumer_group: Option<String>,
     pub(super) tx: tokio::sync::mpsc::Sender<ReadyMessage>,
 }
 
@@ -69,6 +74,8 @@ pub struct Scheduler {
     /// Per-(queue_id, fairness_key) delivery counts for fair share ratio calculation.
     /// Reset each time record_gauges() is called.
     fairness_deliveries: HashMap<(String, String), u64>,
+    /// Consumer group manager: tracks group membership and round-robin state.
+    consumer_groups: ConsumerGroupManager,
 }
 
 impl Scheduler {
@@ -108,6 +115,7 @@ impl Scheduler {
                 Metrics::new()
             },
             fairness_deliveries: HashMap::new(),
+            consumer_groups: ConsumerGroupManager::new(),
         }
     }
 
@@ -203,13 +211,20 @@ impl Scheduler {
             SchedulerCommand::RegisterConsumer {
                 queue_id,
                 consumer_id,
+                consumer_group,
                 tx,
             } => {
-                info!(%queue_id, %consumer_id, "consumer registered");
+                if let Some(ref group) = consumer_group {
+                    info!(%queue_id, %consumer_id, %group, "consumer registered (group)");
+                    self.consumer_groups.join(&queue_id, group, &consumer_id);
+                } else {
+                    info!(%queue_id, %consumer_id, "consumer registered");
+                }
                 self.consumers.insert(
                     consumer_id,
                     ConsumerEntry {
                         queue_id: queue_id.clone(),
+                        consumer_group,
                         tx,
                     },
                 );
@@ -217,7 +232,12 @@ impl Scheduler {
                 self.drr_deliver_queue(&queue_id);
             }
             SchedulerCommand::UnregisterConsumer { consumer_id } => {
-                info!(%consumer_id, "consumer unregistered");
+                if self.consumer_groups.is_in_group(&consumer_id) {
+                    info!(%consumer_id, "consumer unregistered (group member)");
+                    self.consumer_groups.leave(&consumer_id);
+                } else {
+                    info!(%consumer_id, "consumer unregistered");
+                }
                 self.consumers.remove(&consumer_id);
             }
             SchedulerCommand::CreateQueue {
@@ -273,6 +293,13 @@ impl Scheduler {
             SchedulerCommand::ListQueues { reply } => {
                 let result = self.handle_list_queues();
                 let _ = reply.send(result);
+            }
+            SchedulerCommand::GetConsumerGroups {
+                queue_filter,
+                reply,
+            } => {
+                let groups = self.consumer_groups.all_groups(queue_filter.as_deref());
+                let _ = reply.send(Ok(groups));
             }
             SchedulerCommand::RecoverQueue { queue_id, reply } => {
                 info!(%queue_id, "recover queue command received (leader promotion)");

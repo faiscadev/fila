@@ -243,6 +243,11 @@ impl FilaService for HotPathService {
         }
 
         let consumer_id = Uuid::now_v7().to_string();
+        let consumer_group = if req.consumer_group.is_empty() {
+            None
+        } else {
+            Some(req.consumer_group.clone())
+        };
 
         // Channel from scheduler (ReadyMessage) to converter task
         let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel::<ReadyMessage>(64);
@@ -255,6 +260,7 @@ impl FilaService for HotPathService {
             .send_command(SchedulerCommand::RegisterConsumer {
                 queue_id: req.queue.clone(),
                 consumer_id: consumer_id.clone(),
+                consumer_group,
                 tx: ready_tx,
             })
             .map_err(IntoStatus::into_status)?;

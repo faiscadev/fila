@@ -1,31 +1,17 @@
-epic: "Epic 17: Cluster Hardening"
+epic: "Epic 18: Consumer Groups"
 baseBranch: main
-startedAt: "2026-03-21"
+startedAt: "2026-03-22"
 stories:
-  - id: "17.1"
-    title: "Cluster Error Clarity & Ack/Nack Performance"
-    status: completed
-    currentPhase: ""
-    branch: "feat/17.1-cluster-error-clarity-ack-nack-performance"
-    pr: 82
+  - id: "18.1"
+    title: "Broker-Managed Consumer Groups"
+    status: in-progress
+    currentPhase: "implementation"
+    branch: "feat/18.1-broker-managed-consumer-groups"
+    pr: null
     dependsOn: []
-  - id: "17.2"
-    title: "Consume Leader Hint & SDK Reconnect"
-    status: completed
-    currentPhase: ""
-    branch: "feat/17.2-consume-leader-hint-sdk-reconnect"
-    pr: 83
-    dependsOn: ["17.1"]
-  - id: "17.3"
-    title: "Automatic Queue-to-Node Assignment"
-    status: completed
-    currentPhase: ""
-    branch: "feat/17.3-automatic-queue-to-node-assignment"
-    pr: 84
-    dependsOn: []
-completedAt: "2026-03-22"
+completedAt: null
 summary:
-  total: 3
-  completed: 3
+  total: 1
+  completed: 0
   skipped: 0
 skippedIssues: []

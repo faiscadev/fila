@@ -8,12 +8,13 @@ pub mod storage;
 pub mod telemetry;
 
 pub use broker::{
-    AuthConfig, Broker, BrokerConfig, QueueSummary, ReadyMessage, SchedulerCommand, TlsParams,
+    AuthConfig, Broker, BrokerConfig, ConsumerGroupInfo, QueueSummary, ReadyMessage,
+    SchedulerCommand, TlsParams,
 };
 pub use error::{
-    AckError, BrokerError, BrokerResult, ConfigError, CreateQueueError, DeleteQueueError,
-    EnqueueError, ListQueuesError, NackError, RedriveError, StatsError, StorageError,
-    StorageResult,
+    AckError, BrokerError, BrokerResult, ConfigError, ConsumerGroupsError, CreateQueueError,
+    DeleteQueueError, EnqueueError, ListQueuesError, NackError, RedriveError, StatsError,
+    StorageError, StorageResult,
 };
 pub use message::Message;
 pub use queue::QueueConfig;

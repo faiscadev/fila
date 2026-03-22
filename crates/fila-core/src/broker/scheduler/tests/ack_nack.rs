@@ -11,6 +11,7 @@ fn ack_removes_message_lease_and_expiry() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "ack-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -94,6 +95,7 @@ fn ack_same_message_twice_returns_not_found() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "double-ack-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -154,6 +156,7 @@ fn nack_requeues_message_with_incremented_attempt_count() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "nack-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -219,6 +222,7 @@ fn nack_removes_lease_and_lease_expiry() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "nack-lease-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -310,6 +314,7 @@ fn double_nack_returns_not_found() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "double-nack-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -376,6 +381,7 @@ fn nack_then_ack_completes_message_lifecycle() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "nack-ack-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -453,6 +459,7 @@ fn lease_expiry_redelivers_message_with_incremented_attempt_count() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "expiry-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -518,6 +525,7 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "expiry-clean-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -607,6 +615,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "fast-queue".to_string(),
         consumer_id: "c-fast".to_string(),
+        consumer_group: None,
         tx: consumer_tx_fast,
     })
     .unwrap();
@@ -615,6 +624,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "slow-queue".to_string(),
         consumer_id: "c-slow".to_string(),
+        consumer_group: None,
         tx: consumer_tx_slow,
     })
     .unwrap();
@@ -692,6 +702,7 @@ fn ack_before_expiry_prevents_redelivery() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "ack-before-expiry-queue".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();

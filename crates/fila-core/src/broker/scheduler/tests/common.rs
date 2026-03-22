@@ -214,6 +214,7 @@ pub(super) fn dlq_one_message(
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: queue_name.to_string(),
         consumer_id: format!("dlq-helper-{msg_id}"),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();

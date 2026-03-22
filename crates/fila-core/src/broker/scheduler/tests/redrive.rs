@@ -45,6 +45,7 @@ fn redrive_moves_messages_from_dlq_to_parent_and_leasable() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "redrive-q".to_string(),
         consumer_id: "lease-after-redrive".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -281,6 +282,7 @@ fn redrive_skips_leased_messages_in_dlq() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "redrive-leased-q.dlq".to_string(),
         consumer_id: "dlq-inspector".to_string(),
+        consumer_group: None,
         tx: dlq_consumer_tx,
     })
     .unwrap();

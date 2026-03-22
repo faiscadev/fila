@@ -103,6 +103,7 @@ fn dlq_full_flow_enqueue_nack_dlq_lease() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "flow-queue".to_string(),
         consumer_id: "main-c".to_string(),
+        consumer_group: None,
         tx: main_tx,
     })
     .unwrap();
@@ -111,6 +112,7 @@ fn dlq_full_flow_enqueue_nack_dlq_lease() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "flow-queue.dlq".to_string(),
         consumer_id: "dlq-c".to_string(),
+        consumer_group: None,
         tx: dlq_tx,
     })
     .unwrap();

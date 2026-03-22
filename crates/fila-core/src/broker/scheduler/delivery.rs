@@ -192,6 +192,14 @@ impl Scheduler {
     }
 
     /// Attempt to deliver a single message to a consumer via round-robin.
+    ///
+    /// Delivery targets are built from the queue's consumers:
+    /// - Each consumer group counts as one target (internal round-robin picks a member)
+    /// - Each independent (non-group) consumer counts as one target
+    ///
+    /// Round-robin rotates across targets. Within a group, the ConsumerGroupManager
+    /// handles its own round-robin to pick the specific member.
+    ///
     /// Returns true if delivery succeeded.
     fn try_deliver_to_consumer(
         &mut self,
@@ -200,94 +208,172 @@ impl Scheduler {
         lease_key: &[u8],
         visibility_timeout_ms: u64,
     ) -> bool {
-        let queue_consumers: Vec<(String, usize)> = self
-            .consumers
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, e))| e.queue_id == queue_id)
-            .map(|(i, (cid, _))| (cid.clone(), i))
-            .collect();
+        // Build delivery targets: independent consumers + one entry per group.
+        // A "target" is either Target::Independent(consumer_id) or Target::Group(group_name).
+        let mut targets: Vec<DeliveryTarget> = Vec::new();
+        let mut seen_groups: HashSet<String> = HashSet::new();
 
-        if queue_consumers.is_empty() {
+        for (cid, entry) in &self.consumers {
+            if entry.queue_id != queue_id {
+                continue;
+            }
+            if let Some(ref group) = entry.consumer_group {
+                if seen_groups.insert(group.clone()) {
+                    targets.push(DeliveryTarget::Group(group.clone()));
+                }
+            } else {
+                targets.push(DeliveryTarget::Independent(cid.clone()));
+            }
+        }
+
+        if targets.is_empty() {
             return false;
         }
 
-        let rr_idx = self
+        let mut rr_idx = *self
             .consumer_rr_idx
             .entry(queue_id.to_string())
             .or_insert(0);
         let mut attempts = 0;
 
-        while attempts < queue_consumers.len() {
-            let (ref cid, _) = queue_consumers[*rr_idx % queue_consumers.len()];
-            *rr_idx = rr_idx.wrapping_add(1);
+        while attempts < targets.len() {
+            let target = targets[rr_idx % targets.len()].clone();
+            rr_idx = rr_idx.wrapping_add(1);
             attempts += 1;
 
-            let now_ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
-            let expiry_ns = now_ns + visibility_timeout_ms * 1_000_000;
-
-            let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
-            let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
-
-            if let Err(e) = self.storage.apply_mutations(vec![
-                Mutation::PutLease {
-                    key: lease_key.to_vec(),
-                    value: lease_val,
-                },
-                Mutation::PutLeaseExpiry {
-                    key: expiry_key.clone(),
-                },
-            ]) {
-                error!(msg_id = %msg.id, error = %e, "failed to write lease");
-                return false;
-            }
-
-            let ready = ReadyMessage {
-                msg_id: msg.id,
-                queue_id: msg.queue_id.clone(),
-                headers: msg.headers.clone(),
-                payload: msg.payload.clone(),
-                fairness_key: msg.fairness_key.clone(),
-                weight: msg.weight,
-                throttle_keys: msg.throttle_keys.clone(),
-                attempt_count: msg.attempt_count,
-            };
-
-            // Look up the consumer's tx channel
-            let Some(entry) = self.consumers.get(cid) else {
-                continue;
-            };
-
-            match entry.tx.try_send(ready) {
-                Ok(()) => return true,
-                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    warn!(%cid, msg_id = %msg.id, "consumer channel full, trying next");
-                    if let Err(e) = self.storage.apply_mutations(vec![
-                        Mutation::DeleteLease {
-                            key: lease_key.to_vec(),
-                        },
-                        Mutation::DeleteLeaseExpiry { key: expiry_key },
-                    ]) {
-                        error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
+            match &target {
+                DeliveryTarget::Independent(cid) => {
+                    if let Some(true) = self.try_send_to_consumer(
+                        cid,
+                        queue_id,
+                        msg,
+                        lease_key,
+                        visibility_timeout_ms,
+                    ) {
+                        self.consumer_rr_idx.insert(queue_id.to_string(), rr_idx);
+                        return true;
                     }
                 }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                    warn!(%cid, msg_id = %msg.id, "consumer channel closed, trying next");
-                    if let Err(e) = self.storage.apply_mutations(vec![
-                        Mutation::DeleteLease {
-                            key: lease_key.to_vec(),
-                        },
-                        Mutation::DeleteLeaseExpiry { key: expiry_key },
-                    ]) {
-                        error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
+                DeliveryTarget::Group(group_name) => {
+                    // Try each group member in round-robin order.
+                    // next_member() advances the group's internal RR on each call.
+                    let member_count = self
+                        .consumer_groups
+                        .group_members(queue_id, group_name)
+                        .map_or(0, |m| m.len());
+                    let mut group_attempts = 0;
+                    while group_attempts < member_count {
+                        let Some(cid) = self.consumer_groups.next_member(queue_id, group_name)
+                        else {
+                            break;
+                        };
+                        group_attempts += 1;
+                        if let Some(true) = self.try_send_to_consumer(
+                            &cid,
+                            queue_id,
+                            msg,
+                            lease_key,
+                            visibility_timeout_ms,
+                        ) {
+                            self.consumer_rr_idx.insert(queue_id.to_string(), rr_idx);
+                            return true;
+                        }
                     }
                 }
             }
         }
 
+        // Write back the rr index even on failure
+        self.consumer_rr_idx.insert(queue_id.to_string(), rr_idx);
         false
     }
+
+    /// Attempt to send a message to a specific consumer. Returns:
+    /// - `Some(true)` if delivery succeeded
+    /// - `Some(false)` if the consumer was full/closed (lease rolled back)
+    /// - `None` if the consumer was not found
+    fn try_send_to_consumer(
+        &mut self,
+        cid: &str,
+        queue_id: &str,
+        msg: &crate::message::Message,
+        lease_key: &[u8],
+        visibility_timeout_ms: u64,
+    ) -> Option<bool> {
+        // Verify consumer exists
+        if !self.consumers.contains_key(cid) {
+            return None;
+        }
+
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        let expiry_ns = now_ns + visibility_timeout_ms * 1_000_000;
+
+        let lease_val = crate::storage::keys::lease_value(cid, expiry_ns);
+        let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, &msg.id);
+
+        if let Err(e) = self.storage.apply_mutations(vec![
+            Mutation::PutLease {
+                key: lease_key.to_vec(),
+                value: lease_val,
+            },
+            Mutation::PutLeaseExpiry {
+                key: expiry_key.clone(),
+            },
+        ]) {
+            error!(msg_id = %msg.id, error = %e, "failed to write lease");
+            return Some(false);
+        }
+
+        let ready = ReadyMessage {
+            msg_id: msg.id,
+            queue_id: msg.queue_id.clone(),
+            headers: msg.headers.clone(),
+            payload: msg.payload.clone(),
+            fairness_key: msg.fairness_key.clone(),
+            weight: msg.weight,
+            throttle_keys: msg.throttle_keys.clone(),
+            attempt_count: msg.attempt_count,
+        };
+
+        // Look up the consumer's tx channel
+        let entry = self.consumers.get(cid)?;
+
+        match entry.tx.try_send(ready) {
+            Ok(()) => Some(true),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                warn!(%cid, msg_id = %msg.id, "consumer channel full, trying next");
+                if let Err(e) = self.storage.apply_mutations(vec![
+                    Mutation::DeleteLease {
+                        key: lease_key.to_vec(),
+                    },
+                    Mutation::DeleteLeaseExpiry { key: expiry_key },
+                ]) {
+                    error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
+                }
+                Some(false)
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                warn!(%cid, msg_id = %msg.id, "consumer channel closed, trying next");
+                if let Err(e) = self.storage.apply_mutations(vec![
+                    Mutation::DeleteLease {
+                        key: lease_key.to_vec(),
+                    },
+                    Mutation::DeleteLeaseExpiry { key: expiry_key },
+                ]) {
+                    error!(%cid, msg_id = %msg.id, error = %e, "failed to roll back lease");
+                }
+                Some(false)
+            }
+        }
+    }
+}
+
+/// A delivery target: either an independent consumer or a consumer group.
+#[derive(Clone)]
+enum DeliveryTarget {
+    Independent(String),
+    Group(String),
 }
