@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "19.2"
     title: "Documentation Website & Deployment Guides"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/19.2-documentation-website-deployment-guides"
-    pr: null
+    pr: 87
     dependsOn: []
   - id: "19.3"
     title: "SDK & Integration Guides"
