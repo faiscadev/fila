@@ -657,10 +657,35 @@ impl FilaRaftStore {
                 // backward compatibility with Raft entries committed before
                 // the index was introduced.
                 let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
-                let msg_key_opt = storage.get_msg_index(&idx_key).ok().flatten();
+                let msg_key_opt = storage
+                    .get_msg_index(&idx_key)
+                    .map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    })?;
 
                 let msg_key = if let Some(key) = msg_key_opt {
-                    Some(key)
+                    // Verify the message actually exists at this key (stale
+                    // index protection). If not, fall back to scan.
+                    if storage
+                        .get_message(&key)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?
+                        .is_some()
+                    {
+                        Some(key)
+                    } else {
+                        let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+                        let messages = storage
+                            .list_messages(&msg_prefix)
+                            .map_err(|e| StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            })?;
+                        messages
+                            .into_iter()
+                            .find(|(_, msg)| msg.id == *msg_id)
+                            .map(|(key, _)| key)
+                    }
                 } else {
                     // Fallback: scan all messages in the queue (O(n)).
                     let msg_prefix = crate::storage::keys::message_prefix(queue_id);
@@ -705,16 +730,34 @@ impl FilaRaftStore {
             } => {
                 // O(1) lookup via message index, with fallback scan.
                 let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
-                let msg_key_opt = storage.get_msg_index(&idx_key).ok().flatten();
+                let msg_key_opt = storage
+                    .get_msg_index(&idx_key)
+                    .map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    })?;
 
                 let found = if let Some(key) = msg_key_opt {
-                    // O(1) direct get.
-                    storage
+                    // O(1) direct get. If the index points to a deleted message
+                    // (stale index), fall back to scan.
+                    match storage
                         .get_message(&key)
                         .map_err(|e| StorageError::IO {
                             source: openraft::StorageIOError::apply(log_id, &e),
-                        })?
-                        .map(|msg| (key, msg))
+                        })? {
+                        Some(msg) => Some((key, msg)),
+                        None => {
+                            // Stale index — fall back to scan.
+                            let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+                            let messages = storage
+                                .list_messages(&msg_prefix)
+                                .map_err(|e| StorageError::IO {
+                                    source: openraft::StorageIOError::apply(log_id, &e),
+                                })?;
+                            messages
+                                .into_iter()
+                                .find(|(_, msg)| msg.id == *msg_id)
+                        }
+                    }
                 } else {
                     // Fallback: scan all messages in the queue (O(n)).
                     let msg_prefix = crate::storage::keys::message_prefix(queue_id);
@@ -1030,5 +1073,50 @@ mod tests {
         // Index for the acked message should be gone.
         let idx_key = keys::msg_index_key("q1", &target_id);
         assert!(rocksdb.get_msg_index(&idx_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn double_ack_is_idempotent() {
+        let (rocksdb, _dir) = test_storage();
+        let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
+
+        let msg = test_message("q1", "tenant_a");
+        let enqueue_req = super::super::types::ClusterRequest::Enqueue {
+            message: msg.clone(),
+        };
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
+            .unwrap();
+
+        let ack_req = super::super::types::ClusterRequest::Ack {
+            queue_id: "q1".to_string(),
+            msg_id: msg.id,
+        };
+        // First ack — deletes message.
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(2))
+            .unwrap();
+        // Second ack — message already gone, should be a no-op.
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(3))
+            .unwrap();
+
+        let prefix = keys::message_prefix("q1");
+        assert_eq!(rocksdb.list_messages(&prefix).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn ack_nonexistent_message_is_noop() {
+        let (rocksdb, _dir) = test_storage();
+        let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
+
+        let ack_req = super::super::types::ClusterRequest::Ack {
+            queue_id: "q1".to_string(),
+            msg_id: uuid::Uuid::now_v7(),
+        };
+        // Ack a message that was never enqueued — should not error.
+        store
+            .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(1))
+            .unwrap();
     }
 }
