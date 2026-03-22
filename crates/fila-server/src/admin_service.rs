@@ -30,6 +30,36 @@ fn cluster_write_err_to_status(err: ClusterWriteError) -> Status {
     }
 }
 
+/// Select the preferred leader for a new queue's Raft group.
+///
+/// Counts how many queues each member node currently leads and picks
+/// the one with the fewest leaderships. Tie-break: lowest node ID.
+async fn select_preferred_leader(members: &[u64], cluster: &ClusterHandle) -> u64 {
+    let groups = cluster.multi_raft.snapshot_groups().await;
+
+    // Count leaderships per node across all existing queue groups.
+    let mut leadership_counts: std::collections::HashMap<u64, usize> =
+        members.iter().map(|&id| (id, 0)).collect();
+
+    for (_queue_id, raft) in &groups {
+        if let Some(leader) = raft.current_leader().await {
+            if let Some(count) = leadership_counts.get_mut(&leader) {
+                *count += 1;
+            }
+        }
+    }
+
+    // Pick the member with fewest leaderships (tie-break: lowest node ID).
+    members
+        .iter()
+        .copied()
+        .min_by_key(|&id| {
+            let count = leadership_counts.get(&id).copied().unwrap_or(0);
+            (count, id)
+        })
+        .unwrap_or_else(|| members.first().copied().unwrap_or(1))
+}
+
 /// gRPC admin service implementation. Wraps a Broker to send commands
 /// to the scheduler thread.
 pub struct AdminService {
@@ -163,11 +193,19 @@ impl FilaAdmin for AdminService {
             // in the local scheduler and start the queue's Raft group on
             // all nodes.
             let (members, _member_addrs) = cluster.meta_members();
+
+            // Select the preferred leader: the member with the fewest current
+            // queue leaderships. This distributes queue leadership across nodes
+            // for balanced load.
+            let preferred_leader =
+                select_preferred_leader(&members, cluster.as_ref()).await;
+
             let resp = cluster
                 .write_to_meta(ClusterRequest::CreateQueueGroup {
                     queue_id: req.name.clone(),
                     members,
                     config,
+                    preferred_leader,
                 })
                 .await
                 .map_err(cluster_write_err_to_status)?;

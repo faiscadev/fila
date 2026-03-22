@@ -251,6 +251,7 @@ pub async fn process_meta_events(
                 queue_id,
                 members,
                 config,
+                preferred_leader,
             } => {
                 // Create the queue in the local scheduler.
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -275,7 +276,10 @@ pub async fn process_meta_events(
                 }
 
                 // Start the queue's Raft group.
-                if let Err(e) = multi_raft.create_group(&queue_id, &members).await {
+                if let Err(e) = multi_raft
+                    .create_group(&queue_id, &members, preferred_leader)
+                    .await
+                {
                     tracing::error!(queue_id, error = %e, "failed to create queue raft group");
                 }
             }

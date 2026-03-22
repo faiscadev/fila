@@ -297,7 +297,7 @@ mod tests {
         // Create a queue Raft group on all nodes.
         for node in [&node1, &node2, &node3] {
             node.multi_raft
-                .create_group("orders", &member_ids)
+                .create_group("orders", &member_ids, 1)
                 .await
                 .unwrap();
         }
@@ -342,7 +342,7 @@ mod tests {
         // Create queue group on all nodes.
         for node in [&node1, &node2, &node3] {
             node.multi_raft
-                .create_group("payments", &member_ids)
+                .create_group("payments", &member_ids, 1)
                 .await
                 .unwrap();
         }
@@ -427,7 +427,7 @@ mod tests {
         // Create and then delete a queue group.
         for node in [&node1, &node2, &node3] {
             node.multi_raft
-                .create_group("temp-queue", &member_ids)
+                .create_group("temp-queue", &member_ids, 1)
                 .await
                 .unwrap();
         }
@@ -598,8 +598,9 @@ mod tests {
             .cluster_handle
             .write_to_meta(crate::ClusterRequest::CreateQueueGroup {
                 queue_id: queue_name.to_string(),
-                members,
+                members: members.clone(),
                 config,
+                preferred_leader: members.first().copied().unwrap_or(1),
             })
             .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
@@ -1407,7 +1408,7 @@ mod tests {
         for queue_id in &queue_ids {
             for node in [&node1, &node2, &node3] {
                 node.multi_raft
-                    .create_group(queue_id, &member_ids)
+                    .create_group(queue_id, &member_ids, 1)
                     .await
                     .unwrap();
             }

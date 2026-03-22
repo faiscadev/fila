@@ -58,11 +58,12 @@ impl MultiRaftManager {
 
     /// Create a new Raft group for a queue. All specified member nodes will
     /// participate in this group. The group is initialized (bootstrapped) if
-    /// this node is the smallest node ID in the members list.
+    /// this node is the `preferred_leader`.
     pub async fn create_group(
         &self,
         queue_id: &str,
         members: &NonEmpty<(NodeId, String)>,
+        preferred_leader: NodeId,
     ) -> Result<(), CreateGroupError> {
         let store = FilaRaftStore::for_queue(
             Arc::clone(&self.db),
@@ -83,10 +84,9 @@ impl MultiRaftManager {
         .map_err(|e| CreateGroupError::RaftFatal(Box::new(e)))?;
         let raft = Arc::new(raft);
 
-        // Bootstrap the group if this node is the smallest member
-        // (only one node should bootstrap to avoid conflicts).
-        let min_member = members.iter().map(|(id, _)| *id).fold(u64::MAX, u64::min);
-        if self.node_id == min_member {
+        // Bootstrap the group if this node is the preferred leader.
+        // Only one node should bootstrap to avoid conflicts.
+        if self.node_id == preferred_leader {
             let member_map: std::collections::BTreeMap<_, _> = members
                 .iter()
                 .map(|(id, addr)| (*id, BasicNode { addr: addr.clone() }))
