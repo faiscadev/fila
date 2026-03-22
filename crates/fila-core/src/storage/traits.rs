@@ -10,21 +10,50 @@ use crate::queue::QueueConfig;
 /// batch of `Mutation`s.
 #[derive(Debug)]
 pub enum Mutation {
-    PutMessage { key: Vec<u8>, value: Vec<u8> },
-    DeleteMessage { key: Vec<u8> },
-    PutLease { key: Vec<u8>, value: Vec<u8> },
-    DeleteLease { key: Vec<u8> },
-    PutLeaseExpiry { key: Vec<u8> },
-    DeleteLeaseExpiry { key: Vec<u8> },
-    PutQueue { key: Vec<u8>, value: Vec<u8> },
-    DeleteQueue { key: Vec<u8> },
-    PutState { key: Vec<u8>, value: Vec<u8> },
-    DeleteState { key: Vec<u8> },
+    PutMessage {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    DeleteMessage {
+        key: Vec<u8>,
+    },
+    PutLease {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    DeleteLease {
+        key: Vec<u8>,
+    },
+    PutLeaseExpiry {
+        key: Vec<u8>,
+    },
+    DeleteLeaseExpiry {
+        key: Vec<u8>,
+    },
+    PutQueue {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    DeleteQueue {
+        key: Vec<u8>,
+    },
+    PutState {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    DeleteState {
+        key: Vec<u8>,
+    },
     /// Store message index: maps `{queue_id}:{msg_id}` → full message key.
     /// Enables O(1) ack/nack by avoiding full queue scans to locate a message.
-    PutMsgIndex { key: Vec<u8>, value: Vec<u8> },
+    PutMsgIndex {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
     /// Delete a message index entry.
-    DeleteMsgIndex { key: Vec<u8> },
+    DeleteMsgIndex {
+        key: Vec<u8>,
+    },
 }
 
 /// Storage engine trait for all persistence operations.

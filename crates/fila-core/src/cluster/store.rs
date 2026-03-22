@@ -657,11 +657,12 @@ impl FilaRaftStore {
                 // backward compatibility with Raft entries committed before
                 // the index was introduced.
                 let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
-                let msg_key_opt = storage
-                    .get_msg_index(&idx_key)
-                    .map_err(|e| StorageError::IO {
-                        source: openraft::StorageIOError::apply(log_id, &e),
-                    })?;
+                let msg_key_opt =
+                    storage
+                        .get_msg_index(&idx_key)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
 
                 let msg_key = if let Some(key) = msg_key_opt {
                     // Verify the message actually exists at this key (stale
@@ -676,11 +677,12 @@ impl FilaRaftStore {
                         Some(key)
                     } else {
                         let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                        let messages = storage
-                            .list_messages(&msg_prefix)
-                            .map_err(|e| StorageError::IO {
-                                source: openraft::StorageIOError::apply(log_id, &e),
-                            })?;
+                        let messages =
+                            storage
+                                .list_messages(&msg_prefix)
+                                .map_err(|e| StorageError::IO {
+                                    source: openraft::StorageIOError::apply(log_id, &e),
+                                })?;
                         messages
                             .into_iter()
                             .find(|(_, msg)| msg.id == *msg_id)
@@ -712,9 +714,8 @@ impl FilaRaftStore {
                         if let Some(expiry_ts) =
                             crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
                         {
-                            let expiry_key = crate::storage::keys::lease_expiry_key(
-                                expiry_ts, queue_id, msg_id,
-                            );
+                            let expiry_key =
+                                crate::storage::keys::lease_expiry_key(expiry_ts, queue_id, msg_id);
                             mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
                         }
                     }
@@ -730,32 +731,29 @@ impl FilaRaftStore {
             } => {
                 // O(1) lookup via message index, with fallback scan.
                 let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
-                let msg_key_opt = storage
-                    .get_msg_index(&idx_key)
-                    .map_err(|e| StorageError::IO {
-                        source: openraft::StorageIOError::apply(log_id, &e),
-                    })?;
+                let msg_key_opt =
+                    storage
+                        .get_msg_index(&idx_key)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
 
                 let found = if let Some(key) = msg_key_opt {
                     // O(1) direct get. If the index points to a deleted message
                     // (stale index), fall back to scan.
-                    match storage
-                        .get_message(&key)
-                        .map_err(|e| StorageError::IO {
-                            source: openraft::StorageIOError::apply(log_id, &e),
-                        })? {
+                    match storage.get_message(&key).map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    })? {
                         Some(msg) => Some((key, msg)),
                         None => {
                             // Stale index — fall back to scan.
                             let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                            let messages = storage
-                                .list_messages(&msg_prefix)
-                                .map_err(|e| StorageError::IO {
+                            let messages = storage.list_messages(&msg_prefix).map_err(|e| {
+                                StorageError::IO {
                                     source: openraft::StorageIOError::apply(log_id, &e),
-                                })?;
-                            messages
-                                .into_iter()
-                                .find(|(_, msg)| msg.id == *msg_id)
+                                }
+                            })?;
+                            messages.into_iter().find(|(_, msg)| msg.id == *msg_id)
                         }
                     }
                 } else {
@@ -767,9 +765,7 @@ impl FilaRaftStore {
                             .map_err(|e| StorageError::IO {
                                 source: openraft::StorageIOError::apply(log_id, &e),
                             })?;
-                    messages
-                        .into_iter()
-                        .find(|(_, msg)| msg.id == *msg_id)
+                    messages.into_iter().find(|(_, msg)| msg.id == *msg_id)
                 };
 
                 if let Some((key, msg)) = found {
@@ -788,9 +784,8 @@ impl FilaRaftStore {
                         if let Some(expiry_ts) =
                             crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
                         {
-                            let expiry_key = crate::storage::keys::lease_expiry_key(
-                                expiry_ts, queue_id, msg_id,
-                            );
+                            let expiry_key =
+                                crate::storage::keys::lease_expiry_key(expiry_ts, queue_id, msg_id);
                             mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
                         }
                     }
@@ -882,7 +877,11 @@ mod tests {
         storage: Arc<RocksDbEngine>,
         queue_id: &str,
     ) -> FilaRaftStore {
-        FilaRaftStore::for_queue(db as Arc<dyn RaftKeyValueStore>, queue_id, storage as Arc<dyn StorageEngine>)
+        FilaRaftStore::for_queue(
+            db as Arc<dyn RaftKeyValueStore>,
+            queue_id,
+            storage as Arc<dyn StorageEngine>,
+        )
     }
 
     fn test_log_id(index: u64) -> LogId<NodeId> {
@@ -1047,9 +1046,7 @@ mod tests {
             if i == 50 {
                 target_id = msg.id;
             }
-            let req = super::super::types::ClusterRequest::Enqueue {
-                message: msg,
-            };
+            let req = super::super::types::ClusterRequest::Enqueue { message: msg };
             store
                 .apply_to_broker_storage(rocksdb.as_ref(), &req, test_log_id(i + 1))
                 .unwrap();

@@ -208,8 +208,7 @@ mod tests {
     #[tokio::test]
     async fn expected_queues_lifecycle() {
         let dir = tempfile::tempdir().unwrap();
-        let rocksdb =
-            Arc::new(crate::storage::RocksDbEngine::open(dir.path()).unwrap());
+        let rocksdb = Arc::new(crate::storage::RocksDbEngine::open(dir.path()).unwrap());
         let db: Arc<dyn crate::storage::RaftKeyValueStore> = Arc::clone(&rocksdb) as _;
         let storage: Arc<dyn crate::storage::StorageEngine> = Arc::clone(&rocksdb) as _;
 
@@ -240,8 +239,7 @@ mod tests {
     #[tokio::test]
     async fn get_raft_returns_none_for_unknown_queue() {
         let dir = tempfile::tempdir().unwrap();
-        let rocksdb =
-            Arc::new(crate::storage::RocksDbEngine::open(dir.path()).unwrap());
+        let rocksdb = Arc::new(crate::storage::RocksDbEngine::open(dir.path()).unwrap());
         let db: Arc<dyn crate::storage::RaftKeyValueStore> = Arc::clone(&rocksdb) as _;
         let storage: Arc<dyn crate::storage::StorageEngine> = Arc::clone(&rocksdb) as _;
 

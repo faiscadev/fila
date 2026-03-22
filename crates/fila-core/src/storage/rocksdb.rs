@@ -693,16 +693,17 @@ mod tests {
             .unwrap();
 
         assert!(storage.get_message(&msg_key).unwrap().is_some());
-        assert_eq!(
-            storage.get_msg_index(&idx_key).unwrap().unwrap(),
-            msg_key
-        );
+        assert_eq!(storage.get_msg_index(&idx_key).unwrap().unwrap(), msg_key);
 
         // Delete both atomically
         storage
             .apply_mutations(vec![
-                Mutation::DeleteMessage { key: msg_key.clone() },
-                Mutation::DeleteMsgIndex { key: idx_key.clone() },
+                Mutation::DeleteMessage {
+                    key: msg_key.clone(),
+                },
+                Mutation::DeleteMsgIndex {
+                    key: idx_key.clone(),
+                },
             ])
             .unwrap();
 
