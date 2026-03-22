@@ -609,6 +609,49 @@ impl ClusterManager {
             .await?;
         }
 
+        // Discover all cluster members' client addresses via GetNodeInfo RPC.
+        // This runs after join so all nodes are known in the Raft membership.
+        {
+            let metrics = raft.metrics().borrow().clone();
+            let nodes: Vec<(u64, String)> = metrics
+                .membership_config
+                .membership()
+                .nodes()
+                .map(|(&id, n)| (id, n.addr.clone()))
+                .collect();
+            for (peer_id, cluster_addr) in nodes {
+                if peer_id == node_id {
+                    continue; // Already registered our own address
+                }
+                let url = network::normalize_cluster_url(&cluster_addr, client_tls.is_some());
+                match network::connect_channel(&url, client_tls.as_deref()).await {
+                    Ok(channel) => {
+                        let mut client =
+                            fila_proto::fila_cluster_client::FilaClusterClient::new(channel);
+                        match client
+                            .get_node_info(tonic::Request::new(fila_proto::GetNodeInfoRequest {}))
+                            .await
+                        {
+                            Ok(resp) => {
+                                let info = resp.into_inner();
+                                if !info.client_addr.is_empty() {
+                                    multi_raft
+                                        .register_client_addr(info.node_id, &info.client_addr)
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(peer_id, error = %e, "failed to get node info");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(peer_id, error = %e, "failed to connect for node info");
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             node_id,
             raft,

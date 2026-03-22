@@ -9,8 +9,9 @@ use tokio_stream::StreamExt;
 /// to stabilize across the cluster.
 fn create_cluster_queue(addr: &str, name: &str) {
     helpers::create_queue_cli(addr, name);
-    // Allow the queue Raft group to be created on all nodes and elect a leader.
-    std::thread::sleep(Duration::from_secs(2));
+    // Allow the queue Raft group to be created on all nodes, elect a leader,
+    // and propagate client address mappings. CI environments may need more time.
+    std::thread::sleep(Duration::from_secs(3));
 }
 
 /// Helper: run `fila queue inspect <name>` on a node and return the raw stdout.
