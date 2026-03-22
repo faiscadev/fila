@@ -4,10 +4,10 @@ startedAt: "2026-03-21"
 stories:
   - id: "17.1"
     title: "Cluster Error Clarity & Ack/Nack Performance"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/17.1-cluster-error-clarity-ack-nack-performance"
-    pr: null
+    pr: 82
     dependsOn: []
   - id: "17.2"
     title: "Consume Leader Hint & SDK Reconnect"
