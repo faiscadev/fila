@@ -74,6 +74,10 @@ pub enum ClusterRequest {
         /// Preferred initial leader for this queue's Raft group.
         /// The node with this ID bootstraps the group (becomes initial leader).
         /// Chosen by the assignment strategy to balance leadership across nodes.
+        /// A value of 0 means "unset" — fall back to smallest member ID.
+        /// This preserves backward compatibility with Raft log entries written
+        /// before this field existed (serde defaults missing fields to 0).
+        #[serde(default)]
         preferred_leader: u64,
     },
     /// Delete a queue's Raft group. Applied by the meta Raft state machine;

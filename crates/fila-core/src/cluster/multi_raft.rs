@@ -84,9 +84,21 @@ impl MultiRaftManager {
         .map_err(|e| CreateGroupError::RaftFatal(Box::new(e)))?;
         let raft = Arc::new(raft);
 
-        // Bootstrap the group if this node is the preferred leader.
-        // Only one node should bootstrap to avoid conflicts.
-        if self.node_id == preferred_leader {
+        // Determine the bootstrap node: preferred_leader if it's a valid member,
+        // otherwise fall back to the smallest member ID. The fallback handles
+        // legacy Raft log entries that predate the preferred_leader field (where
+        // the deserialized value is 0) and guards against invalid IDs.
+        let bootstrap_node = if preferred_leader > 0
+            && members.iter().any(|(id, _)| *id == preferred_leader)
+        {
+            preferred_leader
+        } else {
+            members
+                .iter()
+                .map(|(id, _)| *id)
+                .fold(u64::MAX, u64::min)
+        };
+        if self.node_id == bootstrap_node {
             let member_map: std::collections::BTreeMap<_, _> = members
                 .iter()
                 .map(|(id, addr)| (*id, BasicNode { addr: addr.clone() }))
