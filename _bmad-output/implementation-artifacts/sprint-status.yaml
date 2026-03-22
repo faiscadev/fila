@@ -186,9 +186,9 @@ development_status:
   epic-17-retrospective: done
 
   # Epic 18: Consumer Groups
-  epic-18: in-progress
-  18-1-broker-managed-consumer-groups: in-progress
-  epic-18-retrospective: optional
+  epic-18: done
+  18-1-broker-managed-consumer-groups: done
+  epic-18-retrospective: done
 
   # Epic 19: Developer Experience (docs website, Helm, Lua helpers, guides)
   epic-19: backlog
