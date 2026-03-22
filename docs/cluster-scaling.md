@@ -75,6 +75,31 @@ fila --addr 127.0.0.1:5555 queue list
 # Should show "Cluster nodes: 3" at the bottom
 ```
 
+## Queue-to-Node Assignment
+
+When a queue is created in cluster mode, Fila automatically distributes
+queue leadership across nodes for balanced load:
+
+- **Preferred leader selection**: each new queue's initial leader is the node
+  with the fewest current queue leaderships (tie-break: lowest node ID).
+- **Node subset selection**: when the cluster has more nodes than
+  `replication_factor` (default: 3), only the N least-loaded nodes participate
+  in each queue's Raft group. This spreads I/O across more nodes.
+- **No manual placement**: operators do not need to specify which nodes a queue
+  runs on. The cluster handles assignment automatically.
+
+Configure `replication_factor` in the `[cluster]` section:
+
+```toml
+[cluster]
+enabled = true
+node_id = 1
+replication_factor = 3  # default: 3 nodes per queue Raft group
+```
+
+Inspect queue leadership via `fila queue inspect <name>` — the "Raft leader"
+line shows which node currently leads each queue.
+
 ## Running Scaling Benchmarks
 
 ### Step 1: Baseline (Single Node)
