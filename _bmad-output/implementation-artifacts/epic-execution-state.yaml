@@ -1,17 +1,26 @@
-epic: "Epic 18: Consumer Groups"
+epic: "Epic 19: Developer Experience"
 baseBranch: main
 startedAt: "2026-03-22"
 stories:
-  - id: "18.1"
-    title: "Broker-Managed Consumer Groups"
+  - id: "19.1"
+    title: "Built-in Lua Helpers"
     status: in-progress
-    currentPhase: "implementation"
-    branch: "feat/18.1-broker-managed-consumer-groups"
+    currentPhase: "dev"
+    branch: "feat/19.1-built-in-lua-helpers"
     pr: null
     dependsOn: []
-completedAt: null
-summary:
-  total: 1
-  completed: 0
-  skipped: 0
+  - id: "19.2"
+    title: "Documentation Website & Deployment Guides"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: []
+  - id: "19.3"
+    title: "SDK & Integration Guides"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: []
 skippedIssues: []
