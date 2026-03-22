@@ -653,15 +653,18 @@ impl TryFrom<fila_proto::ClusterRequestProto> for ClusterRequest {
                 dlq_queue_id: rd.dlq_queue_id,
                 count: rd.count,
             }),
-            Request::CreateQueueGroup(cqg) => Ok(ClusterRequest::CreateQueueGroup {
-                queue_id: cqg.queue_id,
-                members: cqg.members.clone(),
-                config: cqg
-                    .config
-                    .ok_or(ConvertError::MissingField("create_queue_group.config"))?
-                    .into(),
-                preferred_leader: cqg.preferred_leader,
-            }),
+            Request::CreateQueueGroup(cqg) => {
+                let preferred_leader = cqg.preferred_leader;
+                Ok(ClusterRequest::CreateQueueGroup {
+                    queue_id: cqg.queue_id,
+                    members: cqg.members,
+                    config: cqg
+                        .config
+                        .ok_or(ConvertError::MissingField("create_queue_group.config"))?
+                        .into(),
+                    preferred_leader,
+                })
+            }
             Request::DeleteQueueGroup(dqg) => Ok(ClusterRequest::DeleteQueueGroup {
                 queue_id: dqg.queue_id,
             }),
