@@ -30,7 +30,7 @@ pub fn register_helpers(lua: &Lua) -> mlua::Result<()> {
 /// - Jitter: multiply by random factor in `[0.75, 1.25]`
 fn create_exponential_backoff(lua: &Lua) -> mlua::Result<mlua::Function> {
     lua.create_function(|lua, (attempts, base_ms, max_ms): (f64, f64, f64)| {
-        let exponent = (attempts - 1.0).max(0.0).min(52.0); // cap to avoid f64 overflow
+        let exponent = (attempts - 1.0).clamp(0.0, 52.0); // cap to avoid f64 overflow
         let delay = (base_ms * 2.0_f64.powf(exponent)).min(max_ms);
 
         // Use Lua's math.random() for jitter (available in sandbox)
