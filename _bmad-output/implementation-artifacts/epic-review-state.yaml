@@ -1,21 +1,29 @@
-epic: "Epic 16: Release Engineering & SDK Compatibility"
-epicNumber: 16
-startedAt: "2026-03-21T00:00:00Z"
-completedAt: "2026-03-21T14:10:00Z"
+epic: "Epic 16.5: Stability Hardening & Test Coverage"
+epicNumber: 16.5
+startedAt: "2026-03-21T15:00:00Z"
+completedAt: "2026-03-22T01:07:00Z"
 yoloMode: false
-currentPrIndex: 1
+currentPrIndex: 2
+mode: normal
 prChain:
-  - storyId: "16.1"
-    storyKey: "16-1-versioning-compatibility-policy"
-    title: "Versioning & Compatibility Policy"
-    branch: "feat/16.1-versioning-compatibility-policy"
-    pr: 77
+  - storyId: "16.5.1"
+    storyKey: "16.5-1-cluster-e2e-test-suite"
+    title: "Cluster E2E Test Suite"
+    branch: "feat/16.5.1-cluster-e2e-test-suite"
+    pr: 79
     baseBranch: "main"
     status: merged
-  - storyId: "16.2"
-    storyKey: "16-2-sdk-auth-feature-parity"
-    title: "SDK Auth Feature Parity"
-    branch: "feat/16.2-sdk-auth-feature-parity"
-    pr: 78
+  - storyId: "16.5.2"
+    storyKey: "16.5-2-tls-auth-edge-case-hardening"
+    title: "TLS & Auth Edge Case Hardening"
+    branch: "feat/16.5.2-tls-auth-edge-case-hardening"
+    pr: 80
+    baseBranch: "main"
+    status: merged
+  - storyId: "16.5.3"
+    storyKey: "16.5-3-ci-code-coverage-quality-gates"
+    title: "CI Code Coverage & Quality Gates"
+    branch: "feat/16.5.3-ci-code-coverage-quality-gates"
+    pr: 81
     baseBranch: "main"
     status: merged
