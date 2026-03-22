@@ -18,9 +18,9 @@ stories:
     dependsOn: ["17.1"]
   - id: "17.3"
     title: "Automatic Queue-to-Node Assignment"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/17.3-automatic-queue-to-node-assignment"
-    pr: null
+    pr: 84
     dependsOn: []
 skippedIssues: []
