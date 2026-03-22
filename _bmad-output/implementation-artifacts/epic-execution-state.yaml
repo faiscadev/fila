@@ -4,10 +4,10 @@ startedAt: "2026-03-22"
 stories:
   - id: "19.1"
     title: "Built-in Lua Helpers"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/19.1-built-in-lua-helpers"
-    pr: null
+    pr: 86
     dependsOn: []
   - id: "19.2"
     title: "Documentation Website & Deployment Guides"
