@@ -1,8 +1,8 @@
 startedAt: "2026-03-22T00:00:00Z"
-currentEpic: 17
-currentEpicName: "Cluster Hardening"
-currentPhase: "complete"
-cycleCount: 1
+currentEpic: 18
+currentEpicName: "Consumer Groups"
+currentPhase: "execute"
+cycleCount: 2
 completedEpics:
   - epicNumber: 17
     epicName: "Cluster Hardening"
