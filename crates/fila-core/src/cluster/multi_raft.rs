@@ -40,6 +40,11 @@ pub struct MultiRaftManager {
     /// "queue doesn't exist" (`QueueGroupNotFound`) from "node still catching
     /// up" (`NodeNotReady`).
     expected_queues: RwLock<HashSet<String>>,
+    /// Mapping of node_id → client-facing gRPC address. Used for leader hint
+    /// routing: when a consumer connects to a non-leader, the server includes
+    /// the leader's client address in the error response. Populated via
+    /// AddNode requests and GetNodeInfo RPCs.
+    client_addrs: RwLock<HashMap<NodeId, String>>,
     /// Broker storage for queue-level Raft state machines. Committed entries
     /// (enqueue, ack, nack) are applied to this storage on all nodes for replication.
     broker_storage: Arc<dyn crate::storage::StorageEngine>,
@@ -58,6 +63,7 @@ impl MultiRaftManager {
             raft_config,
             groups: RwLock::new(HashMap::new()),
             expected_queues: RwLock::new(HashSet::new()),
+            client_addrs: RwLock::new(HashMap::new()),
             broker_storage,
         }
     }
@@ -198,6 +204,19 @@ impl MultiRaftManager {
     /// meta Raft) even if the local Raft group is not ready yet.
     pub async fn is_queue_expected(&self, queue_id: &str) -> bool {
         self.expected_queues.read().await.contains(queue_id)
+    }
+
+    /// Register a node's client-facing gRPC address for leader hint routing.
+    pub async fn register_client_addr(&self, node_id: NodeId, addr: &str) {
+        self.client_addrs
+            .write()
+            .await
+            .insert(node_id, addr.to_string());
+    }
+
+    /// Look up a node's client-facing gRPC address.
+    pub async fn get_client_addr(&self, node_id: NodeId) -> Option<String> {
+        self.client_addrs.read().await.get(&node_id).cloned()
     }
 }
 

@@ -99,6 +99,10 @@ pub struct FilaClient {
     inner: FilaServiceClient<Channel>,
     /// API key sent as `authorization: Bearer <key>` on every request.
     api_key: Option<String>,
+    /// Stored connection options for transparent leader redirect reconnection.
+    /// When the consume call is redirected to a leader node, the SDK reuses
+    /// these options (TLS, timeout, auth) for the new connection.
+    connect_options: Option<ConnectOptions>,
 }
 
 impl FilaClient {
@@ -106,10 +110,12 @@ impl FilaClient {
     ///
     /// The address should include the scheme, e.g. `http://localhost:5555`.
     pub async fn connect(addr: impl Into<String>) -> Result<Self, ConnectError> {
-        let inner = FilaServiceClient::connect(addr.into()).await?;
+        let addr = addr.into();
+        let inner = FilaServiceClient::connect(addr.clone()).await?;
         Ok(Self {
             inner,
             api_key: None,
+            connect_options: Some(ConnectOptions::new(addr)),
         })
     }
 
@@ -118,6 +124,8 @@ impl FilaClient {
     /// When TLS fields are set in `options`, the connection uses TLS/mTLS.
     /// The address should use `https://` when TLS is enabled.
     pub async fn connect_with_options(options: ConnectOptions) -> Result<Self, ConnectError> {
+        // Clone options for storage before consuming fields for TLS setup.
+        let stored_options = options.clone();
         let mut endpoint = Channel::from_shared(options.addr)
             .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
 
@@ -156,9 +164,11 @@ impl FilaClient {
 
         let channel = endpoint.connect().await?;
         let inner = FilaServiceClient::new(channel);
+        let api_key = stored_options.api_key.clone();
         Ok(Self {
             inner,
-            api_key: options.api_key,
+            api_key,
+            connect_options: Some(stored_options),
         })
     }
 
@@ -213,14 +223,74 @@ impl FilaClient {
         &self,
         queue: &str,
     ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        let response = self
+        let consume_req = ConsumeRequest {
+            queue: queue.to_string(),
+        };
+
+        let result = self
             .inner
             .clone()
-            .consume(self.request(ConsumeRequest {
-                queue: queue.to_string(),
-            }))
-            .await
-            .map_err(consume_status_error)?;
+            .consume(self.request(consume_req.clone()))
+            .await;
+
+        // If the server returns UNAVAILABLE with a leader hint, transparently
+        // reconnect to the hinted leader and retry once. This handles the
+        // cluster case where consumers must connect to the queue's Raft leader.
+        let response = match result {
+            Ok(resp) => resp,
+            Err(status)
+                if status.code() == tonic::Code::Unavailable
+                    && extract_leader_hint(&status).is_some() =>
+            {
+                let leader_addr = extract_leader_hint(&status).unwrap();
+                // Connect to the hinted leader, reusing the same TLS/auth
+                // config as the original connection.
+                let leader_url =
+                    if leader_addr.starts_with("http://") || leader_addr.starts_with("https://") {
+                        leader_addr
+                    } else {
+                        // Preserve the original scheme (http vs https).
+                        let scheme = self
+                            .connect_options
+                            .as_ref()
+                            .map(|o| {
+                                if o.tls || o.tls_ca_cert_pem.is_some() {
+                                    "https"
+                                } else {
+                                    "http"
+                                }
+                            })
+                            .unwrap_or("http");
+                        format!("{scheme}://{leader_addr}")
+                    };
+                // Build connection with same TLS/timeout options.
+                let leader_opts = match self.connect_options {
+                    Some(ref opts) => ConnectOptions {
+                        addr: leader_url,
+                        timeout: opts.timeout,
+                        tls: opts.tls,
+                        tls_ca_cert_pem: opts.tls_ca_cert_pem.clone(),
+                        tls_client_cert_pem: opts.tls_client_cert_pem.clone(),
+                        tls_client_key_pem: opts.tls_client_key_pem.clone(),
+                        api_key: opts.api_key.clone(),
+                    },
+                    None => ConnectOptions::new(leader_url),
+                };
+                match Self::connect_with_options(leader_opts).await {
+                    Ok(leader_client) => leader_client
+                        .inner
+                        .clone()
+                        .consume(leader_client.request(consume_req))
+                        .await
+                        .map_err(consume_status_error)?,
+                    Err(_) => {
+                        // Leader connection failed — return the original error.
+                        return Err(consume_status_error(status));
+                    }
+                }
+            }
+            Err(status) => return Err(consume_status_error(status)),
+        };
 
         let stream = response.into_inner().filter_map(|result| match result {
             Ok(consume_response) => {
@@ -277,4 +347,14 @@ impl FilaClient {
 
         Ok(())
     }
+}
+
+/// Extract the leader's client address from gRPC error metadata.
+/// Returns `Some(addr)` if the `x-fila-leader-addr` key is present.
+fn extract_leader_hint(status: &tonic::Status) -> Option<String> {
+    status
+        .metadata()
+        .get("x-fila-leader-addr")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }

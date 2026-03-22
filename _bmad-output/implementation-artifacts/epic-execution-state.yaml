@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "17.2"
     title: "Consume Leader Hint & SDK Reconnect"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/17.2-consume-leader-hint-sdk-reconnect"
+    pr: 83
     dependsOn: ["17.1"]
   - id: "17.3"
     title: "Automatic Queue-to-Node Assignment"

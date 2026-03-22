@@ -10,10 +10,10 @@ use super::types::{NodeId, TypeConfig};
 use crate::Broker;
 use fila_proto::fila_cluster_server::FilaCluster;
 use fila_proto::{
-    AddNodeRequest, AddNodeResponse, RaftAppendEntriesRequest, RaftAppendEntriesResponse,
-    RaftClientWriteRequest, RaftClientWriteResponse, RaftInstallSnapshotRequest,
-    RaftInstallSnapshotResponse, RaftVoteRequest, RaftVoteResponse, RemoveNodeRequest,
-    RemoveNodeResponse,
+    AddNodeRequest, AddNodeResponse, GetNodeInfoRequest, GetNodeInfoResponse,
+    RaftAppendEntriesRequest, RaftAppendEntriesResponse, RaftClientWriteRequest,
+    RaftClientWriteResponse, RaftInstallSnapshotRequest, RaftInstallSnapshotResponse,
+    RaftVoteRequest, RaftVoteResponse, RemoveNodeRequest, RemoveNodeResponse,
 };
 
 /// gRPC service handler that forwards Raft RPCs to the correct local Raft
@@ -24,6 +24,9 @@ pub struct ClusterGrpcService {
     /// Broker reference for applying forwarded writes to the local scheduler.
     /// Set after Broker creation via OnceLock — None during initial startup.
     broker: Arc<std::sync::OnceLock<Arc<Broker>>>,
+    /// This node's ID and client-facing gRPC address (for GetNodeInfo RPC).
+    node_id: NodeId,
+    client_addr: String,
 }
 
 impl ClusterGrpcService {
@@ -31,11 +34,15 @@ impl ClusterGrpcService {
         meta_raft: Arc<Raft<TypeConfig>>,
         multi_raft: Arc<MultiRaftManager>,
         broker: Arc<std::sync::OnceLock<Arc<Broker>>>,
+        node_id: NodeId,
+        client_addr: String,
     ) -> Self {
         Self {
             meta_raft,
             multi_raft,
             broker,
+            node_id,
+            client_addr,
         }
     }
 
@@ -190,6 +197,13 @@ impl FilaCluster for ClusterGrpcService {
             addr: req.addr.clone(),
         };
 
+        // Store the joining node's client address for leader hint routing.
+        if !req.client_addr.is_empty() {
+            self.multi_raft
+                .register_client_addr(node_id, &req.client_addr)
+                .await;
+        }
+
         // Add/remove node only affects the meta Raft group.
         if let Err(e) = self.meta_raft.add_learner(node_id, node, true).await {
             return Ok(Response::new(handle_membership_error(e)));
@@ -209,6 +223,16 @@ impl FilaCluster for ClusterGrpcService {
             })),
             Err(e) => Ok(Response::new(handle_membership_error(e))),
         }
+    }
+
+    async fn get_node_info(
+        &self,
+        _request: Request<GetNodeInfoRequest>,
+    ) -> Result<Response<GetNodeInfoResponse>, Status> {
+        Ok(Response::new(GetNodeInfoResponse {
+            node_id: self.node_id,
+            client_addr: self.client_addr.clone(),
+        }))
     }
 
     async fn client_write(
