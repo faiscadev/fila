@@ -11,6 +11,7 @@ fn drr_three_equal_weight_keys_get_equal_delivery() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "drr-equal".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -72,6 +73,7 @@ fn drr_single_key_backward_compatible() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "drr-single".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -112,6 +114,7 @@ fn drr_key_exhaustion_continues_other_keys() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "drr-exhaust".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -174,6 +177,7 @@ fn drr_weighted_keys_proportional_delivery() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "drr-weighted".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -291,6 +295,7 @@ fn drr_fairness_accuracy_10k_messages_6_keys() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "drr-accuracy".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -351,6 +356,7 @@ fn drr_default_weight_is_one() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "default-weight".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -400,6 +406,7 @@ fn drr_weight_zero_treated_as_one() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "weight-zero".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -502,6 +509,7 @@ fn drr_weight_update_changes_proportions() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "weight-update".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();

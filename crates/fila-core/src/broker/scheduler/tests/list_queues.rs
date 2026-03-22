@@ -76,6 +76,7 @@ fn list_queues_reports_nonzero_depth_and_consumers() {
     scheduler.handle_command(SchedulerCommand::RegisterConsumer {
         queue_id: "stats-q".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     });
 

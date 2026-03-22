@@ -769,6 +769,7 @@ mod tests {
             .send_command(crate::SchedulerCommand::RegisterConsumer {
                 queue_id: "orders".to_string(),
                 consumer_id: consumer_id.clone(),
+                consumer_group: None,
                 tx: ready_tx,
             })
             .unwrap();
@@ -819,6 +820,7 @@ mod tests {
             .send_command(crate::SchedulerCommand::RegisterConsumer {
                 queue_id: "ack-test".to_string(),
                 consumer_id: "c1".to_string(),
+                consumer_group: None,
                 tx: ready_tx,
             })
             .unwrap();
@@ -1172,6 +1174,7 @@ mod tests {
             .send_command(crate::SchedulerCommand::RegisterConsumer {
                 queue_id: "loss-test".to_string(),
                 consumer_id: "loss-consumer".to_string(),
+                consumer_group: None,
                 tx: ready_tx,
             })
             .unwrap();

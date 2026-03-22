@@ -19,6 +19,7 @@ fn throttle_skips_throttled_message() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "throttle-q".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -69,6 +70,7 @@ fn throttle_multi_key_all_must_pass() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "multi-key-q".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -116,6 +118,7 @@ fn throttle_refill_allows_delivery() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "refill-q".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -165,6 +168,7 @@ fn throttle_skipped_key_stays_active() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "active-q".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();
@@ -205,6 +209,7 @@ fn throttle_empty_keys_unthrottled() {
     tx.send(SchedulerCommand::RegisterConsumer {
         queue_id: "unthrottled-q".to_string(),
         consumer_id: "c1".to_string(),
+        consumer_group: None,
         tx: consumer_tx,
     })
     .unwrap();

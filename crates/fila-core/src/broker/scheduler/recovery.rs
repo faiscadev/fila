@@ -379,6 +379,7 @@ impl Scheduler {
         self.consumers.retain(|_, entry| entry.queue_id != queue_id);
         let dropped = before - self.consumers.len();
         if dropped > 0 {
+            self.consumer_groups.remove_queue(queue_id);
             info!(queue_id, dropped, "dropped consumer streams (leader loss)");
         }
     }
