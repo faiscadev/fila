@@ -1,31 +1,26 @@
-epic: "Epic 17: Cluster Hardening"
+epic: "Epic 19: Developer Experience"
 baseBranch: main
-startedAt: "2026-03-21"
+startedAt: "2026-03-22"
 stories:
-  - id: "17.1"
-    title: "Cluster Error Clarity & Ack/Nack Performance"
+  - id: "19.1"
+    title: "Built-in Lua Helpers"
     status: completed
     currentPhase: ""
-    branch: "feat/17.1-cluster-error-clarity-ack-nack-performance"
-    pr: 82
+    branch: "feat/19.1-built-in-lua-helpers"
+    pr: 86
     dependsOn: []
-  - id: "17.2"
-    title: "Consume Leader Hint & SDK Reconnect"
+  - id: "19.2"
+    title: "Documentation Website & Deployment Guides"
     status: completed
     currentPhase: ""
-    branch: "feat/17.2-consume-leader-hint-sdk-reconnect"
-    pr: 83
-    dependsOn: ["17.1"]
-  - id: "17.3"
-    title: "Automatic Queue-to-Node Assignment"
-    status: completed
-    currentPhase: ""
-    branch: "feat/17.3-automatic-queue-to-node-assignment"
-    pr: 84
+    branch: "feat/19.2-documentation-website-deployment-guides"
+    pr: 87
     dependsOn: []
-completedAt: "2026-03-22"
-summary:
-  total: 3
-  completed: 3
-  skipped: 0
+  - id: "19.3"
+    title: "SDK & Integration Guides"
+    status: in-progress
+    currentPhase: "setup"
+    branch: "feat/19.3-sdk-integration-guides"
+    pr: null
+    dependsOn: []
 skippedIssues: []
