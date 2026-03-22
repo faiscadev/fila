@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod cluster;
+
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;

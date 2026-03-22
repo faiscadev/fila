@@ -169,7 +169,14 @@ development_status:
   epic-16: done
   16-1-versioning-compatibility-policy: done
   16-2-sdk-auth-feature-parity: done
-  epic-16-retrospective: optional
+  epic-16-retrospective: done
+
+  # Epic 16.5: Stability Hardening & Test Coverage
+  epic-16.5: in-progress
+  16.5-1-cluster-e2e-test-suite: done
+  16.5-2-tls-auth-edge-case-hardening: backlog
+  16.5-3-ci-code-coverage-quality-gates: backlog
+  epic-16.5-retrospective: optional
 
   # Epic 17: Developer Experience
   epic-17: backlog
