@@ -243,3 +243,78 @@ end
 # Enable new flow for one tenant
 fila config set feature:new_flow:acme enabled
 ```
+
+---
+
+## Built-in helpers
+
+Fila provides `fila.helpers` — a set of convenience functions for common patterns. These are available in all scripts alongside `fila.get()`.
+
+### `fila.helpers.exponential_backoff(attempts, base_ms, max_ms)`
+
+Returns a delay in milliseconds with exponential growth and ±25% jitter.
+
+- `attempts` — current attempt count
+- `base_ms` — base delay (first attempt delay)
+- `max_ms` — maximum delay cap
+
+```lua
+function on_failure(msg)
+  if msg.attempts >= 5 then
+    return { action = "dlq" }
+  end
+  return {
+    action = "retry",
+    delay_ms = fila.helpers.exponential_backoff(msg.attempts, 1000, 60000)
+  }
+end
+```
+
+### `fila.helpers.tenant_route(msg, header_name)`
+
+Extracts a header value as the fairness key. Returns `{ fairness_key = "default" }` if the header is missing.
+
+```lua
+function on_enqueue(msg)
+  return fila.helpers.tenant_route(msg, "tenant_id")
+end
+```
+
+### `fila.helpers.rate_limit_keys(msg, patterns)`
+
+Generates throttle key strings from patterns. Each `{placeholder}` is replaced by the corresponding header value. Patterns with missing headers are omitted.
+
+```lua
+function on_enqueue(msg)
+  local route = fila.helpers.tenant_route(msg, "tenant_id")
+  route.throttle_keys = fila.helpers.rate_limit_keys(msg, {
+    "provider:{provider}",
+    "region:{region}"
+  })
+  return route
+end
+```
+
+### `fila.helpers.max_retries(attempts, max)`
+
+Returns `{ action = "retry" }` if `attempts < max`, otherwise `{ action = "dlq" }`.
+
+```lua
+function on_failure(msg)
+  return fila.helpers.max_retries(msg.attempts, 5)
+end
+```
+
+### Combining helpers
+
+Helpers compose naturally. Here's a complete on_failure script using multiple helpers:
+
+```lua
+function on_failure(msg)
+  local decision = fila.helpers.max_retries(msg.attempts, 5)
+  if decision.action == "retry" then
+    decision.delay_ms = fila.helpers.exponential_backoff(msg.attempts, 1000, 60000)
+  end
+  return decision
+end
+```
