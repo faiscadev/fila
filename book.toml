@@ -1,0 +1,18 @@
+[book]
+title = "Fila Documentation"
+description = "Fair, scriptable message queue with per-key scheduling"
+authors = ["Faisca"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/faiscadev/fila"
+edit-url-template = "https://github.com/faiscadev/fila/edit/main/{path}"
+
+[output.html.search]
+enable = true

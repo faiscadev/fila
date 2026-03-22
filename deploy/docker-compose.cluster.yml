@@ -1,0 +1,45 @@
+# 3-node Fila cluster for local development/testing
+# Usage: docker compose -f deploy/docker-compose.cluster.yml up
+
+services:
+  node1:
+    image: ghcr.io/faiscadev/fila:dev
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./cluster/node1.toml:/etc/fila/fila.toml:ro
+      - node1-data:/var/lib/fila
+    command: ["fila-server", "--config", "/etc/fila/fila.toml"]
+    networks:
+      - fila-cluster
+
+  node2:
+    image: ghcr.io/faiscadev/fila:dev
+    ports:
+      - "5565:5555"
+    volumes:
+      - ./cluster/node2.toml:/etc/fila/fila.toml:ro
+      - node2-data:/var/lib/fila
+    command: ["fila-server", "--config", "/etc/fila/fila.toml"]
+    networks:
+      - fila-cluster
+
+  node3:
+    image: ghcr.io/faiscadev/fila:dev
+    ports:
+      - "5575:5555"
+    volumes:
+      - ./cluster/node3.toml:/etc/fila/fila.toml:ro
+      - node3-data:/var/lib/fila
+    command: ["fila-server", "--config", "/etc/fila/fila.toml"]
+    networks:
+      - fila-cluster
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+
+networks:
+  fila-cluster:
+    driver: bridge

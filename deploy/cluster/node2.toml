@@ -1,0 +1,9 @@
+[server]
+listen_addr = "0.0.0.0:5555"
+
+[cluster]
+node_id = 2
+bind_addr = "0.0.0.0:5556"
+bootstrap = false
+peers = ["node1:5556", "node3:5556"]
+replication_factor = 3

@@ -17,6 +17,9 @@
 .env
 .env.local
 
+# mdBook build output
+/book/
+
 # Benchmark output
 bench-results.json
 bench/competitive/results/

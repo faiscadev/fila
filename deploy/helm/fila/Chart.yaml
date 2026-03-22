@@ -1,0 +1,11 @@
+apiVersion: v2
+name: fila
+description: Fair, scriptable message queue with per-key scheduling
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/faiscadev/fila
+sources:
+  - https://github.com/faiscadev/fila
+maintainers:
+  - name: Faisca
