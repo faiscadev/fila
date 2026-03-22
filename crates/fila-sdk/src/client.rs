@@ -235,13 +235,12 @@ impl FilaClient {
                 let leader_addr = extract_leader_hint(&status).unwrap();
                 // Connect to the hinted leader. Use http:// by default —
                 // the leader address is a host:port from cluster config.
-                let leader_url = if leader_addr.starts_with("http://")
-                    || leader_addr.starts_with("https://")
-                {
-                    leader_addr
-                } else {
-                    format!("http://{leader_addr}")
-                };
+                let leader_url =
+                    if leader_addr.starts_with("http://") || leader_addr.starts_with("https://") {
+                        leader_addr
+                    } else {
+                        format!("http://{leader_addr}")
+                    };
                 match FilaServiceClient::connect(leader_url).await {
                     Ok(mut leader_client) => {
                         let mut req = tonic::Request::new(consume_req);
@@ -250,7 +249,10 @@ impl FilaClient {
                                 req.metadata_mut().insert("authorization", val);
                             }
                         }
-                        leader_client.consume(req).await.map_err(consume_status_error)?
+                        leader_client
+                            .consume(req)
+                            .await
+                            .map_err(consume_status_error)?
                     }
                     Err(_) => {
                         // Leader connection failed — return the original error.

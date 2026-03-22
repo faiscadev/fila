@@ -224,12 +224,9 @@ impl FilaService for HotPathService {
                     );
                     // Include the leader's client address in gRPC metadata so
                     // SDKs can transparently reconnect to the correct node.
-                    if let Some(addr) = cluster.get_queue_leader_client_addr(&req.queue).await
-                    {
+                    if let Some(addr) = cluster.get_queue_leader_client_addr(&req.queue).await {
                         if let Ok(val) = addr.parse() {
-                            status
-                                .metadata_mut()
-                                .insert("x-fila-leader-addr", val);
+                            status.metadata_mut().insert("x-fila-leader-addr", val);
                         }
                     }
                     return Err(status);
