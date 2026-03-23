@@ -51,6 +51,7 @@ async function fetchQueues() {
   try {
     const res = await fetch('/api/queues');
     const data = await res.json();
+    lastQueues = data.queues;
     renderQueues(data.queues);
   } catch (e) {
     document.getElementById('queues').innerHTML = '<div class="card"><div class="card-title">Connection Error</div><div class="empty">Unable to reach broker API</div></div>';
@@ -63,8 +64,8 @@ function renderQueues(queues) {
     el.innerHTML = '<div class="card"><div class="card-title">No Queues</div><div class="empty">Create a queue to see it here</div></div>';
     return;
   }
-  el.innerHTML = queues.map(q => `
-    <div class="card ${selectedQueue === q.name ? 'selected' : ''}" onclick="selectQueue('${q.name}')">
+  el.innerHTML = queues.map((q, i) => `
+    <div class="card ${selectedQueue === q.name ? 'selected' : ''}" data-queue-idx="${i}">
       <div class="card-title">${esc(q.name)}</div>
       <div class="metrics">
         <div class="metric"><div class="metric-value">${q.depth}</div><div class="metric-label">Pending</div></div>
@@ -73,17 +74,28 @@ function renderQueues(queues) {
       </div>
     </div>
   `).join('');
+  // Attach click handlers via event delegation (avoids XSS from queue names in inline JS)
+  el.querySelectorAll('[data-queue-idx]').forEach(card => {
+    card.addEventListener('click', () => {
+      const idx = parseInt(card.dataset.queueIdx);
+      selectQueue(queues[idx].name);
+    });
+  });
 }
+
+let lastQueues = [];
 
 async function selectQueue(name) {
   selectedQueue = name;
-  await fetchQueues();
+  renderQueues(lastQueues); // Re-render selection state without extra fetch
   try {
     const res = await fetch(`/api/queues/${encodeURIComponent(name)}/stats`);
     const stats = await res.json();
     renderDetail(name, stats);
   } catch (e) {
-    document.getElementById('detail').innerHTML = '<div class="empty">Failed to load stats</div>';
+    const el = document.getElementById('detail');
+    el.style.display = 'block';
+    el.innerHTML = '<div class="detail"><div class="empty">Failed to load stats</div></div>';
   }
 }
 
@@ -147,11 +159,18 @@ function renderDetail(name, s) {
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-fetchQueues();
-setInterval(() => {
-  fetchQueues();
-  if (selectedQueue) selectQueue(selectedQueue);
-}, 2000);
+async function refresh() {
+  await fetchQueues();
+  if (selectedQueue) {
+    try {
+      const res = await fetch(`/api/queues/${encodeURIComponent(selectedQueue)}/stats`);
+      const stats = await res.json();
+      renderDetail(selectedQueue, stats);
+    } catch (e) { /* keep stale detail visible */ }
+  }
+}
+refresh();
+setInterval(refresh, 2000);
 </script>
 </body>
 </html>

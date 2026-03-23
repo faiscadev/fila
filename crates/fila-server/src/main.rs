@@ -142,15 +142,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Optionally start the web management GUI on a separate HTTP port.
-    if let Some(ref gui) = gui_config {
+    let gui_handle = if let Some(ref gui) = gui_config {
         let broker_for_gui = Arc::clone(&broker);
         let gui_addr = gui.listen_addr.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             if let Err(e) = gui::start(broker_for_gui, &gui_addr).await {
                 tracing::error!(error = %e, "GUI server failed");
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
 
     let admin_service = AdminService::new(Arc::clone(&broker), cluster_handle.clone());
     let hot_path_service = HotPathService::new(Arc::clone(&broker), cluster_handle);
@@ -175,6 +177,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
     info!("gRPC server stopped, shutting down broker");
+
+    // Abort GUI server if running (releases its Arc<Broker> reference).
+    if let Some(handle) = gui_handle {
+        handle.abort();
+    }
 
     // Graceful broker shutdown — Drop impl will handle it since Arc may have refs
     drop(broker);

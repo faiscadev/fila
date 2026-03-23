@@ -11,12 +11,11 @@ use std::sync::Arc;
 use axum::{
     extract::Path,
     extract::State,
-    http::header,
     response::{Html, IntoResponse},
     routing::get,
     Json, Router,
 };
-use fila_core::{Broker, QueueSummary, SchedulerCommand};
+use fila_core::{Broker, QueueSummary, SchedulerCommand, StatsError};
 use serde::Serialize;
 use tracing::info;
 
@@ -167,7 +166,7 @@ async fn list_queues_handler(
         queues: queues.into_iter().map(QueueSummaryJson::from).collect(),
     };
 
-    Ok(([(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")], Json(response)))
+    Ok(Json(response))
 }
 
 /// GET /api/queues/:name/stats — get detailed stats for a queue.
@@ -197,11 +196,15 @@ async fn get_stats_handler(
                 "scheduler dropped".to_string(),
             )
         })?
-        .map_err(|e| {
-            (
+        .map_err(|e| match e {
+            StatsError::QueueNotFound(name) => (
                 axum::http::StatusCode::NOT_FOUND,
-                format!("queue not found: {e}"),
-            )
+                format!("queue not found: {name}"),
+            ),
+            StatsError::Storage(err) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("storage error: {err}"),
+            ),
         })?;
 
     let response = QueueStatsResponse {
@@ -234,5 +237,5 @@ async fn get_stats_handler(
             .collect(),
     };
 
-    Ok(([(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")], Json(response)))
+    Ok(Json(response))
 }
