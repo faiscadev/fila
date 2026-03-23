@@ -16,6 +16,8 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+hdrhistogram = "7"
+base64 = "0.22"
 tempfile = "3"
 sysinfo = "0.34"
 rdkafka = { version = "0.37", features = ["cmake-build"], optional = true }
