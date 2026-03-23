@@ -156,6 +156,173 @@ pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
             .collect(),
     });
 
+    // Jain's Fairness Index on normalized ratios (actual/expected).
+    // Formula: (sum(x_i))^2 / (n * sum(x_i^2))
+    // For weighted fairness, x_i = actual_share / expected_share (normalized ratio).
+    // Perfect fairness = 1.0, worst case = 1/n.
+    let normalized_ratios: Vec<f64> = weights
+        .iter()
+        .map(|(tenant, weight)| {
+            let expected_share = *weight as f64 / total_weight as f64;
+            let actual_count = delivery_counts.get(tenant).copied().unwrap_or(0);
+            let actual_share = actual_count as f64 / window_size as f64;
+            if expected_share > 0.0 {
+                actual_share / expected_share
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    let n = normalized_ratios.len() as f64;
+    let sum: f64 = normalized_ratios.iter().sum();
+    let sum_sq: f64 = normalized_ratios.iter().map(|x| x * x).sum();
+    let jfi = if n > 0.0 && sum_sq > 0.0 {
+        (sum * sum) / (n * sum_sq)
+    } else {
+        0.0
+    };
+
+    results.push(BenchResult {
+        name: "fairness_accuracy_jains_index".to_string(),
+        value: jfi,
+        unit: "index".to_string(),
+        metadata: [
+            (
+                "description".to_string(),
+                serde_json::json!("Jain's Fairness Index on normalized ratios (actual/expected)"),
+            ),
+            (
+                "target".to_string(),
+                serde_json::json!(">= 0.95 for equal-weight"),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    });
+
+    results
+}
+
+/// Measure fairness accuracy across equal-weight keys and report Jain's Fairness Index.
+///
+/// With equal weights, the scheduler should deliver messages uniformly across keys.
+/// JFI >= 0.95 is the target for equal-weight fairness.
+pub async fn bench_equal_weight_fairness(server: &BenchServer) -> Vec<BenchResult> {
+    let queue = "bench-fairness-equal";
+    let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" return { fairness_key = key, weight = 1, throttle_keys = {} } end"#;
+    create_queue_with_lua_cli(server.addr(), queue, Some(on_enqueue), None);
+
+    let client = fila_sdk::FilaClient::connect(server.addr())
+        .await
+        .expect("connect");
+
+    let key_count = 5;
+    let messages_per_key = 2000;
+    let keys: Vec<String> = (1..=key_count).map(|i| format!("tenant-{i}")).collect();
+
+    // Enqueue messages for all keys (equal weight)
+    let payload = vec![0u8; PAYLOAD_SIZE];
+    let total_enqueued = messages_per_key * key_count;
+    let mut enq_progress = Progress::new("equal-weight enqueue", total_enqueued as u64);
+    for key in &keys {
+        for _ in 0..messages_per_key {
+            let headers: HashMap<String, String> = [("tenant_id".to_string(), key.clone())]
+                .into_iter()
+                .collect();
+            client
+                .enqueue(queue, headers, payload.clone())
+                .await
+                .expect("enqueue");
+            enq_progress.inc();
+        }
+    }
+    enq_progress.finish();
+
+    // Consume a window (half the total)
+    let window_size = total_enqueued / 2;
+    let mut stream = client.consume(queue).await.expect("consume");
+    let mut delivery_counts: HashMap<String, u64> = HashMap::new();
+    let mut consume_progress = Progress::new("equal-weight consume", window_size as u64);
+
+    for _ in 0..window_size {
+        if let Some(Ok(msg)) = stream.next().await {
+            *delivery_counts.entry(msg.fairness_key.clone()).or_insert(0) += 1;
+            client.ack(queue, &msg.id).await.expect("ack");
+            consume_progress.inc();
+        }
+    }
+    consume_progress.finish();
+
+    let mut results = Vec::new();
+    let expected_share = 1.0 / key_count as f64;
+    let mut max_deviation = 0.0f64;
+
+    for key in &keys {
+        let actual_count = delivery_counts.get(key).copied().unwrap_or(0);
+        let actual_share = actual_count as f64 / window_size as f64;
+        let deviation = (actual_share - expected_share).abs() / expected_share * 100.0;
+        max_deviation = max_deviation.max(deviation);
+
+        results.push(BenchResult {
+            name: format!("equal_weight_fairness_{key}"),
+            value: deviation,
+            unit: "% deviation".to_string(),
+            metadata: [
+                (
+                    "expected_share".to_string(),
+                    serde_json::json!(expected_share),
+                ),
+                ("actual_share".to_string(), serde_json::json!(actual_share)),
+                ("actual_count".to_string(), serde_json::json!(actual_count)),
+            ]
+            .into_iter()
+            .collect(),
+        });
+    }
+
+    results.push(BenchResult {
+        name: "equal_weight_fairness_max_deviation".to_string(),
+        value: max_deviation,
+        unit: "% deviation".to_string(),
+        metadata: HashMap::new(),
+    });
+
+    // Jain's Fairness Index for equal-weight case.
+    // x_i = actual_share / expected_share (all expected shares are equal).
+    let normalized_ratios: Vec<f64> = keys
+        .iter()
+        .map(|key| {
+            let actual_count = delivery_counts.get(key).copied().unwrap_or(0);
+            let actual_share = actual_count as f64 / window_size as f64;
+            actual_share / expected_share
+        })
+        .collect();
+
+    let n = normalized_ratios.len() as f64;
+    let sum: f64 = normalized_ratios.iter().sum();
+    let sum_sq: f64 = normalized_ratios.iter().map(|x| x * x).sum();
+    let jfi = if n > 0.0 && sum_sq > 0.0 {
+        (sum * sum) / (n * sum_sq)
+    } else {
+        0.0
+    };
+
+    results.push(BenchResult {
+        name: "equal_weight_fairness_jains_index".to_string(),
+        value: jfi,
+        unit: "index".to_string(),
+        metadata: [
+            (
+                "description".to_string(),
+                serde_json::json!("Jain's Fairness Index for equal-weight keys"),
+            ),
+            ("target".to_string(), serde_json::json!(">= 0.95")),
+        ]
+        .into_iter()
+        .collect(),
+    });
+
     results
 }
 
