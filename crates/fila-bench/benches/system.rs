@@ -1,4 +1,6 @@
-use fila_bench::benchmarks::{compaction, fairness, latency, lua, memory, scaling, throughput};
+use fila_bench::benchmarks::{
+    compaction, failure_paths, fairness, latency, lua, memory, scaling, throughput,
+};
 use fila_bench::report::BenchReport;
 use fila_bench::server::BenchServer;
 
@@ -82,6 +84,38 @@ async fn run_benchmarks() {
     let results = scaling::bench_consumer_concurrency(&server).await;
     for r in results {
         report.add(r);
+    }
+
+    // 10.5. Equal-weight fairness (Jain's Fairness Index)
+    eprintln!("[10.5/10] Equal-weight fairness (Jain's Fairness Index)...");
+    let results = fairness::bench_equal_weight_fairness(&server).await;
+    for r in results {
+        report.add(r);
+    }
+
+    // Failure-path benchmarks (gated — involve nack storms and DLQ setup)
+    if std::env::var("FILA_BENCH_FAILURE_PATHS").is_ok() {
+        eprintln!("[F1] Nack storm benchmark (10% nack rate)...");
+        let results = failure_paths::bench_nack_storm(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[F2] DLQ routing overhead benchmark...");
+        let results = failure_paths::bench_dlq_routing_overhead(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[F3] Poison pill isolation benchmark...");
+        let results = failure_paths::bench_poison_pill_isolation(&server).await;
+        for r in results {
+            report.add(r);
+        }
+    } else {
+        eprintln!(
+            "[F1-F3] Failure-path benchmarks (skipped — set FILA_BENCH_FAILURE_PATHS=1 to enable)"
+        );
     }
 
     // Note: Queue depth scaling (AC 6) is skipped by default as it takes a

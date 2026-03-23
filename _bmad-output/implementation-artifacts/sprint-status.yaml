@@ -207,6 +207,6 @@ development_status:
   21-1-statistical-foundation-hdrhistogram-measurement-rigor: done
   21-2-competitive-benchmark-overhaul: backlog
   21-3-open-loop-load-generation-latency-under-load-benchmarks: backlog
-  21-4-failure-path-fairness-benchmarks: backlog
+  21-4-failure-path-fairness-benchmarks: done
   21-5-ci-visualization-reporting: backlog
   epic-21-retrospective: optional
