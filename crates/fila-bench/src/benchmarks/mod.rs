@@ -4,5 +4,6 @@ pub mod fairness;
 pub mod latency;
 pub mod lua;
 pub mod memory;
+pub mod open_loop;
 pub mod scaling;
 pub mod throughput;
