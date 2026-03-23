@@ -205,7 +205,7 @@ development_status:
   # Epic 21: Trustworthy Benchmark Suite
   epic-21: in-progress
   21-1-statistical-foundation-hdrhistogram-measurement-rigor: done
-  21-2-competitive-benchmark-overhaul: review
+  21-2-competitive-benchmark-overhaul: done
   21-3-open-loop-load-generation-latency-under-load-benchmarks: backlog
   21-4-failure-path-fairness-benchmarks: backlog
   21-5-ci-visualization-reporting: backlog
