@@ -1,6 +1,6 @@
 # Story 21.2: Competitive Benchmark Overhaul
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
