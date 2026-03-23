@@ -101,7 +101,7 @@ so that I can trust p99+ numbers for engineering decisions instead of relying on
 
 **Histogram serialization for aggregation**: Use `V2Serializer` to serialize histograms to bytes, then base64-encode into the `metadata` map of `BenchResult` with key `"histogram"`. In `aggregate.rs`, decode and merge via `Histogram::add()`. This replaces median-of-percentiles with statistically correct merged histogram.
 
-**Duration-based collection**: Replace the `for _ in 0..SAMPLES_PER_LEVEL` loop with `while start.elapsed() < duration && samples >= MIN_SAMPLES`. Use `MIN_SAMPLES = 10_000` as a floor.
+**Duration-based collection**: Loop until `elapsed >= duration && count >= MIN_LATENCY_SAMPLES`, with a hard timeout at 3x duration to prevent unbounded loops. Use `MIN_LATENCY_SAMPLES = 10_000` as a floor.
 
 **Metric naming convention**: Keep existing pattern but extend: `e2e_latency_p50_light`, `e2e_latency_p99_9_light`, `e2e_latency_p99_99_light`, `e2e_latency_max_light`.
 

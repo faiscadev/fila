@@ -135,13 +135,24 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
 
         // Phase 3: Measure sequential enqueue-consume round-trip latency.
         // Run for `duration` and collect at least MIN_LATENCY_SAMPLES.
+        // Hard timeout at 3x duration to prevent unbounded loops.
         let mut stream = client.consume(&queue).await.expect("consume stream");
         let mut histogram = LatencyHistogram::new();
         let start = Instant::now();
+        let hard_timeout = duration * 3;
 
         loop {
             let elapsed = start.elapsed();
             if elapsed >= duration && histogram.count() >= MIN_LATENCY_SAMPLES {
+                break;
+            }
+            if elapsed >= hard_timeout {
+                eprintln!(
+                    "    WARNING: hard timeout reached for {} with {} samples (wanted {})",
+                    level.name,
+                    histogram.count(),
+                    MIN_LATENCY_SAMPLES
+                );
                 break;
             }
 

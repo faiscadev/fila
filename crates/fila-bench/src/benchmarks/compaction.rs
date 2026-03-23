@@ -26,10 +26,14 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
 
     // Phase 1: Measure idle latency (clean database)
     let mut idle_histogram = LatencyHistogram::new();
+    let hard_timeout = duration * 3;
     let start = Instant::now();
     loop {
         let elapsed = start.elapsed();
         if elapsed >= duration && idle_histogram.count() >= MIN_LATENCY_SAMPLES {
+            break;
+        }
+        if elapsed >= hard_timeout {
             break;
         }
         let sample_start = Instant::now();
@@ -86,6 +90,9 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
     loop {
         let elapsed = start.elapsed();
         if elapsed >= duration && compaction_histogram.count() >= MIN_LATENCY_SAMPLES {
+            break;
+        }
+        if elapsed >= hard_timeout {
             break;
         }
         let sample_start = Instant::now();

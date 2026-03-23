@@ -82,26 +82,18 @@ pub fn aggregate_reports(reports: &[BenchReport]) -> BenchReport {
 
     // Process histogram groups: merge and emit all percentiles
     for (base_name, histograms_b64) in &histogram_groups {
-        // Deduplicate: each run has multiple metrics (p50, p95, ...) sharing the same histogram.
-        // We only need to merge one histogram per run.
-        let unique_histograms: Vec<&str> = {
-            let mut seen = Vec::new();
-            let runs = histograms_b64.len() / 6; // 6 percentile metrics per histogram
-            let runs = runs.max(1);
-            for i in 0..runs {
-                let idx = i * 6;
-                if idx < histograms_b64.len() && !seen.contains(&histograms_b64[idx].as_str()) {
-                    seen.push(histograms_b64[idx].as_str());
-                }
-            }
-            if seen.is_empty() && !histograms_b64.is_empty() {
-                seen.push(histograms_b64[0].as_str());
-            }
-            seen
+        // Each run emits 6 metrics (p50, p95, ...) sharing the same histogram.
+        // Take one histogram per run by stepping through in groups of 6.
+        let per_run_histograms: Vec<&str> = {
+            let metrics_per_run = 6;
+            let num_runs = histograms_b64.len().div_ceil(metrics_per_run);
+            (0..num_runs)
+                .filter_map(|i| histograms_b64.get(i * metrics_per_run).map(|s| s.as_str()))
+                .collect()
         };
 
         let mut merged = LatencyHistogram::new();
-        for h_b64 in &unique_histograms {
+        for h_b64 in &per_run_histograms {
             if let Some(h) = LatencyHistogram::deserialize_base64(h_b64) {
                 merged.merge(&h);
             }
@@ -115,7 +107,7 @@ pub fn aggregate_reports(reports: &[BenchReport]) -> BenchReport {
                 .unwrap_or_default();
             meta.insert(
                 "runs".to_string(),
-                serde_json::json!(unique_histograms.len()),
+                serde_json::json!(per_run_histograms.len()),
             );
             meta.insert("samples".to_string(), serde_json::json!(merged.count()));
             meta.insert(

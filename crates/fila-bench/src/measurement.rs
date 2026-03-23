@@ -38,8 +38,8 @@ impl LatencyHistogram {
     /// Record a duration sample.
     pub fn record(&mut self, d: Duration) {
         let micros = d.as_micros() as u64;
-        // Clamp to histogram max to avoid errors on extreme outliers
-        let micros = micros.min(60_000_000);
+        // Clamp to histogram bounds (1µs min, 60s max) to avoid recording errors
+        let micros = micros.clamp(1, 60_000_000);
         self.histogram.record(micros).ok();
     }
 
