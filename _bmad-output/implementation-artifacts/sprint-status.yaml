@@ -203,10 +203,10 @@ development_status:
   epic-20-retrospective: optional
 
   # Epic 21: Trustworthy Benchmark Suite
-  epic-21: in-progress
+  epic-21: done
   21-1-statistical-foundation-hdrhistogram-measurement-rigor: done
   21-2-competitive-benchmark-overhaul: done
   21-3-open-loop-load-generation-latency-under-load-benchmarks: done
   21-4-failure-path-fairness-benchmarks: done
-  21-5-ci-visualization-reporting: backlog
+  21-5-ci-visualization-reporting: done
   epic-21-retrospective: optional

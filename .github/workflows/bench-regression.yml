@@ -20,6 +20,9 @@ jobs:
   bench:
     name: Benchmark
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@stable
@@ -83,6 +86,57 @@ jobs:
           path: bench-baseline.json
           key: bench-baseline-${{ github.sha }}
 
+      # github-action-benchmark: store results (main) or compare with alert (PR)
+      - name: Store latency benchmark results (main)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.update_baseline)
+        uses: benchmark-action/github-action-benchmark@d48d326b4ca9ba73ca0cd0d59f108f9e02a381c7 # v1
+        with:
+          tool: 'customSmallerIsBetter'
+          output-file-path: bench-aggregated-gab-latency.json
+          benchmark-data-dir-path: dev/bench/latency
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          comment-on-alert: false
+
+      - name: Store throughput benchmark results (main)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.update_baseline)
+        uses: benchmark-action/github-action-benchmark@d48d326b4ca9ba73ca0cd0d59f108f9e02a381c7 # v1
+        with:
+          tool: 'customBiggerIsBetter'
+          output-file-path: bench-aggregated-gab-throughput.json
+          benchmark-data-dir-path: dev/bench/throughput
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          comment-on-alert: false
+
+      - name: Compare latency benchmarks (PR)
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@d48d326b4ca9ba73ca0cd0d59f108f9e02a381c7 # v1
+        with:
+          tool: 'customSmallerIsBetter'
+          output-file-path: bench-aggregated-gab-latency.json
+          benchmark-data-dir-path: dev/bench/latency
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          comment-on-alert: true
+          alert-threshold: '115%'
+          fail-on-alert: false
+          alert-comment-cc-users: '@faiscadev'
+
+      - name: Compare throughput benchmarks (PR)
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@d48d326b4ca9ba73ca0cd0d59f108f9e02a381c7 # v1
+        with:
+          tool: 'customBiggerIsBetter'
+          output-file-path: bench-aggregated-gab-throughput.json
+          benchmark-data-dir-path: dev/bench/throughput
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          comment-on-alert: true
+          alert-threshold: '115%'
+          fail-on-alert: false
+          alert-comment-cc-users: '@faiscadev'
+
       - name: Display benchmark summary
         if: always() && hashFiles('bench-aggregated.json') != ''
         run: |
@@ -107,6 +161,7 @@ jobs:
           name: bench-results-${{ github.sha }}
           path: |
             bench-aggregated.json
+            bench-aggregated-gab-*.json
             bench-run-*.json
             bench-comparison.md
           retention-days: 30
