@@ -11,13 +11,14 @@ inputDocuments:
   - '_bmad-output/planning-artifacts/research/market-message-broker-infrastructure-research-2026-03-04.md'
   - '_bmad-output/brainstorming/brainstorming-session-2026-03-04.md'
   - '_bmad-output/planning-artifacts/epics.md (existing epics 1-11)'
+  - '_bmad-output/planning-artifacts/research/technical-benchmarking-methodology-research-2026-03-23.md'
 ---
 
 # Fila - Epic Breakdown (Phase 2+)
 
 ## Overview
 
-This document provides the epic and story breakdown for Fila's post-v1 roadmap (Epics 12+), decomposing the Phase 2+ requirements from the updated PRD, Architecture, market research, and brainstorming session into implementable stories. Epics 1-11 (Phase 1 MVP) are complete and documented separately.
+This document provides the epic and story breakdown for Fila's post-v1 roadmap (Epics 12+), decomposing the Phase 2+ requirements from the updated PRD, Architecture, market research, and brainstorming session into implementable stories. Epics 1-11 (Phase 1 MVP) are complete and documented separately. Epic 21 added 2026-03-23 based on benchmarking methodology research.
 
 ## Requirements Inventory
 
@@ -91,6 +92,20 @@ GH#63: Epic 17 — Distinguish 'node not ready' from 'queue not found' errors
 GH#64: Epic 17 — Ack/nack linear scan fix in Raft apply path
 GH#65: Epic 17 — Consume on non-leader returns leader hint (+ SDK updates)
 GH#66: Epic 17 — Automatic queue-to-node assignment for balanced leadership
+FR-B1: Epic 21 — Replace LatencySampler with HdrHistogram
+FR-B2: Epic 21 — Increase latency sample count to 10,000+
+FR-B3: Epic 21 — Report p99.9, p99.99, max in all latency benchmarks
+FR-B4: Epic 21 — Increase measurement duration to 30s+ (configurable)
+FR-B5: Epic 21 — Run competitive benchmarks 3x with median aggregation
+FR-B6: Epic 21 — Open-loop load generation mode
+FR-B7: Epic 21 — Concurrent produce/consume for competitive latency
+FR-B8: Epic 21 — Consumer processing time simulation (0/1/10/100ms)
+FR-B9: Epic 21 — Backpressure ramp test (10%→150% capacity)
+FR-B10: Epic 21 — Queue depth effect on latency test
+FR-B11: Epic 21 — Nack storm / DLQ routing / failure-path benchmarks
+FR-B12: Epic 21 — Jain's Fairness Index for fairness tests
+FR-B13: Epic 21 — Disk I/O measurement in competitive resource benchmarks
+FR-B14: Epic 21 — Emit github-action-benchmark JSON format for CI visualization
 
 ## Epic List
 
@@ -138,6 +153,11 @@ Docs website, deployment guides, Helm charts, Lua helpers, and DX sugar. The "ma
 ### Epic 20: Web Management GUI
 Operators can monitor queues and visualize real-time scheduling state via a web-based management interface. Read-only dashboard bundled into the server binary, showing queue depths, DRR state, throttle status, consumer connections, and cluster topology. Optional — disabled by default, zero overhead when disabled.
 **FRs covered:** FR76
+
+### Epic 21: Trustworthy Benchmark Suite
+Developers and evaluators can trust Fila's benchmark numbers for optimization decisions and competitive claims — with statistically valid latency measurement (HdrHistogram, CO correction, 10K+ samples), realistic workload profiles (open-loop, processing delay, backpressure, failure paths), and reproducible results (multi-run aggregation, histogram merging). Builds on Epic 12's benchmark infrastructure with methodology fixes identified in the benchmarking methodology research.
+**FRs covered:** FR-B1 through FR-B14
+**NFRs addressed:** NFR-B1 (reproducibility), NFR-B2 (CI time), NFR-B3 (measurement overhead)
 
 ---
 
@@ -742,3 +762,199 @@ So that I can visualize broker behavior without setting up external monitoring.
 **And** the GUI is optional — disabled by default, zero overhead when disabled
 **And** in clustered mode, the GUI shows cluster-wide view: node list, partition distribution, replication status
 **And** integration tests verify: GUI serves on configured port, dashboard returns queue data matching gRPC GetStats
+
+---
+
+## Epic 21: Trustworthy Benchmark Suite
+
+Developers and evaluators can trust Fila's benchmark numbers for optimization decisions and competitive claims — with statistically valid latency measurement, realistic workload profiles, and reproducible results. This epic addresses 12 methodology gaps identified in the benchmarking methodology research (`_bmad-output/planning-artifacts/research/technical-benchmarking-methodology-research-2026-03-23.md`), transforming Epic 12's benchmark infrastructure from "directionally useful" to "trustworthy for engineering decisions."
+
+> **Context:** The research found that coordinated omission in our closed-loop latency measurement can understate tail latency by orders of magnitude (2,670x demonstrated in ScyllaDB's case). With only 100 latency samples, our p99 is a single data point — noise, not signal. And our 3-second measurement windows are too short to capture RocksDB compaction, memory pressure, or fairness scheduling artifacts. None of the major vendor tools (Kafka, RabbitMQ, OMB) fully solve these problems either — Fila can leapfrog the industry bar with targeted fixes.
+
+### Story 21.1: Statistical Foundation — HdrHistogram & Measurement Rigor
+
+As a developer optimizing Fila's performance,
+I want latency benchmarks that use HDR histograms with sufficient sample counts and extended percentile reporting,
+So that I can trust p99+ numbers for engineering decisions instead of relying on single-datapoint noise.
+
+**Acceptance Criteria:**
+
+**Given** the `hdrhistogram` crate is added as a dependency to `fila-bench`
+**When** any latency benchmark runs
+**Then** latency is recorded into an `hdrhistogram::Histogram` (3 significant figures) instead of the current `LatencySampler`
+**And** `LatencySampler` is removed from `measurement.rs`
+
+**Given** a latency benchmark (e2e latency light/moderate/saturated, compaction impact)
+**When** the benchmark completes
+**Then** at least 10,000 latency samples are collected per load level (up from 100)
+**And** measurement duration is at least 30 seconds per load level (configurable via `FILA_BENCH_DURATION_SECS` env var, default 30)
+
+**Given** any benchmark that reports latency percentiles
+**When** results are emitted to the JSON report
+**Then** the report includes p50, p95, p99, p99.9, p99.99, and max values
+**And** the `BenchReport` schema is updated to support multiple percentile fields per latency metric
+
+**Given** the CI regression workflow runs 3 times and aggregates
+**When** aggregation computes the median
+**Then** aggregation uses histogram merging via `Histogram::add()` (not median-of-percentiles)
+**And** percentiles are computed from the merged histogram
+
+**Given** the benchmark suite runs end-to-end with the new measurement infrastructure
+**When** run 5 times on the same machine
+**Then** p99 latency variance is < 10% across runs (NFR-B1 reproducibility)
+
+**Given** the benchmark harness records latency
+**When** comparing wall-clock overhead of HdrHistogram recording vs old LatencySampler
+**Then** measurement overhead does not exceed 1% of measured values (NFR-B3)
+
+### Story 21.2: Competitive Benchmark Overhaul
+
+As an evaluator comparing Fila against other brokers,
+I want competitive benchmarks that use concurrent produce/consume, multiple runs, and comprehensive resource measurement,
+So that published comparison numbers reflect realistic behavior, not best-case sequential latency.
+
+**Acceptance Criteria:**
+
+**Given** the competitive latency benchmark for any broker
+**When** the benchmark runs
+**Then** producers and consumers run concurrently (not sequentially)
+**And** the producer sends at a fixed rate, the consumer processes independently
+**And** end-to-end latency is measured as `consume_time - produce_timestamp` (timestamp embedded in message payload)
+**And** at least 10,000 latency samples are collected per broker using HdrHistogram (from Story 21.1)
+
+**Given** the competitive benchmark orchestration (`Makefile`)
+**When** `make bench-competitive` runs
+**Then** each broker benchmark runs 3 times
+**And** results are aggregated using histogram merging (for latency) and median (for throughput)
+**And** the final `bench-{broker}.json` contains the aggregated results
+
+**Given** the competitive resource benchmark
+**When** resource usage is measured
+**Then** disk I/O (bytes read/written) is captured alongside CPU% and memory MB
+**And** disk I/O is obtained via `docker stats --format` block I/O fields or equivalent
+
+**Given** the competitive benchmark results
+**When** the JSON report is emitted
+**Then** latency results include p50, p95, p99, p99.9, p99.99, and max (matching Story 21.1 format)
+
+**Given** the competitive benchmark measurement
+**When** the benchmark runs for any broker
+**Then** measurement duration is at least 30 seconds per workload (up from 3 seconds)
+**And** a warmup period of at least 5 seconds precedes measurement (data discarded)
+
+### Story 21.3: Open-Loop Load Generation & Latency-Under-Load Benchmarks
+
+As a developer investigating tail latency under realistic load,
+I want an open-loop load generator that sends at a fixed rate regardless of response time, with workloads for processing delay, backpressure, and queue depth effects,
+So that latency measurements include coordinated-omission-corrected response time, not just service time.
+
+**Acceptance Criteria:**
+
+**Given** the fila-bench harness
+**When** a benchmark specifies open-loop mode
+**Then** the producer sends requests at a configurable fixed rate using `tokio::time::interval`
+**And** each request is spawned as an independent task (fire-and-forget, response collected asynchronously)
+**And** latency is measured as `completed_time - scheduled_time` (includes queuing delay)
+**And** HdrHistogram records values with `record_correct(value, expected_interval)` for CO correction
+
+**Given** the open-loop generator with N worker tasks
+**When** the benchmark completes
+**Then** per-worker histograms are merged via `Histogram::add()` into a single result histogram
+
+**Given** a new "latency under load" self-benchmark
+**When** the benchmark runs
+**Then** it tests 3 load levels: 50%, 80%, and 100% of max throughput (max discovered via a short closed-loop saturation probe)
+**And** each load level runs for at least 30 seconds with open-loop generation
+**And** results report latency percentiles (p50 through max) at each load level
+
+**Given** a new "consumer processing time" self-benchmark
+**When** the benchmark runs
+**Then** it tests 4 processing delays: 0ms, 1ms, 10ms, 100ms
+**And** each delay level uses open-loop production at a fixed rate with concurrent consumption
+**And** consumers simulate processing time with `tokio::time::sleep` before acking
+**And** results report throughput and latency at each delay level
+
+**Given** a new "backpressure ramp" self-benchmark
+**When** the benchmark runs
+**Then** it ramps producer rate from 10% to 150% of max throughput in 10% increments
+**And** each step runs for at least 10 seconds with open-loop generation
+**And** results include throughput achieved and latency percentiles at each step
+**And** the saturation inflection point is identifiable from the results
+
+**Given** a new "queue depth latency" self-benchmark
+**When** the benchmark runs
+**Then** it pre-loads the queue to depths of 0, 1K, 10K, and 100K messages
+**And** at each depth, measures e2e consume latency for newly produced messages (open-loop, 10 seconds)
+**And** results report latency percentiles at each queue depth
+
+### Story 21.4: Failure-Path & Fairness Benchmarks
+
+As a developer validating Fila's behavior under adverse conditions,
+I want benchmarks for nack storms, DLQ routing overhead, poison pill isolation, and formal fairness measurement,
+So that I know the cost of failure paths and can prove Fila's fairness scheduling works correctly under load.
+
+**Acceptance Criteria:**
+
+**Given** a new "nack storm" self-benchmark
+**When** the benchmark runs
+**Then** it produces messages where 10% are nacked (redelivered) and 90% are acked
+**And** it measures overall throughput and latency compared to a 100%-ack baseline
+**And** results report the throughput degradation percentage from nack handling
+
+**Given** a new "DLQ routing overhead" self-benchmark
+**When** the benchmark runs
+**Then** it configures a queue with `max_retries` and a DLQ
+**And** it produces messages where a configurable fraction (e.g., 5%) exhaust retries and route to DLQ
+**And** results report throughput and latency for the mixed workload vs pure-ack baseline
+
+**Given** a new "poison pill isolation" self-benchmark
+**When** the benchmark runs
+**Then** it creates a queue with multiple fairness keys
+**And** one fairness key's messages are all nacked (poison pills), other keys ack normally
+**And** results report per-fairness-key throughput — proving non-poisoned keys maintain throughput
+**And** the test explicitly asserts that poisoned-key throughput degrades while other keys are unaffected
+
+**Given** the existing fairness accuracy benchmark
+**When** the benchmark runs
+**Then** it computes and reports Jain's Fairness Index: `(sum(x_i))^2 / (n * sum(x_i^2))` where `x_i` is per-key consumed count
+**And** the result is a single float between 0 and 1 (1.0 = perfect fairness)
+**And** weighted fairness tests compute Jain's Index on normalized ratios (actual/expected)
+
+**Given** the existing fairness benchmark with equal weights
+**When** N fairness keys have equal weight and the benchmark completes
+**Then** Jain's Fairness Index is reported alongside existing per-key deviation metrics
+**And** the index value is >= 0.95 for the equal-weight case
+
+### Story 21.5: CI Visualization & Reporting
+
+As a developer reviewing a PR,
+I want benchmark results visualized as trend charts on GitHub Pages with regression alerts on PRs,
+So that I can see performance trends over time and catch regressions without reading raw JSON.
+
+**Acceptance Criteria:**
+
+**Given** the benchmark suite produces results
+**When** results are emitted
+**Then** a second output file in `github-action-benchmark` JSON format is generated alongside the existing `BenchReport` JSON
+**And** each metric maps to either `customSmallerIsBetter` (latency, overhead) or `customBiggerIsBetter` (throughput) tool type
+**And** the format includes `name`, `unit`, `value`, and optional `range` fields
+
+**Given** the `bench-regression.yml` CI workflow
+**When** benchmarks complete on a push to `main`
+**Then** the `github-action-benchmark` action stores results to the `gh-pages` branch under `dev/bench/`
+**And** a Chart.js visualization page is generated at the repository's GitHub Pages URL
+
+**Given** the `bench-regression.yml` CI workflow
+**When** benchmarks complete on a PR
+**Then** the `github-action-benchmark` action compares against the stored baseline
+**And** if any metric regresses beyond the configured threshold (default 115%), a comment is posted on the PR with the regression details
+**And** the existing custom comparison (`bench-compare`) continues to run alongside for backward compatibility
+
+**Given** the benchmark results page
+**When** a developer visits the GitHub Pages benchmark URL
+**Then** they see time-series charts for all key metrics (throughput, latency percentiles, fairness)
+**And** each chart shows at least the last 50 data points (commits to main)
+
+**Given** the CI benchmark workflow
+**When** all benchmarks (self + competitive) run end-to-end
+**Then** total CI wall-clock time is under 15 minutes (NFR-B2)
