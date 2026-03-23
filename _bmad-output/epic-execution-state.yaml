@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "21.2"
     title: "Competitive Benchmark Overhaul"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/21.2-competitive-benchmark-overhaul"
+    pr: 91
     dependsOn: ["21.1"]
   - id: "21.3"
     title: "Open-Loop Load Generation & Latency-Under-Load Benchmarks"
