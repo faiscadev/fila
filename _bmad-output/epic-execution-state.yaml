@@ -1,38 +1,40 @@
-epic: "Epic 12: Benchmarks & Competitive Positioning"
+epic: "Epic 21: Trustworthy Benchmark Suite"
 baseBranch: main
-startedAt: "2026-03-04T12:00:00Z"
+startedAt: "2026-03-23T00:00:00Z"
 stories:
-  - id: "12.1"
-    title: "Benchmark Harness & Self-Benchmarking"
-    status: completed
-    currentPhase: ""
-    branch: "feat/12.1-benchmark-harness"
-    pr: 45
+  - id: "21.1"
+    title: "Statistical Foundation — HdrHistogram & Measurement Rigor"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/21.1-hdrhistogram-measurement-rigor"
+    pr: null
     dependsOn: []
-  - id: "12.2"
-    title: "CI Regression Detection"
-    status: completed
+  - id: "21.2"
+    title: "Competitive Benchmark Overhaul"
+    status: pending
     currentPhase: ""
-    branch: "feat/12.2-ci-regression-detection"
-    pr: 46
-    dependsOn: ["12.1"]
-  - id: "12.3"
-    title: "Competitive Benchmarks"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: ["21.1"]
+  - id: "21.3"
+    title: "Open-Loop Load Generation & Latency-Under-Load Benchmarks"
+    status: pending
     currentPhase: ""
-    branch: "feat/12.3-competitive-benchmarks"
-    pr: 47
-    dependsOn: []
-  - id: "12.4"
-    title: "Published Results & Benchmark Dashboard"
-    status: completed
+    branch: ""
+    pr: null
+    dependsOn: ["21.1"]
+  - id: "21.4"
+    title: "Failure-Path & Fairness Benchmarks"
+    status: pending
     currentPhase: ""
-    branch: "feat/12.4-published-results-benchmark-dashboard"
-    pr: 48
-    dependsOn: ["12.1", "12.3"]
+    branch: ""
+    pr: null
+    dependsOn: ["21.1"]
+  - id: "21.5"
+    title: "CI Visualization & Reporting"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["21.1"]
 skippedIssues: []
-completedAt: "2026-03-05T00:30:00Z"
-summary:
-  total: 4
-  completed: 4
-  skipped: 0
