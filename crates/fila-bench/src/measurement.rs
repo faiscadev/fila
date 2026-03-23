@@ -80,9 +80,11 @@ impl LatencyHistogram {
 
     /// Deserialize a histogram from base64-encoded V2 format.
     pub fn deserialize_base64(encoded: &str) -> Option<Self> {
-        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()?;
+        let bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()?;
         let mut deserializer = hdrhistogram::serialization::Deserializer::new();
-        let histogram: hdrhistogram::Histogram<u64> = deserializer.deserialize(&mut &bytes[..]).ok()?;
+        let histogram: hdrhistogram::Histogram<u64> =
+            deserializer.deserialize(&mut &bytes[..]).ok()?;
         Some(Self { histogram })
     }
 }

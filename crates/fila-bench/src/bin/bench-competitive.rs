@@ -164,8 +164,17 @@ mod kafka {
                 let meta: HashMap<String, serde_json::Value> = [(
                     "histogram".to_string(),
                     serde_json::json!(sampler.serialize_base64()),
-                )].into_iter().collect();
-                for (label, value_us) in [("p50", pcts.p50), ("p95", pcts.p95), ("p99", pcts.p99), ("p99_9", pcts.p99_9), ("p99_99", pcts.p99_99), ("max", pcts.max)] {
+                )]
+                .into_iter()
+                .collect();
+                for (label, value_us) in [
+                    ("p50", pcts.p50),
+                    ("p95", pcts.p95),
+                    ("p99", pcts.p99),
+                    ("p99_9", pcts.p99_9),
+                    ("p99_99", pcts.p99_99),
+                    ("max", pcts.max),
+                ] {
                     report.add(BenchResult {
                         name: format!("kafka_latency_{label}"),
                         value: value_us / 1000.0,
@@ -434,8 +443,17 @@ mod rabbitmq {
                 let meta: HashMap<String, serde_json::Value> = [(
                     "histogram".to_string(),
                     serde_json::json!(sampler.serialize_base64()),
-                )].into_iter().collect();
-                for (label, value_us) in [("p50", pcts.p50), ("p95", pcts.p95), ("p99", pcts.p99), ("p99_9", pcts.p99_9), ("p99_99", pcts.p99_99), ("max", pcts.max)] {
+                )]
+                .into_iter()
+                .collect();
+                for (label, value_us) in [
+                    ("p50", pcts.p50),
+                    ("p95", pcts.p95),
+                    ("p99", pcts.p99),
+                    ("p99_9", pcts.p99_9),
+                    ("p99_99", pcts.p99_99),
+                    ("max", pcts.max),
+                ] {
                     report.add(BenchResult {
                         name: format!("rabbitmq_latency_{label}"),
                         value: value_us / 1000.0,
@@ -711,8 +729,17 @@ mod nats {
                 let meta: HashMap<String, serde_json::Value> = [(
                     "histogram".to_string(),
                     serde_json::json!(sampler.serialize_base64()),
-                )].into_iter().collect();
-                for (label, value_us) in [("p50", pcts.p50), ("p95", pcts.p95), ("p99", pcts.p99), ("p99_9", pcts.p99_9), ("p99_99", pcts.p99_99), ("max", pcts.max)] {
+                )]
+                .into_iter()
+                .collect();
+                for (label, value_us) in [
+                    ("p50", pcts.p50),
+                    ("p95", pcts.p95),
+                    ("p99", pcts.p99),
+                    ("p99_9", pcts.p99_9),
+                    ("p99_99", pcts.p99_99),
+                    ("max", pcts.max),
+                ] {
                     report.add(BenchResult {
                         name: format!("nats_latency_{label}"),
                         value: value_us / 1000.0,
@@ -938,8 +965,17 @@ mod fila {
                 let meta: HashMap<String, serde_json::Value> = [(
                     "histogram".to_string(),
                     serde_json::json!(sampler.serialize_base64()),
-                )].into_iter().collect();
-                for (label, value_us) in [("p50", pcts.p50), ("p95", pcts.p95), ("p99", pcts.p99), ("p99_9", pcts.p99_9), ("p99_99", pcts.p99_99), ("max", pcts.max)] {
+                )]
+                .into_iter()
+                .collect();
+                for (label, value_us) in [
+                    ("p50", pcts.p50),
+                    ("p95", pcts.p95),
+                    ("p99", pcts.p99),
+                    ("p99_9", pcts.p99_9),
+                    ("p99_99", pcts.p99_99),
+                    ("max", pcts.max),
+                ] {
                     report.add(BenchResult {
                         name: format!("fila_latency_{label}"),
                         value: value_us / 1000.0,

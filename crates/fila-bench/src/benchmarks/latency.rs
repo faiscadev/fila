@@ -39,10 +39,7 @@ pub fn emit_latency_results(
     };
 
     let mut meta = extra_metadata.clone();
-    meta.insert(
-        "samples".to_string(),
-        serde_json::json!(histogram.count()),
-    );
+    meta.insert("samples".to_string(), serde_json::json!(histogram.count()));
     meta.insert(
         "histogram".to_string(),
         serde_json::json!(histogram.serialize_base64()),
@@ -172,12 +169,10 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
 
         drop(stream);
 
-        let meta: HashMap<String, serde_json::Value> = [(
-            "producers".to_string(),
-            serde_json::json!(level.producers),
-        )]
-        .into_iter()
-        .collect();
+        let meta: HashMap<String, serde_json::Value> =
+            [("producers".to_string(), serde_json::json!(level.producers))]
+                .into_iter()
+                .collect();
 
         results.extend(emit_latency_results(
             &histogram,

@@ -40,7 +40,8 @@ pub fn aggregate_reports(reports: &[BenchReport]) -> BenchReport {
 
     let mut histogram_groups: HashMap<String, Vec<String>> = HashMap::new(); // base_name -> [histogram_b64]
     let mut histogram_units: HashMap<String, String> = HashMap::new();
-    let mut histogram_extra_meta: HashMap<String, HashMap<String, serde_json::Value>> = HashMap::new();
+    let mut histogram_extra_meta: HashMap<String, HashMap<String, serde_json::Value>> =
+        HashMap::new();
 
     for report in reports {
         for metric in &report.benchmarks {
@@ -89,9 +90,7 @@ pub fn aggregate_reports(reports: &[BenchReport]) -> BenchReport {
             let runs = runs.max(1);
             for i in 0..runs {
                 let idx = i * 6;
-                if idx < histograms_b64.len()
-                    && !seen.contains(&histograms_b64[idx].as_str())
-                {
+                if idx < histograms_b64.len() && !seen.contains(&histograms_b64[idx].as_str()) {
                     seen.push(histograms_b64[idx].as_str());
                 }
             }
@@ -114,11 +113,11 @@ pub fn aggregate_reports(reports: &[BenchReport]) -> BenchReport {
                 .get(base_name)
                 .cloned()
                 .unwrap_or_default();
-            meta.insert("runs".to_string(), serde_json::json!(unique_histograms.len()));
             meta.insert(
-                "samples".to_string(),
-                serde_json::json!(merged.count()),
+                "runs".to_string(),
+                serde_json::json!(unique_histograms.len()),
             );
+            meta.insert("samples".to_string(), serde_json::json!(merged.count()));
             meta.insert(
                 "histogram".to_string(),
                 serde_json::json!(merged.serialize_base64()),
