@@ -1,4 +1,4 @@
-use crate::measurement::LatencySampler;
+use crate::measurement::{bench_duration_secs, LatencyHistogram, MIN_LATENCY_SAMPLES};
 use crate::report::BenchResult;
 use crate::server::{create_queue_cli, BenchServer};
 use std::collections::HashMap;
@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 
 const PAYLOAD_SIZE: usize = 1024;
-const SAMPLES_PER_LEVEL: usize = 100;
 
 struct LoadLevel {
     name: &'static str,
@@ -28,14 +27,55 @@ const LOAD_LEVELS: &[LoadLevel] = &[
     },
 ];
 
-/// Measure enqueue-to-consume latency at p50/p95/p99 under varying load.
+/// Emit all 6 percentile metrics for a latency histogram.
+pub fn emit_latency_results(
+    histogram: &LatencyHistogram,
+    prefix: &str,
+    suffix: &str,
+    extra_metadata: &HashMap<String, serde_json::Value>,
+) -> Vec<BenchResult> {
+    let Some(pcts) = histogram.percentiles() else {
+        return Vec::new();
+    };
+
+    let mut meta = extra_metadata.clone();
+    meta.insert(
+        "samples".to_string(),
+        serde_json::json!(histogram.count()),
+    );
+    meta.insert(
+        "histogram".to_string(),
+        serde_json::json!(histogram.serialize_base64()),
+    );
+
+    let percentiles = [
+        ("p50", pcts.p50),
+        ("p95", pcts.p95),
+        ("p99", pcts.p99),
+        ("p99_9", pcts.p99_9),
+        ("p99_99", pcts.p99_99),
+        ("max", pcts.max),
+    ];
+
+    percentiles
+        .into_iter()
+        .map(|(label, value_us)| BenchResult {
+            name: format!("{prefix}_{label}_{suffix}"),
+            value: value_us / 1000.0, // microseconds → milliseconds
+            unit: "ms".to_string(),
+            metadata: meta.clone(),
+        })
+        .collect()
+}
+
+/// Measure enqueue-to-consume latency at p50/p95/p99/p99.9/p99.99/max under varying load.
 ///
 /// Approach: first pre-load background messages to simulate queue pressure from
 /// N producers, then measure sequential enqueue-consume round-trip latency.
-/// This avoids the O(N) scan problem of searching for a specific message among
-/// thousands of background messages.
+/// Collects samples for a configurable duration (default 30s, min 10K samples).
 pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
     let mut results = Vec::new();
+    let duration = Duration::from_secs(bench_duration_secs());
 
     for level in LOAD_LEVELS {
         let queue = format!("bench-latency-{}", level.name);
@@ -49,8 +89,6 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
         let headers: HashMap<String, String> = HashMap::new();
 
         // Phase 1: Pre-load background pressure.
-        // For moderate/saturated, flood the queue with messages from N-1
-        // background producers for 3 seconds to create realistic server load.
         if level.producers > 1 {
             let bg_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let mut bg_tasks = Vec::new();
@@ -89,7 +127,7 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
                     Ok(Some(Ok(msg))) => {
                         let _ = client.ack(&queue, &msg.id).await;
                     }
-                    _ => break, // timeout or stream end — queue is drained
+                    _ => break,
                 }
                 if tokio::time::Instant::now() > drain_deadline {
                     break;
@@ -99,32 +137,34 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
         }
 
         // Phase 3: Measure sequential enqueue-consume round-trip latency.
-        // Each sample: enqueue one message, consume the next available, record time.
-        // Since the queue is drained, the next consumed message IS the one we enqueued.
+        // Run for `duration` and collect at least MIN_LATENCY_SAMPLES.
         let mut stream = client.consume(&queue).await.expect("consume stream");
-        let mut sampler = LatencySampler::with_capacity(SAMPLES_PER_LEVEL);
+        let mut histogram = LatencyHistogram::new();
+        let start = Instant::now();
 
-        for _ in 0..SAMPLES_PER_LEVEL {
-            let start = Instant::now();
+        loop {
+            let elapsed = start.elapsed();
+            if elapsed >= duration && histogram.count() >= MIN_LATENCY_SAMPLES {
+                break;
+            }
+
+            let sample_start = Instant::now();
             let enqueued_id = client
                 .enqueue(&queue, headers.clone(), payload.clone())
                 .await
                 .expect("enqueue");
 
-            // Consume the next message and verify it's the one we just enqueued
             let next = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
             match next {
                 Ok(Some(Ok(msg))) if msg.id == enqueued_id => {
-                    sampler.record(start.elapsed());
+                    histogram.record(sample_start.elapsed());
                     let _ = client.ack(&queue, &msg.id).await;
                 }
                 Ok(Some(Ok(msg))) => {
-                    // Wrong message — ack it and skip this sample
                     let _ = client.ack(&queue, &msg.id).await;
                     continue;
                 }
                 _ => {
-                    // Timeout or error — skip this sample
                     continue;
                 }
             }
@@ -132,34 +172,23 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
 
         drop(stream);
 
-        if let Some((p50, p95, p99)) = sampler.percentiles() {
-            let meta: HashMap<String, serde_json::Value> = [
-                ("producers".to_string(), serde_json::json!(level.producers)),
-                ("samples".to_string(), serde_json::json!(sampler.count())),
-            ]
-            .into_iter()
-            .collect();
+        let meta: HashMap<String, serde_json::Value> = [(
+            "producers".to_string(),
+            serde_json::json!(level.producers),
+        )]
+        .into_iter()
+        .collect();
 
-            results.push(BenchResult {
-                name: format!("e2e_latency_p50_{}", level.name),
-                value: p50.as_secs_f64() * 1000.0,
-                unit: "ms".to_string(),
-                metadata: meta.clone(),
-            });
-            results.push(BenchResult {
-                name: format!("e2e_latency_p95_{}", level.name),
-                value: p95.as_secs_f64() * 1000.0,
-                unit: "ms".to_string(),
-                metadata: meta.clone(),
-            });
-            results.push(BenchResult {
-                name: format!("e2e_latency_p99_{}", level.name),
-                value: p99.as_secs_f64() * 1000.0,
-                unit: "ms".to_string(),
-                metadata: meta,
-            });
-        }
+        results.extend(emit_latency_results(
+            &histogram,
+            "e2e_latency",
+            level.name,
+            &meta,
+        ));
     }
 
     results
 }
+
+/// Helper to emit latency results — re-exported for use by other benchmark modules.
+pub use emit_latency_results as emit_latency;

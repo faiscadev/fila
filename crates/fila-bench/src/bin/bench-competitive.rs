@@ -10,7 +10,7 @@
 //!   bench-competitive nats <output-dir>
 //!   bench-competitive all <output-dir>
 
-use fila_bench::measurement::{LatencySampler, ThroughputMeter};
+use fila_bench::measurement::{LatencyHistogram, ThroughputMeter};
 use fila_bench::report::{BenchReport, BenchResult};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -141,7 +141,7 @@ mod kafka {
             let _ = consumer.poll(Duration::from_secs(2));
 
             let payload = vec![0u8; PAYLOAD_1KB];
-            let mut sampler = LatencySampler::with_capacity(LATENCY_SAMPLES);
+            let mut sampler = LatencyHistogram::new();
 
             for _ in 0..LATENCY_SAMPLES {
                 let start = Instant::now();
@@ -160,25 +160,19 @@ mod kafka {
                 }
             }
 
-            if let Some((p50, p95, p99)) = sampler.percentiles() {
-                report.add(BenchResult {
-                    name: "kafka_latency_p50".to_string(),
-                    value: p50.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
-                report.add(BenchResult {
-                    name: "kafka_latency_p95".to_string(),
-                    value: p95.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
-                report.add(BenchResult {
-                    name: "kafka_latency_p99".to_string(),
-                    value: p99.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
+            if let Some(pcts) = sampler.percentiles() {
+                let meta: HashMap<String, serde_json::Value> = [(
+                    "histogram".to_string(),
+                    serde_json::json!(sampler.serialize_base64()),
+                )].into_iter().collect();
+                for (label, value_us) in [("p50", pcts.p50), ("p95", pcts.p95), ("p99", pcts.p99), ("p99_9", pcts.p99_9), ("p99_99", pcts.p99_99), ("max", pcts.max)] {
+                    report.add(BenchResult {
+                        name: format!("kafka_latency_{label}"),
+                        value: value_us / 1000.0,
+                        unit: "ms".to_string(),
+                        metadata: meta.clone(),
+                    });
+                }
             }
             cleanup_topic(&adm, topic).await;
         }
@@ -415,7 +409,7 @@ mod rabbitmq {
             declare_queue(&channel, queue).await;
             let payload = vec![0u8; PAYLOAD_1KB];
 
-            let mut sampler = LatencySampler::with_capacity(LATENCY_SAMPLES);
+            let mut sampler = LatencyHistogram::new();
             for _ in 0..LATENCY_SAMPLES {
                 let start = Instant::now();
                 let _ = channel
@@ -436,25 +430,19 @@ mod rabbitmq {
                 }
             }
 
-            if let Some((p50, p95, p99)) = sampler.percentiles() {
-                report.add(BenchResult {
-                    name: "rabbitmq_latency_p50".to_string(),
-                    value: p50.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
-                report.add(BenchResult {
-                    name: "rabbitmq_latency_p95".to_string(),
-                    value: p95.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
-                report.add(BenchResult {
-                    name: "rabbitmq_latency_p99".to_string(),
-                    value: p99.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
+            if let Some(pcts) = sampler.percentiles() {
+                let meta: HashMap<String, serde_json::Value> = [(
+                    "histogram".to_string(),
+                    serde_json::json!(sampler.serialize_base64()),
+                )].into_iter().collect();
+                for (label, value_us) in [("p50", pcts.p50), ("p95", pcts.p95), ("p99", pcts.p99), ("p99_9", pcts.p99_9), ("p99_99", pcts.p99_99), ("max", pcts.max)] {
+                    report.add(BenchResult {
+                        name: format!("rabbitmq_latency_{label}"),
+                        value: value_us / 1000.0,
+                        unit: "ms".to_string(),
+                        metadata: meta.clone(),
+                    });
+                }
             }
             channel
                 .queue_delete(queue, QueueDeleteOptions::default())
@@ -701,7 +689,7 @@ mod nats {
                 .await
                 .expect("create consumer");
 
-            let mut sampler = LatencySampler::with_capacity(LATENCY_SAMPLES);
+            let mut sampler = LatencyHistogram::new();
             for _ in 0..LATENCY_SAMPLES {
                 let start = Instant::now();
                 let _ = js.publish(subject, payload.clone().into()).await;
@@ -719,25 +707,19 @@ mod nats {
                 }
             }
 
-            if let Some((p50, p95, p99)) = sampler.percentiles() {
-                report.add(BenchResult {
-                    name: "nats_latency_p50".to_string(),
-                    value: p50.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
-                report.add(BenchResult {
-                    name: "nats_latency_p95".to_string(),
-                    value: p95.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
-                report.add(BenchResult {
-                    name: "nats_latency_p99".to_string(),
-                    value: p99.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
+            if let Some(pcts) = sampler.percentiles() {
+                let meta: HashMap<String, serde_json::Value> = [(
+                    "histogram".to_string(),
+                    serde_json::json!(sampler.serialize_base64()),
+                )].into_iter().collect();
+                for (label, value_us) in [("p50", pcts.p50), ("p95", pcts.p95), ("p99", pcts.p99), ("p99_9", pcts.p99_9), ("p99_99", pcts.p99_99), ("max", pcts.max)] {
+                    report.add(BenchResult {
+                        name: format!("nats_latency_{label}"),
+                        value: value_us / 1000.0,
+                        unit: "ms".to_string(),
+                        metadata: meta.clone(),
+                    });
+                }
             }
             let _ = js.delete_stream(stream).await;
         }
@@ -934,7 +916,7 @@ mod fila {
             let headers = HashMap::new();
 
             let mut stream = client.consume(queue).await.expect("fila consume");
-            let mut sampler = LatencySampler::with_capacity(LATENCY_SAMPLES);
+            let mut sampler = LatencyHistogram::new();
 
             for _ in 0..LATENCY_SAMPLES {
                 let start = Instant::now();
@@ -952,25 +934,19 @@ mod fila {
                 }
             }
 
-            if let Some((p50, p95, p99)) = sampler.percentiles() {
-                report.add(BenchResult {
-                    name: "fila_latency_p50".to_string(),
-                    value: p50.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
-                report.add(BenchResult {
-                    name: "fila_latency_p95".to_string(),
-                    value: p95.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
-                report.add(BenchResult {
-                    name: "fila_latency_p99".to_string(),
-                    value: p99.as_secs_f64() * 1000.0,
-                    unit: "ms".to_string(),
-                    metadata: HashMap::new(),
-                });
+            if let Some(pcts) = sampler.percentiles() {
+                let meta: HashMap<String, serde_json::Value> = [(
+                    "histogram".to_string(),
+                    serde_json::json!(sampler.serialize_base64()),
+                )].into_iter().collect();
+                for (label, value_us) in [("p50", pcts.p50), ("p95", pcts.p95), ("p99", pcts.p99), ("p99_9", pcts.p99_9), ("p99_99", pcts.p99_99), ("max", pcts.max)] {
+                    report.add(BenchResult {
+                        name: format!("fila_latency_{label}"),
+                        value: value_us / 1000.0,
+                        unit: "ms".to_string(),
+                        metadata: meta.clone(),
+                    });
+                }
             }
         }
 

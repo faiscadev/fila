@@ -1,54 +1,89 @@
+use hdrhistogram::serialization::Serializer as _;
 use std::time::{Duration, Instant};
 
-/// Collect timing samples and compute percentiles.
-pub struct LatencySampler {
-    samples: Vec<Duration>,
+/// Percentile results from an HdrHistogram.
+#[derive(Debug, Clone)]
+pub struct PercentileSet {
+    pub p50: f64,
+    pub p95: f64,
+    pub p99: f64,
+    pub p99_9: f64,
+    pub p99_99: f64,
+    pub max: f64,
 }
 
-impl Default for LatencySampler {
+/// Latency recorder backed by HdrHistogram.
+///
+/// Records durations in microseconds. Provides extended percentiles
+/// (p50 through max) and supports histogram merging for multi-run aggregation.
+pub struct LatencyHistogram {
+    histogram: hdrhistogram::Histogram<u64>,
+}
+
+impl Default for LatencyHistogram {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LatencySampler {
+impl LatencyHistogram {
+    /// Create a new histogram covering 1µs to 60s with 3 significant figures.
     pub fn new() -> Self {
         Self {
-            samples: Vec::new(),
+            histogram: hdrhistogram::Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)
+                .expect("create histogram"),
         }
     }
 
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            samples: Vec::with_capacity(capacity),
-        }
-    }
-
+    /// Record a duration sample.
     pub fn record(&mut self, d: Duration) {
-        self.samples.push(d);
+        let micros = d.as_micros() as u64;
+        // Clamp to histogram max to avoid errors on extreme outliers
+        let micros = micros.min(60_000_000);
+        self.histogram.record(micros).ok();
     }
 
-    pub fn count(&self) -> usize {
-        self.samples.len()
+    /// Number of recorded samples.
+    pub fn count(&self) -> u64 {
+        self.histogram.len()
     }
 
-    /// Compute a percentile (0.0–1.0) from collected samples.
-    /// Returns None if no samples exist.
-    pub fn percentile(&mut self, p: f64) -> Option<Duration> {
-        if self.samples.is_empty() {
+    /// Compute all standard percentiles. Returns None if no samples.
+    pub fn percentiles(&self) -> Option<PercentileSet> {
+        if self.histogram.is_empty() {
             return None;
         }
-        self.samples.sort();
-        let idx = ((p * self.samples.len() as f64) as usize).min(self.samples.len() - 1);
-        Some(self.samples[idx])
+        Some(PercentileSet {
+            p50: self.histogram.value_at_quantile(0.50) as f64,
+            p95: self.histogram.value_at_quantile(0.95) as f64,
+            p99: self.histogram.value_at_quantile(0.99) as f64,
+            p99_9: self.histogram.value_at_quantile(0.999) as f64,
+            p99_99: self.histogram.value_at_quantile(0.9999) as f64,
+            max: self.histogram.max() as f64,
+        })
     }
 
-    /// Return p50, p95, p99 as (Duration, Duration, Duration).
-    pub fn percentiles(&mut self) -> Option<(Duration, Duration, Duration)> {
-        let p50 = self.percentile(0.50)?;
-        let p95 = self.percentile(0.95)?;
-        let p99 = self.percentile(0.99)?;
-        Some((p50, p95, p99))
+    /// Merge another histogram into this one.
+    pub fn merge(&mut self, other: &LatencyHistogram) {
+        self.histogram.add(&other.histogram).ok();
+    }
+
+    /// Serialize the histogram to a base64-encoded V2 format for JSON embedding.
+    pub fn serialize_base64(&self) -> String {
+        let mut buf = Vec::new();
+        let mut serializer = hdrhistogram::serialization::V2Serializer::new();
+        serializer
+            .serialize(&self.histogram, &mut buf)
+            .expect("serialize histogram");
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf)
+    }
+
+    /// Deserialize a histogram from base64-encoded V2 format.
+    pub fn deserialize_base64(encoded: &str) -> Option<Self> {
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()?;
+        let mut deserializer = hdrhistogram::serialization::Deserializer::new();
+        let histogram: hdrhistogram::Histogram<u64> = deserializer.deserialize(&mut &bytes[..]).ok()?;
+        Some(Self { histogram })
     }
 }
 
@@ -106,3 +141,14 @@ pub fn process_rss_bytes(pid: u32) -> Option<u64> {
     sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]), true);
     sys.process(sysinfo_pid).map(|p| p.memory())
 }
+
+/// Read the benchmark duration from environment variable, with a default.
+pub fn bench_duration_secs() -> u64 {
+    std::env::var("FILA_BENCH_DURATION_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30)
+}
+
+/// Minimum number of latency samples required per measurement.
+pub const MIN_LATENCY_SAMPLES: u64 = 10_000;
