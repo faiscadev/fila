@@ -34,6 +34,10 @@ circuit_breaker_cooldown_ms = 10000  # cooldown period after circuit break (ms)
 otlp_endpoint = "http://localhost:4317"  # OTLP gRPC endpoint (omit to disable)
 service_name = "fila"                     # OTel service name
 metrics_interval_ms = 10000              # metrics export interval (ms)
+
+# Uncomment to enable the web management GUI
+# [gui]
+# listen_addr = "0.0.0.0:8080"  # HTTP port for the dashboard
 ```
 
 ## Section reference
@@ -70,6 +74,14 @@ Telemetry export is optional. When `otlp_endpoint` is omitted, the broker uses p
 | `otlp_endpoint` | string | (none) | OTLP gRPC endpoint for exporting traces and metrics. Example: `"http://localhost:4317"`. |
 | `service_name` | string | `"fila"` | Service name reported in OTel traces and metrics. |
 | `metrics_interval_ms` | integer | `10000` | How often metrics are exported to the OTLP endpoint. |
+
+### `[gui]`
+
+Web management GUI. Disabled by default. When enabled, serves a read-only dashboard on a separate HTTP port.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `listen_addr` | string | `"0.0.0.0:8080"` | Address and port for the web dashboard HTTP server |
 
 ## OpenTelemetry metrics
 

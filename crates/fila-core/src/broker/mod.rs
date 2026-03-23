@@ -17,7 +17,7 @@ use crate::error::{BrokerError, BrokerResult};
 use crate::storage::StorageEngine;
 
 pub use command::{QueueSummary, ReadyMessage, SchedulerCommand};
-pub use config::{AuthConfig, BrokerConfig, TlsParams};
+pub use config::{AuthConfig, BrokerConfig, GuiConfig, TlsParams};
 
 use scheduler::Scheduler;
 
