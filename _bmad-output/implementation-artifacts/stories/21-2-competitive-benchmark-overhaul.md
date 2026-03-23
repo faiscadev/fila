@@ -39,33 +39,33 @@ so that published comparison numbers reflect realistic behavior, not best-case s
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Update measurement constants (AC: 5)
-  - [ ] 1.1 Change `WARMUP_SECS` from 1 to 5
-  - [ ] 1.2 Change `MEASURE_SECS` from 3 to 30
-  - [ ] 1.3 Remove `LATENCY_SAMPLES` constant (replaced by duration-based collection)
+- [x] Task 1: Update measurement constants (AC: 5)
+  - [x] 1.1 Change `WARMUP_SECS` from 1 to 5
+  - [x] 1.2 Replace `MEASURE_SECS` with `measure_secs()` fn (30s default, configurable via env)
+  - [x] 1.3 Remove `LATENCY_SAMPLES` constant (replaced by duration-based collection)
 
-- [ ] Task 2: Implement concurrent produce/consume latency (AC: 1, 4)
-  - [ ] 2.1 Refactor latency benchmarks: spawn producer and consumer as concurrent tasks
-  - [ ] 2.2 Producer embeds nanosecond timestamp in first 8 bytes of payload
-  - [ ] 2.3 Consumer extracts timestamp from payload, computes `now - embedded_timestamp`
-  - [ ] 2.4 Run for MEASURE_SECS duration, collect into HdrHistogram
-  - [ ] 2.5 Emit 6 percentile metrics (p50 through max) with serialized histogram in metadata
+- [x] Task 2: Implement concurrent produce/consume latency (AC: 1, 4)
+  - [x] 2.1 Refactor latency benchmarks: spawn producer and consumer as concurrent tasks
+  - [x] 2.2 Producer embeds nanosecond timestamp in first 8 bytes of payload
+  - [x] 2.3 Consumer extracts timestamp from payload, computes `now - embedded_timestamp`
+  - [x] 2.4 Run for measure_secs() duration, collect into HdrHistogram
+  - [x] 2.5 Emit 6 percentile metrics (p50 through max) with serialized histogram in metadata
 
-- [ ] Task 3: Add disk I/O to docker stats (AC: 3)
-  - [ ] 3.1 Update `container_stats()` format string to include `{{.BlockIO}}`
-  - [ ] 3.2 Parse block I/O read/write values (handle MiB/GiB/KiB units)
-  - [ ] 3.3 Emit `{broker}_disk_io_read_mb` and `{broker}_disk_io_write_mb` metrics
+- [x] Task 3: Add disk I/O to docker stats (AC: 3)
+  - [x] 3.1 Update `container_stats()` format to include `{{.BlockIO}}`
+  - [x] 3.2 Parse block I/O with `parse_block_io_mb()` (handles TB/GB/MB/kB/B)
+  - [x] 3.3 Emit `{broker}_disk_io_read_mb` and `{broker}_disk_io_write_mb` metrics
 
-- [ ] Task 4: Update Makefile for 3-run aggregation (AC: 2)
-  - [ ] 4.1 Each `bench-{broker}` target runs the benchmark 3 times
-  - [ ] 4.2 Use `bench-aggregate` binary to merge results
-  - [ ] 4.3 Store aggregated result as `bench-{broker}.json`
+- [x] Task 4: Update Makefile for 3-run aggregation (AC: 2)
+  - [x] 4.1 Each `bench-{broker}` target runs 3 times
+  - [x] 4.2 Use `bench-aggregate` binary to merge results
+  - [x] 4.3 Store aggregated result as `bench-{broker}.json`, clean up per-run files
 
-- [ ] Task 5: Apply changes to all 4 broker implementations (AC: 1-5)
-  - [ ] 5.1 Kafka: concurrent latency, 30s duration, 5s warmup, 10K+ samples
-  - [ ] 5.2 RabbitMQ: concurrent latency, 30s duration, 5s warmup, 10K+ samples
-  - [ ] 5.3 NATS: concurrent latency, 30s duration, 5s warmup, 10K+ samples
-  - [ ] 5.4 Fila: concurrent latency, 30s duration, 5s warmup, 10K+ samples
+- [x] Task 5: Apply changes to all 4 broker implementations (AC: 1-5)
+  - [x] 5.1 Kafka: concurrent latency (std::thread for sync rdkafka)
+  - [x] 5.2 RabbitMQ: concurrent latency (tokio::spawn)
+  - [x] 5.3 NATS: concurrent latency (tokio::spawn)
+  - [x] 5.4 Fila: concurrent latency (tokio::spawn)
 
 ## Dev Notes
 
@@ -99,8 +99,20 @@ so that published comparison numbers reflect realistic behavior, not best-case s
 
 ### Agent Model Used
 
+Claude Opus 4.6 (1M context)
+
 ### Debug Log References
+
+None.
 
 ### Completion Notes List
 
+- Kafka uses `std::thread::spawn` for producer/consumer since rdkafka `BaseConsumer` is sync
+- Other brokers (RabbitMQ, NATS, Fila) use `tokio::spawn` for async tasks
+- `ContainerStats` struct replaces the old `(f64, f64)` tuple return
+- `parse_block_io_mb()` helper handles TB/GB/MB/kB/B unit suffixes
+
 ### File List
+
+- `crates/fila-bench/src/bin/bench-competitive.rs` — full overhaul: concurrent latency, disk I/O, 30s duration
+- `bench/competitive/Makefile` — 3-run aggregation per broker
