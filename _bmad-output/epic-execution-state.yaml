@@ -4,8 +4,8 @@ startedAt: "2026-03-23T00:00:00Z"
 stories:
   - id: "21.1"
     title: "Statistical Foundation — HdrHistogram & Measurement Rigor"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/21.1-hdrhistogram-measurement-rigor"
     pr: 90
     dependsOn: []
