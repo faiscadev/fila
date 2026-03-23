@@ -7,6 +7,6 @@ stories:
     status: in-progress
     currentPhase: "dev"
     branch: "feat/20.1-web-management-gui"
-    pr: null
+    pr: 89
     dependsOn: []
 skippedIssues: []
