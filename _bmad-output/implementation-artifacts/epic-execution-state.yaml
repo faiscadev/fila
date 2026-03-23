@@ -4,9 +4,14 @@ startedAt: "2026-03-22"
 stories:
   - id: "20.1"
     title: "Web Management GUI"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/20.1-web-management-gui"
     pr: 89
     dependsOn: []
+completedAt: "2026-03-22"
+summary:
+  total: 1
+  completed: 1
+  skipped: 0
 skippedIssues: []
