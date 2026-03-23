@@ -1,4 +1,4 @@
-# generated: 2026-03-04
+# generated: 2026-03-23
 # project: fila
 # project_key: NOKEY
 # tracking_system: file-system
@@ -33,7 +33,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-04
+generated: 2026-03-23
 project: fila
 project_key: NOKEY
 tracking_system: file-system
@@ -201,3 +201,12 @@ development_status:
   epic-20: done
   20-1-web-management-gui: done
   epic-20-retrospective: optional
+
+  # Epic 21: Trustworthy Benchmark Suite
+  epic-21: backlog
+  21-1-statistical-foundation-hdrhistogram-measurement-rigor: backlog
+  21-2-competitive-benchmark-overhaul: backlog
+  21-3-open-loop-load-generation-latency-under-load-benchmarks: backlog
+  21-4-failure-path-fairness-benchmarks: backlog
+  21-5-ci-visualization-reporting: backlog
+  epic-21-retrospective: optional
