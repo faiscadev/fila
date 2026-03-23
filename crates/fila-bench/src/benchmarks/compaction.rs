@@ -34,6 +34,11 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
             break;
         }
         if elapsed >= hard_timeout {
+            eprintln!(
+                "    WARNING: compaction idle phase hard timeout with {} samples (wanted {})",
+                idle_histogram.count(),
+                MIN_LATENCY_SAMPLES
+            );
             break;
         }
         let sample_start = Instant::now();
@@ -93,6 +98,11 @@ pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
             break;
         }
         if elapsed >= hard_timeout {
+            eprintln!(
+                "    WARNING: compaction active phase hard timeout with {} samples (wanted {})",
+                compaction_histogram.count(),
+                MIN_LATENCY_SAMPLES
+            );
             break;
         }
         let sample_start = Instant::now();
