@@ -208,5 +208,5 @@ development_status:
   21-2-competitive-benchmark-overhaul: done
   21-3-open-loop-load-generation-latency-under-load-benchmarks: backlog
   21-4-failure-path-fairness-benchmarks: done
-  21-5-ci-visualization-reporting: backlog
+  21-5-ci-visualization-reporting: done
   epic-21-retrospective: optional

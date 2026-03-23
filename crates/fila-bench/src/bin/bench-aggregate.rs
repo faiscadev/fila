@@ -33,7 +33,22 @@ fn main() {
         process::exit(2);
     });
 
+    // Also write github-action-benchmark format files alongside the main output.
+    let (smaller_json, bigger_json) = aggregated.to_gab_json();
+    let stem = output_path.strip_suffix(".json").unwrap_or(output_path);
+    let latency_path = format!("{stem}-gab-latency.json");
+    let throughput_path = format!("{stem}-gab-throughput.json");
+    std::fs::write(&latency_path, &smaller_json).unwrap_or_else(|e| {
+        eprintln!("Error writing GAB latency file '{latency_path}': {e}");
+        process::exit(2);
+    });
+    std::fs::write(&throughput_path, &bigger_json).unwrap_or_else(|e| {
+        eprintln!("Error writing GAB throughput file '{throughput_path}': {e}");
+        process::exit(2);
+    });
+
     println!("Aggregated {} reports → {output_path}", reports.len());
+    println!("GAB files: {latency_path}, {throughput_path}");
     for metric in &aggregated.benchmarks {
         println!(
             "  {:<50} {:>12.2} {}",
