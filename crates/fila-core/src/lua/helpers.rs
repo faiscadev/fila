@@ -89,9 +89,7 @@ fn create_rate_limit_keys(lua: &Lua) -> mlua::Result<mlua::Function> {
                 let end = end + start;
 
                 let key = &resolved[start + 1..end];
-                let header_value = headers
-                    .as_ref()
-                    .and_then(|h| h.get::<String>(key).ok());
+                let header_value = headers.as_ref().and_then(|h| h.get::<String>(key).ok());
                 match header_value {
                     Some(value) => {
                         let before = &resolved[..start];

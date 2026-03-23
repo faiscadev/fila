@@ -167,10 +167,7 @@ async fn list_queues_handler(
         queues: queues.into_iter().map(QueueSummaryJson::from).collect(),
     };
 
-    Ok((
-        [(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")],
-        Json(response),
-    ))
+    Ok(([(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")], Json(response)))
 }
 
 /// GET /api/queues/:name/stats — get detailed stats for a queue.
@@ -237,8 +234,5 @@ async fn get_stats_handler(
             .collect(),
     };
 
-    Ok((
-        [(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")],
-        Json(response),
-    ))
+    Ok(([(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")], Json(response)))
 }
