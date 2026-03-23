@@ -129,11 +129,13 @@ pub fn create_queue_cli(addr: &str, name: &str) {
         .args(["queue", "create", name])
         .output()
         .expect("run fila CLI");
-    assert!(
-        output.status.success(),
-        "failed to create queue '{name}': {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Tolerate "already exists" — the queue is ready either way
+        if !stderr.contains("already exists") {
+            panic!("failed to create queue '{name}': {stderr}");
+        }
+    }
 }
 
 /// Create a queue with Lua scripts via the fila CLI binary.

@@ -89,6 +89,7 @@ jobs:
       # github-action-benchmark: store results (main) or compare with alert (PR)
       - name: Store latency benchmark results (main)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.update_baseline)
+        continue-on-error: true
         uses: benchmark-action/github-action-benchmark@d48d326b4ca9ba73ca0cd0d59f108f9e02a381c7 # v1
         with:
           tool: 'customSmallerIsBetter'
@@ -100,6 +101,7 @@ jobs:
 
       - name: Store throughput benchmark results (main)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.update_baseline)
+        continue-on-error: true
         uses: benchmark-action/github-action-benchmark@d48d326b4ca9ba73ca0cd0d59f108f9e02a381c7 # v1
         with:
           tool: 'customBiggerIsBetter'
