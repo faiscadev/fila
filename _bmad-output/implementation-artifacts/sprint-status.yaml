@@ -198,6 +198,6 @@ development_status:
   epic-19-retrospective: optional
 
   # Epic 20: Web Management GUI
-  epic-20: backlog
-  20-1-web-management-gui: backlog
+  epic-20: in-progress
+  20-1-web-management-gui: in-progress
   epic-20-retrospective: optional

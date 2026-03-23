@@ -1,6 +1,7 @@
 mod admin_service;
 mod auth;
 mod error;
+mod gui;
 mod service;
 mod trace_context;
 
@@ -81,6 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Clone gui config before `config` is moved into Broker::new.
+    let gui_config = config.gui.clone();
+
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
     let rocksdb = Arc::new(RocksDbEngine::open(&data_dir)?);
     let storage: Arc<dyn fila_core::StorageEngine> = Arc::clone(&rocksdb) as _;
@@ -135,6 +139,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::time::Duration::from_millis(200),
             leader_watch_shutdown_rx,
         ));
+    }
+
+    // Optionally start the web management GUI on a separate HTTP port.
+    if let Some(ref gui) = gui_config {
+        let broker_for_gui = Arc::clone(&broker);
+        let gui_addr = gui.listen_addr.clone();
+        tokio::spawn(async move {
+            if let Err(e) = gui::start(broker_for_gui, &gui_addr).await {
+                tracing::error!(error = %e, "GUI server failed");
+            }
+        });
     }
 
     let admin_service = AdminService::new(Arc::clone(&broker), cluster_handle.clone());

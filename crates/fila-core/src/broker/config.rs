@@ -15,6 +15,22 @@ pub struct BrokerConfig {
     /// Authentication configuration. `None` (the default) disables authentication.
     /// Presence of this section in `fila.toml` enables API key authentication.
     pub auth: Option<AuthConfig>,
+    /// Web GUI configuration. `None` (the default) disables the web GUI.
+    /// Presence of this section in `fila.toml` enables the read-only management dashboard.
+    pub gui: Option<GuiConfig>,
+}
+
+/// Web management GUI configuration. Presence in `BrokerConfig.gui` (i.e. a `[gui]` section
+/// in `fila.toml`) enables the read-only web dashboard; absence disables it with zero overhead.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuiConfig {
+    /// HTTP listen address for the web GUI (default: "0.0.0.0:8080").
+    #[serde(default = "default_gui_listen_addr")]
+    pub listen_addr: String,
+}
+
+fn default_gui_listen_addr() -> String {
+    "0.0.0.0:8080".to_string()
 }
 
 /// Cluster configuration for Raft-based horizontal scaling.

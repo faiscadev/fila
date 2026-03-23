@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fila Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+  .header { background: #1e293b; padding: 16px 24px; border-bottom: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 20px; font-weight: 600; color: #f8fafc; }
+  .header .status { font-size: 13px; color: #94a3b8; }
+  .header .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; margin-right: 6px; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 20px; cursor: pointer; transition: border-color 0.15s; }
+  .card:hover { border-color: #60a5fa; }
+  .card.selected { border-color: #3b82f6; box-shadow: 0 0 0 1px #3b82f6; }
+  .card-title { font-size: 16px; font-weight: 600; color: #f8fafc; margin-bottom: 12px; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .metric { text-align: center; }
+  .metric-value { font-size: 24px; font-weight: 700; color: #f8fafc; }
+  .metric-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+  .detail { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 20px; }
+  .detail h2 { font-size: 18px; font-weight: 600; color: #f8fafc; margin-bottom: 16px; }
+  .detail-section { margin-bottom: 20px; }
+  .detail-section h3 { font-size: 14px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 12px; border-bottom: 1px solid #334155; }
+  td { padding: 8px 12px; font-size: 14px; border-bottom: 1px solid #1e293b; }
+  .empty { color: #64748b; font-style: italic; padding: 12px 0; }
+  .bar { height: 6px; background: #334155; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+  .bar-fill { height: 100%; background: #3b82f6; border-radius: 3px; transition: width 0.3s; }
+  .refresh-info { font-size: 12px; color: #64748b; text-align: center; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Fila Dashboard</h1>
+  <div class="status"><span class="dot"></span>Connected</div>
+</div>
+<div class="container">
+  <div id="queues" class="grid"></div>
+  <div id="detail" style="display:none"></div>
+  <div class="refresh-info">Auto-refreshes every 2 seconds</div>
+</div>
+<script>
+let selectedQueue = null;
+
+async function fetchQueues() {
+  try {
+    const res = await fetch('/api/queues');
+    const data = await res.json();
+    renderQueues(data.queues);
+  } catch (e) {
+    document.getElementById('queues').innerHTML = '<div class="card"><div class="card-title">Connection Error</div><div class="empty">Unable to reach broker API</div></div>';
+  }
+}
+
+function renderQueues(queues) {
+  const el = document.getElementById('queues');
+  if (!queues.length) {
+    el.innerHTML = '<div class="card"><div class="card-title">No Queues</div><div class="empty">Create a queue to see it here</div></div>';
+    return;
+  }
+  el.innerHTML = queues.map(q => `
+    <div class="card ${selectedQueue === q.name ? 'selected' : ''}" onclick="selectQueue('${q.name}')">
+      <div class="card-title">${esc(q.name)}</div>
+      <div class="metrics">
+        <div class="metric"><div class="metric-value">${q.depth}</div><div class="metric-label">Pending</div></div>
+        <div class="metric"><div class="metric-value">${q.in_flight}</div><div class="metric-label">In Flight</div></div>
+        <div class="metric"><div class="metric-value">${q.active_consumers}</div><div class="metric-label">Consumers</div></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function selectQueue(name) {
+  selectedQueue = name;
+  await fetchQueues();
+  try {
+    const res = await fetch(`/api/queues/${encodeURIComponent(name)}/stats`);
+    const stats = await res.json();
+    renderDetail(name, stats);
+  } catch (e) {
+    document.getElementById('detail').innerHTML = '<div class="empty">Failed to load stats</div>';
+  }
+}
+
+function renderDetail(name, s) {
+  const el = document.getElementById('detail');
+  el.style.display = 'block';
+
+  const maxPending = Math.max(1, ...s.per_key_stats.map(k => k.pending_count));
+
+  let keyRows = s.per_key_stats.length ? s.per_key_stats.map(k => `
+    <tr>
+      <td>${esc(k.key)}</td>
+      <td>${k.pending_count}</td>
+      <td>${k.weight}</td>
+      <td>${k.current_deficit}</td>
+      <td style="width:120px"><div class="bar"><div class="bar-fill" style="width:${(k.pending_count/maxPending*100).toFixed(1)}%"></div></div></td>
+    </tr>
+  `).join('') : '<tr><td colspan="5" class="empty">No fairness keys</td></tr>';
+
+  let throttleRows = s.per_throttle_stats.length ? s.per_throttle_stats.map(t => `
+    <tr>
+      <td>${esc(t.key)}</td>
+      <td>${t.tokens.toFixed(1)}</td>
+      <td>${t.rate_per_second.toFixed(1)}</td>
+      <td>${t.burst.toFixed(1)}</td>
+      <td style="width:120px"><div class="bar"><div class="bar-fill" style="width:${(t.tokens/Math.max(1,t.burst)*100).toFixed(1)}%"></div></div></td>
+    </tr>
+  `).join('') : '<tr><td colspan="5" class="empty">No throttle keys</td></tr>';
+
+  let clusterInfo = '';
+  if (s.leader_node_id > 0) {
+    clusterInfo = `<div class="detail-section"><h3>Cluster</h3>
+      <div class="metrics" style="max-width:300px">
+        <div class="metric"><div class="metric-value">${s.leader_node_id}</div><div class="metric-label">Leader Node</div></div>
+        <div class="metric"><div class="metric-value">${s.replication_count}</div><div class="metric-label">Replicas</div></div>
+      </div></div>`;
+  }
+
+  el.innerHTML = `<div class="detail">
+    <h2>${esc(name)}</h2>
+    <div class="metrics" style="margin-bottom:20px">
+      <div class="metric"><div class="metric-value">${s.depth}</div><div class="metric-label">Pending</div></div>
+      <div class="metric"><div class="metric-value">${s.in_flight}</div><div class="metric-label">In Flight</div></div>
+      <div class="metric"><div class="metric-value">${s.active_consumers}</div><div class="metric-label">Consumers</div></div>
+      <div class="metric"><div class="metric-value">${s.active_fairness_keys}</div><div class="metric-label">Fairness Keys</div></div>
+      <div class="metric"><div class="metric-value">${s.quantum}</div><div class="metric-label">Quantum</div></div>
+    </div>
+    ${clusterInfo}
+    <div class="detail-section">
+      <h3>Fairness Key Distribution (DRR State)</h3>
+      <table><thead><tr><th>Key</th><th>Pending</th><th>Weight</th><th>Deficit</th><th>Distribution</th></tr></thead>
+      <tbody>${keyRows}</tbody></table>
+    </div>
+    <div class="detail-section">
+      <h3>Throttle Keys (Token Bucket State)</h3>
+      <table><thead><tr><th>Key</th><th>Tokens</th><th>Rate/s</th><th>Burst</th><th>Fill Level</th></tr></thead>
+      <tbody>${throttleRows}</tbody></table>
+    </div>
+  </div>`;
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+fetchQueues();
+setInterval(() => {
+  fetchQueues();
+  if (selectedQueue) selectQueue(selectedQueue);
+}, 2000);
+</script>
+</body>
+</html>

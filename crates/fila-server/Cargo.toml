@@ -21,7 +21,10 @@ opentelemetry.workspace = true
 toml.workspace = true
 uuid.workspace = true
 tower.workspace = true
+axum.workspace = true
 http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 pin-project-lite.workspace = true
 futures-core = "0.3"
 

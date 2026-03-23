@@ -1,31 +1,12 @@
-epic: "Epic 19: Developer Experience"
+epic: "Epic 20: Web Management GUI"
 baseBranch: main
 startedAt: "2026-03-22"
 stories:
-  - id: "19.1"
-    title: "Built-in Lua Helpers"
-    status: completed
-    currentPhase: ""
-    branch: "feat/19.1-built-in-lua-helpers"
-    pr: 86
+  - id: "20.1"
+    title: "Web Management GUI"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/20.1-web-management-gui"
+    pr: null
     dependsOn: []
-  - id: "19.2"
-    title: "Documentation Website & Deployment Guides"
-    status: completed
-    currentPhase: ""
-    branch: "feat/19.2-documentation-website-deployment-guides"
-    pr: 87
-    dependsOn: []
-  - id: "19.3"
-    title: "SDK & Integration Guides"
-    status: completed
-    currentPhase: ""
-    branch: "feat/19.3-sdk-integration-guides"
-    pr: 88
-    dependsOn: []
-completedAt: "2026-03-22"
-summary:
-  total: 3
-  completed: 3
-  skipped: 0
 skippedIssues: []
