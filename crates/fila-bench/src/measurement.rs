@@ -43,6 +43,18 @@ impl LatencyHistogram {
         self.histogram.record(micros).ok();
     }
 
+    /// Record a duration with coordinated omission (CO) correction.
+    ///
+    /// Uses HdrHistogram's `record_correct` to fill in missing samples that
+    /// would have been recorded during stalls. `expected_interval` is the
+    /// expected time between consecutive requests in an open-loop workload.
+    pub fn record_corrected(&mut self, d: Duration, expected_interval: Duration) {
+        let micros = d.as_micros() as u64;
+        let micros = micros.clamp(1, 60_000_000);
+        let interval_micros = expected_interval.as_micros() as u64;
+        self.histogram.record_correct(micros, interval_micros).ok();
+    }
+
     /// Number of recorded samples.
     pub fn count(&self) -> u64 {
         self.histogram.len()

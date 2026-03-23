@@ -1,5 +1,5 @@
 use fila_bench::benchmarks::{
-    compaction, failure_paths, fairness, latency, lua, memory, scaling, throughput,
+    compaction, failure_paths, fairness, latency, lua, memory, open_loop, scaling, throughput,
 };
 use fila_bench::report::BenchReport;
 use fila_bench::server::BenchServer;
@@ -128,6 +128,35 @@ async fn run_benchmarks() {
         }
     } else {
         eprintln!("[10/10] Queue depth scaling (skipped — set FILA_BENCH_DEPTH=1 to enable)");
+    }
+
+    // Open-loop benchmarks (long-running — opt-in via env var)
+    if std::env::var("FILA_BENCH_OPENLOOP").is_ok() {
+        eprintln!("[11/14] Latency under load (open-loop)...");
+        let results = open_loop::bench_latency_under_load(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[12/14] Consumer processing time (open-loop)...");
+        let results = open_loop::bench_consumer_processing_time(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[13/14] Backpressure ramp (open-loop)...");
+        let results = open_loop::bench_backpressure_ramp(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[14/14] Queue depth latency (open-loop)...");
+        let results = open_loop::bench_queue_depth_latency(&server).await;
+        for r in results {
+            report.add(r);
+        }
+    } else {
+        eprintln!("[11-14] Open-loop benchmarks (skipped — set FILA_BENCH_OPENLOOP=1 to enable)");
     }
 
     // Write report
