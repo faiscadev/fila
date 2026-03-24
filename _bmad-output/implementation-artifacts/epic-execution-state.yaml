@@ -4,10 +4,10 @@ startedAt: "2026-03-24"
 stories:
   - id: "24.1"
     title: "Zero-Copy Protobuf Passthrough & Key Encoding"
-    status: review
-    currentPhase: "review"
+    status: completed
+    currentPhase: ""
     branch: "feat/24.1-zero-copy-key-encoding"
-    pr: null
+    pr: 100
     dependsOn: []
   - id: "24.2"
     title: "Scheduler Sharding"
