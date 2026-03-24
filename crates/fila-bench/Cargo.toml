@@ -38,6 +38,10 @@ name = "bench-competitive"
 path = "src/bin/bench-competitive.rs"
 required-features = ["competitive"]
 
+[[bin]]
+name = "profile-workload"
+path = "src/bin/profile-workload.rs"
+
 [[bench]]
 name = "system"
 harness = false
