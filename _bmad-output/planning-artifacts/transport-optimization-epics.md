@@ -159,6 +159,17 @@ So that I get streaming performance without changing my code.
 
 ---
 
+## Benchmark Validation (Pending)
+
+All 3 stories deferred benchmark validation (requires Docker + broker containers). The following NFR targets are unvalidated:
+- NFR-T1: Competitive throughput with batching within 3x of Kafka (was 54x gap)
+- NFR-T2: Streaming enqueue throughput >= 30K msg/s single-producer (1KB)
+- NFR-T3: Streaming enqueue latency p50 <= 2ms under sustained load
+
+Run `make benchmark` in `bench/competitive/` and the streaming benchmark scenario to validate.
+
+---
+
 ## Deferred / Out of Scope
 
 The following optimizations from the profiling analysis are **not in this epic** — they are lower priority and independent:

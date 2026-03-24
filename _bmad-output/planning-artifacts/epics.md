@@ -214,6 +214,9 @@ Bring all 5 external SDKs to batch operation parity with the Rust SDK and delive
 ### Epic 27: Profiling Infrastructure
 Build profiling tooling (flamegraphs, subsystem benchmarks, batch benchmark scenarios) so future performance work targets real bottlenecks. Full breakdown in `performance-optimization-epics.md`.
 
+### Epic 29: Transport Optimization — Fair Benchmarks & Streaming Enqueue
+Fix the competitive benchmark to use batching (fair comparison), add bidirectional streaming `StreamEnqueue` RPC, and integrate streaming transparently into the Rust SDK. Profiling showed 94% of per-message time is gRPC/HTTP2 overhead. Full breakdown in `transport-optimization-epics.md`.
+
 ---
 
 ## Epic 12: Benchmarks & Competitive Positioning
