@@ -35,11 +35,21 @@ fn cluster_write_err_to_status(err: ClusterWriteError) -> Status {
 pub struct HotPathService {
     broker: Arc<Broker>,
     cluster: Option<Arc<ClusterHandle>>,
+    /// Maximum messages to batch in a single `ConsumeResponse` frame.
+    delivery_batch_max: usize,
 }
 
 impl HotPathService {
-    pub fn new(broker: Arc<Broker>, cluster: Option<Arc<ClusterHandle>>) -> Self {
-        Self { broker, cluster }
+    pub fn new(
+        broker: Arc<Broker>,
+        cluster: Option<Arc<ClusterHandle>>,
+        delivery_batch_max: usize,
+    ) -> Self {
+        Self {
+            broker,
+            cluster,
+            delivery_batch_max,
+        }
     }
 }
 
@@ -305,18 +315,43 @@ impl FilaService for HotPathService {
         debug!(%consumer_id, queue = %req.queue, "consume stream opened");
 
         // Spawn a converter task that bridges ReadyMessage -> ConsumeResponse
-        // and handles cleanup on disconnect
+        // and handles cleanup on disconnect. When multiple messages are immediately
+        // available, they are batched into a single ConsumeResponse frame to
+        // amortize HTTP/2 framing and protobuf encoding overhead.
         let broker = Arc::clone(&self.broker);
         let cid = consumer_id.clone();
+        let batch_max = self.delivery_batch_max;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     msg = ready_rx.recv() => {
                         match msg {
-                            Some(ready) => {
-                                let response = ConsumeResponse {
-                                    message: Some(ready_to_proto(ready)),
+                            Some(first) => {
+                                // Try to collect more immediately-available messages
+                                // (non-blocking) to batch into one frame.
+                                let mut batch = vec![first];
+                                while batch.len() < batch_max {
+                                    match ready_rx.try_recv() {
+                                        Ok(ready) => batch.push(ready),
+                                        Err(_) => break,
+                                    }
+                                }
+
+                                let response = if batch.len() == 1 {
+                                    // Single message: use the `message` field for
+                                    // backward compatibility with older SDKs.
+                                    ConsumeResponse {
+                                        message: Some(ready_to_proto(batch.pop().unwrap())),
+                                        messages: vec![],
+                                    }
+                                } else {
+                                    // Batched: populate the `messages` repeated field.
+                                    ConsumeResponse {
+                                        message: None,
+                                        messages: batch.into_iter().map(ready_to_proto).collect(),
+                                    }
                                 };
+
                                 if stream_tx.send(Ok(response)).await.is_err() {
                                     break; // gRPC stream closed
                                 }

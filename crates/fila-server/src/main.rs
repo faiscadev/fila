@@ -87,6 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Clone configs before `config` is moved into Broker::new.
     let gui_config = config.gui.clone();
     let grpc_config = config.grpc.clone();
+    let delivery_batch_max = config.scheduler.delivery_batch_max_messages;
 
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
     let rocksdb = Arc::new(RocksDbEngine::open_with_config(
@@ -161,7 +162,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let admin_service = AdminService::new(Arc::clone(&broker), cluster_handle.clone());
-    let hot_path_service = HotPathService::new(Arc::clone(&broker), cluster_handle);
+    let hot_path_service =
+        HotPathService::new(Arc::clone(&broker), cluster_handle, delivery_batch_max);
 
     let requested_addr: std::net::SocketAddr = listen_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(requested_addr).await?;

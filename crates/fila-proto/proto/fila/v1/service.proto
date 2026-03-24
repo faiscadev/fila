@@ -27,7 +27,8 @@ message ConsumeRequest {
 }
 
 message ConsumeResponse {
-  Message message = 1;
+  Message message = 1;           // Single message (backward compatible, used when batch size is 1)
+  repeated Message messages = 2; // Batched messages (populated when server sends multiple at once)
 }
 
 message AckRequest {

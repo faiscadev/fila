@@ -385,24 +385,63 @@ impl FilaClient {
             Err(status) => return Err(consume_status_error(status)),
         };
 
-        let stream = response.into_inner().filter_map(|result| match result {
-            Ok(consume_response) => {
-                // The server may send ConsumeResponse frames with `message: None` as
-                // keepalive signals on the streaming connection. These are expected
-                // and silently skipped — they are not protocol errors.
-                let msg = consume_response.message?;
-                let metadata = msg.metadata.unwrap_or_default();
-                Some(Ok(ConsumeMessage {
-                    id: msg.id,
-                    headers: msg.headers,
-                    payload: msg.payload,
-                    fairness_key: metadata.fairness_key,
-                    attempt_count: metadata.attempt_count,
-                    queue: metadata.queue_id,
-                }))
+        // Bridge channel expands batched ConsumeResponse frames into individual
+        // ConsumeMessage items, maintaining the same stream interface for callers.
+        let (expand_tx, expand_rx) =
+            tokio::sync::mpsc::channel::<Result<ConsumeMessage, StatusError>>(64);
+
+        let mut inner_stream = response.into_inner();
+        tokio::spawn(async move {
+            loop {
+                // Race the server stream against consumer-side closure so the
+                // gRPC stream is cancelled promptly when the consumer drops.
+                let result = tokio::select! {
+                    r = inner_stream.next() => r,
+                    _ = expand_tx.closed() => return,
+                };
+                match result {
+                    Some(Ok(consume_response)) => {
+                        // Prefer the batched `messages` field when non-empty.
+                        if !consume_response.messages.is_empty() {
+                            for msg in consume_response.messages {
+                                let metadata = msg.metadata.unwrap_or_default();
+                                let cm = ConsumeMessage {
+                                    id: msg.id,
+                                    headers: msg.headers,
+                                    payload: msg.payload,
+                                    fairness_key: metadata.fairness_key,
+                                    attempt_count: metadata.attempt_count,
+                                    queue: metadata.queue_id,
+                                };
+                                if expand_tx.send(Ok(cm)).await.is_err() {
+                                    return;
+                                }
+                            }
+                        } else if let Some(msg) = consume_response.message {
+                            let metadata = msg.metadata.unwrap_or_default();
+                            let cm = ConsumeMessage {
+                                id: msg.id,
+                                headers: msg.headers,
+                                payload: msg.payload,
+                                fairness_key: metadata.fairness_key,
+                                attempt_count: metadata.attempt_count,
+                                queue: metadata.queue_id,
+                            };
+                            if expand_tx.send(Ok(cm)).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Some(Err(status)) => {
+                        let _ = expand_tx.send(Err(status_error(status))).await;
+                        return;
+                    }
+                    None => return,
+                }
             }
-            Err(status) => Some(Err(status_error(status))),
         });
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(expand_rx);
 
         Ok(stream)
     }
