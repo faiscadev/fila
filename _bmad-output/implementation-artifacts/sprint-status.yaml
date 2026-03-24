@@ -231,7 +231,7 @@ development_status:
   epic-24: done
   24-1-zero-copy-protobuf-passthrough-key-encoding: done
   24-2-scheduler-sharding: done
-  epic-24-retrospective: optional
+  epic-24-retrospective: done
 
   # Epic 25: Tier 4 — Purpose-Built Storage Engine (Deferred)
   # Target: 200K-500K msg/s. Deferred until post-Tier-3 profiling.
