@@ -1,6 +1,6 @@
 use fila_bench::benchmarks::{
-    compaction, failure_paths, fairness, latency, lua, memory, open_loop, scaling, subsystem,
-    throughput,
+    batch, compaction, failure_paths, fairness, latency, lua, memory, open_loop, scaling,
+    subsystem, throughput,
 };
 use fila_bench::report::BenchReport;
 use fila_bench::server::BenchServer;
@@ -185,6 +185,49 @@ async fn run_benchmarks() {
     } else {
         eprintln!(
             "[S1-S5] Subsystem benchmarks (skipped — set FILA_BENCH_SUBSYSTEM=1 to enable)"
+        );
+    }
+
+    // Batch benchmarks (gated — tests batch_enqueue and delivery batching)
+    if std::env::var("FILA_BENCH_BATCH").is_ok() {
+        eprintln!("[B1] Batch enqueue throughput (batch sizes 1-500)...");
+        let results = batch::bench_batch_enqueue_throughput(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[B2] Batch size scaling (1-1000)...");
+        let results = batch::bench_batch_size_scaling(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[B3] Batch enqueue latency (1/10/50 producers)...");
+        let results = batch::bench_batch_latency(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[B4] Batched vs unbatched comparison...");
+        let results = batch::bench_batched_vs_unbatched(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[B5] Delivery batching throughput (1/10/100 consumers)...");
+        let results = batch::bench_delivery_batching_throughput(&server).await;
+        for r in results {
+            report.add(r);
+        }
+
+        eprintln!("[B6] Concurrent producer batching (1/5/10/50 producers)...");
+        let results = batch::bench_concurrent_producer_batching(&server).await;
+        for r in results {
+            report.add(r);
+        }
+    } else {
+        eprintln!(
+            "[B1-B6] Batch benchmarks (skipped — set FILA_BENCH_BATCH=1 to enable)"
         );
     }
 

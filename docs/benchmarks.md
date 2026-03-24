@@ -166,6 +166,85 @@ Measures `on_enqueue` hook execution throughput for three script complexity leve
 | Header-set (read 2 headers) | exec/s, p50, p99 |
 | Complex routing (string ops, conditionals, table insert) | exec/s, p50, p99 |
 
+## Batch benchmarks
+
+Batch benchmarks measure the performance characteristics of Fila's `batch_enqueue()` RPC and delivery batching. These benchmarks quantify throughput gains from batching, identify the point of diminishing returns for batch sizes, and compare batched vs unbatched workloads.
+
+Enable with `FILA_BENCH_BATCH=1`:
+
+```bash
+FILA_BENCH_BATCH=1 cargo bench -p fila-bench --bench system
+```
+
+### Batch enqueue throughput
+
+Measures `batch_enqueue()` throughput at batch sizes 1, 10, 50, 100, and 500 with 1KB payloads. Reports both messages/s and batches/s to show RPC amortization.
+
+| Batch size | Metrics |
+|-----------:|---------|
+| 1 | msg/s, batches/s |
+| 10 | msg/s, batches/s |
+| 50 | msg/s, batches/s |
+| 100 | msg/s, batches/s |
+| 500 | msg/s, batches/s |
+
+### Batch size scaling
+
+Measures throughput as a function of batch size from 1 to 1,000 to find the point of diminishing returns. A single producer sends batches of increasing size and reports messages/s at each size.
+
+| Batch size | Metric |
+|-----------:|--------|
+| 1 | msg/s |
+| 5 | msg/s |
+| 10 | msg/s |
+| 25 | msg/s |
+| 50 | msg/s |
+| 100 | msg/s |
+| 250 | msg/s |
+| 500 | msg/s |
+| 1,000 | msg/s |
+
+### Batch enqueue latency
+
+Measures end-to-end latency (enqueue to consume) using `batch_enqueue()` at varying concurrency levels. Reports p50, p95, p99, p99.9, p99.99, and max latency.
+
+| Producers | Metrics |
+|----------:|---------|
+| 1 | p50, p95, p99, p99.9, p99.99, max |
+| 10 | p50, p95, p99, p99.9, p99.99, max |
+| 50 | p50, p95, p99, p99.9, p99.99, max |
+
+### Batched vs unbatched comparison
+
+Runs identical workloads in three modes and produces a throughput comparison:
+
+| Mode | Description |
+|------|-------------|
+| Unbatched | Individual `enqueue()` calls |
+| Explicit batch (50) | `batch_enqueue()` with 50 messages per batch |
+| Explicit batch (200) | `batch_enqueue()` with 200 messages per batch |
+
+### Delivery batching throughput
+
+Measures consumer throughput when messages were enqueued using `batch_enqueue()`, with varying consumer counts. A background producer keeps the queue fed via batch enqueue.
+
+| Consumers | Metric |
+|----------:|--------|
+| 1 | msg/s |
+| 10 | msg/s |
+| 100 | msg/s |
+
+### Concurrent producer batching
+
+Measures aggregate throughput with multiple concurrent producers, each using `batch_enqueue()` with batch size 50.
+
+| Producers | Metric |
+|----------:|--------|
+| 1 | msg/s |
+| 5 | msg/s |
+| 10 | msg/s |
+| 50 | msg/s |
+
 ## Competitive comparison
 
 Fila is compared against Kafka, RabbitMQ, and NATS on queue-oriented workloads. All brokers run in Docker containers and are benchmarked using native Rust clients via the `bench-competitive` binary. See [Methodology](#methodology) for details.
