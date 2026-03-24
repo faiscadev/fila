@@ -700,7 +700,9 @@ impl StreamManager {
     }
 
     /// Ensure a stream is open. Opens one if needed. Returns false if
-    /// streaming is permanently disabled (fallback to unary).
+    /// streaming is permanently disabled (fallback to unary) or if the
+    /// stream could not be opened (caller should fall back to unary for
+    /// this batch so auth/transport errors are properly propagated).
     async fn ensure_stream(&mut self) -> bool {
         if self.fallback_to_unary {
             return false;
@@ -708,14 +710,7 @@ impl StreamManager {
         if self.active.is_some() {
             return true;
         }
-        match self.open_stream().await {
-            Ok(()) => true,
-            Err(_) => {
-                // If fallback_to_unary was set by open_stream, return false.
-                // Otherwise the stream just failed to open — we'll retry next time.
-                !self.fallback_to_unary
-            }
-        }
+        self.open_stream().await.is_ok()
     }
 
     /// Send a batch of messages through the stream. Returns the batch items
