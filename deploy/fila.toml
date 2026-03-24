@@ -4,15 +4,33 @@
 [server]
 listen_addr = "0.0.0.0:5555"
 
-[storage]
-data_dir = "/var/lib/fila/data"
-
 [lua]
 # Default safety limits for Lua scripts
 default_timeout_ms = 10
 default_memory_limit_bytes = 1048576  # 1 MB
 circuit_breaker_threshold = 3
 circuit_breaker_cooldown_ms = 10000
+
+# RocksDB storage tuning (defaults are queue-optimized — override only if needed)
+# [storage.rocksdb]
+# block_cache_mb = 256
+# messages_write_buffer_mb = 128
+# messages_max_write_buffers = 4
+# messages_min_write_buffers_to_merge = 2
+# leases_write_buffer_mb = 64
+# pipelined_write = true
+# manual_wal_flush = false  # set true only in cluster mode (Raft provides durability)
+# wal_bytes_per_sync = 524288
+# compact_on_deletion = true
+# bloom_filter_bits = 10
+
+# gRPC transport tuning (defaults are optimized for streaming — override only if needed)
+# [grpc]
+# initial_stream_window_size = 2097152   # 2MB
+# initial_connection_window_size = 4194304  # 4MB
+# tcp_nodelay = true
+# keepalive_interval_secs = 15
+# keepalive_timeout_secs = 10
 
 # Uncomment to enable TLS
 # [tls]

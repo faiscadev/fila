@@ -1,17 +1,19 @@
-epic: "Epic 20: Web Management GUI"
+epic: "Epic 22: Tier 1 — Configuration Tuning & Data Structure Fixes"
 baseBranch: main
-startedAt: "2026-03-22"
+startedAt: "2026-03-23"
 stories:
-  - id: "20.1"
-    title: "Web Management GUI"
+  - id: "22.1"
+    title: "RocksDB Queue-Optimized Configuration & gRPC Tuning"
     status: completed
     currentPhase: ""
-    branch: "feat/20.1-web-management-gui"
-    pr: 89
+    branch: "feat/22.1-rocksdb-grpc-tuning"
+    pr: 95
     dependsOn: []
-completedAt: "2026-03-22"
-summary:
-  total: 1
-  completed: 1
-  skipped: 0
+  - id: "22.2"
+    title: "DRR Scheduler O(1) Key Selection"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["22.1"]
 skippedIssues: []

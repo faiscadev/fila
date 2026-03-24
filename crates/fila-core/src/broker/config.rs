@@ -9,6 +9,8 @@ pub struct BrokerConfig {
     pub lua: LuaConfig,
     pub telemetry: TelemetryConfig,
     pub cluster: ClusterConfig,
+    pub storage: StorageConfig,
+    pub grpc: GrpcConfig,
     /// TLS configuration. `None` (the default) disables TLS entirely.
     /// Presence of this section in `fila.toml` enables TLS.
     pub tls: Option<TlsParams>,
@@ -158,6 +160,88 @@ impl TelemetryConfig {
     /// Resolved metrics interval, defaulting to 10 seconds.
     pub fn metrics_interval(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.metrics_interval_ms.unwrap_or(10_000))
+    }
+}
+
+/// Storage engine configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct StorageConfig {
+    pub rocksdb: RocksDbConfig,
+}
+
+/// RocksDB tuning parameters. All defaults are optimized for queue workloads
+/// (write-heavy, sequential reads, frequent deletes).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct RocksDbConfig {
+    /// Shared LRU block cache size in megabytes (default: 256).
+    pub block_cache_mb: usize,
+    /// Messages CF write buffer size in megabytes (default: 128).
+    pub messages_write_buffer_mb: usize,
+    /// Max write buffers for messages CF (default: 4).
+    pub messages_max_write_buffers: i32,
+    /// Min write buffers to merge for messages CF (default: 2).
+    pub messages_min_write_buffers_to_merge: i32,
+    /// Leases CF write buffer size in megabytes (default: 64).
+    pub leases_write_buffer_mb: usize,
+    /// Enable pipelined writes (default: true).
+    pub pipelined_write: bool,
+    /// Enable manual WAL flush with buffering (default: false).
+    /// When true, WAL entries are buffered in memory and a crash may lose
+    /// unflushed writes. Only enable in cluster mode where Raft provides
+    /// durability.
+    pub manual_wal_flush: bool,
+    /// WAL bytes per sync in bytes (default: 524288 = 512KB).
+    pub wal_bytes_per_sync: u64,
+    /// Enable CompactOnDeletionCollector (default: true).
+    pub compact_on_deletion: bool,
+    /// Bloom filter bits per key (default: 10). Set to 0 to disable.
+    pub bloom_filter_bits: i32,
+}
+
+/// gRPC transport tuning parameters.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct GrpcConfig {
+    /// Initial HTTP/2 stream window size in bytes (default: 2MB).
+    pub initial_stream_window_size: u32,
+    /// Initial HTTP/2 connection window size in bytes (default: 4MB).
+    pub initial_connection_window_size: u32,
+    /// Enable TCP_NODELAY (default: true).
+    pub tcp_nodelay: bool,
+    /// HTTP/2 keepalive interval in seconds (default: 15).
+    pub keepalive_interval_secs: u64,
+    /// HTTP/2 keepalive timeout in seconds (default: 10).
+    pub keepalive_timeout_secs: u64,
+}
+
+impl Default for RocksDbConfig {
+    fn default() -> Self {
+        Self {
+            block_cache_mb: 256,
+            messages_write_buffer_mb: 128,
+            messages_max_write_buffers: 4,
+            messages_min_write_buffers_to_merge: 2,
+            leases_write_buffer_mb: 64,
+            pipelined_write: true,
+            manual_wal_flush: false,
+            wal_bytes_per_sync: 524_288,
+            compact_on_deletion: true,
+            bloom_filter_bits: 10,
+        }
+    }
+}
+
+impl Default for GrpcConfig {
+    fn default() -> Self {
+        Self {
+            initial_stream_window_size: 2 * 1024 * 1024,
+            initial_connection_window_size: 4 * 1024 * 1024,
+            tcp_nodelay: true,
+            keepalive_interval_secs: 15,
+            keepalive_timeout_secs: 10,
+        }
     }
 }
 
@@ -387,5 +471,96 @@ mod tests {
         assert_eq!(tls.cert_file, "server.crt");
         assert_eq!(tls.key_file, "server.key");
         assert_eq!(tls.ca_file.as_deref(), Some("ca.crt"));
+    }
+
+    #[test]
+    fn storage_defaults() {
+        let config = BrokerConfig::default();
+        assert_eq!(config.storage.rocksdb.block_cache_mb, 256);
+        assert_eq!(config.storage.rocksdb.messages_write_buffer_mb, 128);
+        assert_eq!(config.storage.rocksdb.messages_max_write_buffers, 4);
+        assert_eq!(
+            config.storage.rocksdb.messages_min_write_buffers_to_merge,
+            2
+        );
+        assert_eq!(config.storage.rocksdb.leases_write_buffer_mb, 64);
+        assert!(config.storage.rocksdb.pipelined_write);
+        assert!(!config.storage.rocksdb.manual_wal_flush);
+        assert_eq!(config.storage.rocksdb.wal_bytes_per_sync, 524_288);
+        assert!(config.storage.rocksdb.compact_on_deletion);
+        assert_eq!(config.storage.rocksdb.bloom_filter_bits, 10);
+    }
+
+    #[test]
+    fn storage_toml_parsing() {
+        let toml_str = r#"
+            [storage.rocksdb]
+            block_cache_mb = 512
+            messages_write_buffer_mb = 256
+            messages_max_write_buffers = 8
+            messages_min_write_buffers_to_merge = 4
+            leases_write_buffer_mb = 128
+            pipelined_write = false
+            manual_wal_flush = false
+            wal_bytes_per_sync = 1048576
+            compact_on_deletion = false
+            bloom_filter_bits = 16
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.storage.rocksdb.block_cache_mb, 512);
+        assert_eq!(config.storage.rocksdb.messages_write_buffer_mb, 256);
+        assert_eq!(config.storage.rocksdb.messages_max_write_buffers, 8);
+        assert_eq!(
+            config.storage.rocksdb.messages_min_write_buffers_to_merge,
+            4
+        );
+        assert_eq!(config.storage.rocksdb.leases_write_buffer_mb, 128);
+        assert!(!config.storage.rocksdb.pipelined_write);
+        assert!(!config.storage.rocksdb.manual_wal_flush);
+        assert_eq!(config.storage.rocksdb.wal_bytes_per_sync, 1_048_576);
+        assert!(!config.storage.rocksdb.compact_on_deletion);
+        assert_eq!(config.storage.rocksdb.bloom_filter_bits, 16);
+    }
+
+    #[test]
+    fn storage_absent_section_uses_defaults() {
+        let config: BrokerConfig = toml::from_str("").unwrap();
+        assert_eq!(config.storage.rocksdb.block_cache_mb, 256);
+        assert!(config.storage.rocksdb.pipelined_write);
+    }
+
+    #[test]
+    fn grpc_defaults() {
+        let config = BrokerConfig::default();
+        assert_eq!(config.grpc.initial_stream_window_size, 2 * 1024 * 1024);
+        assert_eq!(config.grpc.initial_connection_window_size, 4 * 1024 * 1024);
+        assert!(config.grpc.tcp_nodelay);
+        assert_eq!(config.grpc.keepalive_interval_secs, 15);
+        assert_eq!(config.grpc.keepalive_timeout_secs, 10);
+    }
+
+    #[test]
+    fn grpc_toml_parsing() {
+        let toml_str = r#"
+            [grpc]
+            initial_stream_window_size = 4194304
+            initial_connection_window_size = 8388608
+            tcp_nodelay = false
+            keepalive_interval_secs = 30
+            keepalive_timeout_secs = 20
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.grpc.initial_stream_window_size, 4 * 1024 * 1024);
+        assert_eq!(config.grpc.initial_connection_window_size, 8 * 1024 * 1024);
+        assert!(!config.grpc.tcp_nodelay);
+        assert_eq!(config.grpc.keepalive_interval_secs, 30);
+        assert_eq!(config.grpc.keepalive_timeout_secs, 20);
+    }
+
+    #[test]
+    fn grpc_absent_section_uses_defaults() {
+        let config: BrokerConfig = toml::from_str("").unwrap();
+        assert!(config.grpc.tcp_nodelay);
+        assert_eq!(config.grpc.keepalive_interval_secs, 15);
     }
 }
