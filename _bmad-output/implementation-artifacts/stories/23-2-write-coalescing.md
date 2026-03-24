@@ -1,6 +1,6 @@
 # Story 23.2: Server-Side Write Coalescing
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -26,17 +26,31 @@ So that high-throughput workloads achieve higher write throughput by amortizing 
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `write_coalesce_max_batch` to `SchedulerConfig` with default 100
-- [ ] Task 2: Refactor `handle_enqueue` to return prepared mutations + metadata instead of writing directly
-- [ ] Task 3: Add `coalesce_enqueues` method that batches mutations from multiple enqueue commands
-- [ ] Task 4: Update scheduler loop to drain channel and separate enqueue vs non-enqueue commands
-- [ ] Task 5: Add tests for coalescing (single-message fast path, multi-message batch, error isolation)
-- [ ] Task 6: Verify all existing tests pass
+- [x] Task 1: Add `write_coalesce_max_batch` to `SchedulerConfig` with default 100
+- [x] Task 2: Refactor `handle_enqueue` into `prepare_enqueue` + `finalize_enqueue`
+- [x] Task 3: Add `flush_coalesced_enqueues` method that batches mutations from multiple enqueue commands
+- [x] Task 4: Add `drain_and_coalesce` to scheduler loop, separating enqueue vs non-enqueue commands
+- [x] Task 5: Add 6 coalescing tests (single fast path, multi-message, error isolation, interleaved, cross-queue, max batch)
+- [x] Task 6: Verify all existing tests pass (385 tests, zero failures)
 
 ## Dev Notes
 
 - The scheduler is single-threaded. No async/await, locks, or multi-threading introduced.
 - Coalescing is purely about draining multiple commands from the crossbeam channel before committing.
-- `prepare_enqueue` does everything `handle_enqueue` did (queue check, Lua, routing, key generation, metrics, DRR, pending) except the actual `put_message` storage call.
+- `prepare_enqueue` does everything `handle_enqueue` did (queue check, Lua, routing, key generation, serialization) except the actual storage write, metrics, DRR, and pending index.
+- `finalize_enqueue` updates in-memory state (metrics, DRR, pending) after the batch commits.
 - After all prepares, mutations are committed in one `apply_mutations` call.
 - On storage failure, all callers in the batch receive the error (atomic batch).
+- Non-enqueue commands interleaved in the channel trigger a flush of pending enqueues before processing.
+
+## Files Changed
+
+- `crates/fila-core/src/broker/config.rs` -- `write_coalesce_max_batch` field + tests
+- `crates/fila-core/src/broker/scheduler/mod.rs` -- `drain_and_coalesce`, `flush_coalesced_enqueues`, field storage
+- `crates/fila-core/src/broker/scheduler/handlers.rs` -- `PreparedEnqueue`, `prepare_enqueue`, `finalize_enqueue`, `handle_enqueue` refactor
+- `crates/fila-core/src/broker/scheduler/tests/coalescing.rs` -- 6 new tests
+- `crates/fila-core/src/broker/scheduler/tests/mod.rs` -- register coalescing module
+- `crates/fila-core/src/broker/scheduler/tests/common.rs` -- updated SchedulerConfig structs
+- `crates/fila-core/src/broker/scheduler/tests/ack_nack.rs` -- updated SchedulerConfig structs
+- `crates/fila-core/src/broker/scheduler/tests/fairness.rs` -- updated SchedulerConfig structs
+- `crates/fila-core/src/broker/mod.rs` -- updated SchedulerConfig structs in broker tests

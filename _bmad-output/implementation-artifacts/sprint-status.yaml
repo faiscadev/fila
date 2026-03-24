@@ -222,7 +222,7 @@ development_status:
   # Target: 30K-100K msg/s (1KB). Client batching, write coalescing, delivery batching.
   epic-23: in-progress
   23-1-client-side-batching-batch-enqueue-rpc: done
-  23-2-server-side-write-coalescing: in-progress
+  23-2-server-side-write-coalescing: review
   23-3-delivery-batching-consumer-side: backlog
   epic-23-retrospective: optional
 

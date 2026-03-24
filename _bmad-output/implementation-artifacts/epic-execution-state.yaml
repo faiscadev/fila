@@ -11,8 +11,8 @@ stories:
     dependsOn: []
   - id: "23.2"
     title: "Server-Side Write Coalescing"
-    status: in-progress
-    currentPhase: implementation
+    status: review
+    currentPhase: review
     branch: "feat/23.2-write-coalescing"
     pr: null
     dependsOn: ["23.1"]
