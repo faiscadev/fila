@@ -1,29 +1,42 @@
-epic: "Epic 16.5: Stability Hardening & Test Coverage"
-epicNumber: 16.5
-startedAt: "2026-03-21T15:00:00Z"
-completedAt: "2026-03-22T01:07:00Z"
-yoloMode: false
-currentPrIndex: 2
-mode: normal
+epic: "Epic 21: Trustworthy Benchmark Suite"
+epicNumber: 21
+startedAt: "2026-03-23"
+completedAt: "2026-03-23"
+yoloMode: true
+currentPrIndex: 4
 prChain:
-  - storyId: "16.5.1"
-    storyKey: "16.5-1-cluster-e2e-test-suite"
-    title: "Cluster E2E Test Suite"
-    branch: "feat/16.5.1-cluster-e2e-test-suite"
-    pr: 79
+  - storyId: "21.1"
+    storyKey: "21-1-statistical-foundation-hdrhistogram-measurement-rigor"
+    title: "Statistical Foundation — HdrHistogram & Measurement Rigor"
+    branch: "feat/21.1-hdrhistogram-measurement-rigor"
+    pr: 90
     baseBranch: "main"
     status: merged
-  - storyId: "16.5.2"
-    storyKey: "16.5-2-tls-auth-edge-case-hardening"
-    title: "TLS & Auth Edge Case Hardening"
-    branch: "feat/16.5.2-tls-auth-edge-case-hardening"
-    pr: 80
-    baseBranch: "main"
+  - storyId: "21.2"
+    storyKey: "21-2-competitive-benchmark-overhaul"
+    title: "Competitive Benchmark Overhaul"
+    branch: "feat/21.2-competitive-benchmark-overhaul"
+    pr: 91
+    baseBranch: "feat/21.1-hdrhistogram-measurement-rigor"
     status: merged
-  - storyId: "16.5.3"
-    storyKey: "16.5-3-ci-code-coverage-quality-gates"
-    title: "CI Code Coverage & Quality Gates"
-    branch: "feat/16.5.3-ci-code-coverage-quality-gates"
-    pr: 81
-    baseBranch: "main"
+  - storyId: "21.3"
+    storyKey: "21-3-open-loop-latency-under-load"
+    title: "Open-Loop Load Generation & Latency-Under-Load Benchmarks"
+    branch: "feat/21.3-open-loop-latency-under-load"
+    pr: 92
+    baseBranch: "feat/21.2-competitive-benchmark-overhaul"
+    status: merged
+  - storyId: "21.4"
+    storyKey: "21-4-failure-path-fairness-benchmarks"
+    title: "Failure-Path & Fairness Benchmarks"
+    branch: "feat/21.4-failure-path-fairness-benchmarks"
+    pr: 93
+    baseBranch: "feat/21.3-open-loop-latency-under-load"
+    status: merged
+  - storyId: "21.5"
+    storyKey: "21-5-ci-visualization-reporting"
+    title: "CI Visualization & Benchmark Reporting"
+    branch: "feat/21.5-ci-visualization-reporting"
+    pr: 94
+    baseBranch: "feat/21.4-failure-path-fairness-benchmarks"
     status: merged
