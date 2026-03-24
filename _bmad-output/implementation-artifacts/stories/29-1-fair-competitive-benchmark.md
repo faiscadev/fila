@@ -1,6 +1,6 @@
 # Story 29.1: Fair Competitive Benchmark
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -32,27 +32,28 @@ So that the comparison reflects real-world performance rather than penalizing Fi
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Update Fila throughput benchmark to use SDK auto-batching (AC: #1, #2)
-  - [ ] 1.1 Replace serial unary `Enqueue` calls with `BatchMode::Auto` SDK client
-  - [ ] 1.2 Use concurrent producers (match existing multi-producer pattern)
-  - [ ] 1.3 Verify throughput scenario uses `BatchEnqueue` RPC under the hood
+- [x] Task 1: Update Fila throughput benchmark to use SDK auto-batching (AC: #1, #2)
+  - [x] 1.1 Throughput now uses 4 concurrent producers with `BatchMode::Auto` (default)
+  - [x] 1.2 Concurrent producers trigger auto-batching via message accumulation
+  - [x] 1.3 Verified: auto-batcher uses `BatchEnqueue` RPC when messages accumulate
 
-- [ ] Task 2: Preserve unbatched lifecycle scenario (AC: #3)
-  - [ ] 2.1 Verify lifecycle scenario remains serial enqueue->consume->ack with `BatchMode::Disabled`
-  - [ ] 2.2 Clearly label lifecycle as "unbatched" in results
+- [x] Task 2: Preserve unbatched lifecycle scenario (AC: #3)
+  - [x] 2.1 Lifecycle uses explicit `BatchMode::Disabled` for serial enqueue→consume→ack
+  - [x] 2.2 Latency also uses `BatchMode::Disabled` for accurate per-message measurement
+  - [x] 2.3 All results include `batching` metadata: `"none"` for lifecycle/latency
 
-- [ ] Task 3: Update results format and documentation (AC: #4, #5, #6)
-  - [ ] 3.1 Add `batching` field to results JSON schema
-  - [ ] 3.2 Update `METHODOLOGY.md` with fair comparison rationale
-  - [ ] 3.3 Update `docs/benchmarks.md` with new results
+- [x] Task 3: Update results format and documentation (AC: #4, #5, #6)
+  - [x] 3.1 Added `batching` field to all result metadata across all 4 brokers
+  - [x] 3.2 Updated `METHODOLOGY.md` with batching table and fair comparison rationale
+  - [x] 3.3 Updated `docs/benchmarks.md` with batching labels, cleared stale numbers
 
 - [ ] Task 4: Validate SDK auto-batching under benchmark load (AC: #8)
-  - [ ] 4.1 Run benchmark and verify no SDK errors or hangs
+  - [ ] 4.1 Run benchmark and verify no SDK errors or hangs (requires Docker)
   - [ ] 4.2 Fix any issues found in `fila-sdk`
 
-- [ ] Task 5: End-to-end benchmark run (AC: #7, #9)
-  - [ ] 5.1 Run all 4 brokers, verify valid JSON output
-  - [ ] 5.2 Run existing test suite, verify zero regressions
+- [x] Task 5: Verify no regressions (AC: #9)
+  - [x] 5.1 All 437 non-e2e tests pass
+  - [ ] 5.2 End-to-end benchmark run requires Docker (AC: #7)
 
 ## Design Notes
 
@@ -88,3 +89,29 @@ The competitive benchmark binary is at `crates/fila-bench/src/bin/bench-competit
 - [Source: crates/fila-sdk/src/client.rs — BatchMode::Auto, run_auto_batcher (lines 605-636)]
 - [Source: crates/fila-proto/proto/fila/v1/service.proto — BatchEnqueue RPC]
 - [Source: crates/fila-bench/src/bin/bench-competitive.rs — current benchmark implementation]
+
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Opus 4.6 (1M context)
+
+### Debug Log References
+
+None.
+
+### Completion Notes List
+
+- Throughput scenarios now use 4 concurrent producers (THROUGHPUT_PRODUCERS const) to trigger Nagle-style auto-batching
+- Lifecycle and latency scenarios explicitly use `BatchMode::Disabled` via `ConnectOptions::new(addr).with_batch_mode(BatchMode::Disabled)`
+- `batching_meta()` helper function added at module scope for reuse across all 4 broker modules
+- All broker results (Kafka, RabbitMQ, NATS, Fila) now include `batching` metadata
+- METHODOLOGY.md gained a "Batching & Fair Comparison" section with broker batching table
+- docs/benchmarks.md cleared stale throughput numbers (will be populated on next benchmark run) and added batching context
+- Tasks 4.1 and 5.2 (end-to-end benchmark run) require Docker and broker containers — deferred to PR verification
+
+### File List
+
+- `crates/fila-bench/src/bin/bench-competitive.rs` — Major rewrite of Fila benchmark module + batching metadata for all brokers
+- `bench/competitive/METHODOLOGY.md` — Fair comparison documentation
+- `docs/benchmarks.md` — Updated competitive comparison section with batching labels
