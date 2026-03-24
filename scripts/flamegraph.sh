@@ -110,8 +110,8 @@ echo "output:      $OUTPUT"
 echo ""
 
 # Build the server and workload binary in release mode.
-echo "building release binaries..."
-cargo build --release --bin fila-server --bin profile-workload 2>&1 | tail -1
+echo "building release binaries (with debug symbols for profiling)..."
+CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release --bin fila-server --bin fila --bin profile-workload 2>&1 | tail -1
 
 # Check that cargo-flamegraph is installed.
 if ! command -v cargo-flamegraph &>/dev/null && ! command -v flamegraph &>/dev/null; then
@@ -139,15 +139,15 @@ echo ""
 
 # Use cargo flamegraph to profile the workload binary.
 # On macOS, this uses DTrace. On Linux, it uses perf.
-cargo flamegraph \
+# CARGO_PROFILE_RELEASE_DEBUG=true ensures symbols are available.
+CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph \
     --bin profile-workload \
     --output "$OUTPUT" \
-    --root \
     -- 2>&1 || {
     # If --root fails (common on macOS without SIP disabled), retry without it.
     echo ""
     echo "retrying without --root flag..."
-    cargo flamegraph \
+    CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph \
         --bin profile-workload \
         --output "$OUTPUT" \
         -- 2>&1
