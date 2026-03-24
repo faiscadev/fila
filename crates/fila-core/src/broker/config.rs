@@ -129,6 +129,11 @@ pub struct SchedulerConfig {
     /// sends them in one gRPC frame to amortize HTTP/2 framing overhead.
     /// Default: 10.
     pub delivery_batch_max_messages: usize,
+    /// Number of scheduler threads (default: 1 for backward compatibility).
+    /// Each shard handles a subset of queues via consistent hashing of
+    /// queue names. All messages for a given queue are processed by the
+    /// same shard, preserving per-queue ordering.
+    pub shard_count: usize,
 }
 
 /// Lua scripting safety configuration.
@@ -298,6 +303,7 @@ impl Default for SchedulerConfig {
             quantum: 1000,
             write_coalesce_max_batch: 100,
             delivery_batch_max_messages: 10,
+            shard_count: 1,
         }
     }
 }
@@ -315,6 +321,7 @@ mod tests {
         assert_eq!(config.scheduler.quantum, 1000);
         assert_eq!(config.scheduler.write_coalesce_max_batch, 100);
         assert_eq!(config.scheduler.delivery_batch_max_messages, 10);
+        assert_eq!(config.scheduler.shard_count, 1);
         assert_eq!(config.lua.default_timeout_ms, 10);
         assert_eq!(config.lua.default_memory_limit_bytes, 1_048_576);
         assert_eq!(config.lua.circuit_breaker_threshold, 3);
@@ -333,6 +340,7 @@ mod tests {
             quantum = 500
             write_coalesce_max_batch = 200
             delivery_batch_max_messages = 20
+            shard_count = 4
 
             [lua]
             default_timeout_ms = 20
@@ -347,6 +355,7 @@ mod tests {
         assert_eq!(config.scheduler.quantum, 500);
         assert_eq!(config.scheduler.write_coalesce_max_batch, 200);
         assert_eq!(config.scheduler.delivery_batch_max_messages, 20);
+        assert_eq!(config.scheduler.shard_count, 4);
         assert_eq!(config.lua.default_timeout_ms, 20);
         assert_eq!(config.lua.default_memory_limit_bytes, 524288);
         assert_eq!(config.lua.circuit_breaker_threshold, 5);
