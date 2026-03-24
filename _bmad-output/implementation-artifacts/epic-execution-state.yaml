@@ -4,8 +4,8 @@ startedAt: "2026-03-23"
 stories:
   - id: "22.1"
     title: "RocksDB Queue-Optimized Configuration & gRPC Tuning"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/22.1-rocksdb-grpc-tuning"
     pr: 95
     dependsOn: []
