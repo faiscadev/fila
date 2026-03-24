@@ -1,42 +1,21 @@
-epic: "Epic 21: Trustworthy Benchmark Suite"
-epicNumber: 21
-startedAt: "2026-03-23"
-completedAt: "2026-03-23"
+epic: "Epic 22: Tier 1 — Configuration Tuning & Data Structure Fixes"
+epicNumber: 22
+startedAt: "2026-03-24"
+completedAt: "2026-03-24"
 yoloMode: true
-currentPrIndex: 4
+currentPrIndex: 1
 prChain:
-  - storyId: "21.1"
-    storyKey: "21-1-statistical-foundation-hdrhistogram-measurement-rigor"
-    title: "Statistical Foundation — HdrHistogram & Measurement Rigor"
-    branch: "feat/21.1-hdrhistogram-measurement-rigor"
-    pr: 90
+  - storyId: "22.1"
+    storyKey: "22-1-rocksdb-queue-optimized-configuration-grpc-tuning"
+    title: "RocksDB Queue-Optimized Configuration & gRPC Tuning"
+    branch: "feat/22.1-rocksdb-grpc-tuning"
+    pr: 95
     baseBranch: "main"
     status: merged
-  - storyId: "21.2"
-    storyKey: "21-2-competitive-benchmark-overhaul"
-    title: "Competitive Benchmark Overhaul"
-    branch: "feat/21.2-competitive-benchmark-overhaul"
-    pr: 91
-    baseBranch: "feat/21.1-hdrhistogram-measurement-rigor"
-    status: merged
-  - storyId: "21.3"
-    storyKey: "21-3-open-loop-latency-under-load"
-    title: "Open-Loop Load Generation & Latency-Under-Load Benchmarks"
-    branch: "feat/21.3-open-loop-latency-under-load"
-    pr: 92
-    baseBranch: "feat/21.2-competitive-benchmark-overhaul"
-    status: merged
-  - storyId: "21.4"
-    storyKey: "21-4-failure-path-fairness-benchmarks"
-    title: "Failure-Path & Fairness Benchmarks"
-    branch: "feat/21.4-failure-path-fairness-benchmarks"
-    pr: 93
-    baseBranch: "feat/21.3-open-loop-latency-under-load"
-    status: merged
-  - storyId: "21.5"
-    storyKey: "21-5-ci-visualization-reporting"
-    title: "CI Visualization & Benchmark Reporting"
-    branch: "feat/21.5-ci-visualization-reporting"
-    pr: 94
-    baseBranch: "feat/21.4-failure-path-fairness-benchmarks"
+  - storyId: "22.2"
+    storyKey: "22-2-drr-scheduler-o1-key-selection"
+    title: "DRR Scheduler O(1) Key Selection"
+    branch: "feat/22.2-drr-o1-key-selection"
+    pr: 96
+    baseBranch: "main"
     status: merged

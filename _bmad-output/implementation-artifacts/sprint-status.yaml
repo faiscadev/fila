@@ -216,7 +216,7 @@ development_status:
   epic-22: done
   22-1-rocksdb-queue-optimized-configuration-grpc-tuning: done
   22-2-drr-scheduler-o1-key-selection: done
-  epic-22-retrospective: optional
+  epic-22-retrospective: done
 
   # Epic 23: Tier 2 — Batching (Client, Server, Delivery)
   # Target: 30K-100K msg/s (1KB). Client batching, write coalescing, delivery batching.
