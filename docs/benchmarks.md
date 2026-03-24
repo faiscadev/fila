@@ -102,6 +102,70 @@ Memory usage is dominated by the RocksDB buffer pool, not message count.
 
 Compaction has no measurable negative impact on tail latency in single-node benchmarks.
 
+## Subsystem benchmarks
+
+Subsystem benchmarks isolate and measure each internal component independently, bypassing the full server stack. This helps identify where time is spent and which component dominates in different workloads.
+
+Enable with `FILA_BENCH_SUBSYSTEM=1`:
+
+```bash
+FILA_BENCH_SUBSYSTEM=1 cargo bench -p fila-bench --bench system
+```
+
+### RocksDB raw write throughput
+
+Measures raw `put_message` throughput directly against RocksDB, bypassing scheduler, gRPC, and serialization. Isolates storage engine performance.
+
+| Payload | Metric | Unit |
+|---------|-------:|------|
+| 1KB | ops/s | write operations per second |
+| 1KB | p50, p99 | latency in microseconds |
+| 64KB | ops/s | write operations per second |
+| 64KB | p50, p99 | latency in microseconds |
+
+### Protobuf serialization throughput
+
+Measures protobuf encode and decode throughput for `EnqueueRequest` and `ConsumeResponse` at three payload sizes. Isolates serialization overhead.
+
+| Payload | Metrics |
+|---------|---------|
+| 64B | encode MB/s, encode ns/msg, decode ns/msg |
+| 1KB | encode MB/s, encode ns/msg, decode ns/msg |
+| 64KB | encode MB/s, encode ns/msg, decode ns/msg |
+
+Reported for both `EnqueueRequest` (producer path) and `ConsumeResponse` (consumer path).
+
+### DRR scheduler throughput
+
+Measures `next_key()` + `consume_deficit()` cycle throughput at varying active key counts. Isolates the scheduling algorithm from storage I/O.
+
+| Active keys | Metric |
+|------------:|--------|
+| 10 | selections/s |
+| 1,000 | selections/s |
+| 10,000 | selections/s |
+
+### gRPC round-trip overhead
+
+Measures round-trip latency for a minimal (1-byte payload) Enqueue RPC. Quantifies the fixed per-call overhead of tonic + HTTP/2 framing, separate from message processing.
+
+| Metric | Unit |
+|--------|------|
+| p50 latency | us |
+| p99 latency | us |
+| p99.9 latency | us |
+| throughput | ops/s |
+
+### Lua execution throughput
+
+Measures `on_enqueue` hook execution throughput for three script complexity levels, directly against the Lua VM (no server, no gRPC).
+
+| Script | Metrics |
+|--------|---------|
+| No-op (return defaults) | exec/s, p50, p99 |
+| Header-set (read 2 headers) | exec/s, p50, p99 |
+| Complex routing (string ops, conditionals, table insert) | exec/s, p50, p99 |
+
 ## Competitive comparison
 
 Fila is compared against Kafka, RabbitMQ, and NATS on queue-oriented workloads. All brokers run in Docker containers and are benchmarked using native Rust clients via the `bench-competitive` binary. See [Methodology](#methodology) for details.

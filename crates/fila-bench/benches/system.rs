@@ -1,5 +1,6 @@
 use fila_bench::benchmarks::{
-    compaction, failure_paths, fairness, latency, lua, memory, open_loop, scaling, throughput,
+    compaction, failure_paths, fairness, latency, lua, memory, open_loop, scaling, subsystem,
+    throughput,
 };
 use fila_bench::report::BenchReport;
 use fila_bench::server::BenchServer;
@@ -157,6 +158,34 @@ async fn run_benchmarks() {
         }
     } else {
         eprintln!("[11-14] Open-loop benchmarks (skipped — set FILA_BENCH_OPENLOOP=1 to enable)");
+    }
+
+    // Subsystem benchmarks (gated — isolate internal components)
+    if std::env::var("FILA_BENCH_SUBSYSTEM").is_ok() {
+        let mut subsystem_results = Vec::new();
+
+        eprintln!("[S1] RocksDB raw write throughput...");
+        subsystem::bench_rocksdb_write(&mut subsystem_results);
+
+        eprintln!("[S2] Protobuf serialization throughput...");
+        subsystem::bench_serialization(&mut subsystem_results);
+
+        eprintln!("[S3] DRR scheduler throughput...");
+        subsystem::bench_drr(&mut subsystem_results);
+
+        eprintln!("[S4] gRPC round-trip overhead...");
+        subsystem::bench_grpc_overhead(&server, &mut subsystem_results).await;
+
+        eprintln!("[S5] Lua execution throughput...");
+        subsystem::bench_lua(&mut subsystem_results);
+
+        for r in subsystem_results {
+            report.add(r);
+        }
+    } else {
+        eprintln!(
+            "[S1-S5] Subsystem benchmarks (skipped — set FILA_BENCH_SUBSYSTEM=1 to enable)"
+        );
     }
 
     // Write report

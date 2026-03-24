@@ -38,12 +38,23 @@ fn higher_is_better(result: &BenchResult) -> bool {
     let unit = result.unit.as_str();
 
     // Throughput metrics: higher is better
-    if unit == "msg/s" || unit == "MB/s" {
+    if unit == "msg/s"
+        || unit == "MB/s"
+        || unit == "ops/s"
+        || unit == "sel/s"
+        || unit == "exec/s"
+    {
         return true;
     }
 
-    // Latency, overhead, deviation, memory: lower is better
-    if unit == "ms" || unit == "us" || unit == "% deviation" || unit == "%" || unit == "MB" {
+    // Latency, overhead, deviation, memory, per-message time: lower is better
+    if unit == "ms"
+        || unit == "us"
+        || unit == "ns/msg"
+        || unit == "% deviation"
+        || unit == "%"
+        || unit == "MB"
+    {
         return false;
     }
 

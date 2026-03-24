@@ -1,4 +1,4 @@
-# generated: 2026-03-24
+# generated: 2026-03-23
 # project: fila
 # project_key: NOKEY
 # tracking_system: file-system
@@ -10,7 +10,6 @@
 #   - backlog: Epic not yet started
 #   - in-progress: Epic actively being worked on
 #   - done: All stories in epic completed
-#   - deferred: Epic paused pending design/research decisions
 #
 # Epic Status Transitions:
 #   - backlog → in-progress: Automatically when first story is created (via create-story)
@@ -34,7 +33,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-24
+generated: 2026-03-23
 project: fila
 project_key: NOKEY
 tracking_system: file-system
@@ -237,7 +236,6 @@ development_status:
   # Epic 25: Tier 4 — Purpose-Built Storage Engine (Deferred)
   # Target: 200K-500K msg/s. Deferred until post-Tier-3 profiling.
   epic-25: deferred
-  epic-25-retrospective: optional
 
   # Epic 26: SDK Batch Operations & Smart Batching
   # All SDKs at batch parity with BatchMode (Auto/Linger/Disabled).
@@ -248,7 +246,7 @@ development_status:
   26-4-javascript-sdk-batch-operations-auto-batching: done
   26-5-ruby-sdk-batch-operations-auto-batching: done
   26-6-java-sdk-batch-operations-auto-batching: done
-  epic-26-retrospective: done
+  epic-26-retrospective: optional
 
   # Epic 27: Profiling Infrastructure
   # Flamegraphs, subsystem benchmarks, batch benchmark scenarios.
