@@ -104,7 +104,7 @@ Captures CPU and memory usage of each broker's Docker container after benchmarks
 
 ### Warmup
 
-All throughput benchmarks include a warmup period (default: 1 second) where messages are produced but not counted. This ensures the broker is in a steady state before measurement begins.
+All throughput benchmarks include a warmup period (default: 5 seconds) where messages are produced but not counted. This ensures the broker is in a steady state before measurement begins.
 
 ### Multiple Runs
 
