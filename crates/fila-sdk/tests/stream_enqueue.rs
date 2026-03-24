@@ -67,6 +67,17 @@ otlp_endpoint = ""
             .spawn()
             .expect("start fila-server");
 
+        // Drain stdout so the child process doesn't block on a full pipe buffer.
+        let stdout = child.stdout.take().expect("stdout");
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                if line.is_err() {
+                    break;
+                }
+            }
+        });
+
         let stderr = child.stderr.take().expect("stderr");
         let reader = BufReader::new(stderr);
 
@@ -205,11 +216,16 @@ async fn stream_enqueue_basic() {
 
     // Close the send side and verify the response stream ends gracefully.
     drop(tx);
-    let next = tokio::time::timeout(Duration::from_secs(2), resp_stream.next()).await;
+    let next = tokio::time::timeout(Duration::from_secs(5), resp_stream.next()).await;
     match next {
-        Ok(None) => {}    // Stream closed — expected
-        Ok(Some(_)) => {} // Extra message — also fine
-        Err(_) => {}      // Timeout — server may keep stream open briefly
+        Ok(None) => {} // Stream closed cleanly — expected
+        Ok(Some(Ok(_))) => {
+            panic!("unexpected extra response after closing send side");
+        }
+        Ok(Some(Err(_))) => {} // Transport-level close — acceptable
+        Err(_) => {
+            panic!("server did not close response stream within 5s after client disconnect");
+        }
     }
 }
 
@@ -274,12 +290,13 @@ async fn stream_enqueue_per_message_error() {
         other => panic!("seq 1: expected MessageId, got: {other:?}"),
     }
 
-    // Seq 2 should be an error (queue not found).
+    // Seq 2 should be an error (queue not found). The error message contains
+    // the queue name from the EnqueueError::QueueNotFound variant.
     match &by_seq[&2].result {
         Some(fila_proto::stream_enqueue_response::Result::Error(msg)) => {
             assert!(
-                msg.contains("not found") || msg.contains("not_found") || !msg.is_empty(),
-                "expected queue-not-found error, got: {msg}"
+                msg.contains("nonexistent-queue"),
+                "expected error referencing nonexistent queue, got: {msg}"
             );
         }
         other => panic!("seq 2: expected Error, got: {other:?}"),
