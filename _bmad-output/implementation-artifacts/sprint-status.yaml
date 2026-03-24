@@ -230,7 +230,7 @@ development_status:
   # Target: 50K-150K msg/s (1KB). Zero-copy passthrough, scheduler sharding.
   epic-24: in-progress
   24-1-zero-copy-protobuf-passthrough-key-encoding: done
-  24-2-scheduler-sharding: in-progress
+  24-2-scheduler-sharding: review
   epic-24-retrospective: optional
 
   # Epic 25: Tier 4 — Purpose-Built Storage Engine (Deferred)

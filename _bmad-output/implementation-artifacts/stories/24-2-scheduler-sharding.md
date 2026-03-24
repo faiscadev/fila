@@ -1,6 +1,6 @@
 # Story 24.2: Scheduler Sharding
 
-Status: in-progress
+Status: review
 
 ## Story
 
