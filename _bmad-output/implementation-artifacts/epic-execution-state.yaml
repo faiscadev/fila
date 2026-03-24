@@ -1,6 +1,7 @@
-epic: "Epic 26: SDK Batch Operations & Auto-Batching"
+epic: "Epic 26: SDK Batch Operations & Smart Batching"
 baseBranch: main
 startedAt: "2026-03-24"
+completedAt: "2026-03-24"
 stories:
   - id: "26.1"
     title: "Rust SDK Smart Batching (BatchMode)"
@@ -11,37 +12,37 @@ stories:
     dependsOn: []
   - id: "26.2"
     title: "Go SDK Batch Operations & Smart Batching"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/26.2-batch-smart-batching"
-    pr: null
+    pr: 3
     dependsOn: ["26.1"]
   - id: "26.3"
     title: "Python SDK Batch Operations & Smart Batching"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/26.3-batch-smart-batching"
-    pr: null
+    pr: 3
     dependsOn: ["26.1"]
   - id: "26.4"
     title: "JavaScript SDK Batch Operations & Smart Batching"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/26.4-batch-smart-batching"
-    pr: null
+    pr: 3
     dependsOn: ["26.1"]
   - id: "26.5"
     title: "Ruby SDK Batch Operations & Smart Batching"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/26.5-batch-smart-batching"
-    pr: null
+    pr: 3
     dependsOn: ["26.1"]
   - id: "26.6"
     title: "Java SDK Batch Operations & Smart Batching"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/26.6-batch-smart-batching"
-    pr: null
+    pr: 3
     dependsOn: ["26.1"]
 skippedIssues: []

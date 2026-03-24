@@ -244,11 +244,11 @@ development_status:
   # Prerequisite: Epic 23 complete (done).
   epic-26: in-progress
   26-1-rust-sdk-auto-batching-linger-ms-timer: review
-  26-2-go-sdk-batch-operations-auto-batching: in-progress
-  26-3-python-sdk-batch-operations-auto-batching: in-progress
-  26-4-javascript-sdk-batch-operations-auto-batching: in-progress
-  26-5-ruby-sdk-batch-operations-auto-batching: in-progress
-  26-6-java-sdk-batch-operations-auto-batching: in-progress
+  26-2-go-sdk-batch-operations-auto-batching: review
+  26-3-python-sdk-batch-operations-auto-batching: review
+  26-4-javascript-sdk-batch-operations-auto-batching: review
+  26-5-ruby-sdk-batch-operations-auto-batching: review
+  26-6-java-sdk-batch-operations-auto-batching: review
   epic-26-retrospective: optional
 
   # Epic 27: Profiling Infrastructure
