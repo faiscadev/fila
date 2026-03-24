@@ -187,7 +187,10 @@ pub struct RocksDbConfig {
     pub leases_write_buffer_mb: usize,
     /// Enable pipelined writes (default: true).
     pub pipelined_write: bool,
-    /// Enable manual WAL flush with buffering (default: true).
+    /// Enable manual WAL flush with buffering (default: false).
+    /// When true, WAL entries are buffered in memory and a crash may lose
+    /// unflushed writes. Only enable in cluster mode where Raft provides
+    /// durability.
     pub manual_wal_flush: bool,
     /// WAL bytes per sync in bytes (default: 524288 = 512KB).
     pub wal_bytes_per_sync: u64,
@@ -222,7 +225,7 @@ impl Default for RocksDbConfig {
             messages_min_write_buffers_to_merge: 2,
             leases_write_buffer_mb: 64,
             pipelined_write: true,
-            manual_wal_flush: true,
+            manual_wal_flush: false,
             wal_bytes_per_sync: 524_288,
             compact_on_deletion: true,
             bloom_filter_bits: 10,
@@ -482,7 +485,7 @@ mod tests {
         );
         assert_eq!(config.storage.rocksdb.leases_write_buffer_mb, 64);
         assert!(config.storage.rocksdb.pipelined_write);
-        assert!(config.storage.rocksdb.manual_wal_flush);
+        assert!(!config.storage.rocksdb.manual_wal_flush);
         assert_eq!(config.storage.rocksdb.wal_bytes_per_sync, 524_288);
         assert!(config.storage.rocksdb.compact_on_deletion);
         assert_eq!(config.storage.rocksdb.bloom_filter_bits, 10);
