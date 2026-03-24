@@ -19,7 +19,7 @@ stories:
   - id: "29.3"
     title: "SDK Streaming Enqueue Integration"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "review"
     branch: "feat/29.3-sdk-streaming-enqueue"
     pr: null
     dependsOn: ["29.2"]
