@@ -4,8 +4,8 @@ startedAt: "2026-03-24"
 stories:
   - id: "24.1"
     title: "Zero-Copy Protobuf Passthrough & Key Encoding"
-    status: in-progress
-    currentPhase: "implementation"
+    status: review
+    currentPhase: "review"
     branch: "feat/24.1-zero-copy-key-encoding"
     pr: null
     dependsOn: []

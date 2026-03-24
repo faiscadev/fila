@@ -1,6 +1,6 @@
 # Story 24.1: Zero-Copy Protobuf Passthrough & Key Encoding
 
-Status: in-progress
+Status: review
 
 ## Story
 

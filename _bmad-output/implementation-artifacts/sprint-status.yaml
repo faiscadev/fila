@@ -229,7 +229,7 @@ development_status:
   # Epic 24: Tier 3 — Zero-Copy & Scheduler Sharding
   # Target: 50K-150K msg/s (1KB). Zero-copy passthrough, scheduler sharding.
   epic-24: in-progress
-  24-1-zero-copy-protobuf-passthrough-key-encoding: in-progress
+  24-1-zero-copy-protobuf-passthrough-key-encoding: review
   24-2-scheduler-sharding: backlog
   epic-24-retrospective: optional
 
