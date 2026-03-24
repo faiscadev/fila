@@ -1,6 +1,6 @@
 # Story 23.3: Delivery Batching (Consumer-Side)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -28,12 +28,12 @@ So that delivery throughput is higher by amortizing HTTP/2 framing and protobuf 
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `repeated Message messages` field to `ConsumeResponse` in service.proto
-- [ ] Task 2: Add `delivery_batch_max_messages` to `SchedulerConfig` (default 10)
-- [ ] Task 3: Implement server-side batching in the consume stream converter task
-- [ ] Task 4: Update SDK consumer to handle batched `messages` field
-- [ ] Task 5: Add e2e tests for batched delivery
-- [ ] Task 6: Run full test suite, clippy, fmt
+- [x] Task 1: Add `repeated Message messages` field to `ConsumeResponse` in service.proto
+- [x] Task 2: Add `delivery_batch_max_messages` to `SchedulerConfig` (default 10)
+- [x] Task 3: Implement server-side batching in the consume stream converter task
+- [x] Task 4: Update SDK consumer to handle batched `messages` field
+- [x] Task 5: Add e2e tests for batched delivery (3 tests)
+- [x] Task 6: Run full test suite, clippy, fmt -- all pass
 
 ## Dev Notes
 
