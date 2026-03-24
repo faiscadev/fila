@@ -3,45 +3,45 @@ baseBranch: main
 startedAt: "2026-03-24"
 stories:
   - id: "26.1"
-    title: "Rust SDK Auto-Batching (linger_ms Timer)"
-    status: in-progress
-    currentPhase: "dev"
+    title: "Rust SDK Smart Batching (BatchMode)"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/26.1-rust-sdk-auto-batching"
-    pr: null
+    pr: 102
     dependsOn: []
   - id: "26.2"
-    title: "Go SDK Batch Operations & Auto-Batching"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    title: "Go SDK Batch Operations & Smart Batching"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/26.2-batch-smart-batching"
     pr: null
     dependsOn: ["26.1"]
   - id: "26.3"
-    title: "Python SDK Batch Operations & Auto-Batching"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    title: "Python SDK Batch Operations & Smart Batching"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/26.3-batch-smart-batching"
     pr: null
     dependsOn: ["26.1"]
   - id: "26.4"
-    title: "JavaScript SDK Batch Operations & Auto-Batching"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    title: "JavaScript SDK Batch Operations & Smart Batching"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/26.4-batch-smart-batching"
     pr: null
     dependsOn: ["26.1"]
   - id: "26.5"
-    title: "Ruby SDK Batch Operations & Auto-Batching"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    title: "Ruby SDK Batch Operations & Smart Batching"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/26.5-batch-smart-batching"
     pr: null
     dependsOn: ["26.1"]
   - id: "26.6"
-    title: "Java SDK Batch Operations & Auto-Batching"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    title: "Java SDK Batch Operations & Smart Batching"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/26.6-batch-smart-batching"
     pr: null
     dependsOn: ["26.1"]
 skippedIssues: []
