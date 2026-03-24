@@ -71,23 +71,9 @@ When a story creates or modifies a CI workflow (GitHub Actions, etc.), the workf
 
 This applies to all workflow types: release pipelines, publish workflows, Docker builds, etc. A workflow that has never been triggered is untested code.
 
-## Documentation for Future Phases
+## Performance Optimization
 
-When writing doc comments or documentation that describes **future phase behavior** (e.g., "in phase 2, this will..."), always cross-reference the relevant research or architecture document to capture **all modes and strategies** — not just the most obvious case.
-
-Example: The `QueueRouter` phase 2 docs initially described only FIFO partitioning by fairness key, missing non-FIFO partitioning by message ID. The research doc (`_bmad/docs/research/decoupled-scheduler-sharded-storage.md`) clearly specified both strategies.
-
-**Rule:** Before committing phase 2 design comments, verify them against the research doc. Incomplete forward-looking docs mislead future developers.
-
-## Raft Log Backward Compatibility
-
-Any field added to `ClusterRequest` variants that are serialized into the Raft log (e.g., `CreateQueueGroup`, `Enqueue`, `Ack`, `Nack`) **MUST** handle deserialization of entries written before the field existed:
-
-1. Add `#[serde(default)]` to the new field so existing log entries deserialize without error
-2. Use `optional` in proto3 or handle the proto3 default (0 for integers, empty for strings) as "unset"
-3. In the code that consumes the field, provide a fallback when the value is unset/default
-
-This rule was added after Epic 17, where Cubic caught that `preferred_leader: 0` (proto3 default for missing field) would prevent any node from bootstrapping a queue group.
+Performance epics must begin with profiling to identify actual bottlenecks. Do not set throughput targets based on what other systems achieve — profile the actual system and optimize where time is spent.
 
 ## Mid-Epic Story Additions
 

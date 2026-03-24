@@ -1,24 +1,48 @@
-epic: "Epic 24: Tier 3 — Zero-Copy & Scheduler Sharding"
+epic: "Epic 26: SDK Batch Operations & Smart Batching"
 baseBranch: main
 startedAt: "2026-03-24"
 completedAt: "2026-03-24"
 stories:
-  - id: "24.1"
-    title: "Zero-Copy Protobuf Passthrough & Key Encoding"
+  - id: "26.1"
+    title: "Rust SDK Smart Batching (BatchMode)"
     status: completed
-    currentPhase: ""
-    branch: "feat/24.1-zero-copy-key-encoding"
-    pr: 100
+    currentPhase: "pr-complete"
+    branch: "feat/26.1-rust-sdk-auto-batching"
+    pr: 102
     dependsOn: []
-  - id: "24.2"
-    title: "Scheduler Sharding"
+  - id: "26.2"
+    title: "Go SDK Batch Operations & Smart Batching"
     status: completed
-    currentPhase: ""
-    branch: "feat/24.2-scheduler-sharding"
-    pr: 101
-    dependsOn: ["24.1"]
-summary:
-  total: 2
-  completed: 2
-  skipped: 0
+    currentPhase: "pr-complete"
+    branch: "feat/26.2-batch-smart-batching"
+    pr: 3
+    dependsOn: ["26.1"]
+  - id: "26.3"
+    title: "Python SDK Batch Operations & Smart Batching"
+    status: completed
+    currentPhase: "pr-complete"
+    branch: "feat/26.3-batch-smart-batching"
+    pr: 3
+    dependsOn: ["26.1"]
+  - id: "26.4"
+    title: "JavaScript SDK Batch Operations & Smart Batching"
+    status: completed
+    currentPhase: "pr-complete"
+    branch: "feat/26.4-batch-smart-batching"
+    pr: 3
+    dependsOn: ["26.1"]
+  - id: "26.5"
+    title: "Ruby SDK Batch Operations & Smart Batching"
+    status: completed
+    currentPhase: "pr-complete"
+    branch: "feat/26.5-batch-smart-batching"
+    pr: 3
+    dependsOn: ["26.1"]
+  - id: "26.6"
+    title: "Java SDK Batch Operations & Smart Batching"
+    status: completed
+    currentPhase: "pr-complete"
+    branch: "feat/26.6-batch-smart-batching"
+    pr: 3
+    dependsOn: ["26.1"]
 skippedIssues: []

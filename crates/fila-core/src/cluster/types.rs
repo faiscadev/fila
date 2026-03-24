@@ -23,6 +23,18 @@ openraft::declare_raft_types!(
 /// Every write operation must be serialized into a `ClusterRequest`,
 /// committed via Raft consensus, and then applied to the local state
 /// machine. Read-only operations bypass Raft entirely.
+///
+/// # Backward Compatibility
+///
+/// Any field added to these variants **MUST** handle deserialization of
+/// entries written before the field existed:
+///
+/// 1. Add `#[serde(default)]` so existing log entries deserialize without error
+/// 2. Use `optional` in proto3 or handle the proto3 default (0, empty) as "unset"
+/// 3. Provide a fallback in consuming code when the value is unset/default
+///
+/// This rule exists because Raft log entries persist across upgrades.
+/// (Epic 17: `preferred_leader: 0` would have prevented bootstrapping.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClusterRequest {
     Enqueue {

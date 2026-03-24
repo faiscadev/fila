@@ -110,6 +110,14 @@ Replace RocksDB with an append-only log-segment storage engine tailored to queue
 **NFRs addressed:** NFR30, NFR31, NFR32, NFR33
 **Status:** Deferred until post-Tier 3 profiling justifies it.
 
+### Epic 26: SDK Batch Operations & Auto-Batching
+Bring all 5 external SDKs (Go, Python, JS, Ruby, Java) to feature parity with the Rust SDK for batch operations added in Epic 23. Also deliver the auto-batching with `linger_ms` timer deferred from Story 23.1. Without this epic, the primary throughput lever (batching) is only available to Rust SDK users.
+**FRs covered:** FR-P4 (external SDKs), FR-P5 (external SDKs), FR-P7 (external SDKs)
+**Prerequisite:** Epic 23 (BatchEnqueue RPC, delivery batching already on server)
+
+### Epic 27: Profiling Infrastructure
+Build profiling tooling so performance bottlenecks can be identified before optimizing. Epics 22-24 optimized based on theoretical predictions (10K-150K msg/s targets) without profiling — actual results were 2.7K msg/s. This epic ensures future performance work targets real bottlenecks. Includes flamegraph generation, subsystem-level benchmarks, and batch benchmark scenarios for the existing suite.
+
 ---
 
 ## Epic 22: Tier 1 — Configuration Tuning & Data Structure Fixes
@@ -332,3 +340,232 @@ Replace RocksDB with an append-only log-segment storage engine tailored to Fila'
 
 **FRs covered:** FR-P11 (FR66)
 **NFRs addressed:** NFR30 (2x RocksDB throughput), NFR31 (no compaction spikes > 10ms p99), NFR32 (efficient TTL expiry), NFR33 (< 1.5x storage overhead)
+
+---
+
+## Epic 26: SDK Batch Operations & Smart Batching
+
+Bring all 5 external SDKs (Go, Python, JS, Ruby, Java) to feature parity with the Rust SDK for batch operations added in Epic 23. The server already supports `BatchEnqueue` RPC and delivery batching — the external SDKs simply don't expose these capabilities yet. Also deliver smart opportunistic batching that works by default with zero configuration.
+
+Without this epic, the primary throughput lever (batching) is only available to Rust SDK users. All 5 external SDKs are stuck at single-message-per-RPC throughput.
+
+**Prerequisites:** Epic 23 (BatchEnqueue RPC, delivery batching on server), Epic 16 (all SDKs have TLS + auth parity)
+**Pattern:** One story per SDK (proven in Epic 9 and Epic 16.2)
+
+**Batching design (established in Story 26.1, all SDKs must follow):**
+
+All SDKs expose a `BatchMode` with three modes:
+- **Auto** (default): Opportunistic batching. A background batcher drains whatever messages are available in its channel and flushes without blocking. Multiple RPCs can be in flight concurrently. At low load each message is sent individually; at high load messages naturally cluster into batches. Zero config, zero added latency.
+- **Linger**: Timer-based forced batching with explicit `linger_ms` and `batch_size`.
+- **Disabled**: No batching — each `enqueue()` is a separate single-message RPC.
+
+### Story 26.1: Rust SDK Smart Batching (BatchMode)
+
+As a developer using the Rust SDK,
+I want `enqueue()` to automatically batch messages when it makes sense, without any configuration,
+So that high-throughput producers get batch performance transparently while low-load producers pay zero latency cost.
+
+**Acceptance Criteria:**
+
+**Given** the Rust SDK sends each `enqueue()` as a separate RPC
+**When** smart batching is implemented
+**Then** a `BatchMode` enum controls batching: `Auto` (default), `Linger` (explicit timer), `Disabled` (no batching)
+**And** `Auto` uses opportunistic batching: drains available messages from the channel, spawns flush tasks without blocking, multiple concurrent RPCs
+**And** at low load, each message is sent as an individual concurrent RPC with zero added latency
+**And** at high load, messages naturally cluster and get drained together as `BatchEnqueue` calls
+**And** `enqueue()` returns a future that resolves with the message ID when the flush completes
+**And** partial batch failures propagate individual results to their corresponding futures
+**And** `connect()` uses `Auto` by default — existing code gets smart batching without changes
+**And** `BatchMode::Disabled` turns off batching entirely
+**And** `batch_enqueue()` remains available for explicit manual batching regardless of mode
+**And** single-item flushes use `Enqueue` RPC (not `BatchEnqueue`) to preserve exact error semantics
+**And** new integration tests verify: auto idle send, auto load batching, linger flush, disabled mode, partial failure, explicit batch_enqueue coexistence
+
+### Story 26.2: Go SDK Batch Operations & Smart Batching
+
+As a developer using the Go SDK,
+I want `BatchEnqueue()`, delivery batching support, and smart batching,
+So that Go producers and consumers achieve the same batch throughput as the Rust SDK.
+
+**Acceptance Criteria:**
+
+**Given** the Go SDK (`fila-go`) currently only has single-message `Enqueue()` and the server supports `BatchEnqueue` RPC and delivery batching
+**When** batch operations are added to the Go SDK
+**Then** a new `BatchEnqueue(ctx context.Context, messages []EnqueueMessage) ([]BatchEnqueueResult, error)` method is added to the client
+**And** `EnqueueMessage` contains `Queue string`, `Headers map[string]string`, `Payload []byte`
+**And** `BatchEnqueueResult` contains either a `MessageID string` on success or an `Error string` on failure — per-message granularity
+**And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` (repeated field) into individual messages, falling back to the singular `message` field for backward compatibility
+**And** `BatchMode` is implemented matching the Rust SDK design: `Auto` (default, opportunistic batching via goroutine + channel drain), `Linger` (explicit timer), `Disabled` (no batching)
+**And** `Auto` mode uses a background goroutine that drains the channel and spawns concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `Enqueue()` routes through the batcher by default, returning the message ID after flush completes
+**And** `WithBatchMode(mode)` dial option overrides the default
+**And** `Close()` drains any pending messages before disconnecting
+**And** the PR targets the `fila-go` repository (not pushed directly to main per CLAUDE.md)
+**And** integration tests verify: `BatchEnqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
+**And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
+**And** README documents batch operations and `BatchMode` configuration with examples
+
+### Story 26.3: Python SDK Batch Operations & Smart Batching
+
+As a developer using the Python SDK,
+I want `batch_enqueue()`, delivery batching support, and smart batching,
+So that Python producers and consumers achieve the same batch throughput as the Rust SDK.
+
+**Acceptance Criteria:**
+
+**Given** the Python SDK (`fila-python`) currently only has single-message `enqueue()` and the server supports `BatchEnqueue` RPC and delivery batching
+**When** batch operations are added to the Python SDK
+**Then** a new `batch_enqueue(messages: list[EnqueueMessage]) -> list[BatchEnqueueResult]` method is added to the client
+**And** `EnqueueMessage` is a dataclass with `queue: str`, `headers: dict[str, str] | None`, `payload: bytes`
+**And** `BatchEnqueueResult` is a dataclass with `message_id: str | None` and `error: str | None` — per-message granularity
+**And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` into individual messages, falling back to the singular `message` field for backward compatibility
+**And** `BatchMode` is implemented matching the Rust SDK design: `AUTO` (default, opportunistic batching via background thread + queue drain), `LINGER` (explicit timer), `DISABLED` (no batching)
+**And** `AUTO` mode uses a background thread that drains a `queue.Queue` and spawns concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `enqueue()` routes through the batcher by default, returning the message ID after flush completes
+**And** `FilaClient(batch_mode=BatchMode.DISABLED)` turns off batching
+**And** `close()` drains any pending messages before disconnecting
+**And** the PR targets the `fila-python` repository (not pushed directly to main per CLAUDE.md)
+**And** integration tests verify: `batch_enqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
+**And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
+**And** README documents batch operations and `BatchMode` configuration with examples
+
+### Story 26.4: JavaScript SDK Batch Operations & Smart Batching
+
+As a developer using the JavaScript/Node.js SDK,
+I want `batchEnqueue()`, delivery batching support, and smart batching,
+So that Node.js producers and consumers achieve the same batch throughput as the Rust SDK.
+
+**Acceptance Criteria:**
+
+**Given** the JavaScript SDK (`fila-js`) currently only has single-message `enqueue()` and the server supports `BatchEnqueue` RPC and delivery batching
+**When** batch operations are added to the JavaScript SDK
+**Then** a new `async batchEnqueue(messages: EnqueueMessage[]): Promise<BatchEnqueueResult[]>` method is added to the client
+**And** `EnqueueMessage` has `queue: string`, `headers: Record<string, string>`, `payload: Buffer`
+**And** `BatchEnqueueResult` has `messageId?: string` and `error?: string` — per-message granularity
+**And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` into individual messages, falling back to the singular `message` field for backward compatibility
+**And** `BatchMode` is implemented matching the Rust SDK design: `'auto'` (default, opportunistic batching via microtask drain), `'linger'` (explicit timer with `setTimeout`), `'disabled'` (no batching)
+**And** `'auto'` mode uses `setImmediate`/microtask to drain queued messages and fire concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `enqueue()` routes through the batcher by default, returning a Promise that resolves after flush
+**And** `new FilaClient({ batchMode: 'disabled' })` turns off batching
+**And** `close()` drains any pending messages before disconnecting
+**And** the PR targets the `fila-js` repository (not pushed directly to main per CLAUDE.md)
+**And** integration tests verify: `batchEnqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
+**And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
+**And** README documents batch operations and `batchMode` configuration with examples
+
+### Story 26.5: Ruby SDK Batch Operations & Smart Batching
+
+As a developer using the Ruby SDK,
+I want `batch_enqueue`, delivery batching support, and smart batching,
+So that Ruby producers and consumers achieve the same batch throughput as the Rust SDK.
+
+**Acceptance Criteria:**
+
+**Given** the Ruby SDK (`fila-ruby`) currently only has single-message `enqueue` and the server supports `BatchEnqueue` RPC and delivery batching
+**When** batch operations are added to the Ruby SDK
+**Then** a new `batch_enqueue(messages)` method is added to the client, accepting an array of `EnqueueMessage` (Struct or hash with `queue:`, `headers:`, `payload:`)
+**And** the method returns an array of `BatchEnqueueResult` with `message_id` (String or nil) and `error` (String or nil) — per-message granularity
+**And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` into individual messages, falling back to the singular `message` field for backward compatibility
+**And** `BatchMode` is implemented matching the Rust SDK design: `:auto` (default, opportunistic batching via background thread + Queue drain), `:linger` (explicit timer), `:disabled` (no batching)
+**And** `:auto` mode uses a background thread that drains a `Queue` and spawns concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `enqueue` routes through the batcher by default, returning the message ID after flush completes
+**And** `Fila::Client.new(batch_mode: :disabled)` turns off batching
+**And** `close` drains any pending messages before disconnecting
+**And** the PR targets the `fila-ruby` repository (not pushed directly to main per CLAUDE.md)
+**And** integration tests verify: `batch_enqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
+**And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
+**And** README documents batch operations and `batch_mode` configuration with examples
+
+### Story 26.6: Java SDK Batch Operations & Smart Batching
+
+As a developer using the Java SDK,
+I want `batchEnqueue()`, delivery batching support, and smart batching,
+So that Java producers and consumers achieve the same batch throughput as the Rust SDK.
+
+**Acceptance Criteria:**
+
+**Given** the Java SDK (`fila-java`) currently only has single-message `enqueue()` and the server supports `BatchEnqueue` RPC and delivery batching
+**When** batch operations are added to the Java SDK
+**Then** a new `List<BatchEnqueueResult> batchEnqueue(List<EnqueueMessage> messages)` method is added to the client
+**And** `EnqueueMessage` has `String queue`, `Map<String, String> headers`, `byte[] payload`
+**And** `BatchEnqueueResult` has `Optional<String> messageId()` and `Optional<String> error()` — per-message granularity
+**And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` into individual messages, falling back to the singular `message` field for backward compatibility
+**And** `BatchMode` is implemented matching the Rust SDK design: `AUTO` (default, opportunistic batching via `ExecutorService` + `LinkedBlockingQueue` drain), `LINGER` (explicit timer via `ScheduledExecutorService`), `DISABLED` (no batching)
+**And** `AUTO` mode uses a background thread that drains a `LinkedBlockingQueue` and submits concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `enqueue()` routes through the batcher by default, returning the message ID after flush completes (blocks or returns `CompletableFuture<String>`)
+**And** `FilaClient.builder().batchMode(BatchMode.DISABLED).build()` turns off batching
+**And** `close()` drains any pending messages before disconnecting
+**And** the PR targets the `fila-java` repository (not pushed directly to main per CLAUDE.md)
+**And** integration tests verify: `batchEnqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
+**And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
+**And** README documents batch operations and `BatchMode` configuration with examples
+
+---
+
+## Epic 27: Profiling Infrastructure
+
+Build profiling tooling so future performance work targets real bottlenecks instead of theoretical predictions. Epics 22-24 set throughput targets based on what other systems achieve (10K-150K msg/s) without profiling Fila's actual hot paths — actual results were 2.7K msg/s, predictions missed by 4-55x. This epic ensures the next performance cycle starts with data: where is CPU time actually spent? What does the memory allocation profile look like? Which subsystem is the bottleneck?
+
+**Prerequisites:** Epic 12 (benchmark infrastructure), Epics 22-24 (completed optimizations to profile against)
+
+### Story 27.1: Flamegraph Generation Tooling
+
+As a developer investigating performance bottlenecks,
+I want to generate CPU and memory flamegraphs from standard Fila workloads with a single command,
+So that I can visually identify which functions and subsystems consume the most resources.
+
+**Acceptance Criteria:**
+
+**Given** there is no automated way to generate flamegraphs for Fila workloads today
+**When** flamegraph tooling is added
+**Then** a `scripts/flamegraph.sh` script generates CPU flamegraphs for configurable workloads using `cargo-flamegraph` (Linux perf) or `cargo instruments` (macOS DTrace)
+**And** the script accepts parameters: `--workload` (enqueue-only, consume-only, lifecycle, batch-enqueue), `--duration` (seconds, default 30), `--message-size` (bytes, default 1024), `--concurrency` (producer/consumer count, default 1)
+**And** the script starts a `fila-server` instance, runs the specified workload using `fila-sdk`, and generates an SVG flamegraph in `target/flamegraphs/`
+**And** a `--heap` flag generates memory allocation flamegraphs using DHAT or `jemalloc` profiling (showing allocation sites and sizes)
+**And** the script produces a summary line: total samples, top 5 functions by percentage, top subsystem (rocksdb, tonic, drr, lua, serialization)
+**And** a `Makefile` target `make flamegraph` wraps the script with sensible defaults for the most common workload (enqueue-only, 1KB, 30s)
+**And** `docs/profiling.md` documents: how to install prerequisites (`cargo-flamegraph`, perf/dtrace permissions), how to interpret flamegraphs, common patterns to look for (wide RocksDB stacks = storage bottleneck, wide tonic stacks = gRPC overhead)
+**And** flamegraph SVGs are gitignored (added to `.gitignore`)
+**And** the script is tested by running it and verifying it produces a valid SVG with stack frames
+
+### Story 27.2: Subsystem-Level Benchmarks
+
+As a developer planning performance optimizations,
+I want benchmarks that measure time spent in each subsystem independently,
+So that I can identify which subsystem is the current bottleneck without reading flamegraphs.
+
+**Acceptance Criteria:**
+
+**Given** the existing `fila-bench` suite measures end-to-end throughput and latency but does not break down time by subsystem
+**When** subsystem-level benchmarks are added
+**Then** new benchmark scenarios in `fila-bench` isolate and measure each subsystem independently:
+**And** **RocksDB subsystem**: measures raw `WriteBatch` put + commit throughput (bypassing scheduler, gRPC, serialization) at 1KB and 64KB, with and without the Epic 22 tuning applied, reporting ops/s and p50/p99 latency
+**And** **Serialization subsystem**: measures protobuf encode + decode throughput for `EnqueueRequest` and `ConsumeResponse` at 64B, 1KB, and 64KB, with and without zero-copy (`bytes::Bytes`), reporting MB/s and ns/message
+**And** **DRR subsystem**: measures `next_key()` + `consume_deficit()` cycle throughput at 10, 1K, and 10K active keys, reporting selections/s (isolates the scheduling algorithm from storage)
+**And** **gRPC overhead**: measures round-trip latency for a no-op RPC (echo handler) to quantify the fixed per-call overhead of tonic + HTTP/2 framing
+**And** **Lua subsystem**: measures `on_enqueue` hook execution throughput for no-op, simple header-set, and complex routing scripts, reporting executions/s (isolates from storage write)
+**And** each subsystem benchmark reports its results as a percentage of the end-to-end enqueue time, producing a summary like: `RocksDB: 45%, Serialization: 20%, DRR: 5%, gRPC: 25%, Lua: 5%`
+**And** subsystem benchmarks are gated behind `FILA_BENCH_SUBSYSTEM=1` environment variable (not part of the default suite)
+**And** all subsystem benchmarks use HdrHistogram for latency measurement (consistent with the existing suite)
+**And** results are documented in a new section in `docs/benchmarks.md`
+
+### Story 27.3: Batch Benchmark Scenarios
+
+As a developer evaluating batch performance,
+I want benchmark scenarios that specifically measure batch operations across configurations,
+So that I can quantify the throughput/latency tradeoff of different batch settings.
+
+**Acceptance Criteria:**
+
+**Given** the existing `fila-bench` suite does not include batch-specific benchmark scenarios (all benchmarks use single-message RPCs)
+**When** batch benchmark scenarios are added
+**Then** new scenarios in `fila-bench` measure batch operations:
+**And** **BatchEnqueue throughput**: measures `BatchEnqueue` RPC throughput at batch sizes 1, 10, 50, 100, 500 with 1KB messages, reporting messages/s and batches/s
+**And** **Batch size scaling**: measures throughput as a function of batch size (1 to 1000) to find the point of diminishing returns, producing a throughput-vs-batch-size curve
+**And** **Auto-batching latency**: measures end-to-end latency (enqueue to consume) with auto-batching at `linger_ms` values of 1, 5, 10, 50, reporting the latency cost of buffering
+**And** **Batched vs unbatched comparison**: runs identical workloads with batching disabled, explicit `BatchEnqueue`, and auto-batching, producing a comparison table
+**And** **Delivery batching throughput**: measures consumer throughput with delivery batch sizes of 1, 10, 50 at varying consumer counts (1, 10, 100)
+**And** **Concurrent producer batching**: measures throughput with 1, 5, 10, 50 concurrent producers using `BatchEnqueue` (validates write coalescing benefit stacks with explicit batching)
+**And** batch benchmarks are gated behind `FILA_BENCH_BATCH=1` environment variable (not part of the default suite, since they require meaningful run time)
+**And** all batch benchmarks use the same HdrHistogram and multi-run median aggregation as the existing suite
+**And** results are documented in a new section in `docs/benchmarks.md` with the throughput-vs-batch-size curve and latency tradeoff analysis
