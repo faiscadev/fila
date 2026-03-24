@@ -1,48 +1,26 @@
-epic: "Epic 26: SDK Batch Operations & Smart Batching"
+epic: "Epic 29: Transport Optimization — Fair Benchmarks & Streaming Enqueue"
 baseBranch: main
 startedAt: "2026-03-24"
-completedAt: "2026-03-24"
 stories:
-  - id: "26.1"
-    title: "Rust SDK Smart Batching (BatchMode)"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/26.1-rust-sdk-auto-batching"
-    pr: 102
+  - id: "29.1"
+    title: "Fair Competitive Benchmark"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/29.1-fair-competitive-benchmark"
+    pr: null
     dependsOn: []
-  - id: "26.2"
-    title: "Go SDK Batch Operations & Smart Batching"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/26.2-batch-smart-batching"
-    pr: 3
-    dependsOn: ["26.1"]
-  - id: "26.3"
-    title: "Python SDK Batch Operations & Smart Batching"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/26.3-batch-smart-batching"
-    pr: 3
-    dependsOn: ["26.1"]
-  - id: "26.4"
-    title: "JavaScript SDK Batch Operations & Smart Batching"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/26.4-batch-smart-batching"
-    pr: 3
-    dependsOn: ["26.1"]
-  - id: "26.5"
-    title: "Ruby SDK Batch Operations & Smart Batching"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/26.5-batch-smart-batching"
-    pr: 3
-    dependsOn: ["26.1"]
-  - id: "26.6"
-    title: "Java SDK Batch Operations & Smart Batching"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/26.6-batch-smart-batching"
-    pr: 3
-    dependsOn: ["26.1"]
+  - id: "29.2"
+    title: "Streaming Enqueue RPC (Server-Side)"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: []
+  - id: "29.3"
+    title: "SDK Streaming Enqueue Integration"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["29.2"]
 skippedIssues: []

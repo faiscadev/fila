@@ -1,6 +1,6 @@
 # Story 29.1: Fair Competitive Benchmark
 
-Status: backlog
+Status: ready-for-dev
 
 ## Story
 
@@ -56,18 +56,35 @@ So that the comparison reflects real-world performance rather than penalizing Fi
 
 ## Design Notes
 
-The competitive benchmark binary (`bench-competitive`) is built from `fila-bench` with `--features competitive`. It currently uses raw gRPC calls for Fila (bypassing the SDK). The fix should use `fila-sdk` with `BatchMode::Auto` for throughput scenarios, which will naturally use `BatchEnqueue` RPC when messages accumulate.
+The competitive benchmark binary is at `crates/fila-bench/src/bin/bench-competitive.rs` (~1,420 lines). It already uses `fila-sdk` (`client.enqueue()`, `client.consume()`, `client.ack()`), but connects with default settings — which means `BatchMode::Auto` is technically active but with a single producer per throughput scenario. The issue is that with only 1 producer sending sequentially, auto-batching rarely kicks in because the batcher sees idle → sends immediately (Nagle-style: sends immediately when no RPC is in flight).
 
-The key insight from profiling: Kafka's `linger.ms=5` + `batch.num.messages=1000` means ~1 network call per 1000 messages. Fila's `BatchMode::Auto` with concurrent producers should achieve similar amortization via the opportunistic batcher.
+**What needs to change:** The throughput and multi-producer scenarios need concurrent producers so that messages accumulate while RPCs are in flight, triggering the auto-batcher to batch them via `BatchEnqueue` RPC. This matches how Kafka's `linger.ms=5` amortizes network calls.
+
+**What stays the same:** Lifecycle scenario (enqueue→consume→ack) remains serial/unbatched — this is where Fila already beats Kafka 7.6x and RabbitMQ 4.1x.
+
+**Current broker tuning in benchmark:**
+- Kafka throughput: `linger.ms=5`, `batch.num.messages=1000` (batched)
+- Kafka latency/lifecycle: `linger.ms=0` (unbatched)
+- RabbitMQ: `basic_publish` per message (no client-side batching)
+- NATS: `publish` per message (no client-side batching)
+- Fila: `client.enqueue()` per message, single producer (effectively unbatched despite SDK)
+
+**Results JSON format:** Each benchmark emits `{ name, value, unit, metadata }`. Add `batching` to `metadata`.
+
+**Benchmark infrastructure:**
+- `Makefile` orchestrates via docker-compose, 3 runs per broker, median aggregation via `bench-aggregate`
+- Measurement: `ThroughputMeter` and `LatencyHistogram` from `fila_bench::measurement`
+- Container stats via `docker stats` parsing
 
 ### Key Files to Modify
 
-- `crates/fila-bench/` — competitive benchmark binary (throughput + multi-producer scenarios)
-- `bench/competitive/METHODOLOGY.md` — fair comparison documentation
-- `docs/benchmarks.md` — published results page
+- `crates/fila-bench/src/bin/bench-competitive.rs` — Fila throughput + multi-producer scenarios (use concurrent producers to trigger auto-batching)
+- `bench/competitive/METHODOLOGY.md` — fair comparison rationale
+- `docs/benchmarks.md` — published results with batching labels
 
 ### References
 
-- [Research: post-optimization-profiling-analysis-2026-03-24.md — competitive benchmark methodology gap]
-- [Source: crates/fila-sdk/src/client.rs — BatchMode::Auto, run_auto_batcher]
+- [Research: _bmad-output/planning-artifacts/research/post-optimization-profiling-analysis-2026-03-24.md]
+- [Source: crates/fila-sdk/src/client.rs — BatchMode::Auto, run_auto_batcher (lines 605-636)]
 - [Source: crates/fila-proto/proto/fila/v1/service.proto — BatchEnqueue RPC]
+- [Source: crates/fila-bench/src/bin/bench-competitive.rs — current benchmark implementation]
