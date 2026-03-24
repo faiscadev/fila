@@ -392,9 +392,15 @@ impl FilaClient {
 
         let mut inner_stream = response.into_inner();
         tokio::spawn(async move {
-            while let Some(result) = inner_stream.next().await {
+            loop {
+                // Race the server stream against consumer-side closure so the
+                // gRPC stream is cancelled promptly when the consumer drops.
+                let result = tokio::select! {
+                    r = inner_stream.next() => r,
+                    _ = expand_tx.closed() => return,
+                };
                 match result {
-                    Ok(consume_response) => {
+                    Some(Ok(consume_response)) => {
                         // Prefer the batched `messages` field when non-empty.
                         if !consume_response.messages.is_empty() {
                             for msg in consume_response.messages {
@@ -408,11 +414,10 @@ impl FilaClient {
                                     queue: metadata.queue_id,
                                 };
                                 if expand_tx.send(Ok(cm)).await.is_err() {
-                                    return; // Consumer dropped the stream
+                                    return;
                                 }
                             }
                         } else if let Some(msg) = consume_response.message {
-                            // Single message (backward compatible with older servers).
                             let metadata = msg.metadata.unwrap_or_default();
                             let cm = ConsumeMessage {
                                 id: msg.id,
@@ -426,12 +431,12 @@ impl FilaClient {
                                 return;
                             }
                         }
-                        // Neither field populated → keepalive frame, skip.
                     }
-                    Err(status) => {
+                    Some(Err(status)) => {
                         let _ = expand_tx.send(Err(status_error(status))).await;
                         return;
                     }
+                    None => return,
                 }
             }
         });
