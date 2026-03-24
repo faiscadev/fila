@@ -264,6 +264,6 @@ development_status:
   # Fix competitive benchmark to use batching (P0), add streaming enqueue RPC (P1).
   # Profiling shows 94% of per-message time is gRPC/HTTP2 overhead.
   epic-29: in-progress
-  29-1-fair-competitive-benchmark: in-progress
+  29-1-fair-competitive-benchmark: review
   29-2-streaming-enqueue-rpc: backlog
   29-3-sdk-streaming-enqueue: backlog

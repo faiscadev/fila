@@ -5,7 +5,7 @@ stories:
   - id: "29.1"
     title: "Fair Competitive Benchmark"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "code-review"
     branch: "feat/29.1-fair-competitive-benchmark"
     pr: null
     dependsOn: []
