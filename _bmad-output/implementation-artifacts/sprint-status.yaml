@@ -214,7 +214,7 @@ development_status:
   # Epic 22: Tier 1 — Configuration Tuning & Data Structure Fixes
   # Target: 10K-15K msg/s (1KB). RocksDB tuning, gRPC tuning, DRR O(1).
   epic-22: in-progress
-  22-1-rocksdb-queue-optimized-configuration-grpc-tuning: in-progress
+  22-1-rocksdb-queue-optimized-configuration-grpc-tuning: review
   22-2-drr-scheduler-o1-key-selection: backlog
   epic-22-retrospective: optional
 
