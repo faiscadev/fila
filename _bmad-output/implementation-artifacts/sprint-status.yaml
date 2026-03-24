@@ -236,3 +236,13 @@ development_status:
   # Epic 25: Tier 4 — Purpose-Built Storage Engine (Deferred)
   # Target: 200K-500K msg/s. Deferred until post-Tier-3 profiling.
   epic-25: deferred
+
+  # Epic 26: SDK Batch Operations & Auto-Batching
+  # Bring external SDKs to batch parity + deliver auto-batching (linger_ms).
+  epic-26: backlog
+  epic-26-retrospective: optional
+
+  # Epic 27: Profiling Infrastructure
+  # Flamegraphs, subsystem benchmarks, batch benchmark scenarios.
+  epic-27: backlog
+  epic-27-retrospective: optional

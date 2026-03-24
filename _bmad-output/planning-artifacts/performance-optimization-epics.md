@@ -110,6 +110,14 @@ Replace RocksDB with an append-only log-segment storage engine tailored to queue
 **NFRs addressed:** NFR30, NFR31, NFR32, NFR33
 **Status:** Deferred until post-Tier 3 profiling justifies it.
 
+### Epic 26: SDK Batch Operations & Auto-Batching
+Bring all 5 external SDKs (Go, Python, JS, Ruby, Java) to feature parity with the Rust SDK for batch operations added in Epic 23. Also deliver the auto-batching with `linger_ms` timer deferred from Story 23.1. Without this epic, the primary throughput lever (batching) is only available to Rust SDK users.
+**FRs covered:** FR-P4 (external SDKs), FR-P5 (external SDKs), FR-P7 (external SDKs)
+**Prerequisite:** Epic 23 (BatchEnqueue RPC, delivery batching already on server)
+
+### Epic 27: Profiling Infrastructure
+Build profiling tooling so performance bottlenecks can be identified before optimizing. Epics 22-24 optimized based on theoretical predictions (10K-150K msg/s targets) without profiling — actual results were 2.7K msg/s. This epic ensures future performance work targets real bottlenecks. Includes flamegraph generation, subsystem-level benchmarks, and batch benchmark scenarios for the existing suite.
+
 ---
 
 ## Epic 22: Tier 1 — Configuration Tuning & Data Structure Fixes

@@ -208,6 +208,12 @@ Replace RocksDB with append-only log-segment storage engine. Deferred until Tier
 **NFRs addressed:** NFR30, NFR31, NFR32, NFR33
 **Status:** Deferred. Stories TBD pending post-Tier-3 profiling.
 
+### Epic 26: SDK Batch Operations & Auto-Batching
+Bring all 5 external SDKs to batch operation parity with the Rust SDK and deliver auto-batching. Full breakdown in `performance-optimization-epics.md`.
+
+### Epic 27: Profiling Infrastructure
+Build profiling tooling (flamegraphs, subsystem benchmarks, batch benchmark scenarios) so future performance work targets real bottlenecks. Full breakdown in `performance-optimization-epics.md`.
+
 ---
 
 ## Epic 12: Benchmarks & Competitive Positioning
