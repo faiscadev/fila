@@ -162,6 +162,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let actual_addr = listener.local_addr()?;
     info!(addr = %actual_addr, tls = tls_params.is_some(), "starting gRPC server");
 
+    // Write actual address to a file so test harnesses can discover the port
+    // when using OS-assigned port 0. The file is written next to the config.
+    if let Ok(port_file) = std::env::var("FILA_PORT_FILE") {
+        std::fs::write(&port_file, actual_addr.to_string())
+            .unwrap_or_else(|e| tracing::warn!(%e, path = %port_file, "failed to write port file"));
+    }
+
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
     let mut server_builder = Server::builder();

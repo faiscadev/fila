@@ -56,12 +56,13 @@ impl TestServer {
 
     /// Start a new fila-server instance with custom options.
     ///
-    /// Uses port 0 so the OS assigns a free port. The actual port is parsed
-    /// from the server's log output ("starting gRPC server" line contains
-    /// `addr=<ip>:<port>`). This eliminates the TOCTOU race of picking a
-    /// port then hoping the server binds before something else grabs it.
+    /// Uses port 0 so the OS assigns a free port. The server writes the
+    /// actual bound address to a port file (`FILA_PORT_FILE` env var).
+    /// This eliminates the TOCTOU race entirely — the port is already
+    /// bound by the OS when we read it.
     fn start_with_options(opts: TestServerOptions) -> Self {
         let data_dir = tempfile::tempdir().expect("create temp dir");
+        let port_file = data_dir.path().join("port");
 
         let config_path = data_dir.path().join("fila.toml");
         let scheduler_section = if let Some(q) = opts.quantum {
@@ -85,36 +86,37 @@ impl TestServer {
                 "FILA_DATA_DIR",
                 data_dir.path().join("data").to_str().unwrap(),
             )
+            .env("FILA_PORT_FILE", port_file.to_str().unwrap())
             .current_dir(data_dir.path())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("start fila-server");
 
-        // Parse the actual bound address from server stderr.
-        // The server logs: `addr=127.0.0.1:<port> ... starting gRPC server`
+        // Drain stdout and stderr so the process doesn't block on full pipes.
+        let stdout = child.stdout.take().expect("stdout");
+        std::thread::spawn(move || for _ in BufReader::new(stdout).lines() {});
         let stderr = child.stderr.take().expect("stderr");
-        let (addr_tx, addr_rx) = std::sync::mpsc::channel::<String>();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if line.contains("starting gRPC server") {
-                            // Extract addr=<ip:port> from the log line
-                            if let Some(addr) = extract_addr_from_log(&line) {
-                                let _ = addr_tx.send(addr);
-                            }
-                        }
-                    }
-                    Err(_) => break,
+        std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
+
+        // Wait for the port file to appear (server writes it after binding).
+        let start = std::time::Instant::now();
+        let addr = loop {
+            if start.elapsed() > Duration::from_secs(10) {
+                // Check if child died
+                match child.try_wait() {
+                    Ok(Some(status)) => panic!("fila-server exited with {status} before writing port file"),
+                    _ => panic!("fila-server did not write port file within 10s"),
                 }
             }
-        });
-
-        let addr = addr_rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("fila-server did not log its listen address within 10s");
+            if let Ok(contents) = std::fs::read_to_string(&port_file) {
+                let contents = contents.trim();
+                if !contents.is_empty() {
+                    break contents.to_string();
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
 
         Self {
             child: Some(child),
@@ -149,9 +151,11 @@ impl TestServer {
         self.host_port().split(':').last().unwrap().parse().unwrap()
     }
 
-    /// Restart a server on the same data directory and port.
-    pub fn restart_on(data_dir: tempfile::TempDir, port: u16) -> Self {
-        let addr = format!("127.0.0.1:{port}");
+    /// Restart a server on the same data directory (gets a new OS-assigned port).
+    pub fn restart_on(data_dir: tempfile::TempDir, _port: u16) -> Self {
+        let port_file = data_dir.path().join("port");
+        // Remove stale port file from previous run
+        let _ = std::fs::remove_file(&port_file);
 
         let binary = server_binary();
         assert!(
@@ -164,43 +168,35 @@ impl TestServer {
                 "FILA_DATA_DIR",
                 data_dir.path().join("data").to_str().unwrap(),
             )
+            .env("FILA_PORT_FILE", port_file.to_str().unwrap())
             .current_dir(data_dir.path())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("restart fila-server");
 
+        let stdout = child.stdout.take().expect("stdout");
+        std::thread::spawn(move || for _ in BufReader::new(stdout).lines() {});
         let stderr = child.stderr.take().expect("stderr");
-        let reader = BufReader::new(stderr);
-        let addr_for_thread = addr.clone();
-        std::thread::spawn(move || {
-            for line in reader.lines() {
-                match line {
-                    Ok(_line) => {
-                        if _line.contains(&addr_for_thread)
-                            || _line.contains("starting gRPC server")
-                        {
-                            // ready
-                        }
-                    }
-                    Err(_) => break,
+        std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
+
+        // Wait for the port file to appear.
+        let start = std::time::Instant::now();
+        let addr = loop {
+            if start.elapsed() > Duration::from_secs(10) {
+                match child.try_wait() {
+                    Ok(Some(status)) => panic!("fila-server exited with {status} after restart before writing port file"),
+                    _ => panic!("fila-server did not write port file within 10s after restart"),
                 }
             }
-        });
-
-        let start = std::time::Instant::now();
-        let mut connected = false;
-        while start.elapsed() < Duration::from_secs(10) {
-            if std::net::TcpStream::connect(&addr).is_ok() {
-                connected = true;
-                break;
+            if let Ok(contents) = std::fs::read_to_string(&port_file) {
+                let contents = contents.trim();
+                if !contents.is_empty() {
+                    break contents.to_string();
+                }
             }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        assert!(
-            connected,
-            "fila-server did not become reachable at {addr} within 10s after restart"
-        );
+            std::thread::sleep(Duration::from_millis(20));
+        };
 
         Self {
             child: Some(child),
@@ -301,6 +297,7 @@ pub const TEST_BOOTSTRAP_KEY: &str = "test-bootstrap-key-for-e2e";
 /// Returns (TestServer, http_addr). Use `TEST_BOOTSTRAP_KEY` as the initial credential.
 pub fn start_auth_server() -> (TestServer, String) {
     let data_dir = tempfile::tempdir().expect("temp dir");
+    let port_file = data_dir.path().join("port");
     let config_content = format!(
         "[server]\nlisten_addr = \"127.0.0.1:0\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\nbootstrap_apikey = \"{TEST_BOOTSTRAP_KEY}\"\n"
     );
@@ -318,38 +315,36 @@ pub fn start_auth_server() -> (TestServer, String) {
             "FILA_DATA_DIR",
             data_dir.path().join("data").to_str().unwrap(),
         )
+        .env("FILA_PORT_FILE", port_file.to_str().unwrap())
         .current_dir(data_dir.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("start fila-server with auth");
 
-    // Drain stdout so the process does not block on a full pipe.
+    // Drain stdout and stderr so the process does not block on full pipes.
     let stdout = child.stdout.take().expect("stdout");
     std::thread::spawn(move || for _ in BufReader::new(stdout).lines() {});
-
-    // Parse actual bound address from server stderr.
     let stderr = child.stderr.take().expect("stderr");
-    let (addr_tx, addr_rx) = std::sync::mpsc::channel::<String>();
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            match line {
-                Ok(line) => {
-                    if line.contains("starting gRPC server") {
-                        if let Some(addr) = extract_addr_from_log(&line) {
-                            let _ = addr_tx.send(addr);
-                        }
-                    }
-                }
-                Err(_) => break,
+    std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
+
+    // Wait for the port file to appear.
+    let start = std::time::Instant::now();
+    let addr = loop {
+        if start.elapsed() > Duration::from_secs(10) {
+            match child.try_wait() {
+                Ok(Some(status)) => panic!("fila-server (auth) exited with {status} before writing port file"),
+                _ => panic!("fila-server (auth) did not write port file within 10s"),
             }
         }
-    });
-
-    let addr = addr_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("fila-server (auth mode) did not log its listen address within 10s");
+        if let Ok(contents) = std::fs::read_to_string(&port_file) {
+            let contents = contents.trim();
+            if !contents.is_empty() {
+                break contents.to_string();
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
 
     let http_addr = format!("http://{addr}");
     let server = TestServer::from_parts(child, http_addr.clone(), data_dir);
@@ -412,11 +407,32 @@ pub async fn sdk_client(addr: &str) -> fila_sdk::FilaClient {
 /// The server logs lines like:
 ///   `2026-03-23T... INFO fila_server: addr=127.0.0.1:12345 tls=false starting gRPC server`
 fn extract_addr_from_log(line: &str) -> Option<String> {
+    // Strip ANSI escape codes before parsing — tracing output includes
+    // color codes around field names even when stderr is piped.
+    let stripped = strip_ansi(line);
     let addr_prefix = "addr=";
-    let start = line.find(addr_prefix)? + addr_prefix.len();
-    let rest = &line[start..];
+    let start = stripped.find(addr_prefix)? + addr_prefix.len();
+    let rest = &stripped[start..];
     let end = rest.find(' ').unwrap_or(rest.len());
     Some(rest[..end].to_string())
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip until we find a letter (end of ANSI sequence)
+            for c2 in chars.by_ref() {
+                if c2.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 /// Find a free TCP port. Used by cluster helper which manages its own server processes.
