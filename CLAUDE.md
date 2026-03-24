@@ -81,6 +81,14 @@ When a new story is added to an epic during implementation (e.g., a performance 
 
 This applies even when the story is small, fast, or "obviously scoped." A story tracked only in `sprint-status.yaml` and git history creates gaps in the retrospective record and makes it harder for future agents to understand what was built and why.
 
+## Multi-SDK Epics: Concurrent Agent Execution
+
+When an epic requires the same change across multiple external SDKs (e.g., adding batch operations to Go, Python, JS, Ruby, Java), launch one agent per SDK concurrently rather than executing sequentially. Each agent works in a separate repo with no dependencies on the others.
+
+**Pattern:** Give each agent the algorithm/design from the Rust SDK implementation, the proto definitions, and instructions to implement + test + open a PR. All agents run in parallel. This reduces wall-clock time from 5x to 1x.
+
+This was validated in Epic 26: 5 SDK agents completed in ~8 minutes each (parallel) vs ~40 minutes total if sequential.
+
 ## External Repository Changes
 
 Stories that modify external repositories (e.g., SDK repos like fila-go, fila-python, fila-js, fila-ruby, fila-java) **MUST** open pull requests in those repos, not push directly to main. This applies to all changes, especially security-sensitive code (TLS, auth).

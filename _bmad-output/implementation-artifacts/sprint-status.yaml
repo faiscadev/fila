@@ -246,7 +246,7 @@ development_status:
   26-4-javascript-sdk-batch-operations-auto-batching: done
   26-5-ruby-sdk-batch-operations-auto-batching: done
   26-6-java-sdk-batch-operations-auto-batching: done
-  epic-26-retrospective: optional
+  epic-26-retrospective: done
 
   # Epic 27: Profiling Infrastructure
   # Flamegraphs, subsystem benchmarks, batch benchmark scenarios.
