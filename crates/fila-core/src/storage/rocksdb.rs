@@ -1,11 +1,13 @@
 use std::path::Path;
 
 use rocksdb::{
-    ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded, Options, WriteBatch,
+    BlockBasedOptions, Cache, ColumnFamilyDescriptor, DBCompressionType, DBWithThreadMode,
+    IteratorMode, MultiThreaded, Options, ReadOptions, WriteBatch,
 };
 
 use prost::Message as ProstMessage;
 
+use crate::broker::config::RocksDbConfig;
 use crate::error::{StorageError, StorageResult};
 use crate::message::Message;
 use crate::queue::QueueConfig;
@@ -21,6 +23,8 @@ const CF_RAFT_LOG: &str = "raft_log";
 const CF_MSG_INDEX: &str = "msg_index";
 
 /// All column family names (excluding `default` which RocksDB creates automatically).
+/// Used in tests to verify all CFs exist after open.
+#[cfg(test)]
 const COLUMN_FAMILIES: &[&str] = &[
     CF_MESSAGES,
     CF_LEASES,
@@ -38,23 +42,163 @@ pub struct RocksDbEngine {
     db: DB,
 }
 
+/// Compute the exclusive upper bound for a byte prefix.
+///
+/// Increments the last non-0xFF byte to produce the first key that does
+/// *not* match the prefix. Returns an empty `Vec` when the prefix is all
+/// 0xFF (meaning the prefix covers the remainder of the keyspace).
+fn prefix_upper_bound(prefix: &[u8]) -> Vec<u8> {
+    let mut upper = prefix.to_vec();
+    while let Some(last) = upper.last_mut() {
+        if *last < 0xFF {
+            *last += 1;
+            return upper;
+        }
+        upper.pop();
+    }
+    // All 0xFF — no upper bound possible (covers entire keyspace).
+    vec![]
+}
+
 impl RocksDbEngine {
-    /// Open or create a RocksDB database at the given path with all column families.
+    /// Open or create a RocksDB database at the given path with default options.
+    ///
+    /// Convenience wrapper around [`open_with_config`](Self::open_with_config)
+    /// using [`RocksDbConfig::default()`].
     pub fn open(path: impl AsRef<Path>) -> StorageResult<Self> {
+        Self::open_with_config(path, &RocksDbConfig::default())
+    }
+
+    /// Open or create a RocksDB database with queue-optimized tuning.
+    pub fn open_with_config(path: impl AsRef<Path>, config: &RocksDbConfig) -> StorageResult<Self> {
+        // Shared LRU block cache across all column families.
+        let cache = Cache::new_lru_cache(config.block_cache_mb * 1024 * 1024);
+
+        // --- DB-level options ---
         let mut db_opts = Options::default();
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
+        db_opts.set_enable_pipelined_write(config.pipelined_write);
+        db_opts.set_manual_wal_flush(config.manual_wal_flush);
+        db_opts.set_wal_bytes_per_sync(config.wal_bytes_per_sync);
 
-        let cf_descriptors: Vec<ColumnFamilyDescriptor> = COLUMN_FAMILIES
-            .iter()
-            .map(|name| {
-                let cf_opts = Options::default();
-                ColumnFamilyDescriptor::new(*name, cf_opts)
-            })
-            .collect();
+        // --- Per-CF options ---
+        let messages_opts =
+            Self::messages_cf_opts(config, &cache);
+        let leases_opts = Self::leases_cf_opts(config, &cache);
+        let lease_expiry_opts = Self::lease_expiry_cf_opts(&cache);
+        let raft_log_opts = Self::raft_log_cf_opts(config, &cache);
+        let msg_index_opts = Self::msg_index_cf_opts(config, &cache);
+        let queues_opts = Self::small_cf_opts(config, &cache);
+        let state_opts = Self::small_cf_opts(config, &cache);
+
+        let cf_descriptors = vec![
+            ColumnFamilyDescriptor::new(CF_MESSAGES, messages_opts),
+            ColumnFamilyDescriptor::new(CF_LEASES, leases_opts),
+            ColumnFamilyDescriptor::new(CF_LEASE_EXPIRY, lease_expiry_opts),
+            ColumnFamilyDescriptor::new(CF_QUEUES, queues_opts),
+            ColumnFamilyDescriptor::new(CF_STATE, state_opts),
+            ColumnFamilyDescriptor::new(CF_RAFT_LOG, raft_log_opts),
+            ColumnFamilyDescriptor::new(CF_MSG_INDEX, msg_index_opts),
+        ];
 
         let db = DB::open_cf_descriptors(&db_opts, path, cf_descriptors)?;
         Ok(Self { db })
+    }
+
+    /// Block-based table options with shared cache and optional bloom filter.
+    fn table_opts(cache: &Cache, bloom_bits: i32) -> BlockBasedOptions {
+        let mut opts = BlockBasedOptions::default();
+        opts.set_block_cache(cache);
+        opts.set_cache_index_and_filter_blocks(true);
+        opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+        if bloom_bits > 0 {
+            opts.set_bloom_filter(bloom_bits as f64, false);
+        }
+        opts
+    }
+
+    /// Per-level compression: no compression for L0-L1, Lz4 for L2+.
+    fn compression_per_level() -> [DBCompressionType; 7] {
+        [
+            DBCompressionType::None, // L0
+            DBCompressionType::None, // L1
+            DBCompressionType::Lz4,  // L2
+            DBCompressionType::Lz4,  // L3
+            DBCompressionType::Lz4,  // L4
+            DBCompressionType::Lz4,  // L5
+            DBCompressionType::Lz4,  // L6
+        ]
+    }
+
+    /// Messages CF: large write buffers, bloom filter, per-level compression,
+    /// CompactOnDeletionCollector (queue messages are deleted after ack).
+    fn messages_cf_opts(config: &RocksDbConfig, cache: &Cache) -> Options {
+        let table = Self::table_opts(cache, config.bloom_filter_bits);
+        let mut opts = Options::default();
+        opts.set_block_based_table_factory(&table);
+        opts.set_write_buffer_size(config.messages_write_buffer_mb * 1024 * 1024);
+        opts.set_max_write_buffer_number(config.messages_max_write_buffers);
+        opts.set_min_write_buffer_number_to_merge(config.messages_min_write_buffers_to_merge);
+        opts.set_memtable_prefix_bloom_ratio(0.1);
+        opts.set_compression_per_level(&Self::compression_per_level());
+        if config.compact_on_deletion {
+            // window=128, trigger=1, ratio=0.5 — trigger compaction when >50% of
+            // keys in a sliding 128-key window are deletion tombstones.
+            opts.add_compact_on_deletion_collector_factory(128, 1, 0.5);
+        }
+        opts
+    }
+
+    /// Leases CF: moderate write buffers, bloom filter, per-level compression.
+    fn leases_cf_opts(config: &RocksDbConfig, cache: &Cache) -> Options {
+        let table = Self::table_opts(cache, config.bloom_filter_bits);
+        let mut opts = Options::default();
+        opts.set_block_based_table_factory(&table);
+        opts.set_write_buffer_size(config.leases_write_buffer_mb * 1024 * 1024);
+        opts.set_compression_per_level(&Self::compression_per_level());
+        if config.compact_on_deletion {
+            opts.add_compact_on_deletion_collector_factory(128, 1, 0.5);
+        }
+        opts
+    }
+
+    /// Lease expiry CF: range-scan only, no bloom filter, no compression.
+    fn lease_expiry_cf_opts(cache: &Cache) -> Options {
+        let table = Self::table_opts(cache, 0);
+        let mut opts = Options::default();
+        opts.set_block_based_table_factory(&table);
+        opts
+    }
+
+    /// Raft log CF: CompactOnDeletionCollector (log entries are trimmed after
+    /// snapshot), bloom filters for point lookups.
+    fn raft_log_cf_opts(config: &RocksDbConfig, cache: &Cache) -> Options {
+        let table = Self::table_opts(cache, config.bloom_filter_bits);
+        let mut opts = Options::default();
+        opts.set_block_based_table_factory(&table);
+        opts.set_compression_per_level(&Self::compression_per_level());
+        if config.compact_on_deletion {
+            opts.add_compact_on_deletion_collector_factory(128, 1, 0.5);
+        }
+        opts
+    }
+
+    /// Msg index CF: point lookups only, bloom filters.
+    fn msg_index_cf_opts(config: &RocksDbConfig, cache: &Cache) -> Options {
+        let table = Self::table_opts(cache, config.bloom_filter_bits);
+        let mut opts = Options::default();
+        opts.set_block_based_table_factory(&table);
+        opts.set_compression_per_level(&Self::compression_per_level());
+        opts
+    }
+
+    /// Small CF options for queues and state (low volume, bloom filters).
+    fn small_cf_opts(config: &RocksDbConfig, cache: &Cache) -> Options {
+        let table = Self::table_opts(cache, config.bloom_filter_bits);
+        let mut opts = Options::default();
+        opts.set_block_based_table_factory(&table);
+        opts
     }
 
     fn cf(
@@ -174,15 +318,19 @@ impl StorageEngine for RocksDbEngine {
 
     fn list_messages(&self, prefix: &[u8]) -> StorageResult<Vec<(Vec<u8>, Message)>> {
         let cf = self.cf(CF_MESSAGES)?;
-        let iter = self
-            .db
-            .iterator_cf(&cf, IteratorMode::From(prefix, rocksdb::Direction::Forward));
+        let mut read_opts = ReadOptions::default();
+        let upper = prefix_upper_bound(prefix);
+        if !upper.is_empty() {
+            read_opts.set_iterate_upper_bound(upper);
+        }
+        let iter = self.db.iterator_cf_opt(
+            &cf,
+            read_opts,
+            IteratorMode::From(prefix, rocksdb::Direction::Forward),
+        );
         let mut results = Vec::new();
         for item in iter {
             let (key, value) = item?;
-            if !key.starts_with(prefix) {
-                break;
-            }
             let proto = fila_proto::Message::decode(&*value)?;
             let msg = Message::try_from(proto)?;
             results.push((key.to_vec(), msg));
@@ -281,9 +429,15 @@ impl StorageEngine for RocksDbEngine {
         limit: usize,
     ) -> StorageResult<Vec<(String, Vec<u8>)>> {
         let cf = self.cf(CF_STATE)?;
+        let mut read_opts = ReadOptions::default();
+        let upper = prefix_upper_bound(prefix.as_bytes());
+        if !upper.is_empty() {
+            read_opts.set_iterate_upper_bound(upper);
+        }
         let mut result = Vec::new();
-        let iter = self.db.iterator_cf(
+        let iter = self.db.iterator_cf_opt(
             &cf,
+            read_opts,
             IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward),
         );
         for item in iter {
@@ -293,9 +447,6 @@ impl StorageEngine for RocksDbEngine {
             let (key, value) = item?;
             let key_str = std::str::from_utf8(&key)
                 .map_err(|e| StorageError::CorruptData(format!("non-UTF8 state key: {e}")))?;
-            if !key_str.starts_with(prefix) {
-                break;
-            }
             result.push((key_str.to_string(), value.to_vec()));
         }
         Ok(result)
@@ -731,5 +882,59 @@ mod tests {
             let val = storage.get_state("my-key").unwrap().unwrap();
             assert_eq!(val, b"my-value");
         }
+    }
+
+    #[test]
+    fn open_with_config_creates_all_column_families() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RocksDbConfig {
+            block_cache_mb: 16,
+            messages_write_buffer_mb: 4,
+            ..Default::default()
+        };
+        let storage = RocksDbEngine::open_with_config(dir.path(), &config).unwrap();
+        for cf_name in COLUMN_FAMILIES {
+            assert!(
+                storage.db.cf_handle(cf_name).is_some(),
+                "column family '{cf_name}' should exist with custom config"
+            );
+        }
+    }
+
+    #[test]
+    fn open_with_config_read_write_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RocksDbConfig {
+            block_cache_mb: 16,
+            bloom_filter_bits: 10,
+            compact_on_deletion: true,
+            ..Default::default()
+        };
+        let storage = RocksDbEngine::open_with_config(dir.path(), &config).unwrap();
+        let msg = test_message("q1", "default");
+        let key = keys::message_key(&msg.queue_id, &msg.fairness_key, msg.enqueued_at, &msg.id);
+        storage.put_message(&key, &msg).unwrap();
+        let retrieved = storage.get_message(&key).unwrap().unwrap();
+        assert_eq!(retrieved, msg);
+    }
+
+    #[test]
+    fn prefix_upper_bound_normal() {
+        assert_eq!(prefix_upper_bound(b"abc"), b"abd".to_vec());
+    }
+
+    #[test]
+    fn prefix_upper_bound_trailing_ff() {
+        assert_eq!(prefix_upper_bound(b"ab\xff"), b"ac".to_vec());
+    }
+
+    #[test]
+    fn prefix_upper_bound_all_ff() {
+        assert_eq!(prefix_upper_bound(b"\xff\xff\xff"), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn prefix_upper_bound_empty() {
+        assert_eq!(prefix_upper_bound(b""), Vec::<u8>::new());
     }
 }
