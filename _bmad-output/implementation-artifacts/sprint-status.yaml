@@ -250,8 +250,8 @@ development_status:
 
   # Epic 27: Profiling Infrastructure
   # Flamegraphs, subsystem benchmarks, batch benchmark scenarios.
-  epic-27: backlog
-  27-1-flamegraph-generation-tooling: backlog
-  27-2-subsystem-level-benchmarks: backlog
-  27-3-batch-benchmark-scenarios: backlog
-  epic-27-retrospective: optional
+  epic-27: done
+  27-1-flamegraph-generation-tooling: done
+  27-2-subsystem-level-benchmarks: done
+  27-3-batch-benchmark-scenarios: done
+  epic-27-retrospective: done
