@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use fila_proto::fila_service_client::FilaServiceClient;
-use fila_proto::{AckRequest, ConsumeRequest, EnqueueRequest, NackRequest};
+use fila_proto::{AckRequest, BatchEnqueueRequest, ConsumeRequest, EnqueueRequest, NackRequest};
 use tokio_stream::{Stream, StreamExt};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use crate::error::{
-    ack_status_error, consume_status_error, enqueue_status_error, nack_status_error, status_error,
-    AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError,
+    ack_status_error, batch_enqueue_status_error, consume_status_error, enqueue_status_error,
+    nack_status_error, status_error, AckError, BatchEnqueueError, ConnectError, ConsumeError,
+    EnqueueError, NackError, StatusError,
 };
 
 /// A consumed message received from the broker.
@@ -20,6 +21,50 @@ pub struct ConsumeMessage {
     pub fairness_key: String,
     pub attempt_count: u32,
     pub queue: String,
+}
+
+/// Configuration for client-side batching.
+///
+/// When `linger_ms` is `Some`, the SDK accumulates messages in an internal buffer
+/// and flushes when either `linger_ms` elapses or `batch_size` is reached.
+/// When `linger_ms` is `None` (default), batching is disabled and each `enqueue()`
+/// call sends a single message immediately.
+#[derive(Debug, Clone)]
+pub struct BatchConfig {
+    /// Time threshold in milliseconds before a partial batch is flushed.
+    /// `None` means batching is disabled (default).
+    pub linger_ms: Option<u64>,
+    /// Maximum number of messages per batch. Default: 100.
+    pub batch_size: usize,
+}
+
+impl Default for BatchConfig {
+    fn default() -> Self {
+        Self {
+            linger_ms: None,
+            batch_size: 100,
+        }
+    }
+}
+
+/// A single message specification for use with [`FilaClient::batch_enqueue`].
+#[derive(Debug, Clone)]
+pub struct EnqueueMessage {
+    pub queue: String,
+    pub headers: HashMap<String, String>,
+    pub payload: Vec<u8>,
+}
+
+/// The result of a single message within a batch enqueue call.
+///
+/// Each message in a batch is independently validated and processed.
+/// A failed message does not affect the others.
+#[derive(Debug, Clone)]
+pub enum BatchEnqueueResult {
+    /// The message was successfully enqueued. Contains the broker-assigned message ID.
+    Success(String),
+    /// The message failed to enqueue. Contains the error description.
+    Error(String),
 }
 
 /// Options for connecting to a Fila broker.
@@ -207,6 +252,54 @@ impl FilaClient {
             .map_err(enqueue_status_error)?;
 
         Ok(response.into_inner().message_id)
+    }
+
+    /// Enqueue a batch of messages in a single RPC call.
+    ///
+    /// Each message is independently validated and processed. A failed message
+    /// does not affect the others in the batch. Returns a [`Vec<BatchEnqueueResult>`]
+    /// with one result per input message, in the same order.
+    ///
+    /// This is more efficient than calling [`enqueue`](Self::enqueue) in a loop
+    /// because it amortizes the RPC overhead across all messages in the batch.
+    pub async fn batch_enqueue(
+        &self,
+        messages: Vec<EnqueueMessage>,
+    ) -> Result<Vec<BatchEnqueueResult>, BatchEnqueueError> {
+        let proto_messages = messages
+            .into_iter()
+            .map(|m| EnqueueRequest {
+                queue: m.queue,
+                headers: m.headers,
+                payload: m.payload,
+            })
+            .collect();
+
+        let response = self
+            .inner
+            .clone()
+            .batch_enqueue(self.request(BatchEnqueueRequest {
+                messages: proto_messages,
+            }))
+            .await
+            .map_err(batch_enqueue_status_error)?;
+
+        let results = response
+            .into_inner()
+            .results
+            .into_iter()
+            .map(|r| match r.result {
+                Some(fila_proto::batch_enqueue_result::Result::Success(resp)) => {
+                    BatchEnqueueResult::Success(resp.message_id)
+                }
+                Some(fila_proto::batch_enqueue_result::Result::Error(err)) => {
+                    BatchEnqueueResult::Error(err)
+                }
+                None => BatchEnqueueResult::Error("no result from server".to_string()),
+            })
+            .collect();
+
+        Ok(results)
     }
 
     /// Open a streaming consumer on a queue.

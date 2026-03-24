@@ -66,6 +66,17 @@ pub enum NackError {
     Status(#[from] StatusError),
 }
 
+/// Error from a batch enqueue RPC call.
+///
+/// This represents transport/server-level failures of the entire batch RPC,
+/// not per-message failures. Per-message results (success or error) are
+/// returned in [`BatchEnqueueResult`](crate::BatchEnqueueResult).
+#[derive(Debug, thiserror::Error)]
+pub enum BatchEnqueueError {
+    #[error(transparent)]
+    Status(#[from] StatusError),
+}
+
 // --- Mapping helpers ---
 
 pub(crate) fn status_error(status: tonic::Status) -> StatusError {
@@ -108,4 +119,8 @@ pub(crate) fn nack_status_error(status: tonic::Status) -> NackError {
         Code::NotFound => NackError::MessageNotFound(message),
         _ => NackError::Status(status_error(status)),
     }
+}
+
+pub(crate) fn batch_enqueue_status_error(status: tonic::Status) -> BatchEnqueueError {
+    BatchEnqueueError::Status(status_error(status))
 }
