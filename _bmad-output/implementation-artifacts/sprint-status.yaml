@@ -235,4 +235,4 @@ development_status:
 
   # Epic 25: Tier 4 — Purpose-Built Storage Engine (Deferred)
   # Target: 200K-500K msg/s. Deferred until post-Tier-3 profiling.
-  epic-25: backlog
+  epic-25: deferred
