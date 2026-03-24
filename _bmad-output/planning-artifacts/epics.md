@@ -18,7 +18,7 @@ inputDocuments:
 
 ## Overview
 
-This document provides the epic and story breakdown for Fila's post-v1 roadmap (Epics 12+), decomposing the Phase 2+ requirements from the updated PRD, Architecture, market research, and brainstorming session into implementable stories. Epics 1-11 (Phase 1 MVP) are complete and documented separately. Epic 21 added 2026-03-23 based on benchmarking methodology research.
+This document provides the epic and story breakdown for Fila's post-v1 roadmap (Epics 12+), decomposing the Phase 2+ requirements from the updated PRD, Architecture, market research, and brainstorming session into implementable stories. Epics 1-11 (Phase 1 MVP) are complete and documented separately. Epic 21 added 2026-03-23 based on benchmarking methodology research. Epics 22-25 added 2026-03-23 based on performance optimization research — detailed breakdown in `performance-optimization-epics.md`.
 
 ## Requirements Inventory
 
@@ -40,6 +40,17 @@ FR75: Operators can deploy stability release branches with backported fixes
 FR76: Operators can monitor queues and visualize scheduling state via a web-based management GUI
 FR77: Consumers can join broker-managed consumer groups with automatic rebalancing
 FR78: Script authors can use built-in Lua helpers for common patterns (exponential backoff, tenant routing)
+FR-P1: Server applies queue-optimized RocksDB configuration (bloom filters, block cache, pipelined writes, CompactOnDeletionCollector)
+FR-P2: Server configures gRPC/HTTP/2 flow control and keepalive for high-throughput streaming
+FR-P3: DRR scheduler uses O(1) data structure for key selection instead of O(n) linear scan
+FR-P4: SDK supports client-side batching with configurable linger_ms and batch_size
+FR-P5: Server supports BatchEnqueue RPC for multi-message writes in a single WriteBatch
+FR-P6: Scheduler coalesces concurrent enqueue requests into batched writes
+FR-P7: Consumer streaming delivers multiple messages per gRPC response frame
+FR-P8: Message payload uses bytes::Bytes for zero-copy passthrough
+FR-P9: Scheduler supports sharded execution across multiple threads
+FR-P10: Storage key encoding uses pre-allocated buffers
+FR-P11: Purpose-built append-only storage engine (FR66, deferred)
 
 ### NonFunctional Requirements
 
@@ -55,6 +66,12 @@ NFR30: Queue-optimized write throughput >= 2x RocksDB for append-heavy workloads
 NFR31: Predictable latency — no compaction-induced latency spikes > 10ms p99
 NFR32: Efficient TTL expiry without full-table scans
 NFR33: Storage footprint < 1.5x raw message data (overhead from indexing and metadata)
+NFR-P1: Enqueue throughput >= 10K msg/s (1KB) after Tier 1 optimizations
+NFR-P2: Enqueue throughput >= 30K msg/s (1KB) after Tier 2 optimizations (with batching)
+NFR-P3: 10K fairness key throughput >= 1,500 msg/s (from 506 baseline)
+NFR-P4: Latency must not regress under batched workloads (p50 <= 1ms, p99 <= 5ms)
+NFR-P5: Memory RSS overhead from RocksDB tuning <= 512MB
+NFR-P6: CPU efficiency >= 500 msg/s per CPU percent
 
 ### Additional Requirements
 
@@ -106,6 +123,17 @@ FR-B11: Epic 21 — Nack storm / DLQ routing / failure-path benchmarks
 FR-B12: Epic 21 — Jain's Fairness Index for fairness tests
 FR-B13: Epic 21 — Disk I/O measurement in competitive resource benchmarks
 FR-B14: Epic 21 — Emit github-action-benchmark JSON format for CI visualization
+FR-P1: Epic 22 — RocksDB queue-optimized configuration
+FR-P2: Epic 22 — gRPC HTTP/2 tuning
+FR-P3: Epic 22 — DRR O(1) key selection
+FR-P4: Epic 23 — Client-side SDK batching
+FR-P5: Epic 23 — BatchEnqueue RPC
+FR-P6: Epic 23 — Server-side write coalescing
+FR-P7: Epic 23 — Delivery batching
+FR-P8: Epic 24 — Zero-copy protobuf passthrough
+FR-P9: Epic 24 — Scheduler sharding
+FR-P10: Epic 24 — Key encoding optimization
+FR-P11: Epic 25 (deferred) — Purpose-built storage engine (FR66)
 
 ## Epic List
 
@@ -158,6 +186,27 @@ Operators can monitor queues and visualize real-time scheduling state via a web-
 Developers and evaluators can trust Fila's benchmark numbers for optimization decisions and competitive claims — with statistically valid latency measurement (HdrHistogram, CO correction, 10K+ samples), realistic workload profiles (open-loop, processing delay, backpressure, failure paths), and reproducible results (multi-run aggregation, histogram merging). Builds on Epic 12's benchmark infrastructure with methodology fixes identified in the benchmarking methodology research.
 **FRs covered:** FR-B1 through FR-B14
 **NFRs addressed:** NFR-B1 (reproducibility), NFR-B2 (CI time), NFR-B3 (measurement overhead)
+
+### Epic 22: Tier 1 — Configuration Tuning & Data Structure Fixes
+High-impact, low-effort optimizations: RocksDB queue-optimized configuration (bloom filters, block cache, pipelined writes, CompactOnDeletionCollector), gRPC HTTP/2 tuning (window sizes, keepalive, tcp_nodelay), and DRR scheduler O(1) key selection. No API changes. Target: 10K-15K msg/s (1KB). Full breakdown in `performance-optimization-epics.md`.
+**FRs covered:** FR-P1, FR-P2, FR-P3
+**NFRs addressed:** NFR-P1, NFR-P3, NFR-P5
+
+### Epic 23: Tier 2 — Batching (Client, Server, Delivery)
+The primary throughput lever. Client-side SDK batching (linger_ms + batch_size), BatchEnqueue RPC, server-side write coalescing, and delivery batching for consumers. Requires proto changes and scheduler loop refactor. Target: 30K-100K msg/s (1KB). Full breakdown in `performance-optimization-epics.md`.
+**FRs covered:** FR-P4, FR-P5, FR-P6, FR-P7
+**NFRs addressed:** NFR-P2, NFR-P4, NFR1
+
+### Epic 24: Tier 3 — Zero-Copy & Scheduler Sharding
+Diminishing-returns optimizations: zero-copy protobuf passthrough (bytes::Bytes, skip re-serialization), key encoding optimization, and multi-threaded scheduler sharding. Only justified after Tier 2 profiling. Target: 50K-150K msg/s (1KB). Full breakdown in `performance-optimization-epics.md`.
+**FRs covered:** FR-P8, FR-P9, FR-P10
+**NFRs addressed:** NFR-P6, NFR1
+
+### Epic 25: Tier 4 — Purpose-Built Storage Engine (Deferred)
+Replace RocksDB with append-only log-segment storage engine. Deferred until Tiers 1-3 are exhausted and profiling confirms storage is the remaining bottleneck. Target: 200K-500K msg/s. Full breakdown in `performance-optimization-epics.md`.
+**FRs covered:** FR-P11 (FR66)
+**NFRs addressed:** NFR30, NFR31, NFR32, NFR33
+**Status:** Deferred. Stories TBD pending post-Tier-3 profiling.
 
 ---
 
