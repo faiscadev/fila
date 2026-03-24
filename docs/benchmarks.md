@@ -3,7 +3,7 @@
 This page presents Fila's benchmark results: self-benchmarks measuring single-node performance, and competitive comparisons against Kafka, RabbitMQ, and NATS.
 
 <!-- bench:header-start -->
-> Results from commit `edee8a7` on 2026-03-09. Run benchmarks on your own hardware for results relevant to your environment. See [Reproducing results](#reproducing-results) for instructions.
+> Results from commit `f3be754` on 2026-03-24. Run benchmarks on your own hardware for results relevant to your environment. See [Reproducing results](#reproducing-results) for instructions.
 <!-- bench:header-end -->
 
 ## Self-benchmarks
@@ -15,8 +15,8 @@ Self-benchmarks measure Fila's single-node performance across throughput, latenc
 <!-- bench:throughput-start -->
 | Metric | Value | Unit |
 |--------|------:|------|
-| Enqueue throughput (1KB payload) | 4,359 | msg/s |
-| Enqueue throughput (1KB payload) | 4.26 | MB/s |
+| Enqueue throughput (1KB payload) | 2,646 | msg/s |
+| Enqueue throughput (1KB payload) | 2.58 | MB/s |
 <!-- bench:throughput-end -->
 
 Single producer, sustained over a 3-second measurement window after 1-second warmup.
@@ -28,7 +28,7 @@ Round-trip latency: produce a message, consume it, measure the interval. 100 sam
 <!-- bench:latency-start -->
 | Load level | Producers | p50 | p95 | p99 |
 |------------|----------:|----:|----:|----:|
-| Light | 1 | 0.23 ms | 0.33 ms | 0.43 ms |
+| Light | 1 | 0.00 ms | 0.00 ms | 0.00 ms |
 <!-- bench:latency-end -->
 
 ### Fair scheduling overhead
@@ -38,9 +38,9 @@ Compares throughput with DRR fair scheduling enabled vs plain FIFO delivery.
 <!-- bench:fair-scheduling-overhead-start -->
 | Mode | Throughput (msg/s) |
 |------|-------------------:|
-| FIFO baseline | 1,842 |
-| Fair scheduling (DRR) | 1,693 |
-| **Overhead** | **8.1%** |
+| FIFO baseline | 1,138 |
+| Fair scheduling (DRR) | 1,101 |
+| **Overhead** | **3.2%** |
 <!-- bench:fair-scheduling-overhead-end -->
 
 The DRR scheduler adds minimal overhead compared to FIFO delivery (< 5% target).
@@ -68,9 +68,9 @@ Measures per-message overhead of executing an `on_enqueue` Lua hook.
 <!-- bench:lua-overhead-start -->
 | Metric | Value | Unit |
 |--------|------:|------|
-| Throughput without Lua | 1,290 | msg/s |
-| Throughput with `on_enqueue` hook | 1,716 | msg/s |
-| Per-message overhead | 0.0 | us |
+| Throughput without Lua | 945 | msg/s |
+| Throughput with `on_enqueue` hook | 906 | msg/s |
+| Per-message overhead | 25.3 | us |
 <!-- bench:lua-overhead-end -->
 
 The Lua hook adds < 6 us per-message overhead, well within the < 50 us NFR target.
@@ -82,9 +82,9 @@ Scheduling throughput as the number of distinct fairness keys increases.
 <!-- bench:cardinality-scaling-start -->
 | Key count | Throughput (msg/s) |
 |----------:|-------------------:|
-| 10 | 5,826 |
-| 1,000 | 4,248 |
-| 10,000 | 2,066 |
+| 10 | 1,306 |
+| 1,000 | 779 |
+| 10,000 | 499 |
 <!-- bench:cardinality-scaling-end -->
 
 ### Consumer concurrency scaling
@@ -94,9 +94,9 @@ Aggregate consume throughput with increasing concurrent consumer streams.
 <!-- bench:consumer-scaling-start -->
 | Consumers | Throughput (msg/s) |
 |----------:|-------------------:|
-| 1 | 1,089 |
-| 10 | 4,117 |
-| 100 | 4,139 |
+| 1 | 82 |
+| 10 | 979 |
+| 100 | 1,667 |
 <!-- bench:consumer-scaling-end -->
 
 ### Memory footprint
@@ -104,8 +104,8 @@ Aggregate consume throughput with increasing concurrent consumer streams.
 <!-- bench:memory-start -->
 | Metric | Value |
 |--------|------:|
-| RSS idle | 252 MB |
-| RSS under load (10K messages) | 259 MB |
+| RSS idle | 336 MB |
+| RSS under load (10K messages) | 364 MB |
 <!-- bench:memory-end -->
 
 Memory usage is dominated by the RocksDB buffer pool, not message count.
@@ -115,9 +115,9 @@ Memory usage is dominated by the RocksDB buffer pool, not message count.
 <!-- bench:compaction-start -->
 | Metric | p99 latency |
 |--------|------------:|
-| Idle (no compaction) | 0.26 ms |
-| Active compaction | 0.23 ms |
-| **Delta** | **< 0.03 ms** |
+| Idle (no compaction) | 0.00 ms |
+| Active compaction | 0.00 ms |
+| **Delta** | **< 0.39 ms** |
 <!-- bench:compaction-end -->
 
 Compaction has no measurable negative impact on tail latency in single-node benchmarks.
@@ -444,5 +444,5 @@ The `bench-regression` GitHub Actions workflow runs on every push to `main` and 
 ## Traceability
 
 <!-- bench:traceability-start -->
-Results in this document are from commit `edee8a7` (2026-03-09). Run `cargo bench -p fila-bench --bench system` to generate results for the current version. The JSON output includes the commit hash and timestamp for traceability.
+Results in this document are from commit `f3be754` (2026-03-24). Run `cargo bench -p fila-bench --bench system` to generate results for the current version. The JSON output includes the commit hash and timestamp for traceability.
 <!-- bench:traceability-end -->
