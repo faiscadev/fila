@@ -6,4 +6,5 @@ pub mod lua;
 pub mod memory;
 pub mod open_loop;
 pub mod scaling;
+pub mod subsystem;
 pub mod throughput;
