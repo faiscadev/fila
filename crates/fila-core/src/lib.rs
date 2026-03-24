@@ -8,8 +8,8 @@ pub mod storage;
 pub mod telemetry;
 
 pub use broker::{
-    AuthConfig, Broker, BrokerConfig, GuiConfig, QueueSummary, ReadyMessage, SchedulerCommand,
-    TlsParams,
+    AuthConfig, Broker, BrokerConfig, GrpcConfig, GuiConfig, QueueSummary, ReadyMessage,
+    RocksDbConfig, SchedulerCommand, StorageConfig, TlsParams,
 };
 pub use error::{
     AckError, BrokerError, BrokerResult, ConfigError, CreateQueueError, DeleteQueueError,
