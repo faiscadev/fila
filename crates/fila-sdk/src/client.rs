@@ -797,6 +797,30 @@ impl StreamManager {
     }
 }
 
+/// Parse a gRPC status code name (Debug format) back to a `tonic::Code`.
+fn parse_grpc_code(s: &str) -> tonic::Code {
+    match s {
+        "Ok" => tonic::Code::Ok,
+        "Cancelled" => tonic::Code::Cancelled,
+        "Unknown" => tonic::Code::Unknown,
+        "InvalidArgument" => tonic::Code::InvalidArgument,
+        "DeadlineExceeded" => tonic::Code::DeadlineExceeded,
+        "NotFound" => tonic::Code::NotFound,
+        "AlreadyExists" => tonic::Code::AlreadyExists,
+        "PermissionDenied" => tonic::Code::PermissionDenied,
+        "ResourceExhausted" => tonic::Code::ResourceExhausted,
+        "FailedPrecondition" => tonic::Code::FailedPrecondition,
+        "Aborted" => tonic::Code::Aborted,
+        "OutOfRange" => tonic::Code::OutOfRange,
+        "Unimplemented" => tonic::Code::Unimplemented,
+        "Internal" => tonic::Code::Internal,
+        "Unavailable" => tonic::Code::Unavailable,
+        "DataLoss" => tonic::Code::DataLoss,
+        "Unauthenticated" => tonic::Code::Unauthenticated,
+        _ => tonic::Code::Unknown,
+    }
+}
+
 /// Parse a stream error string formatted as `[Code] message` into an
 /// `EnqueueError`. The server's streaming handler formats errors with the
 /// gRPC status code prefix (e.g., `[NotFound] no-such-queue`).
@@ -806,16 +830,12 @@ fn parse_stream_error(err: &str) -> EnqueueError {
         if let Some(bracket_end) = rest.find(']') {
             let code_str = &rest[..bracket_end];
             let message = rest[bracket_end + 1..].trim_start().to_string();
-            return match code_str {
-                "NotFound" => EnqueueError::QueueNotFound(message),
-                "InvalidArgument" => EnqueueError::Status(StatusError::InvalidArgument(message)),
-                "Unavailable" => EnqueueError::Status(StatusError::Unavailable(message)),
-                "Internal" => EnqueueError::Status(StatusError::Internal(message)),
-                _ => EnqueueError::Status(StatusError::Rpc {
-                    code: tonic::Code::Unknown,
-                    message: format!("{code_str}: {message}"),
-                }),
-            };
+            let code = parse_grpc_code(code_str);
+            // Map to the appropriate EnqueueError variant using the same
+            // logic as the unary enqueue_status_error, then delegate to
+            // status_error for the remaining codes.
+            let status = tonic::Status::new(code, message);
+            return enqueue_status_error(status);
         }
     }
     // Fallback for unprefixed errors.
