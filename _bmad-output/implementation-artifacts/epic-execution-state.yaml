@@ -4,10 +4,10 @@ startedAt: "2026-03-24"
 stories:
   - id: "29.1"
     title: "Fair Competitive Benchmark"
-    status: in-progress
-    currentPhase: "code-review"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/29.1-fair-competitive-benchmark"
-    pr: null
+    pr: 109
     dependsOn: []
   - id: "29.2"
     title: "Streaming Enqueue RPC (Server-Side)"
