@@ -435,6 +435,7 @@ mod tests {
                 command_channel_capacity: 100,
                 idle_timeout_ms: 10,
                 quantum: 1000,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -507,6 +508,7 @@ mod tests {
                 command_channel_capacity: 100,
                 idle_timeout_ms: 10,
                 quantum: 1000,
+                ..Default::default()
             },
             auth: Some(config::AuthConfig {
                 bootstrap_apikey: bootstrap_key.to_string(),

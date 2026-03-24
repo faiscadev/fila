@@ -444,6 +444,7 @@ fn lease_expiry_redelivers_message_with_incremented_attempt_count() {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
         quantum: 1000,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
 
@@ -508,6 +509,7 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
         quantum: 1000,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
     let storage_for_thread = Arc::clone(&storage);
@@ -597,6 +599,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
         quantum: 1000,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
 
@@ -683,6 +686,7 @@ fn ack_before_expiry_prevents_redelivery() {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
         quantum: 1000,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
 

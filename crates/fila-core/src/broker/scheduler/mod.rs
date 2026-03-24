@@ -69,6 +69,8 @@ pub struct Scheduler {
     /// Per-(queue_id, fairness_key) delivery counts for fair share ratio calculation.
     /// Reset each time record_gauges() is called.
     fairness_deliveries: HashMap<(String, String), u64>,
+    /// Maximum number of commands to drain per coalescing batch.
+    write_coalesce_max_batch: usize,
 }
 
 impl Scheduler {
@@ -108,6 +110,7 @@ impl Scheduler {
                 Metrics::new()
             },
             fairness_deliveries: HashMap::new(),
+            write_coalesce_max_batch: config.write_coalesce_max_batch,
         }
     }
 
@@ -118,15 +121,8 @@ impl Scheduler {
         self.recover();
 
         while self.running {
-            // Phase 1: Drain all buffered commands (non-blocking)
-            let mut drained = 0;
-            while let Ok(cmd) = self.inbound.try_recv() {
-                self.handle_command(cmd);
-                drained += 1;
-                if !self.running {
-                    break;
-                }
-            }
+            // Phase 1: Drain buffered commands (non-blocking), coalescing enqueues.
+            let drained = self.drain_and_coalesce();
 
             // Phase 2: Refill token buckets, then DRR delivery round.
             self.throttle.refill_all(Instant::now());
@@ -164,6 +160,142 @@ impl Scheduler {
         }
 
         info!("scheduler stopped");
+    }
+
+    /// Drain up to `write_coalesce_max_batch` commands from the channel,
+    /// coalescing enqueue commands into a single storage write batch.
+    /// Non-enqueue commands are processed inline immediately.
+    /// Returns the total number of commands drained.
+    fn drain_and_coalesce(&mut self) -> usize {
+        let max_batch = self.write_coalesce_max_batch;
+        let mut drained = 0;
+
+        // Accumulate enqueue commands for coalesced write
+        let mut pending_enqueues: Vec<(
+            crate::message::Message,
+            tokio::sync::oneshot::Sender<Result<uuid::Uuid, crate::error::EnqueueError>>,
+        )> = Vec::new();
+
+        // Drain commands from the channel (non-blocking)
+        while drained < max_batch {
+            match self.inbound.try_recv() {
+                Ok(cmd) => {
+                    drained += 1;
+                    match cmd {
+                        SchedulerCommand::Enqueue { message, reply } => {
+                            debug!(
+                                queue_id = %message.queue_id,
+                                msg_id = %message.id,
+                                "enqueue command received (coalescing)"
+                            );
+                            pending_enqueues.push((message, reply));
+                        }
+                        other => {
+                            // Flush any accumulated enqueues before processing
+                            // non-enqueue commands, to maintain ordering.
+                            if !pending_enqueues.is_empty() {
+                                self.flush_coalesced_enqueues(&mut pending_enqueues);
+                            }
+                            self.handle_command(other);
+                            if !self.running {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+
+        // Flush any remaining enqueues
+        if !pending_enqueues.is_empty() {
+            self.flush_coalesced_enqueues(&mut pending_enqueues);
+        }
+
+        drained
+    }
+
+    /// Prepare all pending enqueue commands, commit their mutations in a single
+    /// WriteBatch, then finalize in-memory state and send responses.
+    fn flush_coalesced_enqueues(
+        &mut self,
+        pending: &mut Vec<(
+            crate::message::Message,
+            tokio::sync::oneshot::Sender<Result<uuid::Uuid, crate::error::EnqueueError>>,
+        )>,
+    ) {
+        use crate::storage::Mutation;
+
+        let batch = pending.drain(..);
+
+        // Phase 1: Prepare each enqueue (validation, Lua, serialization).
+        // Commands that fail preparation get their error sent immediately.
+        let mut prepared: Vec<(
+            handlers::PreparedEnqueue,
+            tokio::sync::oneshot::Sender<Result<uuid::Uuid, crate::error::EnqueueError>>,
+        )> = Vec::new();
+
+        for (message, reply) in batch {
+            match self.prepare_enqueue(message) {
+                Ok(prep) => {
+                    prepared.push((prep, reply));
+                }
+                Err(err) => {
+                    // Validation/Lua failure — send error immediately, no storage write needed
+                    let _ = reply.send(Err(err));
+                }
+            }
+        }
+
+        if prepared.is_empty() {
+            return;
+        }
+
+        // Phase 2: Collect all mutations into a single batch
+        let mutations: Vec<Mutation> = prepared
+            .iter()
+            .map(|(prep, _)| Mutation::PutMessage {
+                key: prep.msg_key.clone(),
+                value: prep.msg_value.clone(),
+            })
+            .collect();
+
+        let batch_size = prepared.len();
+
+        // Phase 3: Commit the coalesced batch
+        match self.storage.apply_mutations(mutations) {
+            Ok(()) => {
+                debug!(batch_size, "coalesced enqueue batch committed");
+
+                // Collect queue_ids that need delivery before sending responses
+                let mut delivery_queues: HashSet<String> = HashSet::new();
+
+                // Phase 4: Finalize in-memory state and send success responses
+                for (prep, reply) in prepared {
+                    delivery_queues.insert(prep.queue_id.clone());
+                    self.finalize_enqueue(&prep);
+                    let _ = reply.send(Ok(prep.msg_id));
+                }
+
+                // Deliver immediately for responsiveness
+                for queue_id in &delivery_queues {
+                    self.drr_deliver_queue(queue_id);
+                }
+            }
+            Err(storage_err) => {
+                // Storage failure — all callers in the batch receive the error
+                warn!(
+                    batch_size,
+                    error = %storage_err,
+                    "coalesced enqueue batch failed"
+                );
+                for (_, reply) in prepared {
+                    let _ = reply.send(Err(crate::error::EnqueueError::Storage(
+                        crate::error::StorageError::Engine(storage_err.to_string()),
+                    )));
+                }
+            }
+        }
     }
 
     fn handle_command(&mut self, cmd: SchedulerCommand) {
