@@ -157,8 +157,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin_service = AdminService::new(Arc::clone(&broker), cluster_handle.clone());
     let hot_path_service = HotPathService::new(Arc::clone(&broker), cluster_handle);
 
-    let addr = listen_addr.parse()?;
-    info!(%addr, tls = tls_params.is_some(), "starting gRPC server");
+    let requested_addr: std::net::SocketAddr = listen_addr.parse()?;
+    let listener = tokio::net::TcpListener::bind(requested_addr).await?;
+    let actual_addr = listener.local_addr()?;
+    info!(addr = %actual_addr, tls = tls_params.is_some(), "starting gRPC server");
+
+    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
     let mut server_builder = Server::builder();
     if let Some(ref tls) = tls_params {
@@ -173,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(trace_context::TraceContextLayer)
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))
-        .serve_with_shutdown(addr, shutdown_signal())
+        .serve_with_incoming_shutdown(incoming, shutdown_signal())
         .await;
 
     info!("gRPC server stopped, shutting down broker");

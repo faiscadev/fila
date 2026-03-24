@@ -55,9 +55,12 @@ impl TestServer {
     }
 
     /// Start a new fila-server instance with custom options.
+    ///
+    /// Uses port 0 so the OS assigns a free port. The actual port is parsed
+    /// from the server's log output ("starting gRPC server" line contains
+    /// `addr=<ip>:<port>`). This eliminates the TOCTOU race of picking a
+    /// port then hoping the server binds before something else grabs it.
     fn start_with_options(opts: TestServerOptions) -> Self {
-        let port = free_port();
-        let addr = format!("127.0.0.1:{port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");
 
         let config_path = data_dir.path().join("fila.toml");
@@ -67,12 +70,7 @@ impl TestServer {
             String::new()
         };
         let config_content = format!(
-            r#"[server]
-listen_addr = "{addr}"
-{scheduler_section}
-[telemetry]
-otlp_endpoint = ""
-"#
+            "[server]\nlisten_addr = \"127.0.0.1:0\"\n{scheduler_section}\n[telemetry]\notlp_endpoint = \"\"\n"
         );
         std::fs::write(&config_path, config_content).expect("write config");
 
@@ -93,17 +91,20 @@ otlp_endpoint = ""
             .spawn()
             .expect("start fila-server");
 
-        // Drain stderr so the process doesn't block on a full pipe.
+        // Parse the actual bound address from server stderr.
+        // The server logs: `addr=127.0.0.1:<port> ... starting gRPC server`
         let stderr = child.stderr.take().expect("stderr");
-        let reader = BufReader::new(stderr);
-        let addr_for_thread = addr.clone();
+        let (addr_tx, addr_rx) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 match line {
                     Ok(line) => {
-                        if line.contains(&addr_for_thread) || line.contains("starting gRPC server")
-                        {
-                            // Server is ready — keep draining.
+                        if line.contains("starting gRPC server") {
+                            // Extract addr=<ip:port> from the log line
+                            if let Some(addr) = extract_addr_from_log(&line) {
+                                let _ = addr_tx.send(addr);
+                            }
                         }
                     }
                     Err(_) => break,
@@ -111,20 +112,9 @@ otlp_endpoint = ""
             }
         });
 
-        // Poll TCP until the server is reachable.
-        let start = std::time::Instant::now();
-        let mut connected = false;
-        while start.elapsed() < Duration::from_secs(10) {
-            if std::net::TcpStream::connect(&addr).is_ok() {
-                connected = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        assert!(
-            connected,
-            "fila-server did not become reachable at {addr} within 10s"
-        );
+        let addr = addr_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("fila-server did not log its listen address within 10s");
 
         Self {
             child: Some(child),
@@ -310,12 +300,9 @@ pub const TEST_BOOTSTRAP_KEY: &str = "test-bootstrap-key-for-e2e";
 ///
 /// Returns (TestServer, http_addr). Use `TEST_BOOTSTRAP_KEY` as the initial credential.
 pub fn start_auth_server() -> (TestServer, String) {
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
-
     let data_dir = tempfile::tempdir().expect("temp dir");
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\nbootstrap_apikey = \"{TEST_BOOTSTRAP_KEY}\"\n"
+        "[server]\nlisten_addr = \"127.0.0.1:0\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\nbootstrap_apikey = \"{TEST_BOOTSTRAP_KEY}\"\n"
     );
     let config_path = data_dir.path().join("fila.toml");
     std::fs::write(&config_path, config_content).expect("write config");
@@ -337,26 +324,32 @@ pub fn start_auth_server() -> (TestServer, String) {
         .spawn()
         .expect("start fila-server with auth");
 
-    // Drain stdout and stderr so the process does not block on a full pipe.
+    // Drain stdout so the process does not block on a full pipe.
     let stdout = child.stdout.take().expect("stdout");
     std::thread::spawn(move || for _ in BufReader::new(stdout).lines() {});
-    let stderr = child.stderr.take().expect("stderr");
-    std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
-    // Poll TCP until the server is reachable.
-    let start = std::time::Instant::now();
-    let mut connected = false;
-    while start.elapsed() < Duration::from_secs(10) {
-        if std::net::TcpStream::connect(&addr).is_ok() {
-            connected = true;
-            break;
+    // Parse actual bound address from server stderr.
+    let stderr = child.stderr.take().expect("stderr");
+    let (addr_tx, addr_rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    if line.contains("starting gRPC server") {
+                        if let Some(addr) = extract_addr_from_log(&line) {
+                            let _ = addr_tx.send(addr);
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
         }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(
-        connected,
-        "fila-server (auth mode) did not become reachable at {addr} within 10s"
-    );
+    });
+
+    let addr = addr_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("fila-server (auth mode) did not log its listen address within 10s");
 
     let http_addr = format!("http://{addr}");
     let server = TestServer::from_parts(child, http_addr.clone(), data_dir);
@@ -414,37 +407,22 @@ pub async fn sdk_client(addr: &str) -> fila_sdk::FilaClient {
         .expect("connect SDK client")
 }
 
-/// Find a free TCP port.
+/// Extract `addr=<ip:port>` from a tracing log line.
 ///
-/// Uses an atomic counter to avoid the TOCTOU race where `TcpListener::bind(":0")`
-/// gives the same port to two parallel tests before either server binds.
-/// The counter ensures each call returns a distinct port within this process.
+/// The server logs lines like:
+///   `2026-03-23T... INFO fila_server: addr=127.0.0.1:12345 tls=false starting gRPC server`
+fn extract_addr_from_log(line: &str) -> Option<String> {
+    let addr_prefix = "addr=";
+    let start = line.find(addr_prefix)? + addr_prefix.len();
+    let rest = &line[start..];
+    let end = rest.find(' ').unwrap_or(rest.len());
+    Some(rest[..end].to_string())
+}
+
+/// Find a free TCP port. Used by cluster helper which manages its own server processes.
 pub fn free_port() -> u16 {
-    use std::sync::atomic::{AtomicU16, Ordering};
-    static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
-
-    loop {
-        // First call: seed from an OS-assigned port to get a random base
-        let current = NEXT_PORT.load(Ordering::Relaxed);
-        if current == 0 {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("bind to free port");
-            let base = listener.local_addr().unwrap().port();
-            // Try to set the base; if another thread beat us, just use their value
-            let _ = NEXT_PORT.compare_exchange(0, base, Ordering::Relaxed, Ordering::Relaxed);
-            drop(listener);
-        }
-
-        let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
-        if port == 0 {
-            continue; // race on init, retry
-        }
-
-        // Verify the port is actually free before returning
-        if TcpListener::bind(format!("127.0.0.1:{port}")).is_ok() {
-            return port;
-        }
-        // Port in use by something else, try next
-    }
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to free port");
+    listener.local_addr().unwrap().port()
 }
 
 /// Resolve the path to the fila-server binary.
