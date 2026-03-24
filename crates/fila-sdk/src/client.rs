@@ -659,8 +659,7 @@ impl StreamManager {
         match response {
             Ok(resp) => {
                 let mut resp_stream = resp.into_inner();
-                let pending: Arc<Mutex<PendingMap>> =
-                    Arc::new(Mutex::new(HashMap::new()));
+                let pending: Arc<Mutex<PendingMap>> = Arc::new(Mutex::new(HashMap::new()));
                 let pending_clone = Arc::clone(&pending);
 
                 // Spawn a reader task that reads responses and resolves pending oneshots.
