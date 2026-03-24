@@ -1,6 +1,6 @@
 # Story 22.2: DRR Scheduler O(1) Key Selection
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
