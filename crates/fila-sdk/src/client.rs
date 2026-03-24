@@ -446,9 +446,7 @@ impl FilaClient {
                     None => ConnectOptions::new(leader_url),
                 };
                 // Connect to leader without auto-batching (consume doesn't need it).
-                let mut leader_opts_no_batch = leader_opts;
-                leader_opts_no_batch.batch_config = None;
-                match Self::connect_with_options(leader_opts_no_batch).await {
+                match Self::connect_with_options(leader_opts).await {
                     Ok(leader_client) => leader_client
                         .inner
                         .clone()
