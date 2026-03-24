@@ -308,25 +308,21 @@ impl FilaService for HotPathService {
                         payload: req.payload,
                     };
 
-                    let result = enqueue_single_standalone(
-                        &caller, &broker, &cluster, enqueue_req,
-                    )
-                    .await;
+                    let result =
+                        enqueue_single_standalone(&caller, &broker, &cluster, enqueue_req).await;
 
                     let response = match result {
                         Ok(msg_id) => StreamEnqueueResponse {
                             sequence_number: seq,
-                            result: Some(
-                                fila_proto::stream_enqueue_response::Result::MessageId(msg_id),
-                            ),
+                            result: Some(fila_proto::stream_enqueue_response::Result::MessageId(
+                                msg_id,
+                            )),
                         },
                         Err(status) => StreamEnqueueResponse {
                             sequence_number: seq,
-                            result: Some(
-                                fila_proto::stream_enqueue_response::Result::Error(
-                                    status.message().to_string(),
-                                ),
-                            ),
+                            result: Some(fila_proto::stream_enqueue_response::Result::Error(
+                                status.message().to_string(),
+                            )),
                         },
                     };
 
