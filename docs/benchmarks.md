@@ -302,42 +302,44 @@ Results are written to `bench/competitive/results/bench-{broker}.json`.
 
 ### Workloads
 
-Each broker is tested with identical workloads:
+Each broker is tested with identical workloads using its recommended high-throughput configuration:
 
-| Workload | Description |
-|----------|-------------|
-| **Throughput** | Sustained message production rate (64B, 1KB, 64KB payloads) |
-| **Latency** | Produce-consume round-trip (p50/p95/p99) |
-| **Lifecycle** | Full enqueue-consume-ack cycle (1,000 messages) |
-| **Multi-producer** | 3 concurrent producers aggregate throughput |
-| **Resources** | CPU and memory during benchmark |
+| Workload | Description | Batching |
+|----------|-------------|----------|
+| **Throughput** | Sustained message production rate (64B, 1KB, 64KB payloads) | Each broker's recommended batching |
+| **Latency** | Produce-consume round-trip (p50/p95/p99) | Unbatched |
+| **Lifecycle** | Full enqueue-consume-ack cycle (1,000 messages) | Unbatched |
+| **Multi-producer** | 3 concurrent producers aggregate throughput | Each broker's recommended batching |
+| **Resources** | CPU and memory during benchmark | — |
 
 ### Broker configurations
 
-| Broker | Version | Mode | Key settings |
-|--------|---------|------|-------------|
-| Fila | `4535e4a` | Docker container | DRR scheduler, RocksDB storage |
-| Kafka | 3.9 | KRaft (no ZooKeeper) | 1 partition, `linger.ms=5`, `batch.num.messages=1000` |
-| RabbitMQ | 3.13 | Quorum queues | Durable, manual ack |
-| NATS | 2.11 | JetStream | File storage, pull-subscribe, explicit ack |
+| Broker | Version | Mode | Throughput batching |
+|--------|---------|------|---------------------|
+| Fila | latest | Docker container, DRR scheduler | `BatchMode::Auto` (4 concurrent producers) |
+| Kafka | 3.9 | KRaft (no ZooKeeper), 1 partition | `linger.ms=5`, `batch.num.messages=1000` |
+| RabbitMQ | 3.13 | Quorum queues, durable, manual ack | Per-message (no client-side batching) |
+| NATS | 2.11 | JetStream, file storage, pull-subscribe | Per-message (no client-side batching) |
 
-All competitors use production-recommended settings, not development defaults. All brokers use native Rust client libraries (`rdkafka`, `lapin`, `async-nats`).
+All competitors use production-recommended settings, not development defaults. All brokers use native Rust client libraries (`rdkafka`, `lapin`, `async-nats`). Throughput scenarios use each broker's recommended batching strategy for a fair comparison. Lifecycle scenarios are unbatched for all brokers.
 
 Run `make bench-competitive` on your hardware to generate comparison tables.
 
 ### Results
 
-> These are reference numbers from a single run. Your results will vary by hardware. All brokers run in Docker containers.
+> These are reference numbers from a single run. Your results will vary by hardware. All brokers run in Docker containers. Throughput uses each broker's recommended batching; lifecycle is unbatched.
 
-#### Throughput (messages/second)
+#### Throughput (messages/second, batched)
 
 <!-- bench:competitive-throughput-start -->
 | Payload | Fila | Kafka | RabbitMQ | NATS |
 |---------|-----:|------:|---------:|-----:|
-| 64B | 2,845 | 1,473,379 | 36,141 | 394,950 |
-| 1KB | 2,637 | 143,278 | 38,321 | 137,748 |
-| 64KB | 759 | 2,335 | 2,379 | 2,426 |
+| 64B | — | — | — | — |
+| 1KB | — | — | — | — |
+| 64KB | — | — | — | — |
 <!-- bench:competitive-throughput-end -->
+
+> Previous unbatched results (Fila 2,637 msg/s vs Kafka 143,278 msg/s at 1KB) were an unfair comparison: Kafka used `linger.ms=5` batching while Fila sent 1 message per RPC. The updated benchmark uses each broker's recommended batching.
 
 #### End-to-end latency (1KB payload)
 
@@ -349,7 +351,7 @@ Run `make bench-competitive` on your hardware to generate comparison tables.
 | p99 | 4.79 ms | 105.30 ms | 5.59 ms | 0.79 ms |
 <!-- bench:competitive-latency-end -->
 
-#### Lifecycle throughput (enqueue + consume + ack, 1KB)
+#### Lifecycle throughput (enqueue + consume + ack, 1KB, unbatched)
 
 <!-- bench:competitive-lifecycle-start -->
 | Broker | msg/s |

@@ -32,6 +32,23 @@ This benchmark suite compares Fila against Kafka, RabbitMQ, and NATS on queue-or
 - **Consumer**: Pull-subscribe with explicit ack
 - **Why JetStream**: Required for persistent messaging, message acknowledgment, and replay — features needed for queue-style workloads
 
+## Batching & Fair Comparison
+
+Each broker uses its recommended high-throughput configuration for **throughput** and **multi-producer** scenarios. This is how real users deploy these systems — comparing unbatched Fila against batched Kafka would be misleading.
+
+| Broker | Throughput batching | Lifecycle batching | Rationale |
+|--------|--------------------|--------------------|-----------|
+| **Fila** | `BatchMode::Auto` (Nagle-style, 4 concurrent producers) | Unbatched (`BatchMode::Disabled`) | Auto-batching is the SDK default; concurrent producers trigger batch accumulation |
+| **Kafka** | `linger.ms=5`, `batch.num.messages=1000` | Unbatched (`linger.ms=0`, `batch.num.messages=1`) | Standard Kafka high-throughput tuning |
+| **RabbitMQ** | Per-message `basic_publish` | Per-message | RabbitMQ's AMQP protocol has no client-side batching equivalent |
+| **NATS** | Per-message `publish` | Per-message | NATS JetStream has no linger-style batching |
+
+**Why throughput uses batching:** Throughput benchmarks answer "how fast can I produce messages?" Using each broker's recommended client configuration reflects the real-world performance developers will see.
+
+**Why lifecycle stays unbatched:** The lifecycle benchmark (enqueue→consume→ack) measures per-message round-trip latency. Batching would mask the true per-message overhead. All brokers use unbatched, serial operations for this scenario.
+
+All results include a `batching` metadata field in the JSON output indicating the strategy used (e.g., `"auto"`, `"none"`, `"linger_ms=5"`).
+
 ## Workloads
 
 ### 1. Throughput (Producer)
@@ -39,26 +56,31 @@ This benchmark suite compares Fila against Kafka, RabbitMQ, and NATS on queue-or
 Measures sustained message production rate over a fixed time window.
 
 - **Message sizes**: 64B, 1KB, 64KB
-- **Warmup**: 1 second (discarded)
-- **Measurement window**: 3 seconds
+- **Producers**: 4 concurrent producers for Fila (triggers auto-batching), 1 producer for Kafka (linger.ms handles batching), 1 for RabbitMQ/NATS
+- **Batching**: Each broker uses its recommended batching (see table above)
+- **Warmup**: 5 seconds (discarded)
+- **Measurement window**: 30 seconds (configurable via `FILA_BENCH_DURATION_SECS`)
 - **Metric**: messages/second
 
 ### 2. End-to-End Latency
 
-Measures round-trip time: produce a single message, consume it, measure the interval.
+Measures round-trip time: produce a message, consume it, measure the interval.
 
 - **Message size**: 1KB
-- **Samples**: 100
-- **Metrics**: p50, p95, p99 (milliseconds)
-- **Method**: Sequential produce→consume pairs (not pipelined)
+- **Batching**: Unbatched for all brokers (latency-focused)
+- **Warmup**: 5 seconds (discarded)
+- **Measurement window**: 30 seconds
+- **Metrics**: p50, p95, p99, p99.9, p99.99, max (milliseconds)
+- **Method**: Concurrent producer/consumer with embedded nanosecond timestamps
 
 ### 3. Multi-Producer Throughput
 
 Measures sustained aggregate production rate from multiple concurrent producers.
 
-- **Producers**: 3 concurrent producers (threads for Kafka, async tasks for RabbitMQ/NATS)
+- **Producers**: 3 concurrent producers (threads for Kafka, async tasks for others)
 - **Message size**: 1KB
-- **Measurement window**: 3 seconds
+- **Batching**: Each broker uses its recommended batching (see table above)
+- **Measurement window**: 30 seconds
 - **Metric**: aggregate messages/second across all producers
 
 ### 4. Lifecycle Throughput (Produce → Consume → Ack)
@@ -66,6 +88,7 @@ Measures sustained aggregate production rate from multiple concurrent producers.
 Measures the full message lifecycle: pre-load 1,000 messages, then consume and acknowledge each one.
 
 - **Message size**: 1KB
+- **Batching**: Unbatched for all brokers — serial enqueue→consume→ack
 - **Messages**: 1,000
 - **Metric**: messages/second for the consume+ack phase
 
