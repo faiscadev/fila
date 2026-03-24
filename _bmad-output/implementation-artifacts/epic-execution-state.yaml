@@ -1,6 +1,7 @@
 epic: "Epic 24: Tier 3 — Zero-Copy & Scheduler Sharding"
 baseBranch: main
 startedAt: "2026-03-24"
+completedAt: "2026-03-24"
 stories:
   - id: "24.1"
     title: "Zero-Copy Protobuf Passthrough & Key Encoding"
@@ -11,9 +12,13 @@ stories:
     dependsOn: []
   - id: "24.2"
     title: "Scheduler Sharding"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/24.2-scheduler-sharding"
+    pr: 101
     dependsOn: ["24.1"]
+summary:
+  total: 2
+  completed: 2
+  skipped: 0
 skippedIssues: []
