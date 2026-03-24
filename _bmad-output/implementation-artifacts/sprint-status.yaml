@@ -239,16 +239,15 @@ development_status:
   epic-25: deferred
   epic-25-retrospective: optional
 
-  # Epic 26: SDK Batch Operations & Auto-Batching
-  # Bring external SDKs to batch parity + deliver auto-batching (linger_ms).
-  # Prerequisite: Epic 23 complete (done).
-  epic-26: in-progress
-  26-1-rust-sdk-auto-batching-linger-ms-timer: review
-  26-2-go-sdk-batch-operations-auto-batching: review
-  26-3-python-sdk-batch-operations-auto-batching: review
-  26-4-javascript-sdk-batch-operations-auto-batching: review
-  26-5-ruby-sdk-batch-operations-auto-batching: review
-  26-6-java-sdk-batch-operations-auto-batching: review
+  # Epic 26: SDK Batch Operations & Smart Batching
+  # All SDKs at batch parity with BatchMode (Auto/Linger/Disabled).
+  epic-26: done
+  26-1-rust-sdk-auto-batching-linger-ms-timer: done
+  26-2-go-sdk-batch-operations-auto-batching: done
+  26-3-python-sdk-batch-operations-auto-batching: done
+  26-4-javascript-sdk-batch-operations-auto-batching: done
+  26-5-ruby-sdk-batch-operations-auto-batching: done
+  26-6-java-sdk-batch-operations-auto-batching: done
   epic-26-retrospective: optional
 
   # Epic 27: Profiling Infrastructure
