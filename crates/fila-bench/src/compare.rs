@@ -37,12 +37,13 @@ fn higher_is_better(result: &BenchResult) -> bool {
     let name = result.name.as_str();
     let unit = result.unit.as_str();
 
-    // Throughput metrics: higher is better
+    // Throughput and speedup metrics: higher is better
     if unit == "msg/s"
         || unit == "MB/s"
         || unit == "ops/s"
         || unit == "sel/s"
         || unit == "exec/s"
+        || unit == "x"
     {
         return true;
     }

@@ -102,6 +102,87 @@ Memory usage is dominated by the RocksDB buffer pool, not message count.
 
 Compaction has no measurable negative impact on tail latency in single-node benchmarks.
 
+## Batch benchmarks
+
+Batch benchmarks measure throughput and latency of the `BatchEnqueue` RPC and compare it against single-message enqueue. These benchmarks are gated behind `FILA_BENCH_BATCH=1` because they exercise batch-specific code paths and take additional time.
+
+Enable with `FILA_BENCH_BATCH=1`:
+
+```bash
+FILA_BENCH_BATCH=1 cargo bench -p fila-bench --bench system
+```
+
+### BatchEnqueue throughput
+
+Measures `BatchEnqueue` RPC throughput at various batch sizes with 1KB messages. Reports both messages/s and batches/s.
+
+| Batch size | Metric |
+|-----------:|--------|
+| 1 | msg/s, batches/s |
+| 10 | msg/s, batches/s |
+| 50 | msg/s, batches/s |
+| 100 | msg/s, batches/s |
+| 500 | msg/s, batches/s |
+
+### Batch size scaling
+
+Measures throughput as a function of batch size (1 to 1000) to identify the point of diminishing returns.
+
+| Batch size | Metric |
+|-----------:|--------|
+| 1 | msg/s |
+| 5 | msg/s |
+| 10 | msg/s |
+| 25 | msg/s |
+| 50 | msg/s |
+| 100 | msg/s |
+| 250 | msg/s |
+| 500 | msg/s |
+| 1000 | msg/s |
+
+### Auto-batching latency
+
+Measures end-to-end latency (batch enqueue to consume) at various producer concurrency levels. Simulates client-side auto-batching by accumulating messages and flushing via `batch_enqueue` at batch size 50.
+
+| Producers | Metrics |
+|----------:|---------|
+| 1 | p50, p95, p99, p99.9, p99.99, max |
+| 10 | p50, p95, p99, p99.9, p99.99, max |
+| 50 | p50, p95, p99, p99.9, p99.99, max |
+
+### Batched vs unbatched comparison
+
+Runs identical workloads (3,000 messages) with three approaches and reports throughput and speedup ratios.
+
+| Mode | Description |
+|------|-------------|
+| **Unbatched** | Single `enqueue()` per message |
+| **Explicit batch** | `batch_enqueue()` with batch size 100 |
+| **Auto-batch** | Client-side accumulation, flush at batch size 100 |
+
+Speedup ratios are computed relative to the unbatched baseline.
+
+### Delivery batching throughput
+
+Measures consumer throughput with varying concurrent consumer counts. Messages are pre-loaded and continuously produced via `batch_enqueue`.
+
+| Consumers | Metric |
+|----------:|--------|
+| 1 | msg/s |
+| 10 | msg/s |
+| 100 | msg/s |
+
+### Concurrent producer batching
+
+Measures aggregate throughput with multiple concurrent producers all using `batch_enqueue` (batch size 100).
+
+| Producers | Metric |
+|----------:|--------|
+| 1 | msg/s |
+| 5 | msg/s |
+| 10 | msg/s |
+| 50 | msg/s |
+
 ## Subsystem benchmarks
 
 Subsystem benchmarks isolate and measure each internal component independently, bypassing the full server stack. This helps identify where time is spent and which component dominates in different workloads.
