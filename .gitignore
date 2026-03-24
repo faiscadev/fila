@@ -21,7 +21,7 @@
 /book/
 
 # Benchmark output
-bench-results.json
+bench-results*.json
 bench/competitive/results/
 
 # Flamegraph output
