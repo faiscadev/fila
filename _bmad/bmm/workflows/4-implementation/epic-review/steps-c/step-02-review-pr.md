@@ -231,6 +231,9 @@ After CI checks pass, examine the Cubic check output. It shows:
 7. **Go back to GATE LOOP START**
 
 **If CI passes AND no Cubic findings (or 0 issues):**
+- **Before exiting:** Verify every Cubic comment has a reply. List all Cubic comments:
+  `gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --jq '[.[] | select(.user.login == "cubic-dev-ai[bot]")]'`
+  For each Cubic comment, confirm it has at least one non-Cubic reply (either "Addressed in [commit]" or "Not addressing: [reason]"). If any Cubic comment lacks a reply, reply to it now before proceeding.
 - Gate passes. Exit loop.
 
 #### 5e. Report Back

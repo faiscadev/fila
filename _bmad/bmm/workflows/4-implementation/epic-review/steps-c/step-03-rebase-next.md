@@ -183,13 +183,21 @@ After CI checks pass, examine the Cubic check output. It shows:
 
 **If CI fails OR Cubic has new findings:**
 1. Read the failure details or Cubic findings
-2. Fix the issues in code
-3. Add regression tests for Cubic findings where appropriate
-4. Commit: `fix: address CI/Cubic findings for story {storyId} after rebase`
-5. Push: `git push origin {next-branch}`
-6. **Go back to GATE LOOP START**
+2. Reply to EVERY Cubic review comment on the PR BEFORE pushing fixes:
+   - For addressed comments: reply with "Addressed in [commit hash]"
+   - For declined comments: reply with "Not addressing: [reason]"
+   - List Cubic inline comments: `gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --jq '[.[] | select(.user.login == "cubic-dev-ai[bot]")]'`
+   - Reply to each: `gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies -f body="..."`
+3. Fix the issues in code
+4. Add regression tests for Cubic findings where appropriate
+5. Commit: `fix: address CI/Cubic findings for story {storyId} after rebase`
+6. Push: `git push origin {next-branch}`
+7. **Go back to GATE LOOP START**
 
 **If CI passes AND no Cubic findings (or 0 issues):**
+- **Before exiting:** Verify every Cubic comment has a reply. List all Cubic comments:
+  `gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --jq '[.[] | select(.user.login == "cubic-dev-ai[bot]")]'`
+  For each Cubic comment, confirm it has at least one non-Cubic reply (either "Addressed in [commit]" or "Not addressing: [reason]"). If any Cubic comment lacks a reply, reply to it now before proceeding.
 - Gate passes. Exit loop.
 
 ### 7. Update State and Proceed

@@ -150,14 +150,22 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/comments
 ```
 
 **If CI passes AND no unresolved review feedback (including Cubic):**
+- **Before exiting:** Verify every Cubic comment has a reply. List all Cubic comments:
+  `gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --jq '[.[] | select(.user.login == "cubic-dev-ai[bot]")]'`
+  For each Cubic comment, confirm it has at least one non-Cubic reply (either "Addressed in [commit]" or "Not addressing: [reason]"). If any Cubic comment lacks a reply, reply to it now before proceeding.
 - Exit loop
 - Proceed to step 5
 
 **If CI fails OR automated review has feedback:**
 1. Read the failure details or review comments
-2. Fix the issues in code
-3. Commit and push
-4. **Go back to LOOP START** (re-check CI and reviews)
+2. Reply to EVERY Cubic review comment on the PR BEFORE pushing fixes:
+   - For addressed comments: reply with "Addressed in [commit hash]"
+   - For declined comments: reply with "Not addressing: [reason]"
+   - List Cubic inline comments: `gh api repos/{owner}/{repo}/pulls/{pr-number}/comments --jq '[.[] | select(.user.login == "cubic-dev-ai[bot]")]'`
+   - Reply to each: `gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies -f body="..."`
+3. Fix the issues in code
+4. Commit and push
+5. **Go back to LOOP START** (re-check CI and reviews)
 
 ### 5. Update State and Auto-Proceed
 
