@@ -121,13 +121,19 @@ impl BenchReport {
 /// without importing compare internals.
 fn gab_higher_is_better(name: &str, unit: &str) -> bool {
     // Throughput metrics: higher is better
-    if unit == "msg/s" || unit == "MB/s" {
+    if unit == "msg/s"
+        || unit == "MB/s"
+        || unit == "ops/s"
+        || unit == "sel/s"
+        || unit == "exec/s"
+    {
         return true;
     }
 
-    // Latency, overhead, deviation, memory: lower is better
+    // Latency, overhead, deviation, memory, per-message time: lower is better
     if unit == "ms"
         || unit == "us"
+        || unit == "ns/msg"
         || unit == "% deviation"
         || unit == "%"
         || unit == "MB"
@@ -250,11 +256,15 @@ mod tests {
         // Higher is better
         assert!(gab_higher_is_better("anything", "msg/s"));
         assert!(gab_higher_is_better("anything", "MB/s"));
+        assert!(gab_higher_is_better("anything", "ops/s"));
+        assert!(gab_higher_is_better("anything", "sel/s"));
+        assert!(gab_higher_is_better("anything", "exec/s"));
         assert!(gab_higher_is_better("custom_throughput_metric", "widgets"));
 
         // Lower is better
         assert!(!gab_higher_is_better("anything", "ms"));
         assert!(!gab_higher_is_better("anything", "us"));
+        assert!(!gab_higher_is_better("anything", "ns/msg"));
         assert!(!gab_higher_is_better("anything", "%"));
         assert!(!gab_higher_is_better("anything", "% deviation"));
         assert!(!gab_higher_is_better("anything", "MB"));

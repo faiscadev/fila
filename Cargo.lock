@@ -1238,17 +1238,25 @@ version = "0.1.0"
 dependencies = [
  "async-nats",
  "base64 0.22.1",
+ "bytes",
+ "fila-core",
+ "fila-proto",
  "fila-sdk",
  "futures-util",
  "hdrhistogram",
  "lapin",
+ "mlua",
+ "prost",
+ "prost-types",
  "rdkafka",
+ "rocksdb",
  "serde",
  "serde_json",
  "sysinfo",
  "tempfile",
  "tokio",
  "tokio-stream",
+ "uuid",
 ]
 
 [[package]]
