@@ -120,12 +120,13 @@ impl BenchReport {
 /// operates on raw name/unit strings so it can be used from the report module
 /// without importing compare internals.
 fn gab_higher_is_better(name: &str, unit: &str) -> bool {
-    // Throughput metrics: higher is better
+    // Throughput and speedup metrics: higher is better
     if unit == "msg/s"
         || unit == "MB/s"
         || unit == "ops/s"
         || unit == "sel/s"
         || unit == "exec/s"
+        || unit == "x"
     {
         return true;
     }
@@ -259,6 +260,7 @@ mod tests {
         assert!(gab_higher_is_better("anything", "ops/s"));
         assert!(gab_higher_is_better("anything", "sel/s"));
         assert!(gab_higher_is_better("anything", "exec/s"));
+        assert!(gab_higher_is_better("anything", "x"));
         assert!(gab_higher_is_better("custom_throughput_metric", "widgets"));
 
         // Lower is better
