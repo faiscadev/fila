@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "29.2"
     title: "Streaming Enqueue RPC (Server-Side)"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/29.2-streaming-enqueue-rpc"
     pr: null
     dependsOn: []
   - id: "29.3"
