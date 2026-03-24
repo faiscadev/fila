@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// Per-queue DRR scheduling state.
 #[derive(Default)]
 struct DrrQueueState {
-    /// Active fairness keys in round-robin order.
+    /// Active fairness keys in round-robin order (canonical order for replenish).
     active_keys: VecDeque<String>,
     /// Set for O(1) membership checks.
     active_set: HashSet<String>,
@@ -12,8 +12,9 @@ struct DrrQueueState {
     deficits: HashMap<String, i64>,
     /// Weight per fairness key (default 1).
     weights: HashMap<String, u32>,
-    /// Current position in the round-robin traversal.
-    round_position: usize,
+    /// Keys with positive deficit, in round-robin delivery order.
+    /// Replaces the O(n) `round_position` scan with O(1) front pop.
+    eligible_keys: VecDeque<String>,
     /// Whether a round is currently active (deficits have been allocated
     /// but not yet exhausted). Prevents `start_new_round` from being
     /// called multiple times before the current round finishes.
@@ -79,31 +80,22 @@ impl DrrScheduler {
         };
 
         if state.active_set.remove(fairness_key) {
-            // Find and remove by index so we can adjust round_position correctly
-            if let Some(removed_idx) = state.active_keys.iter().position(|k| k == fairness_key) {
-                state.active_keys.remove(removed_idx);
-                state.deficits.remove(fairness_key);
-                state.weights.remove(fairness_key);
+            if let Some(idx) = state.active_keys.iter().position(|k| k == fairness_key) {
+                state.active_keys.remove(idx);
+            }
+            state.deficits.remove(fairness_key);
+            state.weights.remove(fairness_key);
+            state.eligible_keys.retain(|k| k != fairness_key);
 
-                if state.active_keys.is_empty() {
-                    state.round_position = 0;
-                    state.round_active = false;
+            if state.active_keys.is_empty() {
+                state.round_active = false;
+                state.burst_delivered = 0;
+                state.current_burst_key = None;
+            } else {
+                // Reset burst if the removed key was the current burst key
+                if state.current_burst_key.as_deref() == Some(fairness_key) {
                     state.burst_delivered = 0;
                     state.current_burst_key = None;
-                } else {
-                    if removed_idx < state.round_position {
-                        // Key was before current position — shift back to avoid skipping
-                        state.round_position -= 1;
-                    } else if state.round_position >= state.active_keys.len() {
-                        // Position overshot the end — wrap to start
-                        state.round_position = 0;
-                    }
-
-                    // Reset burst if the removed key was the current burst key
-                    if state.current_burst_key.as_deref() == Some(fairness_key) {
-                        state.burst_delivered = 0;
-                        state.current_burst_key = None;
-                    }
                 }
             }
         }
@@ -112,47 +104,41 @@ impl DrrScheduler {
     /// Return the next fairness key that has positive deficit in the current
     /// round. This is an idempotent peek — calling it multiple times without
     /// `consume_deficit` returns the same key. State advancement (burst
-    /// tracking, round position) happens in `consume_deficit`.
+    /// tracking, eligible deque rotation) happens in `consume_deficit`.
     ///
     /// Returns `None` when the round is exhausted (all remaining keys have
     /// non-positive deficit), and marks the round as inactive so a new
     /// round can be started.
+    ///
+    /// O(1) — reads from the front of the eligible deque instead of scanning
+    /// all active keys.
     pub fn next_key(&mut self, queue_id: &str) -> Option<String> {
         let state = self.queues.get_mut(queue_id)?;
-        let len = state.active_keys.len();
-        if len == 0 {
-            return None;
+
+        if let Some(key) = state.eligible_keys.front() {
+            return Some(key.clone());
         }
 
-        // Scan from round_position for the first key with positive deficit.
-        // Does NOT advance state — consume_deficit handles burst progression.
-        let start = state.round_position;
-        for i in 0..len {
-            let idx = (start + i) % len;
-            let key = &state.active_keys[idx];
-            let deficit = state.deficits.get(key).copied().unwrap_or(0);
-            if deficit > 0 {
-                return Some(key.clone());
-            }
-        }
-
-        // Round exhausted — all keys have non-positive deficit
+        // Eligible deque empty — round exhausted
         state.round_active = false;
         None
     }
 
     /// Decrement the deficit of a fairness key by 1 after delivering a message.
     /// Also tracks burst progression: each key delivers `weight` messages
-    /// per turn before `round_position` advances to the next key. This
-    /// ensures proportional interleaving within any delivery window.
+    /// per turn before yielding to the next eligible key. This ensures
+    /// proportional interleaving within any delivery window.
     pub fn consume_deficit(&mut self, queue_id: &str, fairness_key: &str) {
         let Some(state) = self.queues.get_mut(queue_id) else {
             return;
         };
 
-        if let Some(d) = state.deficits.get_mut(fairness_key) {
+        let remaining = if let Some(d) = state.deficits.get_mut(fairness_key) {
             *d -= 1;
-        }
+            *d
+        } else {
+            0
+        };
 
         // Track burst: if this is a different key than the current burst,
         // reset the burst counter.
@@ -163,14 +149,26 @@ impl DrrScheduler {
             state.burst_delivered += 1;
         }
 
-        // When burst reaches the key's weight, advance to the next key.
+        // Rotate when either: the burst completes, or the key's deficit is
+        // exhausted (even mid-burst). The old linear-scan `next_key` would
+        // skip keys with non-positive deficit; we maintain the same behavior
+        // by eagerly removing them from the eligible deque.
         let weight = state.weights.get(fairness_key).copied().unwrap_or(1);
-        if state.burst_delivered >= weight {
+        let burst_done = state.burst_delivered >= weight;
+        let deficit_exhausted = remaining <= 0;
+
+        if burst_done || deficit_exhausted {
             state.burst_delivered = 0;
             state.current_burst_key = None;
-            // Advance round_position past the current key
-            if let Some(idx) = state.active_keys.iter().position(|k| k == fairness_key) {
-                state.round_position = (idx + 1) % state.active_keys.len();
+
+            // Remove current key from front of eligible deque
+            if state.eligible_keys.front().map(|k| k.as_str()) == Some(fairness_key) {
+                state.eligible_keys.pop_front();
+            }
+
+            // Re-append at back only if it still has positive deficit
+            if remaining > 0 {
+                state.eligible_keys.push_back(fairness_key.to_string());
             }
         }
     }
@@ -178,7 +176,7 @@ impl DrrScheduler {
     /// Drain all remaining deficit for a fairness key (set to 0).
     /// Used when a key is throttled to skip all its remaining deficit in O(1)
     /// rather than consuming one at a time. Also resets burst state and
-    /// advances round_position past the drained key.
+    /// removes the key from the eligible deque.
     pub fn drain_deficit(&mut self, queue_id: &str, fairness_key: &str) {
         let Some(state) = self.queues.get_mut(queue_id) else {
             return;
@@ -191,12 +189,8 @@ impl DrrScheduler {
             state.burst_delivered = 0;
             state.current_burst_key = None;
         }
-        // Advance past the drained key so next_key skips it
-        if !state.active_keys.is_empty() {
-            if let Some(idx) = state.active_keys.iter().position(|k| k == fairness_key) {
-                state.round_position = (idx + 1) % state.active_keys.len();
-            }
-        }
+        // Remove from eligible deque so next_key skips it
+        state.eligible_keys.retain(|k| k != fairness_key);
     }
 
     /// Start a new DRR round for a queue: refill deficit for all active keys
@@ -213,13 +207,18 @@ impl DrrScheduler {
             return false;
         }
 
+        // Rebuild eligible deque: replenish deficits and include keys with
+        // positive deficit in active_keys order.
+        state.eligible_keys.clear();
         for key in &state.active_keys {
             let weight = state.weights.get(key).copied().unwrap_or(1);
             let deficit = state.deficits.entry(key.clone()).or_insert(0);
             *deficit += (weight as i64) * (self.quantum as i64);
+            if *deficit > 0 {
+                state.eligible_keys.push_back(key.clone());
+            }
         }
 
-        state.round_position = 0;
         state.round_active = true;
         state.burst_delivered = 0;
         state.current_burst_key = None;
