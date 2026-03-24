@@ -2,7 +2,7 @@ mod client;
 mod error;
 
 pub use client::{
-    BatchConfig, BatchEnqueueResult, ConnectOptions, ConsumeMessage, EnqueueMessage, FilaClient,
+    BatchEnqueueResult, BatchMode, ConnectOptions, ConsumeMessage, EnqueueMessage, FilaClient,
 };
 pub use error::{
     AckError, BatchEnqueueError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError,
