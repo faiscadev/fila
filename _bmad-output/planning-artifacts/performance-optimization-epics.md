@@ -343,42 +343,48 @@ Replace RocksDB with an append-only log-segment storage engine tailored to Fila'
 
 ---
 
-## Epic 26: SDK Batch Operations & Auto-Batching
+## Epic 26: SDK Batch Operations & Smart Batching
 
-Bring all 5 external SDKs (Go, Python, JS, Ruby, Java) to feature parity with the Rust SDK for batch operations added in Epic 23. The server already supports `BatchEnqueue` RPC and delivery batching — the external SDKs simply don't expose these capabilities yet. Also deliver the auto-batching with `linger_ms` timer that was deferred from Story 23.1 — the `BatchConfig` struct exists in the Rust SDK but the client-side accumulation + timer-based flush is not wired into `enqueue()`.
+Bring all 5 external SDKs (Go, Python, JS, Ruby, Java) to feature parity with the Rust SDK for batch operations added in Epic 23. The server already supports `BatchEnqueue` RPC and delivery batching — the external SDKs simply don't expose these capabilities yet. Also deliver smart opportunistic batching that works by default with zero configuration.
 
 Without this epic, the primary throughput lever (batching) is only available to Rust SDK users. All 5 external SDKs are stuck at single-message-per-RPC throughput.
 
 **Prerequisites:** Epic 23 (BatchEnqueue RPC, delivery batching on server), Epic 16 (all SDKs have TLS + auth parity)
 **Pattern:** One story per SDK (proven in Epic 9 and Epic 16.2)
 
-### Story 26.1: Rust SDK Auto-Batching (linger_ms Timer)
+**Batching design (established in Story 26.1, all SDKs must follow):**
+
+All SDKs expose a `BatchMode` with three modes:
+- **Auto** (default): Opportunistic batching. A background batcher drains whatever messages are available in its channel and flushes without blocking. Multiple RPCs can be in flight concurrently. At low load each message is sent individually; at high load messages naturally cluster into batches. Zero config, zero added latency.
+- **Linger**: Timer-based forced batching with explicit `linger_ms` and `batch_size`.
+- **Disabled**: No batching — each `enqueue()` is a separate single-message RPC.
+
+### Story 26.1: Rust SDK Smart Batching (BatchMode)
 
 As a developer using the Rust SDK,
-I want `enqueue()` to automatically accumulate messages and flush in batches when auto-batching is configured,
-So that high-throughput producers get batch performance without manually calling `batch_enqueue()`.
+I want `enqueue()` to automatically batch messages when it makes sense, without any configuration,
+So that high-throughput producers get batch performance transparently while low-load producers pay zero latency cost.
 
 **Acceptance Criteria:**
 
-**Given** the Rust SDK has `BatchConfig` with `linger_ms: Option<u64>` and `batch_size: usize` defined but not wired into the `enqueue()` path
-**When** auto-batching is implemented
-**Then** `FilaClient::with_batch_config(config)` enables auto-batching on the client
-**And** when auto-batching is enabled, `enqueue()` buffers messages in a per-queue accumulator instead of sending immediately
-**And** the buffer is flushed via `BatchEnqueue` RPC when either `batch_size` messages are accumulated OR `linger_ms` milliseconds have elapsed since the first message entered the buffer — whichever comes first
-**And** `enqueue()` returns a future that resolves with the message ID when the batch containing that message is flushed and acknowledged by the server
-**And** if the batch flush fails, all buffered `enqueue()` futures resolve with the appropriate error
-**And** partial batch failures (some messages succeed, some fail) propagate individual results to their corresponding `enqueue()` futures
-**And** when auto-batching is disabled (default, `linger_ms = None`), `enqueue()` uses the existing single-message `Enqueue` RPC — zero behavior change
-**And** `batch_enqueue()` remains available for explicit manual batching regardless of auto-batching configuration
-**And** the accumulator is per-client, not per-queue — messages to different queues are batched together in the same `BatchEnqueue` call (the server handles per-queue routing)
-**And** `Drop` on the client flushes any pending buffered messages before disconnecting
-**And** new integration tests verify: auto-batch flush on `batch_size` threshold, auto-batch flush on `linger_ms` timeout, mixed queue batching, partial failure propagation, disabled auto-batching uses single-message RPC
-**And** benchmark comparison: `enqueue()` with auto-batching (`linger_ms=5, batch_size=100`) vs explicit `batch_enqueue()` vs unbatched — auto-batching throughput within 10% of explicit batching
+**Given** the Rust SDK sends each `enqueue()` as a separate RPC
+**When** smart batching is implemented
+**Then** a `BatchMode` enum controls batching: `Auto` (default), `Linger` (explicit timer), `Disabled` (no batching)
+**And** `Auto` uses opportunistic batching: drains available messages from the channel, spawns flush tasks without blocking, multiple concurrent RPCs
+**And** at low load, each message is sent as an individual concurrent RPC with zero added latency
+**And** at high load, messages naturally cluster and get drained together as `BatchEnqueue` calls
+**And** `enqueue()` returns a future that resolves with the message ID when the flush completes
+**And** partial batch failures propagate individual results to their corresponding futures
+**And** `connect()` uses `Auto` by default — existing code gets smart batching without changes
+**And** `BatchMode::Disabled` turns off batching entirely
+**And** `batch_enqueue()` remains available for explicit manual batching regardless of mode
+**And** single-item flushes use `Enqueue` RPC (not `BatchEnqueue`) to preserve exact error semantics
+**And** new integration tests verify: auto idle send, auto load batching, linger flush, disabled mode, partial failure, explicit batch_enqueue coexistence
 
-### Story 26.2: Go SDK Batch Operations & Auto-Batching
+### Story 26.2: Go SDK Batch Operations & Smart Batching
 
 As a developer using the Go SDK,
-I want `BatchEnqueue()`, delivery batching support, and auto-batching configuration,
+I want `BatchEnqueue()`, delivery batching support, and smart batching,
 So that Go producers and consumers achieve the same batch throughput as the Rust SDK.
 
 **Acceptance Criteria:**
@@ -389,20 +395,20 @@ So that Go producers and consumers achieve the same batch throughput as the Rust
 **And** `EnqueueMessage` contains `Queue string`, `Headers map[string]string`, `Payload []byte`
 **And** `BatchEnqueueResult` contains either a `MessageID string` on success or an `Error string` on failure — per-message granularity
 **And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` (repeated field) into individual messages, falling back to the singular `message` field for backward compatibility
-**And** a new `WithBatchConfig(lingerMs int, batchSize int)` dial option enables auto-batching on the client
-**And** when auto-batching is enabled, `Enqueue()` buffers messages and flushes via `BatchEnqueue` when either `batchSize` messages accumulate or `lingerMs` milliseconds elapse
-**And** `Enqueue()` with auto-batching returns the message ID and error after the batch is flushed — callers see the same API surface
-**And** when auto-batching is disabled (default), `Enqueue()` uses the existing single-message RPC
-**And** `Close()` flushes any pending buffered messages before disconnecting
+**And** `BatchMode` is implemented matching the Rust SDK design: `Auto` (default, opportunistic batching via goroutine + channel drain), `Linger` (explicit timer), `Disabled` (no batching)
+**And** `Auto` mode uses a background goroutine that drains the channel and spawns concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `Enqueue()` routes through the batcher by default, returning the message ID after flush completes
+**And** `WithBatchMode(mode)` dial option overrides the default
+**And** `Close()` drains any pending messages before disconnecting
 **And** the PR targets the `fila-go` repository (not pushed directly to main per CLAUDE.md)
-**And** integration tests verify: `BatchEnqueue` correctness (all messages stored with correct IDs), partial failure handling, delivery batch unpacking, auto-batching flush on both thresholds
+**And** integration tests verify: `BatchEnqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
 **And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
-**And** README documents batch operations and auto-batching configuration with examples
+**And** README documents batch operations and `BatchMode` configuration with examples
 
-### Story 26.3: Python SDK Batch Operations & Auto-Batching
+### Story 26.3: Python SDK Batch Operations & Smart Batching
 
 As a developer using the Python SDK,
-I want `batch_enqueue()`, delivery batching support, and auto-batching configuration,
+I want `batch_enqueue()`, delivery batching support, and smart batching,
 So that Python producers and consumers achieve the same batch throughput as the Rust SDK.
 
 **Acceptance Criteria:**
@@ -413,20 +419,20 @@ So that Python producers and consumers achieve the same batch throughput as the 
 **And** `EnqueueMessage` is a dataclass with `queue: str`, `headers: dict[str, str] | None`, `payload: bytes`
 **And** `BatchEnqueueResult` is a dataclass with `message_id: str | None` and `error: str | None` — per-message granularity
 **And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` into individual messages, falling back to the singular `message` field for backward compatibility
-**And** auto-batching is configured via `FilaClient(auto_batch_linger_ms=5, auto_batch_size=100)` constructor parameters
-**And** when auto-batching is enabled, `enqueue()` buffers messages in a background asyncio task (or threading.Timer for sync client) and flushes via `batch_enqueue` when either `auto_batch_size` messages accumulate or `auto_batch_linger_ms` milliseconds elapse
-**And** `enqueue()` with auto-batching returns the message ID after the batch is flushed — callers see the same API surface
-**And** when auto-batching is disabled (default), `enqueue()` uses the existing single-message RPC
-**And** `close()` flushes any pending buffered messages before disconnecting
+**And** `BatchMode` is implemented matching the Rust SDK design: `AUTO` (default, opportunistic batching via background thread + queue drain), `LINGER` (explicit timer), `DISABLED` (no batching)
+**And** `AUTO` mode uses a background thread that drains a `queue.Queue` and spawns concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `enqueue()` routes through the batcher by default, returning the message ID after flush completes
+**And** `FilaClient(batch_mode=BatchMode.DISABLED)` turns off batching
+**And** `close()` drains any pending messages before disconnecting
 **And** the PR targets the `fila-python` repository (not pushed directly to main per CLAUDE.md)
-**And** integration tests verify: `batch_enqueue` correctness, partial failure handling, delivery batch unpacking, auto-batching flush on both thresholds
+**And** integration tests verify: `batch_enqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
 **And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
-**And** README documents batch operations and auto-batching configuration with examples
+**And** README documents batch operations and `BatchMode` configuration with examples
 
-### Story 26.4: JavaScript SDK Batch Operations & Auto-Batching
+### Story 26.4: JavaScript SDK Batch Operations & Smart Batching
 
 As a developer using the JavaScript/Node.js SDK,
-I want `batchEnqueue()`, delivery batching support, and auto-batching configuration,
+I want `batchEnqueue()`, delivery batching support, and smart batching,
 So that Node.js producers and consumers achieve the same batch throughput as the Rust SDK.
 
 **Acceptance Criteria:**
@@ -437,20 +443,20 @@ So that Node.js producers and consumers achieve the same batch throughput as the
 **And** `EnqueueMessage` has `queue: string`, `headers: Record<string, string>`, `payload: Buffer`
 **And** `BatchEnqueueResult` has `messageId?: string` and `error?: string` — per-message granularity
 **And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` into individual messages, falling back to the singular `message` field for backward compatibility
-**And** auto-batching is configured via `new FilaClient({ autoBatchLingerMs: 5, autoBatchSize: 100 })` constructor options
-**And** when auto-batching is enabled, `enqueue()` buffers messages and flushes via `batchEnqueue` when either `autoBatchSize` messages accumulate or `autoBatchLingerMs` milliseconds elapse (using `setTimeout`)
-**And** `enqueue()` with auto-batching returns a Promise that resolves with the message ID after the batch is flushed
-**And** when auto-batching is disabled (default), `enqueue()` uses the existing single-message RPC
-**And** `close()` flushes any pending buffered messages before disconnecting
+**And** `BatchMode` is implemented matching the Rust SDK design: `'auto'` (default, opportunistic batching via microtask drain), `'linger'` (explicit timer with `setTimeout`), `'disabled'` (no batching)
+**And** `'auto'` mode uses `setImmediate`/microtask to drain queued messages and fire concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `enqueue()` routes through the batcher by default, returning a Promise that resolves after flush
+**And** `new FilaClient({ batchMode: 'disabled' })` turns off batching
+**And** `close()` drains any pending messages before disconnecting
 **And** the PR targets the `fila-js` repository (not pushed directly to main per CLAUDE.md)
-**And** integration tests verify: `batchEnqueue` correctness, partial failure handling, delivery batch unpacking, auto-batching flush on both thresholds
+**And** integration tests verify: `batchEnqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
 **And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
-**And** README documents batch operations and auto-batching configuration with examples
+**And** README documents batch operations and `batchMode` configuration with examples
 
-### Story 26.5: Ruby SDK Batch Operations & Auto-Batching
+### Story 26.5: Ruby SDK Batch Operations & Smart Batching
 
 As a developer using the Ruby SDK,
-I want `batch_enqueue`, delivery batching support, and auto-batching configuration,
+I want `batch_enqueue`, delivery batching support, and smart batching,
 So that Ruby producers and consumers achieve the same batch throughput as the Rust SDK.
 
 **Acceptance Criteria:**
@@ -460,20 +466,20 @@ So that Ruby producers and consumers achieve the same batch throughput as the Ru
 **Then** a new `batch_enqueue(messages)` method is added to the client, accepting an array of `EnqueueMessage` (Struct or hash with `queue:`, `headers:`, `payload:`)
 **And** the method returns an array of `BatchEnqueueResult` with `message_id` (String or nil) and `error` (String or nil) — per-message granularity
 **And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` into individual messages, falling back to the singular `message` field for backward compatibility
-**And** auto-batching is configured via `Fila::Client.new(auto_batch_linger_ms: 5, auto_batch_size: 100)`
-**And** when auto-batching is enabled, `enqueue` buffers messages in a background thread and flushes via `batch_enqueue` when either `auto_batch_size` messages accumulate or `auto_batch_linger_ms` milliseconds elapse
-**And** `enqueue` with auto-batching returns the message ID after the batch is flushed — callers see the same API surface
-**And** when auto-batching is disabled (default), `enqueue` uses the existing single-message RPC
-**And** `close` flushes any pending buffered messages before disconnecting
+**And** `BatchMode` is implemented matching the Rust SDK design: `:auto` (default, opportunistic batching via background thread + Queue drain), `:linger` (explicit timer), `:disabled` (no batching)
+**And** `:auto` mode uses a background thread that drains a `Queue` and spawns concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `enqueue` routes through the batcher by default, returning the message ID after flush completes
+**And** `Fila::Client.new(batch_mode: :disabled)` turns off batching
+**And** `close` drains any pending messages before disconnecting
 **And** the PR targets the `fila-ruby` repository (not pushed directly to main per CLAUDE.md)
-**And** integration tests verify: `batch_enqueue` correctness, partial failure handling, delivery batch unpacking, auto-batching flush on both thresholds
+**And** integration tests verify: `batch_enqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
 **And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
-**And** README documents batch operations and auto-batching configuration with examples
+**And** README documents batch operations and `batch_mode` configuration with examples
 
-### Story 26.6: Java SDK Batch Operations & Auto-Batching
+### Story 26.6: Java SDK Batch Operations & Smart Batching
 
 As a developer using the Java SDK,
-I want `batchEnqueue()`, delivery batching support, and auto-batching configuration,
+I want `batchEnqueue()`, delivery batching support, and smart batching,
 So that Java producers and consumers achieve the same batch throughput as the Rust SDK.
 
 **Acceptance Criteria:**
@@ -484,15 +490,15 @@ So that Java producers and consumers achieve the same batch throughput as the Ru
 **And** `EnqueueMessage` has `String queue`, `Map<String, String> headers`, `byte[] payload`
 **And** `BatchEnqueueResult` has `Optional<String> messageId()` and `Optional<String> error()` — per-message granularity
 **And** the consumer stream handler transparently unpacks batched `ConsumeResponse.messages` into individual messages, falling back to the singular `message` field for backward compatibility
-**And** auto-batching is configured via `FilaClient.builder().autoBatchLingerMs(5).autoBatchSize(100).build()`
-**And** when auto-batching is enabled, `enqueue()` buffers messages in a `ScheduledExecutorService` and flushes via `batchEnqueue` when either `autoBatchSize` messages accumulate or `autoBatchLingerMs` milliseconds elapse
-**And** `enqueue()` with auto-batching returns the message ID after the batch is flushed (blocks or returns `CompletableFuture<String>` depending on sync/async API)
-**And** when auto-batching is disabled (default), `enqueue()` uses the existing single-message RPC
-**And** `close()` flushes any pending buffered messages before disconnecting
+**And** `BatchMode` is implemented matching the Rust SDK design: `AUTO` (default, opportunistic batching via `ExecutorService` + `LinkedBlockingQueue` drain), `LINGER` (explicit timer via `ScheduledExecutorService`), `DISABLED` (no batching)
+**And** `AUTO` mode uses a background thread that drains a `LinkedBlockingQueue` and submits concurrent RPCs — same algorithm as Rust SDK's `run_auto_batcher`
+**And** `enqueue()` routes through the batcher by default, returning the message ID after flush completes (blocks or returns `CompletableFuture<String>`)
+**And** `FilaClient.builder().batchMode(BatchMode.DISABLED).build()` turns off batching
+**And** `close()` drains any pending messages before disconnecting
 **And** the PR targets the `fila-java` repository (not pushed directly to main per CLAUDE.md)
-**And** integration tests verify: `batchEnqueue` correctness, partial failure handling, delivery batch unpacking, auto-batching flush on both thresholds
+**And** integration tests verify: `batchEnqueue` correctness, partial failure handling, delivery batch unpacking, auto mode idle/load behavior
 **And** CI provisions `fila-server` binary so integration tests actually run (not silently skipped)
-**And** README documents batch operations and auto-batching configuration with examples
+**And** README documents batch operations and `BatchMode` configuration with examples
 
 ---
 

@@ -1,108 +1,92 @@
-# Story 26.1: Rust SDK Auto-Batching (linger_ms Timer)
+# Story 26.1: Rust SDK Smart Batching (BatchMode)
 
 Status: review
 
 ## Story
 
 As a developer using the Rust SDK,
-I want `enqueue()` to automatically accumulate messages and flush in batches when auto-batching is configured,
-so that high-throughput producers get batch performance without manually calling `batch_enqueue()`.
+I want `enqueue()` to automatically batch messages when it makes sense, without any configuration,
+so that high-throughput producers get batch performance transparently while low-load producers pay zero latency cost.
 
 ## Acceptance Criteria
 
-1. **Given** `BatchConfig` with `linger_ms` and `batch_size` is defined at `crates/fila-sdk/src/client.rs:33-48` but not wired into `enqueue()`
-   **When** auto-batching is implemented
-   **Then** `FilaClient` accepts `BatchConfig` via a builder method and buffers `enqueue()` calls when auto-batching is enabled
+1. **Given** the Rust SDK sends each `enqueue()` as a separate RPC
+   **When** smart batching is implemented
+   **Then** a `BatchMode` enum controls batching behavior: `Auto` (default), `Linger` (explicit timer), `Disabled` (no batching)
 
-2. **And** when auto-batching is enabled, `enqueue()` buffers messages in an internal accumulator instead of sending immediately
+2. **And** `BatchMode::Auto` (default) uses opportunistic batching: drains whatever messages are available in the channel, flushes without blocking the loop, multiple RPCs in flight concurrently
 
-3. **And** the buffer is flushed via `BatchEnqueue` RPC when either `batch_size` messages are accumulated OR `linger_ms` milliseconds have elapsed since the first message entered the buffer — whichever comes first
+3. **And** at low load (single producer, no contention), each message is sent as an individual concurrent RPC with zero added latency
 
-4. **And** `enqueue()` returns a future that resolves with the message ID when the batch containing that message is flushed and acknowledged by the server
+4. **And** at high load (multiple concurrent producers), messages naturally cluster in the channel and get drained together as `BatchEnqueue` calls
 
-5. **And** if the batch flush fails (transport error), all buffered `enqueue()` futures resolve with the appropriate error
+5. **And** `enqueue()` returns a future that resolves with the message ID when the batch/single RPC containing that message completes
 
-6. **And** partial batch failures (some messages succeed, some fail) propagate individual results to their corresponding `enqueue()` futures
+6. **And** if the flush fails (transport error), all futures in that batch resolve with the appropriate error
 
-7. **And** when auto-batching is disabled (default, `linger_ms = None`), `enqueue()` uses the existing single-message `Enqueue` RPC — zero behavior change
+7. **And** partial batch failures propagate individual results to their corresponding `enqueue()` futures
 
-8. **And** `batch_enqueue()` remains available for explicit manual batching regardless of auto-batching configuration
+8. **And** `BatchMode::Linger { linger_ms, batch_size }` preserves explicit timer-based batching for users who want forced batching
 
-9. **And** `Drop` on the client flushes any pending buffered messages before disconnecting
+9. **And** `BatchMode::Disabled` turns off batching — each `enqueue()` is a direct single-message RPC
 
-10. **And** new integration tests verify: auto-batch flush on `batch_size` threshold, auto-batch flush on `linger_ms` timeout, partial failure propagation, disabled auto-batching uses single-message RPC
+10. **And** `connect()` uses `Auto` by default — existing code gets smart batching without changes
 
-11. **And** all existing tests pass (zero regressions)
+11. **And** `batch_enqueue()` remains available for explicit manual batching regardless of batch mode
+
+12. **And** single-item flushes use the `Enqueue` RPC (not `BatchEnqueue`) to preserve exact error semantics like `QueueNotFound`
+
+13. **And** new integration tests verify: auto idle send, auto load batching, linger flush, disabled mode, partial failure, explicit batch_enqueue coexistence
+
+14. **And** all existing tests pass (zero regressions)
 
 ## Tasks / Subtasks
 
-- [x] Task 1: Add `BatchConfig` to `FilaClient` (AC: #1, #7)
-  - [x] 1.1 Added `batch_config: Option<BatchConfig>` field to `ConnectOptions`
-  - [x] 1.2 Added `ConnectOptions::with_batch_config(config)` builder method
-  - [x] 1.3 Wired through `connect()` (batcher_tx: None) and `connect_with_options()` (spawns batcher when linger_ms set)
+- [x] Task 1: Design BatchMode enum (AC: #1, #8, #9, #10)
+  - [x] 1.1 Replaced `BatchConfig` struct with `BatchMode` enum (`Auto`, `Linger`, `Disabled`)
+  - [x] 1.2 Default is `Auto { max_batch_size: 100 }`
+  - [x] 1.3 `ConnectOptions::with_batch_mode(mode)` builder method
+  - [x] 1.4 `connect()` delegates to `connect_with_options` so it picks up the default Auto mode
 
-- [x] Task 2: Implement auto-batching accumulator (AC: #2, #3, #4, #5, #6)
-  - [x] 2.1 Created `BatchItem` struct with EnqueueMessage + oneshot::Sender
-  - [x] 2.2 Used `tokio::sync::mpsc` channel for the batcher task
-  - [x] 2.3 Spawned `run_batcher()` background task that accumulates and flushes on batch_size or linger_ms
-  - [x] 2.4 Modified `enqueue()` to route through batcher when `batcher_tx` is Some
-  - [x] 2.5 Implemented `flush_batch()` that calls BatchEnqueue RPC and fans results to oneshot senders
-  - [x] 2.6 Handled partial failures: maps per-message Success/Error to individual futures
+- [x] Task 2: Implement opportunistic auto-batcher (AC: #2, #3, #4, #5, #6, #7)
+  - [x] 2.1 `run_auto_batcher`: `recv()` one message, `try_recv()` drain, `tokio::spawn` flush, loop
+  - [x] 2.2 Flushes are spawned as independent tasks — multiple RPCs in flight concurrently
+  - [x] 2.3 `flush_batch_owned`: single-item uses `Enqueue` RPC, multi-item uses `BatchEnqueue`
+  - [x] 2.4 Per-message result fanout via oneshot channels
+  - [x] 2.5 Result count mismatch handling (server returns fewer results than messages sent)
 
-- [x] Task 3: Implement graceful shutdown (AC: #9)
-  - [x] 3.1 Batcher flushes remaining messages when rx.recv() returns None (all senders dropped)
-  - [x] 3.2 Uses mpsc channel close as the shutdown signal (natural Drop behavior)
+- [x] Task 3: Preserve linger batcher (AC: #8)
+  - [x] 3.1 Renamed to `run_linger_batcher`, unchanged behavior
 
-- [x] Task 4: Integration tests (AC: #10, #11)
-  - [x] 4.1 `auto_batch_flush_on_batch_size`: enqueue 5 messages with batch_size=5, verifies immediate flush
-  - [x] 4.2 `auto_batch_flush_on_linger_timeout`: enqueue 1 message with linger_ms=100, verifies timer-based flush
-  - [x] 4.3 `auto_batch_disabled_uses_single_message_rpc`: verifies no delay without auto-batching
-  - [x] 4.4 `explicit_batch_enqueue_works_with_auto_batching`: verifies batch_enqueue() still works alongside auto-batching
-  - [x] 4.5 All 3 existing tests pass (zero regressions)
+- [x] Task 4: Integration tests (AC: #13, #14)
+  - [x] 4.1 `nagle_auto_batch_sends_immediately_when_idle`: single message, default connect, no delay
+  - [x] 4.2 `nagle_auto_batch_buffers_under_load`: 20 concurrent enqueues, all stored with unique IDs
+  - [x] 4.3 `auto_batch_flush_on_batch_size`: linger mode, concurrent sends hit batch_size
+  - [x] 4.4 `auto_batch_flush_on_linger_timeout`: linger mode, timer-based flush
+  - [x] 4.5 `batch_disabled_uses_single_message_rpc`: disabled mode, no delay
+  - [x] 4.6 `auto_batch_partial_failure_propagation`: valid + invalid queue in same batch
+  - [x] 4.7 `explicit_batch_enqueue_works_with_auto_batching`: manual batch_enqueue alongside auto mode
+  - [x] 4.8 All 3 existing tests pass (zero regressions, including `enqueue_to_nonexistent_queue` with QueueNotFound semantics preserved)
 
 ## Dev Notes
 
 ### Architecture
 
-The `FilaClient` at `crates/fila-sdk/src/client.rs:143-151` currently has `inner: FilaServiceClient<Channel>`, `api_key: Option<String>`, and `connect_options: Option<ConnectOptions>`. The auto-batcher will add a new field for the batcher task handle/channel.
+`BatchMode::Auto` uses an opportunistic batcher (`run_auto_batcher`):
+1. `rx.recv().await` — wait for at least one message
+2. `rx.try_recv()` in a loop — drain any messages that arrived concurrently
+3. `tokio::spawn(flush_batch_owned(...))` — send without blocking the loop
+4. Loop back to step 1 immediately
 
-**Recommended pattern**: Use a `tokio::sync::mpsc` channel to decouple `enqueue()` from the batch flush logic. The batcher runs as a background task that:
-1. Receives `(EnqueueMessage, oneshot::Sender<Result<String, EnqueueError>>)` tuples
-2. Accumulates in a `Vec`
-3. Starts a `tokio::time::sleep(linger_ms)` timer on first message
-4. Flushes when `batch_size` reached or timer fires (use `tokio::select!`)
-5. Calls `self.batch_enqueue()` and fans results back via oneshot senders
+Multiple RPCs can be in flight simultaneously. The channel acts as the natural buffer. Arrival rate is the tuning knob — no timers, no heuristics, no config.
 
-**Important**: `FilaClient` is `Clone + Send + Sync`. The batcher channel sender is `Clone`, so this property is preserved. The background task holds the receiver end.
-
-### Existing Code to Reuse
-
-- `batch_enqueue()` at `client.rs:265-303` — the flush path calls this directly
-- `BatchEnqueueResult` enum at `client.rs:63-68` — map `Success(id)` → resolve oneshot with `Ok(id)`, `Error(msg)` → resolve with `Err(EnqueueError::...)`
-- `EnqueueMessage` at `client.rs:50-56` — reuse as the accumulator item type
-- `EnqueueError` at `error.rs` — the auto-batched `enqueue()` returns the same error type
-
-### Error Type Consideration
-
-The current `enqueue()` returns `Result<String, EnqueueError>`. The auto-batched path will also return `Result<String, EnqueueError>`. If the batch flush has a transport-level failure, all messages in that batch get `EnqueueError::Transport(...)`. If an individual message fails (partial failure from `BatchEnqueueResult::Error`), that specific future gets an appropriate `EnqueueError` variant.
-
-### Testing
-
-Integration tests live in `crates/fila-sdk/tests/`. Use `TestServer` helper from `crates/fila-e2e/src/lib.rs` to spin up a real server for testing.
-
-### What NOT to Do
-
-- Do NOT change the `enqueue()` method signature — it must remain backward compatible
-- Do NOT make auto-batching the default — it must be opt-in via `BatchConfig`
-- Do NOT buffer across queues in separate batches — the `BatchEnqueue` RPC handles multi-queue messages in one call
-- Do NOT add a separate `enqueue_batched()` method — the existing `enqueue()` transparently switches behavior based on config
+`flush_batch_owned` uses single-message `Enqueue` RPC when only 1 item is in the batch (preserves exact error types like `QueueNotFound`), and `BatchEnqueue` for multiple items.
 
 ### References
 
-- [Source: crates/fila-sdk/src/client.rs — full client implementation]
+- [Source: crates/fila-sdk/src/client.rs — BatchMode, run_auto_batcher, flush_batch_owned]
 - [Source: crates/fila-sdk/src/error.rs — per-operation error types]
-- [Source: crates/fila-proto/proto/fila/v1/service.proto — BatchEnqueue RPC definition]
-- [Source: performance-optimization-epics.md — Story 26.1 AC definition]
+- [Source: crates/fila-proto/proto/fila/v1/service.proto — Enqueue + BatchEnqueue RPCs]
 
 ## Dev Agent Record
 
@@ -116,13 +100,16 @@ None.
 
 ### Completion Notes List
 
-- Used `tokio::sync::mpsc` channel + `oneshot` pattern for the batcher, preserving `Clone + Send + Sync` on `FilaClient`
-- Batcher task holds its own `FilaServiceClient<Channel>` clone to avoid circular dependency
-- `tokio::select! { biased; }` ensures message processing takes priority over timer in race conditions
-- Added `tokio::time` feature to fila-sdk Cargo.toml
+- Replaced `BatchConfig` with `BatchMode` enum — breaking change but pre-1.0
+- `connect()` now delegates to `connect_with_options()` so default Auto mode is always active
+- Opportunistic batcher uses `tokio::spawn` for flushes — fully concurrent, no serialization
+- Single-item optimization: 1 message → `Enqueue` RPC (not `BatchEnqueue`) preserves `QueueNotFound` error semantics
+- Leader reconnect in `consume()` uses `BatchMode::Disabled` (no batcher needed for consume path)
+- Cubic findings addressed: result count mismatch handling, concurrent batch_size test, uniqueness assertion, partial failure test
 
 ### File List
 
 - `crates/fila-sdk/Cargo.toml` — added `"time"` feature to tokio dependency
-- `crates/fila-sdk/src/client.rs` — added `BatchItem`, `batcher_tx` field, `run_batcher()`, `flush_batch()`, modified `enqueue()`, added `with_batch_config()` to `ConnectOptions`
-- `crates/fila-sdk/tests/integration.rs` — added 4 auto-batching integration tests
+- `crates/fila-sdk/src/lib.rs` — export `BatchMode` instead of `BatchConfig`
+- `crates/fila-sdk/src/client.rs` — `BatchMode` enum, `run_auto_batcher`, `run_linger_batcher`, `flush_batch_owned`, `attach_api_key`, modified `enqueue()` routing, `connect()` delegates to `connect_with_options`
+- `crates/fila-sdk/tests/integration.rs` — 7 new integration tests (10 total)
