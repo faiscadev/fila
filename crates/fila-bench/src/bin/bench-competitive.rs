@@ -1082,8 +1082,7 @@ mod fila {
                                 .await;
                         }
                         // Measure
-                        let measure_deadline =
-                            Instant::now() + Duration::from_secs(measure_secs());
+                        let measure_deadline = Instant::now() + Duration::from_secs(measure_secs());
                         while Instant::now() < measure_deadline {
                             if client
                                 .enqueue(&queue, headers.clone(), payload.clone())
@@ -1128,8 +1127,7 @@ mod fila {
             // Producer task — use Disabled batching for accurate per-message latency
             let producer_handle = {
                 let queue = queue.to_string();
-                let opts = ConnectOptions::new(addr)
-                    .with_batch_mode(BatchMode::Disabled);
+                let opts = ConnectOptions::new(addr).with_batch_mode(BatchMode::Disabled);
                 let client = FilaClient::connect_with_options(opts)
                     .await
                     .expect("fila connect");
@@ -1187,8 +1185,7 @@ mod fila {
         {
             let queue = "bench-lifecycle";
             create_queue_cli(addr, queue);
-            let opts =
-                ConnectOptions::new(addr).with_batch_mode(BatchMode::Disabled);
+            let opts = ConnectOptions::new(addr).with_batch_mode(BatchMode::Disabled);
             let client = FilaClient::connect_with_options(opts)
                 .await
                 .expect("fila connect");
@@ -1222,7 +1219,9 @@ mod fila {
         }
 
         // Multi-producer throughput — concurrent producers with auto-batching
-        println!("[fila] Multi-producer throughput ({MULTI_PRODUCERS} producers, auto-batching)...");
+        println!(
+            "[fila] Multi-producer throughput ({MULTI_PRODUCERS} producers, auto-batching)..."
+        );
         {
             let queue = "bench-multi-producer";
             create_queue_cli(addr, queue);
