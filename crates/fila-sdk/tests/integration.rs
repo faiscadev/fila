@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::{CreateQueueRequest, QueueConfig};
-use fila_sdk::{AckError, EnqueueError, FilaClient};
+use fila_sdk::{AckError, BatchConfig, ConnectOptions, EnqueueError, FilaClient};
 use tokio_stream::StreamExt;
 
 /// Find a free TCP port by binding to port 0 and reading the assigned port.
@@ -240,4 +240,139 @@ async fn enqueue_to_nonexistent_queue() {
         matches!(err, EnqueueError::QueueNotFound(_)),
         "expected QueueNotFound, got: {err:?}"
     );
+}
+
+#[tokio::test]
+async fn auto_batch_flush_on_batch_size() {
+    let server = TestServer::start();
+    let opts = ConnectOptions::new(server.addr()).with_batch_config(BatchConfig {
+        linger_ms: Some(5000), // High linger — flush should happen by batch_size
+        batch_size: 5,
+    });
+    let client = FilaClient::connect_with_options(opts).await.unwrap();
+
+    let queue = "test-auto-batch-size";
+    create_queue(server.addr(), queue).await;
+
+    // Enqueue exactly batch_size messages — should flush immediately.
+    let mut ids = Vec::new();
+    for i in 0..5u32 {
+        let id = client
+            .enqueue(queue, HashMap::new(), format!("msg-{i}").into_bytes())
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+
+    assert_eq!(ids.len(), 5);
+    for id in &ids {
+        assert!(!id.is_empty(), "each message should have a broker-assigned ID");
+    }
+
+    // Consume all 5 messages to verify they were stored correctly.
+    let consumer = FilaClient::connect(server.addr()).await.unwrap();
+    let mut stream = consumer.consume(queue).await.unwrap();
+    for _ in 0..5 {
+        let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(ids.contains(&msg.id));
+    }
+}
+
+#[tokio::test]
+async fn auto_batch_flush_on_linger_timeout() {
+    let server = TestServer::start();
+    let opts = ConnectOptions::new(server.addr()).with_batch_config(BatchConfig {
+        linger_ms: Some(100), // 100ms linger
+        batch_size: 1000,     // High batch_size — flush should happen by timer
+    });
+    let client = FilaClient::connect_with_options(opts).await.unwrap();
+
+    let queue = "test-auto-batch-linger";
+    create_queue(server.addr(), queue).await;
+
+    // Enqueue 1 message — won't hit batch_size, must wait for linger.
+    let start = std::time::Instant::now();
+    let id = client
+        .enqueue(queue, HashMap::new(), b"linger-test".to_vec())
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(!id.is_empty());
+    // The enqueue should have resolved after the linger timeout.
+    assert!(
+        elapsed >= Duration::from_millis(50),
+        "expected linger delay, got {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "linger took too long: {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn auto_batch_disabled_uses_single_message_rpc() {
+    let server = TestServer::start();
+    // No batch config — auto-batching is disabled.
+    let client = FilaClient::connect(server.addr()).await.unwrap();
+
+    let queue = "test-no-auto-batch";
+    create_queue(server.addr(), queue).await;
+
+    // Enqueue should return immediately (no linger delay).
+    let start = std::time::Instant::now();
+    let id = client
+        .enqueue(queue, HashMap::new(), b"direct".to_vec())
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(!id.is_empty());
+    // Without auto-batching, enqueue resolves as fast as a single RPC.
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "unbatched enqueue took too long: {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn explicit_batch_enqueue_works_with_auto_batching() {
+    use fila_sdk::{BatchEnqueueResult, EnqueueMessage};
+
+    let server = TestServer::start();
+    let opts = ConnectOptions::new(server.addr()).with_batch_config(BatchConfig {
+        linger_ms: Some(100),
+        batch_size: 100,
+    });
+    let client = FilaClient::connect_with_options(opts).await.unwrap();
+
+    let queue = "test-explicit-with-auto";
+    create_queue(server.addr(), queue).await;
+
+    // Explicit batch_enqueue should still work even with auto-batching enabled.
+    let messages = vec![
+        EnqueueMessage {
+            queue: queue.to_string(),
+            headers: HashMap::new(),
+            payload: b"explicit-1".to_vec(),
+        },
+        EnqueueMessage {
+            queue: queue.to_string(),
+            headers: HashMap::new(),
+            payload: b"explicit-2".to_vec(),
+        },
+    ];
+
+    let results = client.batch_enqueue(messages).await.unwrap();
+    assert_eq!(results.len(), 2);
+    for result in &results {
+        assert!(
+            matches!(result, BatchEnqueueResult::Success(_)),
+            "expected Success, got: {result:?}"
+        );
+    }
 }

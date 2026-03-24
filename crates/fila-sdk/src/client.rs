@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use fila_proto::fila_service_client::FilaServiceClient;
 use fila_proto::{AckRequest, BatchEnqueueRequest, ConsumeRequest, EnqueueRequest, NackRequest};
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::{Stream, StreamExt};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
@@ -86,6 +87,10 @@ pub struct ConnectOptions {
     /// API key for authenticating with the broker.
     /// When set, every RPC includes `authorization: Bearer <key>` metadata.
     pub api_key: Option<String>,
+    /// Client-side batching configuration.
+    /// When `linger_ms` is set, `enqueue()` buffers messages and flushes
+    /// them via `BatchEnqueue` RPC when the batch is full or the timer fires.
+    pub batch_config: Option<BatchConfig>,
 }
 
 impl ConnectOptions {
@@ -133,6 +138,22 @@ impl ConnectOptions {
         self.api_key = Some(api_key.into());
         self
     }
+
+    /// Enable auto-batching on the client.
+    ///
+    /// When configured with `linger_ms`, `enqueue()` buffers messages and
+    /// flushes via `BatchEnqueue` RPC when either `batch_size` messages
+    /// accumulate or `linger_ms` milliseconds elapse.
+    pub fn with_batch_config(mut self, config: BatchConfig) -> Self {
+        self.batch_config = Some(config);
+        self
+    }
+}
+
+/// An item sent to the background batcher task.
+struct BatchItem {
+    message: EnqueueMessage,
+    result_tx: oneshot::Sender<Result<String, EnqueueError>>,
 }
 
 /// Idiomatic Rust client for the Fila message broker.
@@ -148,6 +169,8 @@ pub struct FilaClient {
     /// When the consume call is redirected to a leader node, the SDK reuses
     /// these options (TLS, timeout, auth) for the new connection.
     connect_options: Option<ConnectOptions>,
+    /// Channel to the background batcher task. Present when auto-batching is enabled.
+    batcher_tx: Option<mpsc::Sender<BatchItem>>,
 }
 
 impl FilaClient {
@@ -161,6 +184,7 @@ impl FilaClient {
             inner,
             api_key: None,
             connect_options: Some(ConnectOptions::new(addr)),
+            batcher_tx: None,
         })
     }
 
@@ -210,10 +234,32 @@ impl FilaClient {
         let channel = endpoint.connect().await?;
         let inner = FilaServiceClient::new(channel);
         let api_key = stored_options.api_key.clone();
+
+        // Spawn the auto-batcher task if configured with linger_ms.
+        let batcher_tx = match &stored_options.batch_config {
+            Some(config) if config.linger_ms.is_some() => {
+                let (tx, rx) = mpsc::channel::<BatchItem>(config.batch_size * 2);
+                let batcher_client = inner.clone();
+                let batcher_api_key = api_key.clone();
+                let batch_size = config.batch_size;
+                let linger_ms = config.linger_ms.unwrap();
+                tokio::spawn(run_batcher(
+                    rx,
+                    batcher_client,
+                    batcher_api_key,
+                    batch_size,
+                    linger_ms,
+                ));
+                Some(tx)
+            }
+            _ => None,
+        };
+
         Ok(Self {
             inner,
             api_key,
             connect_options: Some(stored_options),
+            batcher_tx,
         })
     }
 
@@ -234,12 +280,41 @@ impl FilaClient {
     /// Enqueue a message to a queue.
     ///
     /// Returns the broker-assigned message ID (UUIDv7).
+    ///
+    /// When auto-batching is enabled (via [`ConnectOptions::with_batch_config`]),
+    /// the message is buffered and flushed via `BatchEnqueue` RPC when either
+    /// `batch_size` messages accumulate or `linger_ms` milliseconds elapse.
+    /// The returned future resolves when the batch containing this message
+    /// is flushed and acknowledged.
     pub async fn enqueue(
         &self,
         queue: &str,
         headers: HashMap<String, String>,
         payload: impl Into<Vec<u8>>,
     ) -> Result<String, EnqueueError> {
+        // Route through the batcher when auto-batching is enabled.
+        if let Some(ref tx) = self.batcher_tx {
+            let (result_tx, result_rx) = oneshot::channel();
+            let item = BatchItem {
+                message: EnqueueMessage {
+                    queue: queue.to_string(),
+                    headers,
+                    payload: payload.into(),
+                },
+                result_tx,
+            };
+            tx.send(item).await.map_err(|_| {
+                EnqueueError::Status(StatusError::Internal(
+                    "auto-batcher task has shut down".to_string(),
+                ))
+            })?;
+            return result_rx.await.map_err(|_| {
+                EnqueueError::Status(StatusError::Internal(
+                    "auto-batcher dropped result channel".to_string(),
+                ))
+            })?;
+        }
+
         let response = self
             .inner
             .clone()
@@ -366,10 +441,14 @@ impl FilaClient {
                         tls_client_cert_pem: opts.tls_client_cert_pem.clone(),
                         tls_client_key_pem: opts.tls_client_key_pem.clone(),
                         api_key: opts.api_key.clone(),
+                        batch_config: None,
                     },
                     None => ConnectOptions::new(leader_url),
                 };
-                match Self::connect_with_options(leader_opts).await {
+                // Connect to leader without auto-batching (consume doesn't need it).
+                let mut leader_opts_no_batch = leader_opts;
+                leader_opts_no_batch.batch_config = None;
+                match Self::connect_with_options(leader_opts_no_batch).await {
                     Ok(leader_client) => leader_client
                         .inner
                         .clone()
@@ -489,4 +568,130 @@ fn extract_leader_hint(status: &tonic::Status) -> Option<String> {
         .get("x-fila-leader-addr")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
+}
+
+/// Background task that accumulates enqueue requests and flushes them in batches.
+///
+/// Flushes when either `batch_size` messages accumulate or `linger_ms` elapses
+/// since the first message in the current batch. When all senders are dropped
+/// (client dropped), flushes any remaining messages before exiting.
+async fn run_batcher(
+    mut rx: mpsc::Receiver<BatchItem>,
+    client: FilaServiceClient<Channel>,
+    api_key: Option<String>,
+    batch_size: usize,
+    linger_ms: u64,
+) {
+    let mut buffer: Vec<BatchItem> = Vec::with_capacity(batch_size);
+
+    loop {
+        if buffer.is_empty() {
+            // No pending items — block until the next message arrives.
+            match rx.recv().await {
+                Some(item) => {
+                    buffer.push(item);
+                    if buffer.len() >= batch_size {
+                        flush_batch(&mut buffer, &client, &api_key).await;
+                    }
+                }
+                // All senders dropped — nothing to flush.
+                None => return,
+            }
+        } else {
+            // Buffer has items — race between more messages and the linger timer.
+            let deadline =
+                tokio::time::Instant::now() + Duration::from_millis(linger_ms);
+            let sleep = tokio::time::sleep_until(deadline);
+            tokio::pin!(sleep);
+
+            loop {
+                tokio::select! {
+                    biased;
+                    msg = rx.recv() => match msg {
+                        Some(item) => {
+                            buffer.push(item);
+                            if buffer.len() >= batch_size {
+                                flush_batch(&mut buffer, &client, &api_key).await;
+                                break; // Back to outer loop (buffer now empty).
+                            }
+                        }
+                        None => {
+                            // All senders dropped — flush remaining and exit.
+                            flush_batch(&mut buffer, &client, &api_key).await;
+                            return;
+                        }
+                    },
+                    _ = &mut sleep => {
+                        flush_batch(&mut buffer, &client, &api_key).await;
+                        break; // Back to outer loop.
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Flush the buffered messages via BatchEnqueue RPC and fan results back
+/// to individual callers via their oneshot senders.
+async fn flush_batch(
+    buffer: &mut Vec<BatchItem>,
+    client: &FilaServiceClient<Channel>,
+    api_key: &Option<String>,
+) {
+    let items: Vec<BatchItem> = buffer.drain(..).collect();
+    if items.is_empty() {
+        return;
+    }
+
+    let proto_messages: Vec<EnqueueRequest> = items
+        .iter()
+        .map(|item| EnqueueRequest {
+            queue: item.message.queue.clone(),
+            headers: item.message.headers.clone(),
+            payload: bytes::Bytes::from(item.message.payload.clone()),
+        })
+        .collect();
+
+    let mut req = tonic::Request::new(BatchEnqueueRequest {
+        messages: proto_messages,
+    });
+    if let Some(ref key) = api_key {
+        if let Ok(val) =
+            tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
+        {
+            req.metadata_mut().insert("authorization", val);
+        }
+    }
+
+    let result = client.clone().batch_enqueue(req).await;
+
+    match result {
+        Ok(response) => {
+            let results = response.into_inner().results;
+            for (item, result) in items.into_iter().zip(results.into_iter()) {
+                let mapped = match result.result {
+                    Some(fila_proto::batch_enqueue_result::Result::Success(resp)) => {
+                        Ok(resp.message_id)
+                    }
+                    Some(fila_proto::batch_enqueue_result::Result::Error(err)) => {
+                        Err(EnqueueError::Status(StatusError::Internal(err)))
+                    }
+                    None => Err(EnqueueError::Status(StatusError::Internal(
+                        "no result from server".to_string(),
+                    ))),
+                };
+                let _ = item.result_tx.send(mapped);
+            }
+        }
+        Err(status) => {
+            // Transport-level failure — all messages in this batch get the error.
+            let err = batch_enqueue_status_error(status);
+            let msg = err.to_string();
+            for item in items {
+                let _ = item.result_tx.send(Err(EnqueueError::Status(
+                    StatusError::Internal(msg.clone()),
+                )));
+            }
+        }
+    }
 }
