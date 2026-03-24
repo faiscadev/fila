@@ -23,3 +23,6 @@
 # Benchmark output
 bench-results.json
 bench/competitive/results/
+
+# Flamegraph output
+target/flamegraphs/
