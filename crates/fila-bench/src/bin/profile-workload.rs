@@ -58,8 +58,12 @@ async fn main() {
     let start = Instant::now();
 
     match workload.as_str() {
-        "enqueue-only" => run_enqueue_only(&addr, queue_name, &payload, concurrency, duration).await,
-        "consume-only" => run_consume_only(&addr, queue_name, &payload, concurrency, duration).await,
+        "enqueue-only" => {
+            run_enqueue_only(&addr, queue_name, &payload, concurrency, duration).await
+        }
+        "consume-only" => {
+            run_consume_only(&addr, queue_name, &payload, concurrency, duration).await
+        }
         "lifecycle" => run_lifecycle(&addr, queue_name, &payload, concurrency, duration).await,
         "batch-enqueue" => {
             run_batch_enqueue(&addr, queue_name, &payload, concurrency, duration).await

@@ -21,8 +21,7 @@ const MEASURE_SECS: u64 = 3;
 pub fn bench_rocksdb_write(results: &mut Vec<BenchResult>) {
     for &(label, size) in &[("1kb", 1024usize), ("64kb", 65536usize)] {
         let dir = tempfile::tempdir().expect("create temp dir");
-        let engine =
-            fila_core::storage::RocksDbEngine::open(dir.path()).expect("open rocksdb");
+        let engine = fila_core::storage::RocksDbEngine::open(dir.path()).expect("open rocksdb");
 
         let payload = vec![0xABu8; size];
 
@@ -30,10 +29,7 @@ pub fn bench_rocksdb_write(results: &mut Vec<BenchResult>) {
         for i in 0..WARMUP_ITERS {
             let key = format!("warmup:{i}");
             engine
-                .put_message(
-                    key.as_bytes(),
-                    &make_test_message(&payload),
-                )
+                .put_message(key.as_bytes(), &make_test_message(&payload))
                 .expect("warmup put");
         }
 
@@ -173,11 +169,9 @@ pub fn bench_serialization(results: &mut Vec<BenchResult>) {
             name: format!("subsystem_serde_enqueue_decode_{label}_ns"),
             value: decode_ns_per_msg,
             unit: "ns/msg".to_string(),
-            metadata: [
-                ("total_ops".to_string(), serde_json::json!(meter.count())),
-            ]
-            .into_iter()
-            .collect(),
+            metadata: [("total_ops".to_string(), serde_json::json!(meter.count()))]
+                .into_iter()
+                .collect(),
         });
 
         // -- ConsumeResponse encode/decode --

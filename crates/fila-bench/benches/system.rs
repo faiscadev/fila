@@ -183,9 +183,7 @@ async fn run_benchmarks() {
             report.add(r);
         }
     } else {
-        eprintln!(
-            "[S1-S5] Subsystem benchmarks (skipped — set FILA_BENCH_SUBSYSTEM=1 to enable)"
-        );
+        eprintln!("[S1-S5] Subsystem benchmarks (skipped — set FILA_BENCH_SUBSYSTEM=1 to enable)");
     }
 
     // Batch benchmarks (gated — requires batch API support)
@@ -226,9 +224,7 @@ async fn run_benchmarks() {
             report.add(r);
         }
     } else {
-        eprintln!(
-            "[B1-B6] Batch benchmarks (skipped — set FILA_BENCH_BATCH=1 to enable)"
-        );
+        eprintln!("[B1-B6] Batch benchmarks (skipped — set FILA_BENCH_BATCH=1 to enable)");
     }
 
     // Write report

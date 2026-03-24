@@ -17,11 +17,7 @@ fn make_payload() -> Vec<u8> {
     vec![0x42u8; PAYLOAD_SIZE]
 }
 
-fn make_batch(
-    queue: &str,
-    batch_size: usize,
-    payload: &[u8],
-) -> Vec<fila_sdk::EnqueueMessage> {
+fn make_batch(queue: &str, batch_size: usize, payload: &[u8]) -> Vec<fila_sdk::EnqueueMessage> {
     (0..batch_size)
         .map(|_| fila_sdk::EnqueueMessage {
             queue: queue.to_string(),
@@ -86,18 +82,12 @@ pub async fn bench_batch_enqueue_throughput(server: &BenchServer) -> Vec<BenchRe
         let meta: HashMap<String, serde_json::Value> = [
             ("batch_size".to_string(), serde_json::json!(batch_size)),
             ("payload_size".to_string(), serde_json::json!(PAYLOAD_SIZE)),
-            (
-                "duration_secs".to_string(),
-                serde_json::json!(MEASURE_SECS),
-            ),
+            ("duration_secs".to_string(), serde_json::json!(MEASURE_SECS)),
             (
                 "total_messages".to_string(),
                 serde_json::json!(msg_meter.count()),
             ),
-            (
-                "total_batches".to_string(),
-                serde_json::json!(batch_count),
-            ),
+            ("total_batches".to_string(), serde_json::json!(batch_count)),
         ]
         .into_iter()
         .collect();
