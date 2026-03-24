@@ -1,6 +1,7 @@
 epic: "Epic 29: Transport Optimization — Fair Benchmarks & Streaming Enqueue"
 baseBranch: main
 startedAt: "2026-03-24"
+completedAt: "2026-03-24"
 stories:
   - id: "29.1"
     title: "Fair Competitive Benchmark"
@@ -11,16 +12,16 @@ stories:
     dependsOn: []
   - id: "29.2"
     title: "Streaming Enqueue RPC (Server-Side)"
-    status: in-progress
-    currentPhase: "review"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/29.2-streaming-enqueue-rpc"
-    pr: null
+    pr: 110
     dependsOn: []
   - id: "29.3"
     title: "SDK Streaming Enqueue Integration"
-    status: pending
-    currentPhase: ""
-    branch: ""
-    pr: null
+    status: completed
+    currentPhase: "pr-complete"
+    branch: "feat/29.3-sdk-streaming-enqueue"
+    pr: 111
     dependsOn: ["29.2"]
 skippedIssues: []
