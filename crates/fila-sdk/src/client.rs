@@ -664,16 +664,25 @@ async fn flush_batch(
     match result {
         Ok(response) => {
             let results = response.into_inner().results;
-            for (item, result) in items.into_iter().zip(results.into_iter()) {
-                let mapped = match result.result {
-                    Some(fila_proto::batch_enqueue_result::Result::Success(resp)) => {
-                        Ok(resp.message_id)
-                    }
-                    Some(fila_proto::batch_enqueue_result::Result::Error(err)) => {
-                        Err(EnqueueError::Status(StatusError::Internal(err)))
-                    }
+            // Pair each item with its result. If the server returns fewer
+            // results than messages sent, trailing items get an explicit error
+            // instead of a silent drop.
+            let mut result_iter = results.into_iter();
+            for item in items {
+                let mapped = match result_iter.next() {
+                    Some(result) => match result.result {
+                        Some(fila_proto::batch_enqueue_result::Result::Success(resp)) => {
+                            Ok(resp.message_id)
+                        }
+                        Some(fila_proto::batch_enqueue_result::Result::Error(err)) => {
+                            Err(EnqueueError::Status(StatusError::Internal(err)))
+                        }
+                        None => Err(EnqueueError::Status(StatusError::Internal(
+                            "no result from server".to_string(),
+                        ))),
+                    },
                     None => Err(EnqueueError::Status(StatusError::Internal(
-                        "no result from server".to_string(),
+                        "server returned fewer results than messages sent".to_string(),
                     ))),
                 };
                 let _ = item.result_tx.send(mapped);

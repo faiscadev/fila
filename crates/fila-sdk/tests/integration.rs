@@ -246,7 +246,7 @@ async fn enqueue_to_nonexistent_queue() {
 async fn auto_batch_flush_on_batch_size() {
     let server = TestServer::start();
     let opts = ConnectOptions::new(server.addr()).with_batch_config(BatchConfig {
-        linger_ms: Some(5000), // High linger — flush should happen by batch_size
+        linger_ms: Some(30000), // Very high linger — flush MUST happen by batch_size
         batch_size: 5,
     });
     let client = FilaClient::connect_with_options(opts).await.unwrap();
@@ -254,15 +254,23 @@ async fn auto_batch_flush_on_batch_size() {
     let queue = "test-auto-batch-size";
     create_queue(server.addr(), queue).await;
 
-    // Enqueue exactly batch_size messages — should flush immediately.
-    let mut ids = Vec::new();
+    // Send all 5 messages concurrently so they buffer before any result resolves.
+    let start = std::time::Instant::now();
+    let mut handles = Vec::new();
     for i in 0..5u32 {
-        let id = client
-            .enqueue(queue, HashMap::new(), format!("msg-{i}").into_bytes())
-            .await
-            .unwrap();
-        ids.push(id);
+        let c = client.clone();
+        let q = queue.to_string();
+        handles.push(tokio::spawn(async move {
+            c.enqueue(&q, HashMap::new(), format!("msg-{i}").into_bytes())
+                .await
+                .unwrap()
+        }));
     }
+    let mut ids = Vec::new();
+    for h in handles {
+        ids.push(h.await.unwrap());
+    }
+    let elapsed = start.elapsed();
 
     assert_eq!(ids.len(), 5);
     for id in &ids {
@@ -271,10 +279,17 @@ async fn auto_batch_flush_on_batch_size() {
             "each message should have a broker-assigned ID"
         );
     }
+    // With 30s linger and batch_size=5, the batch must have been flushed by
+    // batch_size, not linger. Should resolve well under 30s.
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "batch_size flush took too long ({elapsed:?}), likely waited for linger"
+    );
 
-    // Consume all 5 messages to verify they were stored correctly.
+    // Consume all 5 messages and verify uniqueness.
     let consumer = FilaClient::connect(server.addr()).await.unwrap();
     let mut stream = consumer.consume(queue).await.unwrap();
+    let mut seen = std::collections::HashSet::new();
     for _ in 0..5 {
         let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
@@ -282,6 +297,11 @@ async fn auto_batch_flush_on_batch_size() {
             .unwrap()
             .unwrap();
         assert!(ids.contains(&msg.id));
+        assert!(
+            seen.insert(msg.id.clone()),
+            "duplicate message ID: {}",
+            msg.id
+        );
     }
 }
 
@@ -339,6 +359,48 @@ async fn auto_batch_disabled_uses_single_message_rpc() {
     assert!(
         elapsed < Duration::from_millis(500),
         "unbatched enqueue took too long: {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn auto_batch_partial_failure_propagation() {
+    let server = TestServer::start();
+    let opts = ConnectOptions::new(server.addr()).with_batch_config(BatchConfig {
+        linger_ms: Some(30000),
+        batch_size: 2,
+    });
+    let client = FilaClient::connect_with_options(opts).await.unwrap();
+
+    let valid_queue = "test-partial-failure";
+    create_queue(server.addr(), valid_queue).await;
+
+    // Send 2 messages concurrently: one to a valid queue, one to a non-existent queue.
+    // They'll be batched together (batch_size=2), and the server should return
+    // individual success/error results.
+    let c1 = client.clone();
+    let c2 = client.clone();
+    let h_valid = tokio::spawn(async move {
+        c1.enqueue(valid_queue, HashMap::new(), b"good".to_vec())
+            .await
+    });
+    let h_invalid = tokio::spawn(async move {
+        c2.enqueue("no-such-queue", HashMap::new(), b"bad".to_vec())
+            .await
+    });
+
+    let result_valid = h_valid.await.unwrap();
+    let result_invalid = h_invalid.await.unwrap();
+
+    // The valid message should succeed.
+    assert!(
+        result_valid.is_ok(),
+        "valid queue should succeed: {result_valid:?}"
+    );
+
+    // The invalid message should fail (queue not found → per-message error).
+    assert!(
+        result_invalid.is_err(),
+        "non-existent queue should fail: {result_invalid:?}"
     );
 }
 
