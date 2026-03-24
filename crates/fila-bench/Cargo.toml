@@ -47,6 +47,10 @@ path = "src/bin/bench-competitive.rs"
 required-features = ["competitive"]
 
 [[bin]]
+name = "bench-update-docs"
+path = "src/bin/bench-update-docs.rs"
+
+[[bin]]
 name = "profile-workload"
 path = "src/bin/profile-workload.rs"
 

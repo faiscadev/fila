@@ -226,3 +226,44 @@ jobs:
           fi
 
           gh pr edit "$PR_NUMBER" --body-file /tmp/new-body.md
+
+  update-docs:
+    name: Update Benchmark Docs
+    needs: bench
+    if: github.event_name == 'push' && needs.bench.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bench-results-${{ github.sha }}
+
+      - name: Build bench-update-docs
+        run: cargo build --release -p fila-bench --bin bench-update-docs
+
+      - name: Update docs/benchmarks.md
+        run: |
+          ./target/release/bench-update-docs \
+            --self-bench bench-aggregated.json \
+            --competitive-dir bench/competitive/results \
+            --doc docs/benchmarks.md
+
+      - name: Commit updated docs if changed
+        run: |
+          git diff --quiet docs/benchmarks.md && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/benchmarks.md
+          git commit -m "docs: update benchmarks.md from CI run [skip ci]"
+          git push
