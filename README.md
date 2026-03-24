@@ -116,7 +116,7 @@ Sub-millisecond p50 enqueue-to-consume latency. DRR fair scheduling adds no meas
 | Rust | `fila-sdk` | [crates/fila-sdk](crates/fila-sdk) |
 | Go | `github.com/faiscadev/fila-go` | [faiscadev/fila-go](https://github.com/faiscadev/fila-go) |
 | Python | `fila` | [faiscadev/fila-python](https://github.com/faiscadev/fila-python) |
-| JavaScript | `@anthropic/fila` | [faiscadev/fila-js](https://github.com/faiscadev/fila-js) |
+| JavaScript | `fila-client` | [faiscadev/fila-js](https://github.com/faiscadev/fila-js) |
 | Ruby | `fila` | [faiscadev/fila-ruby](https://github.com/faiscadev/fila-ruby) |
 | Java | `dev.fila:fila-client` | [faiscadev/fila-java](https://github.com/faiscadev/fila-java) |
 

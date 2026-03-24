@@ -125,7 +125,7 @@ Default broker address: http://localhost:5555 (override with --addr)
 - Rust: fila-sdk (crates.io)
 - Go: github.com/faiscadev/fila-go
 - Python: fila (PyPI)
-- JavaScript: @anthropic/fila (npm)
+- JavaScript: fila-client (npm)
 - Ruby: fila (RubyGems)
 - Java: dev.fila:fila-client (Maven Central)
 

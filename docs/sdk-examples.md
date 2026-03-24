@@ -128,7 +128,7 @@ print(f"acked: {msg.id}")
 ## JavaScript / Node.js
 
 ```javascript
-const { FilaClient } = require('@anthropic/fila');
+const { FilaClient } = require('fila-client');
 
 async function main() {
   const client = await FilaClient.connect('localhost:5555');

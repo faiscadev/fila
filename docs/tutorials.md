@@ -183,7 +183,7 @@ The `on_failure` hook reads this with `fila.get("max_retries")`. Change it witho
 
 ```javascript
 // JavaScript SDK
-const { FilaClient } = require('@anthropic/fila');
+const { FilaClient } = require('fila-client');
 
 async function main() {
   const client = await FilaClient.connect('localhost:5555');
