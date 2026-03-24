@@ -321,7 +321,7 @@ impl FilaService for HotPathService {
                         Err(status) => StreamEnqueueResponse {
                             sequence_number: seq,
                             result: Some(fila_proto::stream_enqueue_response::Result::Error(
-                                status.message().to_string(),
+                                format!("[{:?}] {}", status.code(), status.message()),
                             )),
                         },
                     };

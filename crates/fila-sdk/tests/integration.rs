@@ -496,3 +496,142 @@ async fn explicit_batch_enqueue_works_with_auto_batching() {
         );
     }
 }
+
+// --- Streaming enqueue tests ---
+
+#[tokio::test]
+async fn streaming_enqueue_basic_flow() {
+    let server = TestServer::start();
+    // Default BatchMode::Auto uses streaming when available.
+    let client = FilaClient::connect(server.addr()).await.unwrap();
+
+    let queue = "test-streaming-basic";
+    create_queue(server.addr(), queue).await;
+
+    // Enqueue multiple messages — they should go through the streaming path.
+    let mut ids = Vec::new();
+    for i in 0..10u32 {
+        let id = client
+            .enqueue(
+                queue,
+                HashMap::new(),
+                format!("stream-msg-{i}").into_bytes(),
+            )
+            .await
+            .unwrap();
+        assert!(!id.is_empty());
+        ids.push(id);
+    }
+
+    // Verify all messages were stored by consuming them.
+    let consumer = FilaClient::connect(server.addr()).await.unwrap();
+    let mut stream = consumer.consume(queue).await.unwrap();
+    let mut consumed = std::collections::HashSet::new();
+    for _ in 0..10 {
+        let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(ids.contains(&msg.id));
+        consumed.insert(msg.id);
+    }
+    assert_eq!(consumed.len(), 10, "all 10 messages should be unique");
+}
+
+#[tokio::test]
+async fn streaming_concurrent_enqueue_from_multiple_tasks() {
+    let server = TestServer::start();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
+
+    let queue = "test-streaming-concurrent";
+    create_queue(server.addr(), queue).await;
+
+    // Spawn 50 concurrent enqueue tasks — all use the same streaming connection.
+    let mut handles = Vec::new();
+    for i in 0..50u32 {
+        let c = client.clone();
+        let q = queue.to_string();
+        handles.push(tokio::spawn(async move {
+            c.enqueue(&q, HashMap::new(), format!("concurrent-{i}").into_bytes())
+                .await
+                .unwrap()
+        }));
+    }
+
+    let mut ids = Vec::new();
+    for h in handles {
+        ids.push(h.await.unwrap());
+    }
+
+    assert_eq!(ids.len(), 50);
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    assert_eq!(unique.len(), 50, "all 50 message IDs should be unique");
+}
+
+#[tokio::test]
+async fn streaming_enqueue_per_message_error() {
+    let server = TestServer::start();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
+
+    let valid_queue = "test-streaming-error";
+    create_queue(server.addr(), valid_queue).await;
+
+    // Enqueue to a valid queue — should succeed.
+    let id = client
+        .enqueue(valid_queue, HashMap::new(), b"good".to_vec())
+        .await
+        .unwrap();
+    assert!(!id.is_empty());
+
+    // Enqueue to a non-existent queue — should return QueueNotFound.
+    let err = client
+        .enqueue("nonexistent-queue", HashMap::new(), b"bad".to_vec())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, EnqueueError::QueueNotFound(_)),
+        "expected QueueNotFound, got: {err:?}"
+    );
+
+    // Enqueue to the valid queue again — stream should still work after a per-message error.
+    let id2 = client
+        .enqueue(valid_queue, HashMap::new(), b"still-good".to_vec())
+        .await
+        .unwrap();
+    assert!(!id2.is_empty());
+}
+
+#[tokio::test]
+async fn streaming_linger_mode_uses_stream() {
+    let server = TestServer::start();
+    let opts = ConnectOptions::new(server.addr()).with_batch_mode(BatchMode::Linger {
+        linger_ms: 100,
+        batch_size: 10,
+    });
+    let client = FilaClient::connect_with_options(opts).await.unwrap();
+
+    let queue = "test-streaming-linger";
+    create_queue(server.addr(), queue).await;
+
+    // Enqueue messages via linger batcher — should use streaming.
+    let mut handles = Vec::new();
+    for i in 0..10u32 {
+        let c = client.clone();
+        let q = queue.to_string();
+        handles.push(tokio::spawn(async move {
+            c.enqueue(&q, HashMap::new(), format!("linger-{i}").into_bytes())
+                .await
+                .unwrap()
+        }));
+    }
+
+    let mut ids = Vec::new();
+    for h in handles {
+        ids.push(h.await.unwrap());
+    }
+
+    assert_eq!(ids.len(), 10);
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    assert_eq!(unique.len(), 10, "all message IDs should be unique");
+}
