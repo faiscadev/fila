@@ -179,16 +179,28 @@ mod tests {
         // Start node 4 and add it to the cluster.
         let node4 = TestNode::start(4, base_port + 3).await;
 
-        leader_raft
-            .add_learner(
-                4,
-                BasicNode {
-                    addr: format!("127.0.0.1:{}", base_port + 3),
-                },
-                true,
-            )
-            .await
-            .unwrap();
+        // Retry add_learner — the leader may not be fully stabilized yet
+        // (openraft can return ForwardToLeader even when targeting the actual leader).
+        let mut retries = 10;
+        loop {
+            match leader_raft
+                .add_learner(
+                    4,
+                    BasicNode {
+                        addr: format!("127.0.0.1:{}", base_port + 3),
+                    },
+                    true,
+                )
+                .await
+            {
+                Ok(_) => break,
+                Err(_) if retries > 0 => {
+                    retries -= 1;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => panic!("add_learner failed after retries: {e}"),
+            }
+        }
 
         // Promote to voter.
         let mut add_voters = std::collections::BTreeSet::new();
