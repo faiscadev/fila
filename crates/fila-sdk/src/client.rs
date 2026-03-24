@@ -1,9 +1,14 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use fila_proto::fila_service_client::FilaServiceClient;
-use fila_proto::{AckRequest, BatchEnqueueRequest, ConsumeRequest, EnqueueRequest, NackRequest};
-use tokio::sync::{mpsc, oneshot};
+use fila_proto::{
+    AckRequest, BatchEnqueueRequest, ConsumeRequest, EnqueueRequest, NackRequest,
+    StreamEnqueueRequest, StreamEnqueueResponse,
+};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_stream::{Stream, StreamExt};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
@@ -594,20 +599,300 @@ fn extract_leader_hint(status: &tonic::Status) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Opportunistic batcher: drains whatever messages are available and flushes
-/// them without blocking the loop. Multiple RPCs can be in flight concurrently.
+// --- Streaming enqueue infrastructure ---
+
+/// Map of in-flight sequence numbers to their result oneshot channels.
+type PendingMap = HashMap<u64, oneshot::Sender<Result<String, EnqueueError>>>;
+
+/// Active streaming connection state: the sender half of the stream and a
+/// handle to the response reader task.
+struct ActiveStream {
+    /// Send half of the bidirectional gRPC stream.
+    sender: mpsc::Sender<StreamEnqueueRequest>,
+    /// Map of in-flight sequence numbers to their result channels.
+    pending: Arc<Mutex<PendingMap>>,
+    /// Handle to the response reader task (for cleanup).
+    _reader_handle: tokio::task::JoinHandle<()>,
+}
+
+/// Manages a persistent `StreamEnqueue` bidirectional stream.
 ///
-/// At low load: each message arrives alone and is sent as a concurrent
-/// individual RPC (zero added latency, full concurrency preserved).
-/// At high load: multiple messages pile up in the channel between loop
-/// iterations and get drained together as a single `BatchEnqueue` call.
-/// Batch size tunes itself naturally to the actual arrival rate.
+/// Lazily opens the stream on first flush. If the stream breaks, it
+/// automatically reopens on the next flush. If the server returns
+/// `UNIMPLEMENTED`, permanently falls back to unary RPCs.
+struct StreamManager {
+    client: FilaServiceClient<Channel>,
+    api_key: Option<String>,
+    /// Monotonically increasing sequence number counter.
+    seq: AtomicU64,
+    /// The currently active stream, if any.
+    active: Option<ActiveStream>,
+    /// Once set to true, streaming is permanently disabled and the batcher
+    /// falls back to unary RPCs for all subsequent flushes.
+    fallback_to_unary: bool,
+}
+
+impl StreamManager {
+    fn new(client: FilaServiceClient<Channel>, api_key: Option<String>) -> Self {
+        Self {
+            client,
+            api_key,
+            seq: AtomicU64::new(1),
+            active: None,
+            fallback_to_unary: false,
+        }
+    }
+
+    /// Open a new bidirectional stream. Returns an error if the stream
+    /// cannot be established. Sets `fallback_to_unary` if the server
+    /// returns `UNIMPLEMENTED`.
+    async fn open_stream(&mut self) -> Result<(), tonic::Status> {
+        let (req_tx, req_rx) = mpsc::channel::<StreamEnqueueRequest>(256);
+        let req_stream = tokio_stream::wrappers::ReceiverStream::new(req_rx);
+
+        // Build the streaming request with API key auth metadata.
+        let mut request = tonic::Request::new(req_stream);
+        attach_api_key(&mut request, &self.api_key);
+
+        let response = self.client.clone().stream_enqueue(request).await;
+
+        match response {
+            Ok(resp) => {
+                let mut resp_stream = resp.into_inner();
+                let pending: Arc<Mutex<PendingMap>> = Arc::new(Mutex::new(HashMap::new()));
+                let pending_clone = Arc::clone(&pending);
+
+                // Spawn a reader task that reads responses and resolves pending oneshots.
+                let reader_handle = tokio::spawn(async move {
+                    while let Some(result) = resp_stream.next().await {
+                        match result {
+                            Ok(resp) => {
+                                resolve_stream_response(&pending_clone, resp).await;
+                            }
+                            Err(status) => {
+                                // Stream broke — error all pending messages.
+                                error_all_pending(
+                                    &pending_clone,
+                                    &format!("stream error: {status}"),
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                    }
+                    // Stream ended cleanly (server closed) — error remaining pending.
+                    error_all_pending(&pending_clone, "stream closed by server").await;
+                });
+
+                self.active = Some(ActiveStream {
+                    sender: req_tx,
+                    pending,
+                    _reader_handle: reader_handle,
+                });
+                Ok(())
+            }
+            Err(status) if status.code() == tonic::Code::Unimplemented => {
+                self.fallback_to_unary = true;
+                Err(status)
+            }
+            Err(status) => Err(status),
+        }
+    }
+
+    /// Ensure a stream is open. Opens one if needed. Returns false if
+    /// streaming is permanently disabled (fallback to unary) or if the
+    /// stream could not be opened (caller should fall back to unary for
+    /// this batch so auth/transport errors are properly propagated).
+    async fn ensure_stream(&mut self) -> bool {
+        if self.fallback_to_unary {
+            return false;
+        }
+        if self.active.is_some() {
+            return true;
+        }
+        self.open_stream().await.is_ok()
+    }
+
+    /// Send a batch of messages through the stream. Returns the batch items
+    /// that could not be sent (for fallback to unary).
+    async fn send_batch(&mut self, items: Vec<BatchItem>) -> Vec<BatchItem> {
+        let active = match self.active.as_ref() {
+            Some(a) => a,
+            None => return items,
+        };
+
+        // Pre-register all pending entries BEFORE sending to avoid a race
+        // where the response reader resolves a sequence number before it's
+        // in the pending map.
+        let mut prepared: Vec<(StreamEnqueueRequest, u64)> = Vec::with_capacity(items.len());
+        {
+            let mut pending = active.pending.lock().await;
+            for item in &items {
+                let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+                prepared.push((
+                    StreamEnqueueRequest {
+                        queue: item.message.queue.clone(),
+                        headers: item.message.headers.clone(),
+                        payload: bytes::Bytes::from(item.message.payload.clone()),
+                        sequence_number: seq,
+                    },
+                    seq,
+                ));
+            }
+            // Register all oneshot senders under their sequence numbers.
+            // We consume items here, pairing each with its seq.
+            let items_vec: Vec<BatchItem> = items.into_iter().collect();
+            for (i, item) in items_vec.into_iter().enumerate() {
+                let seq = prepared[i].1;
+                pending.insert(seq, item.result_tx);
+            }
+        }
+
+        // Now send all requests to the stream. If a send fails, remove the
+        // pending entries for unsent items and error them.
+        let mut unsent_seqs: Vec<u64> = Vec::new();
+        let mut failed = false;
+        for (req, seq) in prepared {
+            if failed {
+                unsent_seqs.push(seq);
+                continue;
+            }
+            match active.sender.try_send(req) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(req)) => {
+                    if active.sender.send(req).await.is_err() {
+                        unsent_seqs.push(seq);
+                        failed = true;
+                    }
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    unsent_seqs.push(seq);
+                    failed = true;
+                }
+            }
+        }
+
+        if !unsent_seqs.is_empty() {
+            // Error all unsent items by removing them from the pending map.
+            let mut pending = active.pending.lock().await;
+            for seq in unsent_seqs {
+                if let Some(tx) = pending.remove(&seq) {
+                    let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
+                        "stream broke during send".to_string(),
+                    ))));
+                }
+            }
+            drop(pending);
+            self.active = None;
+        }
+
+        // All items are either registered in pending (and will be resolved by
+        // the reader task) or have been errored above. No unsent items returned.
+        Vec::new()
+    }
+}
+
+/// Parse a gRPC status code name (Debug format) back to a `tonic::Code`.
+fn parse_grpc_code(s: &str) -> tonic::Code {
+    match s {
+        "Ok" => tonic::Code::Ok,
+        "Cancelled" => tonic::Code::Cancelled,
+        "Unknown" => tonic::Code::Unknown,
+        "InvalidArgument" => tonic::Code::InvalidArgument,
+        "DeadlineExceeded" => tonic::Code::DeadlineExceeded,
+        "NotFound" => tonic::Code::NotFound,
+        "AlreadyExists" => tonic::Code::AlreadyExists,
+        "PermissionDenied" => tonic::Code::PermissionDenied,
+        "ResourceExhausted" => tonic::Code::ResourceExhausted,
+        "FailedPrecondition" => tonic::Code::FailedPrecondition,
+        "Aborted" => tonic::Code::Aborted,
+        "OutOfRange" => tonic::Code::OutOfRange,
+        "Unimplemented" => tonic::Code::Unimplemented,
+        "Internal" => tonic::Code::Internal,
+        "Unavailable" => tonic::Code::Unavailable,
+        "DataLoss" => tonic::Code::DataLoss,
+        "Unauthenticated" => tonic::Code::Unauthenticated,
+        _ => tonic::Code::Unknown,
+    }
+}
+
+/// Parse a stream error string formatted as `[Code] message` into an
+/// `EnqueueError`. The server's streaming handler formats errors with the
+/// gRPC status code prefix (e.g., `[NotFound] no-such-queue`).
+fn parse_stream_error(err: &str) -> EnqueueError {
+    // Parse "[Code] message" format from server.
+    if let Some(rest) = err.strip_prefix('[') {
+        if let Some(bracket_end) = rest.find(']') {
+            let code_str = &rest[..bracket_end];
+            let message = rest[bracket_end + 1..].trim_start().to_string();
+            let code = parse_grpc_code(code_str);
+            // Map to the appropriate EnqueueError variant using the same
+            // logic as the unary enqueue_status_error, then delegate to
+            // status_error for the remaining codes.
+            let status = tonic::Status::new(code, message);
+            return enqueue_status_error(status);
+        }
+    }
+    // Fallback for unprefixed errors.
+    EnqueueError::Status(StatusError::Internal(err.to_string()))
+}
+
+/// Resolve a single stream response by matching its sequence number to a
+/// pending oneshot sender.
+async fn resolve_stream_response(
+    pending: &Mutex<HashMap<u64, oneshot::Sender<Result<String, EnqueueError>>>>,
+    response: StreamEnqueueResponse,
+) {
+    let seq = response.sequence_number;
+    let result = match response.result {
+        Some(fila_proto::stream_enqueue_response::Result::MessageId(id)) => Ok(id),
+        Some(fila_proto::stream_enqueue_response::Result::Error(err)) => {
+            Err(parse_stream_error(&err))
+        }
+        None => Err(EnqueueError::Status(StatusError::Internal(
+            "no result in stream response".to_string(),
+        ))),
+    };
+
+    let mut map = pending.lock().await;
+    if let Some(tx) = map.remove(&seq) {
+        let _ = tx.send(result);
+    }
+}
+
+/// Error all pending messages (called when the stream breaks).
+async fn error_all_pending(
+    pending: &Mutex<HashMap<u64, oneshot::Sender<Result<String, EnqueueError>>>>,
+    error_msg: &str,
+) {
+    let mut map = pending.lock().await;
+    let entries: Vec<_> = map.drain().collect();
+    for (_seq, tx) in entries {
+        let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
+            error_msg.to_string(),
+        ))));
+    }
+}
+
+// --- Batcher implementations ---
+
+/// Opportunistic batcher with streaming support.
+///
+/// Uses a persistent `StreamEnqueue` bidirectional stream when the server
+/// supports it. Falls back to unary RPCs if the server returns `UNIMPLEMENTED`.
+///
+/// At low load: each message arrives alone and is sent immediately through
+/// the stream (zero added latency).
+/// At high load: multiple messages pile up and are sent as a burst through
+/// the same stream. No HTTP/2 stream creation overhead per batch.
 async fn run_auto_batcher(
     mut rx: mpsc::Receiver<BatchItem>,
     client: FilaServiceClient<Channel>,
     api_key: Option<String>,
     max_batch_size: usize,
 ) {
+    let mut stream_mgr = StreamManager::new(client.clone(), api_key.clone());
+
     loop {
         // Wait for at least one message.
         let first = match rx.recv().await {
@@ -625,18 +910,34 @@ async fn run_auto_batcher(
             }
         }
 
-        // Flush in a spawned task — don't block the loop. This allows
-        // concurrent RPCs: the loop immediately goes back to recv().
-        let c = client.clone();
-        let k = api_key.clone();
-        tokio::spawn(async move {
-            flush_batch_owned(batch, &c, &k).await;
-        });
+        // Try streaming first.
+        if stream_mgr.ensure_stream().await {
+            let unsent = stream_mgr.send_batch(batch).await;
+            if !unsent.is_empty() {
+                // Stream broke mid-send. Error the unsent items — they'll
+                // get transport errors. Next batch will reopen the stream.
+                for item in unsent {
+                    let _ = item
+                        .result_tx
+                        .send(Err(EnqueueError::Status(StatusError::Internal(
+                            "stream broke during send".to_string(),
+                        ))));
+                }
+            }
+        } else {
+            // Streaming not available — fall back to unary RPCs.
+            let c = client.clone();
+            let k = api_key.clone();
+            tokio::spawn(async move {
+                flush_batch_owned(batch, &c, &k).await;
+            });
+        }
     }
 }
 
-/// Timer-based batcher: flushes when either `batch_size` messages accumulate
-/// or `linger_ms` milliseconds elapse since the first message in the batch.
+/// Timer-based batcher with streaming support.
+///
+/// Uses streaming when available, falls back to unary RPCs otherwise.
 async fn run_linger_batcher(
     mut rx: mpsc::Receiver<BatchItem>,
     client: FilaServiceClient<Channel>,
@@ -644,6 +945,7 @@ async fn run_linger_batcher(
     batch_size: usize,
     linger_ms: u64,
 ) {
+    let mut stream_mgr = StreamManager::new(client.clone(), api_key.clone());
     let mut buffer: Vec<BatchItem> = Vec::with_capacity(batch_size);
 
     loop {
@@ -653,7 +955,7 @@ async fn run_linger_batcher(
                 Some(item) => {
                     buffer.push(item);
                     if buffer.len() >= batch_size {
-                        flush_batch(&mut buffer, &client, &api_key).await;
+                        flush_with_stream(&mut stream_mgr, &mut buffer, &client, &api_key).await;
                     }
                 }
                 // All senders dropped — nothing to flush.
@@ -672,18 +974,36 @@ async fn run_linger_batcher(
                         Some(item) => {
                             buffer.push(item);
                             if buffer.len() >= batch_size {
-                                flush_batch(&mut buffer, &client, &api_key).await;
+                                flush_with_stream(
+                                    &mut stream_mgr,
+                                    &mut buffer,
+                                    &client,
+                                    &api_key,
+                                )
+                                .await;
                                 break; // Back to outer loop (buffer now empty).
                             }
                         }
                         None => {
                             // All senders dropped — flush remaining and exit.
-                            flush_batch(&mut buffer, &client, &api_key).await;
+                            flush_with_stream(
+                                &mut stream_mgr,
+                                &mut buffer,
+                                &client,
+                                &api_key,
+                            )
+                            .await;
                             return;
                         }
                     },
                     _ = &mut sleep => {
-                        flush_batch(&mut buffer, &client, &api_key).await;
+                        flush_with_stream(
+                            &mut stream_mgr,
+                            &mut buffer,
+                            &client,
+                            &api_key,
+                        )
+                        .await;
                         break; // Back to outer loop.
                     }
                 }
@@ -692,14 +1012,33 @@ async fn run_linger_batcher(
     }
 }
 
-/// Flush from a mutable buffer reference (used by linger batcher).
-async fn flush_batch(
+/// Flush a buffer using streaming if available, otherwise unary RPCs.
+async fn flush_with_stream(
+    stream_mgr: &mut StreamManager,
     buffer: &mut Vec<BatchItem>,
     client: &FilaServiceClient<Channel>,
     api_key: &Option<String>,
 ) {
     let items: Vec<BatchItem> = std::mem::take(buffer);
-    flush_batch_owned(items, client, api_key).await;
+    if items.is_empty() {
+        return;
+    }
+
+    if stream_mgr.ensure_stream().await {
+        let unsent = stream_mgr.send_batch(items).await;
+        if !unsent.is_empty() {
+            for item in unsent {
+                let _ = item
+                    .result_tx
+                    .send(Err(EnqueueError::Status(StatusError::Internal(
+                        "stream broke during send".to_string(),
+                    ))));
+            }
+        }
+    } else {
+        // Streaming not available — fall back to unary RPCs.
+        flush_batch_owned(items, client, api_key).await;
+    }
 }
 
 /// Flush an owned batch of messages and fan results back to individual callers.

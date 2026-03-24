@@ -263,7 +263,7 @@ development_status:
   # Epic 29: Transport Optimization — Fair Benchmarks & Streaming Enqueue
   # Fix competitive benchmark to use batching (P0), add streaming enqueue RPC (P1).
   # Profiling shows 94% of per-message time is gRPC/HTTP2 overhead.
-  epic-29: in-progress
+  epic-29: done
   29-1-fair-competitive-benchmark: done
-  29-2-streaming-enqueue-rpc: review
-  29-3-sdk-streaming-enqueue: backlog
+  29-2-streaming-enqueue-rpc: done
+  29-3-sdk-streaming-enqueue: done
