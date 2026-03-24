@@ -83,8 +83,7 @@ impl RocksDbEngine {
         db_opts.set_wal_bytes_per_sync(config.wal_bytes_per_sync);
 
         // --- Per-CF options ---
-        let messages_opts =
-            Self::messages_cf_opts(config, &cache);
+        let messages_opts = Self::messages_cf_opts(config, &cache);
         let leases_opts = Self::leases_cf_opts(config, &cache);
         let lease_expiry_opts = Self::lease_expiry_cf_opts(&cache);
         let raft_log_opts = Self::raft_log_cf_opts(config, &cache);

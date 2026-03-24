@@ -164,7 +164,7 @@ impl TelemetryConfig {
 }
 
 /// Storage engine configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
     pub rocksdb: RocksDbConfig,
@@ -211,14 +211,6 @@ pub struct GrpcConfig {
     pub keepalive_interval_secs: u64,
     /// HTTP/2 keepalive timeout in seconds (default: 10).
     pub keepalive_timeout_secs: u64,
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            rocksdb: RocksDbConfig::default(),
-        }
-    }
 }
 
 impl Default for RocksDbConfig {
@@ -484,7 +476,10 @@ mod tests {
         assert_eq!(config.storage.rocksdb.block_cache_mb, 256);
         assert_eq!(config.storage.rocksdb.messages_write_buffer_mb, 128);
         assert_eq!(config.storage.rocksdb.messages_max_write_buffers, 4);
-        assert_eq!(config.storage.rocksdb.messages_min_write_buffers_to_merge, 2);
+        assert_eq!(
+            config.storage.rocksdb.messages_min_write_buffers_to_merge,
+            2
+        );
         assert_eq!(config.storage.rocksdb.leases_write_buffer_mb, 64);
         assert!(config.storage.rocksdb.pipelined_write);
         assert!(config.storage.rocksdb.manual_wal_flush);
@@ -512,7 +507,10 @@ mod tests {
         assert_eq!(config.storage.rocksdb.block_cache_mb, 512);
         assert_eq!(config.storage.rocksdb.messages_write_buffer_mb, 256);
         assert_eq!(config.storage.rocksdb.messages_max_write_buffers, 8);
-        assert_eq!(config.storage.rocksdb.messages_min_write_buffers_to_merge, 4);
+        assert_eq!(
+            config.storage.rocksdb.messages_min_write_buffers_to_merge,
+            4
+        );
         assert_eq!(config.storage.rocksdb.leases_write_buffer_mb, 128);
         assert!(!config.storage.rocksdb.pipelined_write);
         assert!(!config.storage.rocksdb.manual_wal_flush);

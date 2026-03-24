@@ -181,8 +181,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .initial_stream_window_size(grpc_config.initial_stream_window_size)
         .initial_connection_window_size(grpc_config.initial_connection_window_size)
         .tcp_nodelay(grpc_config.tcp_nodelay)
-        .http2_keepalive_interval(Some(Duration::from_secs(grpc_config.keepalive_interval_secs)))
-        .http2_keepalive_timeout(Some(Duration::from_secs(grpc_config.keepalive_timeout_secs)));
+        .http2_keepalive_interval(Some(Duration::from_secs(
+            grpc_config.keepalive_interval_secs,
+        )))
+        .http2_keepalive_timeout(Some(Duration::from_secs(
+            grpc_config.keepalive_timeout_secs,
+        )));
     if let Some(ref tls) = tls_params {
         let server_tls = load_server_tls(tls).await?;
         server_builder = server_builder.tls_config(server_tls)?;
