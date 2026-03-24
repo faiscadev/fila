@@ -246,7 +246,7 @@ impl FilaClient {
             .enqueue(self.request(EnqueueRequest {
                 queue: queue.to_string(),
                 headers,
-                payload: payload.into(),
+                payload: bytes::Bytes::from(payload.into()),
             }))
             .await
             .map_err(enqueue_status_error)?;
@@ -271,7 +271,7 @@ impl FilaClient {
             .map(|m| EnqueueRequest {
                 queue: m.queue,
                 headers: m.headers,
-                payload: m.payload,
+                payload: bytes::Bytes::from(m.payload),
             })
             .collect();
 
@@ -408,7 +408,7 @@ impl FilaClient {
                                 let cm = ConsumeMessage {
                                     id: msg.id,
                                     headers: msg.headers,
-                                    payload: msg.payload,
+                                    payload: msg.payload.to_vec(),
                                     fairness_key: metadata.fairness_key,
                                     attempt_count: metadata.attempt_count,
                                     queue: metadata.queue_id,
@@ -422,7 +422,7 @@ impl FilaClient {
                             let cm = ConsumeMessage {
                                 id: msg.id,
                                 headers: msg.headers,
-                                payload: msg.payload,
+                                payload: msg.payload.to_vec(),
                                 fairness_key: metadata.fairness_key,
                                 attempt_count: metadata.attempt_count,
                                 queue: metadata.queue_id,

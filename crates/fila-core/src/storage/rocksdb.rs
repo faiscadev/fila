@@ -542,7 +542,7 @@ mod tests {
             id: Uuid::now_v7(),
             queue_id: queue_id.to_string(),
             headers: HashMap::new(),
-            payload: vec![1, 2, 3],
+            payload: vec![1, 2, 3].into(),
             fairness_key: fairness_key.to_string(),
             weight: 1,
             throttle_keys: vec![],

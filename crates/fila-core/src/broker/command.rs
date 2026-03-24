@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use bytes::Bytes;
 use uuid::Uuid;
 
 use crate::error::{
@@ -13,7 +14,7 @@ pub struct ReadyMessage {
     pub msg_id: Uuid,
     pub queue_id: String,
     pub headers: HashMap<String, String>,
-    pub payload: Vec<u8>,
+    pub payload: Bytes,
     pub fairness_key: String,
     pub weight: u32,
     pub throttle_keys: Vec<String>,

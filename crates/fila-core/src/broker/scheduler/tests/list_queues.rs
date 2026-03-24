@@ -56,7 +56,7 @@ fn list_queues_reports_nonzero_depth_and_consumers() {
         id: Uuid::now_v7(),
         queue_id: "stats-q".to_string(),
         headers: HashMap::new(),
-        payload: vec![1],
+        payload: vec![1].into(),
         fairness_key: "fk".to_string(),
         weight: 1,
         throttle_keys: vec![],

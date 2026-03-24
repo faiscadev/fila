@@ -379,7 +379,7 @@ mod tests {
             id: uuid::Uuid::now_v7(),
             queue_id: "payments".to_string(),
             headers: std::collections::HashMap::new(),
-            payload: vec![1, 2, 3],
+            payload: vec![1, 2, 3].into(),
             fairness_key: "default".to_string(),
             weight: 1,
             throttle_keys: vec![],
@@ -626,7 +626,7 @@ mod tests {
             id: uuid::Uuid::now_v7(),
             queue_id: queue_id.to_string(),
             headers: std::collections::HashMap::new(),
-            payload: payload.clone(),
+            payload: bytes::Bytes::from(payload.clone()),
             fairness_key: "default".to_string(),
             weight: 1,
             throttle_keys: vec![],
@@ -779,7 +779,7 @@ mod tests {
             .expect("channel should not be closed");
 
         assert_eq!(ready_msg.msg_id, msg_id);
-        assert_eq!(ready_msg.payload, b"hello cluster");
+        assert_eq!(ready_msg.payload.as_ref(), b"hello cluster");
 
         // Cleanup.
         let _ = leader

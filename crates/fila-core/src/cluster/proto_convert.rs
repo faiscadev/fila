@@ -371,7 +371,7 @@ pub(crate) fn install_snapshot_request_to_proto(
         vote: Some(vote_to_proto(r.vote)),
         meta: Some(snapshot_meta_to_proto(r.meta)),
         offset: r.offset,
-        data: r.data,
+        data: r.data.into(),
         done: r.done,
         group_id,
     }
@@ -390,7 +390,7 @@ pub(crate) fn install_snapshot_request_from_proto(
         vote: vote_from_proto(vote)?,
         meta: snapshot_meta_from_proto(meta)?,
         offset: p.offset,
-        data: p.data,
+        data: p.data.to_vec(),
         done: p.done,
     })
 }
@@ -798,7 +798,7 @@ mod tests {
             id: uuid::Uuid::now_v7(),
             queue_id: "test-queue".to_string(),
             headers: HashMap::from([("key".to_string(), "value".to_string())]),
-            payload: b"hello world".to_vec(),
+            payload: bytes::Bytes::from_static(b"hello world"),
             fairness_key: "default".to_string(),
             weight: 1,
             throttle_keys: vec!["rate-1".to_string()],

@@ -11,13 +11,12 @@ fn encode_u64(val: u64) -> [u8; 8] {
     val.to_be_bytes()
 }
 
-/// Encode a variable-length string with a 2-byte big-endian length prefix.
-fn encode_string(s: &str) -> Vec<u8> {
+/// Write a variable-length string with a 2-byte big-endian length prefix
+/// directly into `buf`, avoiding intermediate allocation.
+fn write_string(buf: &mut Vec<u8>, s: &str) {
     let len = u16::try_from(s.len()).expect("key string exceeds 64 KiB");
-    let mut buf = Vec::with_capacity(2 + s.len());
     buf.extend_from_slice(&len.to_be_bytes());
     buf.extend_from_slice(s.as_bytes());
-    buf
 }
 
 /// Build a message key: `{queue_id}:{fairness_key}:{enqueue_ts_ns}:{msg_id}`
@@ -36,33 +35,46 @@ pub fn message_key(
     enqueue_ts_ns: u64,
     msg_id: &uuid::Uuid,
 ) -> Vec<u8> {
-    let mut key = Vec::with_capacity(64);
-    key.extend_from_slice(&encode_string(queue_id));
+    // Exact size: (2+queue_id) + 1 + (2+fairness_key) + 1 + 8 + 1 + 16
+    let cap = 31 + queue_id.len() + fairness_key.len();
+    let mut key = Vec::with_capacity(cap);
+    write_string(&mut key, queue_id);
     key.push(SEPARATOR);
-    key.extend_from_slice(&encode_string(fairness_key));
+    write_string(&mut key, fairness_key);
     key.push(SEPARATOR);
     key.extend_from_slice(&encode_u64(enqueue_ts_ns));
     key.push(SEPARATOR);
     key.extend_from_slice(msg_id.as_bytes());
+    debug_assert_eq!(key.len(), cap, "message_key capacity mismatch");
     key
 }
 
 /// Build a prefix for iterating all messages in a queue.
 pub fn message_prefix(queue_id: &str) -> Vec<u8> {
-    let mut prefix = Vec::with_capacity(32);
-    prefix.extend_from_slice(&encode_string(queue_id));
+    // Exact size: (2+queue_id) + 1
+    let cap = 3 + queue_id.len();
+    let mut prefix = Vec::with_capacity(cap);
+    write_string(&mut prefix, queue_id);
     prefix.push(SEPARATOR);
+    debug_assert_eq!(prefix.len(), cap, "message_prefix capacity mismatch");
     prefix
 }
 
 /// Build a prefix for iterating messages with a specific fairness key in a queue.
 #[cfg(test)]
 pub fn message_prefix_with_key(queue_id: &str, fairness_key: &str) -> Vec<u8> {
-    let mut prefix = Vec::with_capacity(48);
-    prefix.extend_from_slice(&encode_string(queue_id));
+    // Exact size: (2+queue_id) + 1 + (2+fairness_key) + 1
+    let cap = 6 + queue_id.len() + fairness_key.len();
+    let mut prefix = Vec::with_capacity(cap);
+    write_string(&mut prefix, queue_id);
     prefix.push(SEPARATOR);
-    prefix.extend_from_slice(&encode_string(fairness_key));
+    write_string(&mut prefix, fairness_key);
     prefix.push(SEPARATOR);
+    debug_assert_eq!(
+        prefix.len(),
+        cap,
+        "message_prefix_with_key capacity mismatch"
+    );
     prefix
 }
 
@@ -89,19 +101,25 @@ pub fn extract_queue_id(key: &[u8]) -> Option<String> {
 /// full message storage key for O(1) ack/nack lookups. Stored in its own
 /// column family (`msg_index`) to avoid collisions with leases.
 pub fn msg_index_key(queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
-    let mut key = Vec::with_capacity(32);
-    key.extend_from_slice(&encode_string(queue_id));
+    // Exact size: (2+queue_id) + 1 + 16
+    let cap = 19 + queue_id.len();
+    let mut key = Vec::with_capacity(cap);
+    write_string(&mut key, queue_id);
     key.push(SEPARATOR);
     key.extend_from_slice(msg_id.as_bytes());
+    debug_assert_eq!(key.len(), cap, "msg_index_key capacity mismatch");
     key
 }
 
 /// Build a lease key: `{queue_id}:{msg_id}`
 pub fn lease_key(queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
-    let mut key = Vec::with_capacity(32);
-    key.extend_from_slice(&encode_string(queue_id));
+    // Exact size: (2+queue_id) + 1 + 16
+    let cap = 19 + queue_id.len();
+    let mut key = Vec::with_capacity(cap);
+    write_string(&mut key, queue_id);
     key.push(SEPARATOR);
     key.extend_from_slice(msg_id.as_bytes());
+    debug_assert_eq!(key.len(), cap, "lease_key capacity mismatch");
     key
 }
 
@@ -109,21 +127,27 @@ pub fn lease_key(queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
 ///
 /// Timestamp-first layout enables efficient "scan from earliest expiry" iteration.
 pub fn lease_expiry_key(expiry_ts_ns: u64, queue_id: &str, msg_id: &uuid::Uuid) -> Vec<u8> {
-    let mut key = Vec::with_capacity(40);
+    // Exact size: 8 + 1 + (2+queue_id) + 1 + 16
+    let cap = 28 + queue_id.len();
+    let mut key = Vec::with_capacity(cap);
     key.extend_from_slice(&encode_u64(expiry_ts_ns));
     key.push(SEPARATOR);
-    key.extend_from_slice(&encode_string(queue_id));
+    write_string(&mut key, queue_id);
     key.push(SEPARATOR);
     key.extend_from_slice(msg_id.as_bytes());
+    debug_assert_eq!(key.len(), cap, "lease_expiry_key capacity mismatch");
     key
 }
 
 /// Encode a lease value: `{consumer_id}:{expiry_ts_ns}`
 pub fn lease_value(consumer_id: &str, expiry_ts_ns: u64) -> Vec<u8> {
-    let mut val = Vec::with_capacity(32);
-    val.extend_from_slice(&encode_string(consumer_id));
+    // Exact size: (2+consumer_id) + 1 + 8
+    let cap = 11 + consumer_id.len();
+    let mut val = Vec::with_capacity(cap);
+    write_string(&mut val, consumer_id);
     val.push(SEPARATOR);
     val.extend_from_slice(&encode_u64(expiry_ts_ns));
+    debug_assert_eq!(val.len(), cap, "lease_value capacity mismatch");
     val
 }
 

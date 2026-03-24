@@ -16,6 +16,7 @@ tonic = { workspace = true, features = ["tls-native-roots"] }
 tokio = { workspace = true, features = ["sync", "rt"] }
 tokio-stream.workspace = true
 thiserror.workspace = true
+bytes.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
