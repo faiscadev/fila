@@ -27,6 +27,16 @@ const PAYLOAD_64B: usize = 64;
 const PAYLOAD_1KB: usize = 1024;
 const PAYLOAD_64KB: usize = 65536;
 
+/// Build metadata with a `batching` field indicating the strategy used.
+fn batching_meta(strategy: &str) -> HashMap<String, serde_json::Value> {
+    let mut m = HashMap::new();
+    m.insert(
+        "batching".to_string(),
+        serde_json::Value::String(strategy.to_string()),
+    );
+    m
+}
+
 /// Returns the measurement duration in seconds, configurable via `FILA_BENCH_DURATION_SECS`.
 fn measure_secs() -> u64 {
     std::env::var("FILA_BENCH_DURATION_SECS")
@@ -171,7 +181,7 @@ mod kafka {
                 name: format!("kafka_throughput_{size_name}"),
                 value: meter.msg_per_sec(),
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("linger_ms=5"),
             });
             cleanup_topic(&adm, &topic).await;
         }
@@ -294,7 +304,7 @@ mod kafka {
                 name: "kafka_lifecycle_throughput".to_string(),
                 value: count as f64 / elapsed,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("none"),
             });
             cleanup_topic(&adm, topic).await;
         }
@@ -351,7 +361,7 @@ mod kafka {
                 name: "kafka_multi_producer_throughput".to_string(),
                 value: total as f64 / measure_duration as f64,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("linger_ms=5"),
             });
             cleanup_topic(&adm, topic).await;
         }
@@ -479,7 +489,7 @@ mod rabbitmq {
                 name: format!("rabbitmq_throughput_{size_name}"),
                 value: meter.msg_per_sec(),
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("none"),
             });
             channel
                 .queue_delete(&queue, QueueDeleteOptions::default())
@@ -615,7 +625,7 @@ mod rabbitmq {
                 name: "rabbitmq_lifecycle_throughput".to_string(),
                 value: count as f64 / elapsed,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("none"),
             });
             channel
                 .queue_delete(queue, QueueDeleteOptions::default())
@@ -693,7 +703,7 @@ mod rabbitmq {
                 name: "rabbitmq_multi_producer_throughput".to_string(),
                 value: total as f64 / measure_duration as f64,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("none"),
             });
 
             let conn = connect().await;
@@ -800,7 +810,7 @@ mod nats {
                 name: format!("nats_throughput_{size_name}"),
                 value: meter.msg_per_sec(),
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("none"),
             });
             let _ = js.delete_stream(&stream).await;
         }
@@ -929,7 +939,7 @@ mod nats {
                 name: "nats_lifecycle_throughput".to_string(),
                 value: count as f64 / elapsed,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("none"),
             });
             let _ = js.delete_stream(stream).await;
         }
@@ -986,7 +996,7 @@ mod nats {
                 name: "nats_multi_producer_throughput".to_string(),
                 value: total as f64 / measure_duration as f64,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("none"),
             });
             let _ = js.delete_stream(stream).await;
         }
@@ -1026,16 +1036,22 @@ mod nats {
 mod fila {
     use super::*;
     use fila_bench::server::create_queue_cli;
-    use fila_sdk::FilaClient;
+    use fila_sdk::{BatchMode, ConnectOptions, FilaClient};
     use tokio_stream::StreamExt;
 
     const ADDR: &str = "http://localhost:5555";
+    /// Number of concurrent producers for throughput scenarios.
+    /// Concurrent producers are needed to trigger auto-batching: the Nagle-style
+    /// batcher sends immediately when idle, so a single serial producer never
+    /// accumulates messages. Multiple producers ensure messages queue while RPCs
+    /// are in flight, matching how Kafka's linger.ms amortizes network calls.
+    const THROUGHPUT_PRODUCERS: usize = 4;
 
     pub async fn bench(report: &mut BenchReport) {
         let addr = ADDR;
         let measure_duration = measure_secs();
 
-        // Throughput benchmarks
+        // Throughput benchmarks — concurrent producers with auto-batching
         for (size_name, payload_size) in [
             ("64b", PAYLOAD_64B),
             ("1kb", PAYLOAD_1KB),
@@ -1043,43 +1059,62 @@ mod fila {
         ] {
             let queue = format!("bench-throughput-{size_name}");
             create_queue_cli(addr, &queue);
-            let client = FilaClient::connect(addr).await.expect("fila connect");
-            let payload = vec![0u8; payload_size];
-            let headers = HashMap::new();
 
-            // Warmup
-            println!("[fila] Throughput {size_name} warmup...");
-            let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
-            while Instant::now() < warmup_deadline {
-                let _ = client
-                    .enqueue(&queue, headers.clone(), payload.clone())
-                    .await;
-            }
+            println!("[fila] Throughput {size_name} warmup ({THROUGHPUT_PRODUCERS} producers, auto-batching)...");
+            let counts: Vec<Arc<std::sync::atomic::AtomicU64>> = (0..THROUGHPUT_PRODUCERS)
+                .map(|_| Arc::new(std::sync::atomic::AtomicU64::new(0)))
+                .collect();
 
-            // Measure
+            let handles: Vec<_> = (0..THROUGHPUT_PRODUCERS)
+                .map(|i| {
+                    let queue = queue.clone();
+                    let count = counts[i].clone();
+                    let addr = addr.to_string();
+                    tokio::spawn(async move {
+                        let client = FilaClient::connect(&addr).await.expect("fila connect");
+                        let payload = vec![0u8; payload_size];
+                        let headers = HashMap::new();
+                        // Warmup
+                        let warmup_deadline = Instant::now() + Duration::from_secs(WARMUP_SECS);
+                        while Instant::now() < warmup_deadline {
+                            let _ = client
+                                .enqueue(&queue, headers.clone(), payload.clone())
+                                .await;
+                        }
+                        // Measure
+                        let measure_deadline = Instant::now() + Duration::from_secs(measure_secs());
+                        while Instant::now() < measure_deadline {
+                            if client
+                                .enqueue(&queue, headers.clone(), payload.clone())
+                                .await
+                                .is_ok()
+                            {
+                                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    })
+                })
+                .collect();
+
             println!("[fila] Throughput {size_name} measuring...");
-            let mut meter = ThroughputMeter::start();
-            let measure_deadline = Instant::now() + Duration::from_secs(measure_duration);
-            while Instant::now() < measure_deadline {
-                if client
-                    .enqueue(&queue, headers.clone(), payload.clone())
-                    .await
-                    .is_ok()
-                {
-                    meter.increment();
-                }
+            for h in handles {
+                h.await.unwrap();
             }
 
+            let total: u64 = counts
+                .iter()
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .sum();
             report.add(BenchResult {
                 name: format!("fila_throughput_{size_name}"),
-                value: meter.msg_per_sec(),
+                value: total as f64 / measure_duration as f64,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("auto"),
             });
         }
 
-        // Latency benchmark (1KB) — concurrent produce/consume
-        println!("[fila] Latency benchmark...");
+        // Latency benchmark (1KB) — concurrent produce/consume, unbatched
+        println!("[fila] Latency benchmark (unbatched)...");
         {
             let queue = "bench-latency";
             create_queue_cli(addr, queue);
@@ -1089,10 +1124,13 @@ mod fila {
             let warmup_dur = Duration::from_secs(WARMUP_SECS);
             let total_dur = Duration::from_secs(WARMUP_SECS + measure_duration);
 
-            // Producer task
+            // Producer task — use Disabled batching for accurate per-message latency
             let producer_handle = {
                 let queue = queue.to_string();
-                let client = FilaClient::connect(addr).await.expect("fila connect");
+                let opts = ConnectOptions::new(addr).with_batch_mode(BatchMode::Disabled);
+                let client = FilaClient::connect_with_options(opts)
+                    .await
+                    .expect("fila connect");
                 tokio::spawn(async move {
                     let start = start_time;
                     let total = total_dur;
@@ -1142,12 +1180,15 @@ mod fila {
             emit_latency_results(report, "fila", &locked);
         }
 
-        // Lifecycle throughput
-        println!("[fila] Lifecycle throughput...");
+        // Lifecycle throughput — unbatched serial enqueue→consume→ack
+        println!("[fila] Lifecycle throughput (unbatched)...");
         {
             let queue = "bench-lifecycle";
             create_queue_cli(addr, queue);
-            let client = FilaClient::connect(addr).await.expect("fila connect");
+            let opts = ConnectOptions::new(addr).with_batch_mode(BatchMode::Disabled);
+            let client = FilaClient::connect_with_options(opts)
+                .await
+                .expect("fila connect");
             let payload = vec![0u8; PAYLOAD_1KB];
             let headers = HashMap::new();
 
@@ -1173,20 +1214,22 @@ mod fila {
                 name: "fila_lifecycle_throughput".to_string(),
                 value: count as f64 / elapsed,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("none"),
             });
         }
 
-        // Multi-producer throughput
-        println!("[fila] Multi-producer throughput...");
+        // Multi-producer throughput — concurrent producers with auto-batching
+        println!(
+            "[fila] Multi-producer throughput ({MULTI_PRODUCERS} producers, auto-batching)..."
+        );
         {
             let queue = "bench-multi-producer";
             create_queue_cli(addr, queue);
             let payload = vec![0u8; PAYLOAD_1KB];
             let addr = addr.to_string();
 
-            let counts: Vec<std::sync::Arc<std::sync::atomic::AtomicU64>> = (0..MULTI_PRODUCERS)
-                .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+            let counts: Vec<Arc<std::sync::atomic::AtomicU64>> = (0..MULTI_PRODUCERS)
+                .map(|_| Arc::new(std::sync::atomic::AtomicU64::new(0)))
                 .collect();
 
             let handles: Vec<_> = (0..MULTI_PRODUCERS)
@@ -1232,7 +1275,7 @@ mod fila {
                 name: "fila_multi_producer_throughput".to_string(),
                 value: total as f64 / measure_duration as f64,
                 unit: "msg/s".to_string(),
-                metadata: HashMap::new(),
+                metadata: batching_meta("auto"),
             });
         }
 
