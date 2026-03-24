@@ -255,3 +255,15 @@ development_status:
   27-2-subsystem-level-benchmarks: done
   27-3-batch-benchmark-scenarios: done
   epic-27-retrospective: done
+
+  # Epic 28: Auto-Update Benchmarks Doc
+  epic-28: done
+  28-1-auto-update-benchmarks-doc: done
+
+  # Epic 29: Transport Optimization — Fair Benchmarks & Streaming Enqueue
+  # Fix competitive benchmark to use batching (P0), add streaming enqueue RPC (P1).
+  # Profiling shows 94% of per-message time is gRPC/HTTP2 overhead.
+  epic-29: backlog
+  29-1-fair-competitive-benchmark: backlog
+  29-2-streaming-enqueue-rpc: backlog
+  29-3-sdk-streaming-enqueue: backlog
