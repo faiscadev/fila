@@ -1310,6 +1310,7 @@ dependencies = [
 name = "fila-proto"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "prost",
  "prost-types",
  "tonic",
@@ -1321,6 +1322,7 @@ dependencies = [
 name = "fila-sdk"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "fila-proto",
  "tempfile",
  "thiserror 1.0.69",
