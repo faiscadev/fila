@@ -1,24 +1,47 @@
-epic: "Epic 24: Tier 3 — Zero-Copy & Scheduler Sharding"
+epic: "Epic 26: SDK Batch Operations & Auto-Batching"
 baseBranch: main
 startedAt: "2026-03-24"
-completedAt: "2026-03-24"
 stories:
-  - id: "24.1"
-    title: "Zero-Copy Protobuf Passthrough & Key Encoding"
-    status: completed
-    currentPhase: ""
-    branch: "feat/24.1-zero-copy-key-encoding"
-    pr: 100
+  - id: "26.1"
+    title: "Rust SDK Auto-Batching (linger_ms Timer)"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/26.1-rust-sdk-auto-batching"
+    pr: null
     dependsOn: []
-  - id: "24.2"
-    title: "Scheduler Sharding"
-    status: completed
+  - id: "26.2"
+    title: "Go SDK Batch Operations & Auto-Batching"
+    status: pending
     currentPhase: ""
-    branch: "feat/24.2-scheduler-sharding"
-    pr: 101
-    dependsOn: ["24.1"]
-summary:
-  total: 2
-  completed: 2
-  skipped: 0
+    branch: ""
+    pr: null
+    dependsOn: ["26.1"]
+  - id: "26.3"
+    title: "Python SDK Batch Operations & Auto-Batching"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["26.1"]
+  - id: "26.4"
+    title: "JavaScript SDK Batch Operations & Auto-Batching"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["26.1"]
+  - id: "26.5"
+    title: "Ruby SDK Batch Operations & Auto-Batching"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["26.1"]
+  - id: "26.6"
+    title: "Java SDK Batch Operations & Auto-Batching"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["26.1"]
 skippedIssues: []
