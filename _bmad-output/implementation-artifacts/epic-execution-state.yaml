@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "23.2"
     title: "Server-Side Write Coalescing"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/23.2-write-coalescing"
+    pr: 98
     dependsOn: ["23.1"]
   - id: "23.3"
     title: "Delivery Batching (Consumer-Side)"

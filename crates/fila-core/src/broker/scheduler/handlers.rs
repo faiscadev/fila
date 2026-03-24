@@ -1,10 +1,31 @@
 use super::*;
 
+/// Result of preparing an enqueue without writing to storage.
+/// Contains the serialized message data and in-memory state updates
+/// needed to finalize the enqueue after the batch write commits.
+pub(super) struct PreparedEnqueue {
+    pub(super) msg_id: uuid::Uuid,
+    pub(super) queue_id: String,
+    pub(super) fairness_key: String,
+    pub(super) weight: u32,
+    pub(super) throttle_keys: Vec<String>,
+    pub(super) msg_key: Vec<u8>,
+    /// Protobuf-serialized message value for the PutMessage mutation.
+    pub(super) msg_value: Vec<u8>,
+}
+
 impl Scheduler {
-    pub(super) fn handle_enqueue(
+    /// Prepare an enqueue without writing to storage. Performs queue validation,
+    /// Lua hooks, routing, key generation, and serialization. Returns the
+    /// prepared mutation and metadata, or an error if validation fails.
+    ///
+    /// The caller is responsible for collecting mutations into a batch and
+    /// calling `apply_mutations` once, then finalizing in-memory state via
+    /// `finalize_enqueue`.
+    pub(super) fn prepare_enqueue(
         &mut self,
         mut message: crate::message::Message,
-    ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
+    ) -> Result<PreparedEnqueue, crate::error::EnqueueError> {
         // Verify queue exists
         if self.storage.get_queue(&message.queue_id)?.is_none() {
             return Err(crate::error::EnqueueError::QueueNotFound(
@@ -75,26 +96,59 @@ impl Scheduler {
             &msg_id,
         );
 
-        self.storage.put_message(&key, &message)?;
+        // Serialize to protobuf for the mutation (same as put_message does internally)
+        let proto = fila_proto::Message::from(message.clone());
+        let value = prost::Message::encode_to_vec(&proto);
 
-        self.metrics.record_enqueue(&message.queue_id);
+        Ok(PreparedEnqueue {
+            msg_id,
+            queue_id: message.queue_id,
+            fairness_key: message.fairness_key,
+            weight: message.weight,
+            throttle_keys: message.throttle_keys,
+            msg_key: key,
+            msg_value: value,
+        })
+    }
+
+    /// Finalize an enqueue after its mutation has been committed to storage.
+    /// Updates in-memory state: metrics, DRR active set, pending index.
+    pub(super) fn finalize_enqueue(&mut self, prepared: &PreparedEnqueue) {
+        self.metrics.record_enqueue(&prepared.queue_id);
 
         // Register the fairness key in DRR active set so it participates in scheduling
         self.drr
-            .add_key(&message.queue_id, &message.fairness_key, message.weight);
+            .add_key(&prepared.queue_id, &prepared.fairness_key, prepared.weight);
 
         // Add to pending index
         self.pending_push(
-            &message.queue_id,
-            &message.fairness_key,
+            &prepared.queue_id,
+            &prepared.fairness_key,
             PendingEntry {
-                msg_key: key,
-                msg_id,
-                throttle_keys: message.throttle_keys.clone(),
+                msg_key: prepared.msg_key.clone(),
+                msg_id: prepared.msg_id,
+                throttle_keys: prepared.throttle_keys.clone(),
             },
         );
+    }
 
-        Ok(msg_id)
+    /// Process a single enqueue command end-to-end (prepare + write + finalize).
+    /// Used for the non-coalesced path (single command or when coalescing is
+    /// disabled).
+    pub(super) fn handle_enqueue(
+        &mut self,
+        message: crate::message::Message,
+    ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
+        let prepared = self.prepare_enqueue(message)?;
+
+        let mutation = Mutation::PutMessage {
+            key: prepared.msg_key.clone(),
+            value: prepared.msg_value.clone(),
+        };
+        self.storage.apply_mutations(vec![mutation])?;
+        self.finalize_enqueue(&prepared);
+
+        Ok(prepared.msg_id)
     }
 
     pub(super) fn handle_create_queue(

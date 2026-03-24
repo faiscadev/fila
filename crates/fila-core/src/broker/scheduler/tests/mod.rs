@@ -9,6 +9,7 @@ mod common;
 use common::*;
 
 mod ack_nack;
+mod coalescing;
 mod command;
 mod config;
 mod delivery;

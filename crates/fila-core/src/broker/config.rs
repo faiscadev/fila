@@ -118,6 +118,11 @@ pub struct SchedulerConfig {
     /// per scheduling round. Higher values mean fewer round resets but
     /// coarser fairness granularity.
     pub quantum: u32,
+    /// Maximum number of commands to drain from the channel per coalescing
+    /// batch. When multiple enqueue commands arrive concurrently, their
+    /// storage writes are coalesced into a single RocksDB WriteBatch.
+    /// Default: 100.
+    pub write_coalesce_max_batch: usize,
 }
 
 /// Lua scripting safety configuration.
@@ -285,6 +290,7 @@ impl Default for SchedulerConfig {
             command_channel_capacity: 10_000,
             idle_timeout_ms: 100,
             quantum: 1000,
+            write_coalesce_max_batch: 100,
         }
     }
 }
@@ -300,6 +306,7 @@ mod tests {
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
         assert_eq!(config.scheduler.idle_timeout_ms, 100);
         assert_eq!(config.scheduler.quantum, 1000);
+        assert_eq!(config.scheduler.write_coalesce_max_batch, 100);
         assert_eq!(config.lua.default_timeout_ms, 10);
         assert_eq!(config.lua.default_memory_limit_bytes, 1_048_576);
         assert_eq!(config.lua.circuit_breaker_threshold, 3);
@@ -316,6 +323,7 @@ mod tests {
             command_channel_capacity = 500
             idle_timeout_ms = 50
             quantum = 500
+            write_coalesce_max_batch = 200
 
             [lua]
             default_timeout_ms = 20
@@ -328,6 +336,7 @@ mod tests {
         assert_eq!(config.scheduler.command_channel_capacity, 500);
         assert_eq!(config.scheduler.idle_timeout_ms, 50);
         assert_eq!(config.scheduler.quantum, 500);
+        assert_eq!(config.scheduler.write_coalesce_max_batch, 200);
         assert_eq!(config.lua.default_timeout_ms, 20);
         assert_eq!(config.lua.default_memory_limit_bytes, 524288);
         assert_eq!(config.lua.circuit_breaker_threshold, 5);

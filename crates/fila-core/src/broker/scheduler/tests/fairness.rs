@@ -264,6 +264,7 @@ fn drr_fairness_accuracy_10k_messages_6_keys() {
         command_channel_capacity: total_msgs + 100, // room for all commands
         idle_timeout_ms: 50,
         quantum: 100,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
 
@@ -456,6 +457,7 @@ fn drr_weight_update_changes_proportions() {
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
         quantum: 5,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
     let lua_config = LuaConfig::default();
