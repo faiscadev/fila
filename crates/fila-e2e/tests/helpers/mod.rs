@@ -105,7 +105,9 @@ impl TestServer {
             if start.elapsed() > Duration::from_secs(10) {
                 // Check if child died
                 match child.try_wait() {
-                    Ok(Some(status)) => panic!("fila-server exited with {status} before writing port file"),
+                    Ok(Some(status)) => {
+                        panic!("fila-server exited with {status} before writing port file")
+                    }
                     _ => panic!("fila-server did not write port file within 10s"),
                 }
             }
@@ -185,7 +187,9 @@ impl TestServer {
         let addr = loop {
             if start.elapsed() > Duration::from_secs(10) {
                 match child.try_wait() {
-                    Ok(Some(status)) => panic!("fila-server exited with {status} after restart before writing port file"),
+                    Ok(Some(status)) => panic!(
+                        "fila-server exited with {status} after restart before writing port file"
+                    ),
                     _ => panic!("fila-server did not write port file within 10s after restart"),
                 }
             }
@@ -333,7 +337,9 @@ pub fn start_auth_server() -> (TestServer, String) {
     let addr = loop {
         if start.elapsed() > Duration::from_secs(10) {
             match child.try_wait() {
-                Ok(Some(status)) => panic!("fila-server (auth) exited with {status} before writing port file"),
+                Ok(Some(status)) => {
+                    panic!("fila-server (auth) exited with {status} before writing port file")
+                }
                 _ => panic!("fila-server (auth) did not write port file within 10s"),
             }
         }
