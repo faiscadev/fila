@@ -8,6 +8,8 @@ mod trace_context;
 use std::path::Path;
 use std::sync::Arc;
 
+use std::time::Duration;
+
 use fila_core::{Broker, BrokerConfig, RocksDbEngine, TlsParams};
 use fila_proto::fila_admin_server::FilaAdminServer;
 use fila_proto::fila_service_server::FilaServiceServer;
@@ -82,11 +84,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Clone gui config before `config` is moved into Broker::new.
+    // Clone configs before `config` is moved into Broker::new.
     let gui_config = config.gui.clone();
+    let grpc_config = config.grpc.clone();
 
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
-    let rocksdb = Arc::new(RocksDbEngine::open(&data_dir)?);
+    let rocksdb = Arc::new(RocksDbEngine::open_with_config(
+        &data_dir,
+        &config.storage.rocksdb,
+    )?);
     let storage: Arc<dyn fila_core::StorageEngine> = Arc::clone(&rocksdb) as _;
 
     // Conditionally start cluster manager (Raft consensus).
@@ -171,7 +177,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
-    let mut server_builder = Server::builder();
+    let mut server_builder = Server::builder()
+        .initial_stream_window_size(grpc_config.initial_stream_window_size)
+        .initial_connection_window_size(grpc_config.initial_connection_window_size)
+        .tcp_nodelay(grpc_config.tcp_nodelay)
+        .http2_keepalive_interval(Some(Duration::from_secs(grpc_config.keepalive_interval_secs)))
+        .http2_keepalive_timeout(Some(Duration::from_secs(grpc_config.keepalive_timeout_secs)));
     if let Some(ref tls) = tls_params {
         let server_tls = load_server_tls(tls).await?;
         server_builder = server_builder.tls_config(server_tls)?;
