@@ -123,6 +123,12 @@ pub struct SchedulerConfig {
     /// storage writes are coalesced into a single RocksDB WriteBatch.
     /// Default: 100.
     pub write_coalesce_max_batch: usize,
+    /// Maximum number of messages to batch in a single `ConsumeResponse`
+    /// frame on the delivery stream. When multiple messages are immediately
+    /// available for a consumer, the server collects up to this many and
+    /// sends them in one gRPC frame to amortize HTTP/2 framing overhead.
+    /// Default: 10.
+    pub delivery_batch_max_messages: usize,
 }
 
 /// Lua scripting safety configuration.
@@ -291,6 +297,7 @@ impl Default for SchedulerConfig {
             idle_timeout_ms: 100,
             quantum: 1000,
             write_coalesce_max_batch: 100,
+            delivery_batch_max_messages: 10,
         }
     }
 }
@@ -307,6 +314,7 @@ mod tests {
         assert_eq!(config.scheduler.idle_timeout_ms, 100);
         assert_eq!(config.scheduler.quantum, 1000);
         assert_eq!(config.scheduler.write_coalesce_max_batch, 100);
+        assert_eq!(config.scheduler.delivery_batch_max_messages, 10);
         assert_eq!(config.lua.default_timeout_ms, 10);
         assert_eq!(config.lua.default_memory_limit_bytes, 1_048_576);
         assert_eq!(config.lua.circuit_breaker_threshold, 3);
@@ -324,6 +332,7 @@ mod tests {
             idle_timeout_ms = 50
             quantum = 500
             write_coalesce_max_batch = 200
+            delivery_batch_max_messages = 20
 
             [lua]
             default_timeout_ms = 20
@@ -337,6 +346,7 @@ mod tests {
         assert_eq!(config.scheduler.idle_timeout_ms, 50);
         assert_eq!(config.scheduler.quantum, 500);
         assert_eq!(config.scheduler.write_coalesce_max_batch, 200);
+        assert_eq!(config.scheduler.delivery_batch_max_messages, 20);
         assert_eq!(config.lua.default_timeout_ms, 20);
         assert_eq!(config.lua.default_memory_limit_bytes, 524288);
         assert_eq!(config.lua.circuit_breaker_threshold, 5);

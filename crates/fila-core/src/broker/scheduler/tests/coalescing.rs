@@ -262,6 +262,7 @@ fn max_batch_size_respected() {
         idle_timeout_ms: 10,
         quantum: 1000,
         write_coalesce_max_batch: 5,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
     let lua_config = LuaConfig::default();

@@ -11,7 +11,7 @@ pub(super) fn test_setup() -> (
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
         quantum: 1000,
-        write_coalesce_max_batch: 100,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
     let lua_config = LuaConfig::default();
@@ -53,7 +53,7 @@ pub(super) fn test_setup_with_storage(
         command_channel_capacity: 256,
         idle_timeout_ms: 10,
         quantum: 1000,
-        write_coalesce_max_batch: 100,
+        ..Default::default()
     };
     let (tx, rx) = crossbeam_channel::bounded(config.command_channel_capacity);
     let lua_config = LuaConfig::default();
