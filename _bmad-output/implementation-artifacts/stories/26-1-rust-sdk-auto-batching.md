@@ -1,6 +1,6 @@
 # Story 26.1: Rust SDK Auto-Batching (linger_ms Timer)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -36,29 +36,29 @@ so that high-throughput producers get batch performance without manually calling
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `BatchConfig` to `FilaClient` (AC: #1, #7)
-  - [ ] 1.1 Add `batch_config: Option<BatchConfig>` field to `FilaClient`
-  - [ ] 1.2 Add `ConnectOptions::with_batch_config(config)` builder method
-  - [ ] 1.3 Wire `batch_config` through `connect()` and `connect_with_options()`
+- [x] Task 1: Add `BatchConfig` to `FilaClient` (AC: #1, #7)
+  - [x] 1.1 Added `batch_config: Option<BatchConfig>` field to `ConnectOptions`
+  - [x] 1.2 Added `ConnectOptions::with_batch_config(config)` builder method
+  - [x] 1.3 Wired through `connect()` (batcher_tx: None) and `connect_with_options()` (spawns batcher when linger_ms set)
 
-- [ ] Task 2: Implement auto-batching accumulator (AC: #2, #3, #4, #5, #6)
-  - [ ] 2.1 Create internal `BatchAccumulator` struct with: pending messages vec, oneshot senders for per-message results, batch timer handle
-  - [ ] 2.2 Wrap accumulator in `Arc<Mutex<>>` or use a dedicated `tokio::sync::mpsc` channel for the batcher task
-  - [ ] 2.3 Spawn a background tokio task that owns the accumulator, receives enqueue requests, and flushes on batch_size or linger_ms
-  - [ ] 2.4 Modify `enqueue()`: when auto-batching enabled, send message to batcher task via channel, return a `oneshot::Receiver` wrapped as the result future
-  - [ ] 2.5 Implement flush: collect buffered messages, call `batch_enqueue()`, map results back to individual oneshot senders
-  - [ ] 2.6 Handle partial failures: match `BatchEnqueueResult::Success`/`Error` per message, send appropriate result on each oneshot
+- [x] Task 2: Implement auto-batching accumulator (AC: #2, #3, #4, #5, #6)
+  - [x] 2.1 Created `BatchItem` struct with EnqueueMessage + oneshot::Sender
+  - [x] 2.2 Used `tokio::sync::mpsc` channel for the batcher task
+  - [x] 2.3 Spawned `run_batcher()` background task that accumulates and flushes on batch_size or linger_ms
+  - [x] 2.4 Modified `enqueue()` to route through batcher when `batcher_tx` is Some
+  - [x] 2.5 Implemented `flush_batch()` that calls BatchEnqueue RPC and fans results to oneshot senders
+  - [x] 2.6 Handled partial failures: maps per-message Success/Error to individual futures
 
-- [ ] Task 3: Implement graceful shutdown (AC: #9)
-  - [ ] 3.1 On `Drop`, signal the batcher task to flush remaining messages and shut down
-  - [ ] 3.2 Consider using `tokio::sync::watch` or closing the sender channel as the shutdown signal
+- [x] Task 3: Implement graceful shutdown (AC: #9)
+  - [x] 3.1 Batcher flushes remaining messages when rx.recv() returns None (all senders dropped)
+  - [x] 3.2 Uses mpsc channel close as the shutdown signal (natural Drop behavior)
 
-- [ ] Task 4: Integration tests (AC: #10, #11)
-  - [ ] 4.1 Test: enqueue N messages with batch_size=N, verify batch flushes immediately and all messages are stored
-  - [ ] 4.2 Test: enqueue 1 message with batch_size=100 and linger_ms=50, verify flush happens within ~50ms
-  - [ ] 4.3 Test: enqueue with auto-batching disabled, verify single-message RPC used (existing behavior)
-  - [ ] 4.4 Test: explicit `batch_enqueue()` still works when auto-batching is enabled
-  - [ ] 4.5 Run full existing test suite to verify zero regressions
+- [x] Task 4: Integration tests (AC: #10, #11)
+  - [x] 4.1 `auto_batch_flush_on_batch_size`: enqueue 5 messages with batch_size=5, verifies immediate flush
+  - [x] 4.2 `auto_batch_flush_on_linger_timeout`: enqueue 1 message with linger_ms=100, verifies timer-based flush
+  - [x] 4.3 `auto_batch_disabled_uses_single_message_rpc`: verifies no delay without auto-batching
+  - [x] 4.4 `explicit_batch_enqueue_works_with_auto_batching`: verifies batch_enqueue() still works alongside auto-batching
+  - [x] 4.5 All 3 existing tests pass (zero regressions)
 
 ## Dev Notes
 
@@ -108,8 +108,21 @@ Integration tests live in `crates/fila-sdk/tests/`. Use `TestServer` helper from
 
 ### Agent Model Used
 
+Claude Opus 4.6 (1M context)
+
 ### Debug Log References
+
+None.
 
 ### Completion Notes List
 
+- Used `tokio::sync::mpsc` channel + `oneshot` pattern for the batcher, preserving `Clone + Send + Sync` on `FilaClient`
+- Batcher task holds its own `FilaServiceClient<Channel>` clone to avoid circular dependency
+- `tokio::select! { biased; }` ensures message processing takes priority over timer in race conditions
+- Added `tokio::time` feature to fila-sdk Cargo.toml
+
 ### File List
+
+- `crates/fila-sdk/Cargo.toml` — added `"time"` feature to tokio dependency
+- `crates/fila-sdk/src/client.rs` — added `BatchItem`, `batcher_tx` field, `run_batcher()`, `flush_batch()`, modified `enqueue()`, added `with_batch_config()` to `ConnectOptions`
+- `crates/fila-sdk/tests/integration.rs` — added 4 auto-batching integration tests

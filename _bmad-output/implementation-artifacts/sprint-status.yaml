@@ -243,7 +243,7 @@ development_status:
   # Bring external SDKs to batch parity + deliver auto-batching (linger_ms).
   # Prerequisite: Epic 23 complete (done).
   epic-26: in-progress
-  26-1-rust-sdk-auto-batching-linger-ms-timer: in-progress
+  26-1-rust-sdk-auto-batching-linger-ms-timer: review
   26-2-go-sdk-batch-operations-auto-batching: backlog
   26-3-python-sdk-batch-operations-auto-batching: backlog
   26-4-javascript-sdk-batch-operations-auto-batching: backlog
