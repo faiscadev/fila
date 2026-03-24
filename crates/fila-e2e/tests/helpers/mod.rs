@@ -415,9 +415,36 @@ pub async fn sdk_client(addr: &str) -> fila_sdk::FilaClient {
 }
 
 /// Find a free TCP port.
-fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to free port");
-    listener.local_addr().unwrap().port()
+///
+/// Uses an atomic counter to avoid the TOCTOU race where `TcpListener::bind(":0")`
+/// gives the same port to two parallel tests before either server binds.
+/// The counter ensures each call returns a distinct port within this process.
+pub fn free_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
+
+    loop {
+        // First call: seed from an OS-assigned port to get a random base
+        let current = NEXT_PORT.load(Ordering::Relaxed);
+        if current == 0 {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind to free port");
+            let base = listener.local_addr().unwrap().port();
+            // Try to set the base; if another thread beat us, just use their value
+            let _ = NEXT_PORT.compare_exchange(0, base, Ordering::Relaxed, Ordering::Relaxed);
+            drop(listener);
+        }
+
+        let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+        if port == 0 {
+            continue; // race on init, retry
+        }
+
+        // Verify the port is actually free before returning
+        if TcpListener::bind(format!("127.0.0.1:{port}")).is_ok() {
+            return port;
+        }
+        // Port in use by something else, try next
+    }
 }
 
 /// Resolve the path to the fila-server binary.

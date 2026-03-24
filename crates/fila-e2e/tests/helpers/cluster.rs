@@ -233,8 +233,7 @@ fn spawn_and_wait(data_dir: tempfile::TempDir, client_port: u16) -> ClusterNode 
 }
 
 fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to free port");
-    listener.local_addr().unwrap().port()
+    super::free_port()
 }
 
 fn server_binary() -> PathBuf {
