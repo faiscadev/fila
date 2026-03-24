@@ -5,6 +5,7 @@ pub mod drr;
 pub mod metrics;
 pub mod router;
 mod scheduler;
+mod shard_router;
 pub mod stats;
 pub mod throttle;
 
@@ -22,13 +23,32 @@ pub use config::{
 };
 
 use scheduler::Scheduler;
+use shard_router::ShardRouter;
 
-/// The broker owns the scheduler thread and the inbound command channel.
-/// IO threads (gRPC handlers) send commands through `send_command()`,
-/// and the single-threaded scheduler processes them sequentially.
+/// Internal routing decision for a scheduler command.
+enum RouteKey {
+    /// Route to the shard owning this queue.
+    Queue(String),
+    /// Route to shard 0 (global commands).
+    Shard0,
+    /// Broadcast to all shards (fire-and-forget).
+    Broadcast,
+    /// Broadcast ListQueues and aggregate results.
+    ListQueues,
+    /// Broadcast shutdown to all shards.
+    Shutdown,
+}
+
+/// The broker owns the scheduler threads and routes commands through
+/// the `ShardRouter`. IO threads (gRPC handlers) send commands through
+/// `send_command()`, which routes each command to the correct shard
+/// based on queue name.
+///
+/// When `shard_count` is 1 (the default), behavior is identical to the
+/// pre-sharding single-scheduler architecture.
 pub struct Broker {
-    command_tx: crossbeam_channel::Sender<SchedulerCommand>,
-    scheduler_thread: Option<thread::JoinHandle<()>>,
+    router: ShardRouter,
+    scheduler_threads: Vec<thread::JoinHandle<()>>,
     storage: Arc<dyn StorageEngine>,
     /// Whether API key authentication is enabled. Set from `BrokerConfig.auth`.
     pub auth_enabled: bool,
@@ -38,13 +58,14 @@ pub struct Broker {
 }
 
 impl Broker {
-    /// Create a new broker, spawning the scheduler on a dedicated OS thread.
+    /// Create a new broker, spawning scheduler threads on dedicated OS threads.
+    ///
+    /// When `shard_count` is 1 (default), a single scheduler thread is spawned.
+    /// For `shard_count > 1`, N scheduler threads are spawned, each processing
+    /// a subset of queues determined by consistent hashing.
     #[tracing::instrument(skip_all, fields(listen_addr = %config.server.listen_addr))]
     pub fn new(config: BrokerConfig, storage: Arc<dyn StorageEngine>) -> BrokerResult<Self> {
-        let (tx, rx) = crossbeam_channel::bounded::<SchedulerCommand>(
-            config.scheduler.command_channel_capacity,
-        );
-
+        let shard_count = config.scheduler.shard_count.max(1);
         let scheduler_config = config.scheduler.clone();
         let lua_config = config.lua.clone();
         let cluster_node_id = if config.cluster.enabled {
@@ -53,53 +74,125 @@ impl Broker {
             0
         };
 
-        let storage_for_scheduler = Arc::clone(&storage);
-        let handle = thread::Builder::new()
-            .name("fila-scheduler".to_string())
-            .spawn(move || {
-                let mut scheduler = Scheduler::new(
-                    storage_for_scheduler,
-                    rx,
-                    &scheduler_config,
-                    &lua_config,
-                    cluster_node_id,
-                );
-                scheduler.run();
-            })
-            .map_err(|e| BrokerError::SchedulerSpawn(e.to_string()))?;
+        let mut senders = Vec::with_capacity(shard_count);
+        let mut threads = Vec::with_capacity(shard_count);
 
-        info!("broker started");
+        for shard_idx in 0..shard_count {
+            let (tx, rx) = crossbeam_channel::bounded::<SchedulerCommand>(
+                scheduler_config.command_channel_capacity,
+            );
+
+            let sc = scheduler_config.clone();
+            let lc = lua_config.clone();
+            let storage_clone = Arc::clone(&storage);
+            let thread_name = if shard_count == 1 {
+                "fila-scheduler".to_string()
+            } else {
+                format!("fila-scheduler-{shard_idx}")
+            };
+
+            let handle = thread::Builder::new()
+                .name(thread_name)
+                .spawn(move || {
+                    let mut scheduler =
+                        Scheduler::new(storage_clone, rx, &sc, &lc, cluster_node_id);
+                    scheduler.run();
+                })
+                .map_err(|e| BrokerError::SchedulerSpawn(e.to_string()))?;
+
+            senders.push(tx);
+            threads.push(handle);
+        }
+
+        info!(shard_count, "broker started");
 
         Ok(Self {
-            command_tx: tx,
-            scheduler_thread: Some(handle),
+            router: ShardRouter::new(senders),
+            scheduler_threads: threads,
             storage,
             auth_enabled: config.auth.is_some(),
             bootstrap_api_key: config.auth.map(|a| a.bootstrap_apikey),
         })
     }
 
-    /// Send a command to the scheduler. Returns an error if the channel is full
-    /// or disconnected.
+    /// Send a command to the appropriate scheduler shard.
+    ///
+    /// Commands are routed based on their queue affinity:
+    /// - Queue-targeted commands (Enqueue, Ack, Nack, CreateQueue, etc.)
+    ///   are hashed by queue name to a specific shard.
+    /// - Global commands (SetConfig, GetConfig, ListConfig, SetThrottleRate,
+    ///   RemoveThrottleRate) are sent to shard 0.
+    /// - ListQueues is broadcast to all shards and results are aggregated.
+    /// - Shutdown is broadcast to all shards.
+    ///
+    /// Returns an error if the target channel is full or disconnected.
     #[tracing::instrument(skip_all)]
     pub fn send_command(&self, cmd: SchedulerCommand) -> BrokerResult<()> {
-        self.command_tx.try_send(cmd).map_err(|e| match e {
-            crossbeam_channel::TrySendError::Full(_) => BrokerError::ChannelFull,
-            crossbeam_channel::TrySendError::Disconnected(_) => BrokerError::ChannelDisconnected,
-        })
+        // Extract the routing queue name before moving the command.
+        let route_key = Self::extract_route_key(&cmd);
+        match route_key {
+            RouteKey::Queue(qid) => self.router.send_to_queue(&qid, cmd),
+            RouteKey::Shard0 => self.router.send_to_shard0(cmd),
+            RouteKey::Broadcast => self.router.broadcast_fire_and_forget(cmd),
+            RouteKey::ListQueues => {
+                // Destructure to extract the reply channel.
+                if let SchedulerCommand::ListQueues { reply } = cmd {
+                    self.router.send_list_queues(reply)
+                } else {
+                    unreachable!()
+                }
+            }
+            RouteKey::Shutdown => {
+                self.router.broadcast_shutdown();
+                Ok(())
+            }
+        }
     }
 
-    /// Initiate graceful shutdown: send the shutdown command and wait for the
-    /// scheduler thread to finish.
+    /// Determine the routing key for a command without consuming it.
+    fn extract_route_key(cmd: &SchedulerCommand) -> RouteKey {
+        match cmd {
+            SchedulerCommand::Enqueue { message, .. } => RouteKey::Queue(message.queue_id.clone()),
+            SchedulerCommand::Ack { queue_id, .. }
+            | SchedulerCommand::Nack { queue_id, .. }
+            | SchedulerCommand::RegisterConsumer { queue_id, .. }
+            | SchedulerCommand::DeleteQueue { queue_id, .. }
+            | SchedulerCommand::GetStats { queue_id, .. }
+            | SchedulerCommand::RecoverQueue { queue_id, .. }
+            | SchedulerCommand::DropQueueConsumers { queue_id, .. } => {
+                RouteKey::Queue(queue_id.clone())
+            }
+            SchedulerCommand::CreateQueue { name, .. } => RouteKey::Queue(name.clone()),
+            SchedulerCommand::Redrive { dlq_queue_id, .. } => RouteKey::Queue(dlq_queue_id.clone()),
+
+            // UnregisterConsumer has no queue_id — broadcast to all shards.
+            SchedulerCommand::UnregisterConsumer { .. } => RouteKey::Broadcast,
+
+            // Cross-shard aggregation
+            SchedulerCommand::ListQueues { .. } => RouteKey::ListQueues,
+
+            // Global commands: route to shard 0
+            SchedulerCommand::SetThrottleRate { .. }
+            | SchedulerCommand::RemoveThrottleRate { .. }
+            | SchedulerCommand::SetConfig { .. }
+            | SchedulerCommand::GetConfig { .. }
+            | SchedulerCommand::ListConfig { .. } => RouteKey::Shard0,
+
+            SchedulerCommand::Shutdown => RouteKey::Shutdown,
+        }
+    }
+
+    /// Initiate graceful shutdown: send the shutdown command to all shards
+    /// and wait for all scheduler threads to finish.
     #[tracing::instrument(skip_all)]
     pub fn shutdown(mut self) -> BrokerResult<()> {
         info!("initiating broker shutdown");
 
-        // Send shutdown command (ignore error if channel already closed)
-        let _ = self.command_tx.send(SchedulerCommand::Shutdown);
+        // Send shutdown command to all shards (ignore error if channels already closed)
+        self.router.broadcast_shutdown();
 
-        // Wait for the scheduler thread to finish
-        if let Some(handle) = self.scheduler_thread.take() {
+        // Wait for all scheduler threads to finish
+        for handle in self.scheduler_threads.drain(..) {
             handle.join().map_err(|_| BrokerError::SchedulerPanicked)?;
         }
 
@@ -409,10 +502,10 @@ impl Broker {
 
 impl Drop for Broker {
     fn drop(&mut self) {
-        // If shutdown wasn't called explicitly, attempt to stop the scheduler
-        if self.scheduler_thread.is_some() {
-            let _ = self.command_tx.send(SchedulerCommand::Shutdown);
-            if let Some(handle) = self.scheduler_thread.take() {
+        // If shutdown wasn't called explicitly, attempt to stop all schedulers
+        if !self.scheduler_threads.is_empty() {
+            self.router.broadcast_shutdown();
+            for handle in self.scheduler_threads.drain(..) {
                 let _ = handle.join();
             }
         }
@@ -644,5 +737,176 @@ mod tests {
         // separate check at the service layer (is_superadmin flag, not a permission)
         let perms = vec![("produce".into(), "*".into())];
         assert!(broker.caller_can_grant_all(&caller, &perms).unwrap());
+    }
+
+    // ── Scheduler sharding tests ──
+
+    fn sharded_broker(shard_count: usize) -> (Broker, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RocksDbEngine::open(dir.path()).unwrap());
+        let config = BrokerConfig {
+            scheduler: config::SchedulerConfig {
+                command_channel_capacity: 100,
+                idle_timeout_ms: 10,
+                quantum: 1000,
+                shard_count,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let broker = Broker::new(config, storage).unwrap();
+        (broker, dir)
+    }
+
+    #[test]
+    fn sharded_broker_starts_and_shuts_down() {
+        let (broker, _dir) = sharded_broker(4);
+        broker.shutdown().unwrap();
+    }
+
+    #[test]
+    fn sharded_broker_drop_stops_all_schedulers() {
+        let (broker, _dir) = sharded_broker(4);
+        drop(broker);
+        // If we get here without hanging, all scheduler threads stopped
+    }
+
+    #[test]
+    fn sharded_broker_create_and_enqueue() {
+        let (broker, _dir) = sharded_broker(2);
+
+        // Create 4 queues (will be distributed across 2 shards)
+        for name in &["alpha", "beta", "gamma", "delta"] {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            broker
+                .send_command(SchedulerCommand::CreateQueue {
+                    name: name.to_string(),
+                    config: crate::queue::QueueConfig::new(name.to_string()),
+                    reply: tx,
+                })
+                .unwrap();
+            rx.blocking_recv().unwrap().unwrap();
+        }
+
+        // Enqueue a message to each queue
+        for name in &["alpha", "beta", "gamma", "delta"] {
+            let msg = Message {
+                id: Uuid::now_v7(),
+                queue_id: name.to_string(),
+                headers: HashMap::new(),
+                payload: vec![42].into(),
+                fairness_key: "default".to_string(),
+                weight: 1,
+                throttle_keys: vec![],
+                attempt_count: 0,
+                enqueued_at: 1_000_000_000,
+                leased_at: None,
+            };
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            broker
+                .send_command(SchedulerCommand::Enqueue {
+                    message: msg,
+                    reply: tx,
+                })
+                .unwrap();
+            rx.blocking_recv().unwrap().unwrap();
+        }
+
+        // ListQueues should aggregate from both shards
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::ListQueues { reply: tx })
+            .unwrap();
+        let summaries = rx.blocking_recv().unwrap().unwrap();
+        // 4 queues + 4 auto-created DLQs = 8
+        assert_eq!(summaries.len(), 8);
+
+        // Verify each original queue has depth=1
+        for name in &["alpha", "beta", "gamma", "delta"] {
+            let s = summaries.iter().find(|s| s.name == *name).unwrap();
+            assert_eq!(s.depth, 1, "queue {name} should have depth 1");
+        }
+
+        broker.shutdown().unwrap();
+    }
+
+    #[test]
+    fn sharded_broker_list_queues_deduplicates() {
+        let (broker, _dir) = sharded_broker(4);
+
+        // Create 2 queues
+        for name in &["q1", "q2"] {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            broker
+                .send_command(SchedulerCommand::CreateQueue {
+                    name: name.to_string(),
+                    config: crate::queue::QueueConfig::new(name.to_string()),
+                    reply: tx,
+                })
+                .unwrap();
+            rx.blocking_recv().unwrap().unwrap();
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::ListQueues { reply: tx })
+            .unwrap();
+        let summaries = rx.blocking_recv().unwrap().unwrap();
+        // 2 queues + 2 DLQs = 4, no duplicates
+        assert_eq!(summaries.len(), 4);
+        let names: Vec<&str> = summaries.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"q1"));
+        assert!(names.contains(&"q2"));
+        assert!(names.contains(&"q1.dlq"));
+        assert!(names.contains(&"q2.dlq"));
+    }
+
+    #[test]
+    fn sharded_broker_get_stats_routes_to_correct_shard() {
+        let (broker, _dir) = sharded_broker(2);
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::CreateQueue {
+                name: "stats-q".to_string(),
+                config: crate::queue::QueueConfig::new("stats-q".to_string()),
+                reply: tx,
+            })
+            .unwrap();
+        rx.blocking_recv().unwrap().unwrap();
+
+        // Enqueue 3 messages
+        for _ in 0..3 {
+            let msg = Message {
+                id: Uuid::now_v7(),
+                queue_id: "stats-q".to_string(),
+                headers: HashMap::new(),
+                payload: vec![1].into(),
+                fairness_key: "default".to_string(),
+                weight: 1,
+                throttle_keys: vec![],
+                attempt_count: 0,
+                enqueued_at: 1_000_000_000,
+                leased_at: None,
+            };
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            broker
+                .send_command(SchedulerCommand::Enqueue {
+                    message: msg,
+                    reply: tx,
+                })
+                .unwrap();
+            rx.blocking_recv().unwrap().unwrap();
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::GetStats {
+                queue_id: "stats-q".to_string(),
+                reply: tx,
+            })
+            .unwrap();
+        let stats = rx.blocking_recv().unwrap().unwrap();
+        assert_eq!(stats.depth, 3);
     }
 }
