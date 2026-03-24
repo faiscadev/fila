@@ -8,6 +8,7 @@ use fila_proto::fila_service_server::FilaService;
 use fila_proto::{
     AckRequest, AckResponse, BatchEnqueueRequest, BatchEnqueueResponse, BatchEnqueueResult,
     ConsumeRequest, ConsumeResponse, EnqueueRequest, EnqueueResponse, NackRequest, NackResponse,
+    StreamEnqueueRequest, StreamEnqueueResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, instrument};
@@ -28,6 +29,108 @@ fn cluster_write_err_to_status(err: ClusterWriteError) -> Status {
         ClusterWriteError::NoLeader => Status::unavailable("no leader available"),
         ClusterWriteError::Raft(e) => Status::internal(format!("raft error: {e}")),
         ClusterWriteError::Forward(e) => Status::unavailable(format!("forward error: {e}")),
+    }
+}
+
+/// Process a single enqueue request without requiring `&self`. Used by the streaming handler
+/// which runs in a spawned task that cannot hold a reference to `HotPathService`.
+async fn enqueue_single_standalone(
+    caller: &Option<CallerKey>,
+    broker: &Arc<Broker>,
+    cluster: &Option<Arc<ClusterHandle>>,
+    req: EnqueueRequest,
+) -> Result<String, Status> {
+    if req.queue.is_empty() {
+        return Err(Status::invalid_argument("queue name must not be empty"));
+    }
+
+    // ACL check: produce permission on this queue.
+    if let Some(ref caller) = caller {
+        let permitted = broker
+            .check_permission(
+                caller,
+                fila_core::broker::auth::Permission::Produce,
+                &req.queue,
+            )
+            .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
+        if !permitted {
+            return Err(Status::permission_denied(format!(
+                "key does not have produce permission on queue \"{}\"",
+                req.queue
+            )));
+        }
+    }
+
+    let now_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+
+    let msg_id = Uuid::now_v7();
+
+    let message = Message {
+        id: msg_id,
+        queue_id: req.queue.clone(),
+        headers: req.headers,
+        payload: req.payload,
+        fairness_key: "default".to_string(),
+        weight: 1,
+        throttle_keys: vec![],
+        attempt_count: 0,
+        enqueued_at: now_ns,
+        leased_at: None,
+    };
+
+    if let Some(ref cluster) = cluster {
+        let result = cluster
+            .write_to_queue(
+                &req.queue,
+                ClusterRequest::Enqueue {
+                    message: message.clone(),
+                },
+            )
+            .await
+            .map_err(cluster_write_err_to_status)?;
+
+        let msg_id = match result.response {
+            ClusterResponse::Enqueue { msg_id } => msg_id,
+            ClusterResponse::Error { message } => {
+                return Err(Status::internal(message));
+            }
+            _ => return Err(Status::internal("unexpected cluster response")),
+        };
+
+        if result.handled_locally {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            broker
+                .send_command(SchedulerCommand::Enqueue {
+                    message,
+                    reply: reply_tx,
+                })
+                .map_err(IntoStatus::into_status)?;
+
+            let _ = reply_rx
+                .await
+                .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                .map_err(IntoStatus::into_status)?;
+        }
+
+        Ok(msg_id.to_string())
+    } else {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::Enqueue {
+                message,
+                reply: reply_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        let msg_id = reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .map_err(IntoStatus::into_status)?;
+
+        Ok(msg_id.to_string())
     }
 }
 
@@ -62,99 +165,7 @@ impl HotPathService {
         caller: &Option<CallerKey>,
         req: EnqueueRequest,
     ) -> Result<String, Status> {
-        if req.queue.is_empty() {
-            return Err(Status::invalid_argument("queue name must not be empty"));
-        }
-
-        // ACL check: produce permission on this queue.
-        if let Some(ref caller) = caller {
-            let permitted = self
-                .broker
-                .check_permission(
-                    caller,
-                    fila_core::broker::auth::Permission::Produce,
-                    &req.queue,
-                )
-                .map_err(|e| Status::internal(format!("acl check error: {e}")))?;
-            if !permitted {
-                return Err(Status::permission_denied(format!(
-                    "key does not have produce permission on queue \"{}\"",
-                    req.queue
-                )));
-            }
-        }
-
-        let now_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-
-        let msg_id = Uuid::now_v7();
-
-        let message = Message {
-            id: msg_id,
-            queue_id: req.queue.clone(),
-            headers: req.headers,
-            payload: req.payload,
-            fairness_key: "default".to_string(),
-            weight: 1,
-            throttle_keys: vec![],
-            attempt_count: 0,
-            enqueued_at: now_ns,
-            leased_at: None,
-        };
-
-        if let Some(ref cluster) = self.cluster {
-            let result = cluster
-                .write_to_queue(
-                    &req.queue,
-                    ClusterRequest::Enqueue {
-                        message: message.clone(),
-                    },
-                )
-                .await
-                .map_err(cluster_write_err_to_status)?;
-
-            let msg_id = match result.response {
-                ClusterResponse::Enqueue { msg_id } => msg_id,
-                ClusterResponse::Error { message } => {
-                    return Err(Status::internal(message));
-                }
-                _ => return Err(Status::internal("unexpected cluster response")),
-            };
-
-            if result.handled_locally {
-                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-                self.broker
-                    .send_command(SchedulerCommand::Enqueue {
-                        message,
-                        reply: reply_tx,
-                    })
-                    .map_err(IntoStatus::into_status)?;
-
-                let _ = reply_rx
-                    .await
-                    .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-                    .map_err(IntoStatus::into_status)?;
-            }
-
-            Ok(msg_id.to_string())
-        } else {
-            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-            self.broker
-                .send_command(SchedulerCommand::Enqueue {
-                    message,
-                    reply: reply_tx,
-                })
-                .map_err(IntoStatus::into_status)?;
-
-            let msg_id = reply_rx
-                .await
-                .map_err(|_| Status::internal("scheduler reply channel dropped"))?
-                .map_err(IntoStatus::into_status)?;
-
-            Ok(msg_id.to_string())
-        }
+        enqueue_single_standalone(caller, &self.broker, &self.cluster, req).await
     }
 }
 
@@ -227,6 +238,104 @@ impl FilaService for HotPathService {
         }
 
         Ok(Response::new(BatchEnqueueResponse { results }))
+    }
+
+    type StreamEnqueueStream =
+        tokio_stream::wrappers::ReceiverStream<Result<StreamEnqueueResponse, Status>>;
+
+    async fn stream_enqueue(
+        &self,
+        request: Request<tonic::Streaming<StreamEnqueueRequest>>,
+    ) -> Result<Response<Self::StreamEnqueueStream>, Status> {
+        let caller = request
+            .extensions()
+            .get::<ValidatedKeyId>()
+            .map(|k| k.0.clone());
+        let mut inbound = request.into_inner();
+
+        let (resp_tx, resp_rx) =
+            tokio::sync::mpsc::channel::<Result<StreamEnqueueResponse, Status>>(64);
+
+        let broker = Arc::clone(&self.broker);
+        let cluster = self.cluster.clone();
+
+        tokio::spawn(async move {
+            use tokio_stream::StreamExt;
+
+            loop {
+                // Wait for the first message (blocks until one arrives or stream ends).
+                let first = match inbound.next().await {
+                    Some(Ok(msg)) => msg,
+                    Some(Err(_)) => break, // Transport error
+                    None => break,         // Client closed stream
+                };
+
+                // Drain immediately available messages for write coalescing.
+                // Use poll_next via tokio::select! with a zero-duration sleep as
+                // the competing branch so we only take what's already buffered.
+                let mut batch = vec![first];
+                loop {
+                    tokio::select! {
+                        biased;
+                        msg = inbound.next() => {
+                            match msg {
+                                Some(Ok(m)) => {
+                                    batch.push(m);
+                                    if batch.len() >= 256 {
+                                        break; // Cap batch size
+                                    }
+                                }
+                                _ => {
+                                    // Stream ended or error — process what we have and exit
+                                    // after sending responses.
+                                    break;
+                                }
+                            }
+                        }
+                        _ = tokio::task::yield_now() => {
+                            // No more immediately available messages.
+                            break;
+                        }
+                    }
+                }
+
+                // Process each message through the scheduler pipeline and collect responses.
+                for req in batch {
+                    let seq = req.sequence_number;
+                    let enqueue_req = EnqueueRequest {
+                        queue: req.queue,
+                        headers: req.headers,
+                        payload: req.payload,
+                    };
+
+                    let result =
+                        enqueue_single_standalone(&caller, &broker, &cluster, enqueue_req).await;
+
+                    let response = match result {
+                        Ok(msg_id) => StreamEnqueueResponse {
+                            sequence_number: seq,
+                            result: Some(fila_proto::stream_enqueue_response::Result::MessageId(
+                                msg_id,
+                            )),
+                        },
+                        Err(status) => StreamEnqueueResponse {
+                            sequence_number: seq,
+                            result: Some(fila_proto::stream_enqueue_response::Result::Error(
+                                status.message().to_string(),
+                            )),
+                        },
+                    };
+
+                    if resp_tx.send(Ok(response)).await.is_err() {
+                        return; // Client disconnected from response stream
+                    }
+                }
+            }
+        });
+
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            resp_rx,
+        )))
     }
 
     type ConsumeStream = tokio_stream::wrappers::ReceiverStream<Result<ConsumeResponse, Status>>;

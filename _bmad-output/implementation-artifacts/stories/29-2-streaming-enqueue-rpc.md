@@ -1,6 +1,6 @@
 # Story 29.2: Streaming Enqueue RPC (Server-Side)
 
-Status: backlog
+Status: review
 
 ## Story
 
@@ -40,35 +40,35 @@ So that enqueue throughput is limited by storage speed, not transport framing.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Proto definition (AC: #1, #2, #3)
-  - [ ] 1.1 Add `StreamEnqueue` bidirectional streaming RPC to `FilaService`
-  - [ ] 1.2 Define `StreamEnqueueRequest` message (queue, headers, payload, sequence_number)
-  - [ ] 1.3 Define `StreamEnqueueResponse` message (sequence_number, oneof result: message_id/error)
-  - [ ] 1.4 Regenerate proto code, verify compilation
+- [x] Task 1: Proto definition (AC: #1, #2, #3)
+  - [x] 1.1 Add `StreamEnqueue` bidirectional streaming RPC to `FilaService`
+  - [x] 1.2 Define `StreamEnqueueRequest` message (queue, headers, payload, sequence_number)
+  - [x] 1.3 Define `StreamEnqueueResponse` message (sequence_number, oneof result: message_id/error)
+  - [x] 1.4 Regenerate proto code, verify compilation
 
-- [ ] Task 2: Server handler implementation (AC: #4, #5, #6, #8, #9)
-  - [ ] 2.1 Implement `stream_enqueue` handler on `FilaServiceServer`
-  - [ ] 2.2 Read from client stream in a loop, batch via write coalescing (drain available messages)
-  - [ ] 2.3 Route batched messages through scheduler pipeline (same path as `BatchEnqueue`)
-  - [ ] 2.4 Write per-message responses to server stream with correlated sequence numbers
-  - [ ] 2.5 Preserve per-queue ordering within the stream
+- [x] Task 2: Server handler implementation (AC: #4, #5, #6, #8, #9)
+  - [x] 2.1 Implement `stream_enqueue` handler on `FilaServiceServer`
+  - [x] 2.2 Read from client stream in a loop, batch via write coalescing (drain available messages)
+  - [x] 2.3 Route batched messages through scheduler pipeline (same path as `BatchEnqueue`)
+  - [x] 2.4 Write per-message responses to server stream with correlated sequence numbers
+  - [x] 2.5 Preserve per-queue ordering within the stream
 
-- [ ] Task 3: Error and disconnect handling (AC: #7, #10)
-  - [ ] 3.1 Handle client disconnect mid-stream (committed messages acked, uncommitted dropped)
-  - [ ] 3.2 Handle transport errors gracefully
-  - [ ] 3.3 Verify existing unary RPCs are unchanged
+- [x] Task 3: Error and disconnect handling (AC: #7, #10)
+  - [x] 3.1 Handle client disconnect mid-stream (committed messages acked, uncommitted dropped)
+  - [x] 3.2 Handle transport errors gracefully
+  - [x] 3.3 Verify existing unary RPCs are unchanged
 
-- [ ] Task 4: Integration tests (AC: #11)
-  - [ ] 4.1 Basic stream enqueue: send N messages, receive N acks
-  - [ ] 4.2 Sequence number correlation: out-of-order processing returns correct sequence numbers
-  - [ ] 4.3 Per-message error: enqueue to nonexistent queue mid-stream
-  - [ ] 4.4 Client disconnect: server handles gracefully
-  - [ ] 4.5 Concurrent streams: multiple producers streaming simultaneously
+- [x] Task 4: Integration tests (AC: #11)
+  - [x] 4.1 Basic stream enqueue: send N messages, receive N acks
+  - [x] 4.2 Sequence number correlation: out-of-order processing returns correct sequence numbers
+  - [x] 4.3 Per-message error: enqueue to nonexistent queue mid-stream
+  - [x] 4.4 Client disconnect: server handles gracefully (tested in basic test — drop(tx))
+  - [x] 4.5 Concurrent streams: multiple producers streaming simultaneously
 
 - [ ] Task 5: Benchmark validation (AC: #12, #13)
-  - [ ] 5.1 Add streaming enqueue benchmark scenario to `fila-bench`
-  - [ ] 5.2 Compare streaming vs unary throughput, verify >= 3x improvement
-  - [ ] 5.3 Run existing test suite, verify zero regressions
+  - [ ] 5.1 Add streaming enqueue benchmark scenario to `fila-bench` (deferred to 29.3)
+  - [ ] 5.2 Compare streaming vs unary throughput, verify >= 3x improvement (deferred)
+  - [x] 5.3 Run existing test suite, verify zero regressions
 
 ## Design Notes
 
@@ -87,12 +87,42 @@ Client assigns monotonically increasing `sequence_number` to each message. Serve
 ### Key Files to Modify
 
 - `crates/fila-proto/proto/fila/v1/service.proto` — new RPC + message types
-- `crates/fila-server/src/grpc/` — streaming handler implementation
-- `crates/fila-bench/` — streaming benchmark scenario
-- `crates/fila-sdk/tests/integration.rs` — streaming integration tests (or new test file)
+- `crates/fila-server/src/service.rs` — streaming handler implementation
+- `crates/fila-sdk/tests/stream_enqueue.rs` — streaming integration tests
 
 ### References
 
 - [Research: post-optimization-profiling-analysis-2026-03-24.md — bottleneck #1: per-message gRPC overhead]
-- [Source: crates/fila-server/src/grpc/ — existing Enqueue/BatchEnqueue handlers]
+- [Source: crates/fila-server/src/service.rs — existing Enqueue/BatchEnqueue handlers]
 - [Source: crates/fila-proto/proto/fila/v1/service.proto — current RPC surface]
+
+## Dev Agent Record
+
+### Implementation Summary
+
+Added a bidirectional streaming `StreamEnqueue` RPC that amortizes HTTP/2 per-message overhead by streaming messages over a persistent connection.
+
+**Architecture:**
+- Extracted `enqueue_single_standalone()` from `HotPathService::enqueue_single()` — standalone async fn callable from spawned tasks without `&self`
+- Streaming handler spawns a task that reads from the client stream, drains available messages (write coalescing via `tokio::select! biased` + `yield_now`), processes each through the existing scheduler pipeline, and writes per-message responses with correlated sequence numbers
+- Uses `tokio::sync::mpsc` channel (capacity 64) for the response stream, matching the existing `ConsumeStream` pattern
+- Batch cap of 256 messages per coalesce cycle to bound memory
+
+**Proto additions:**
+- `StreamEnqueueRequest`: queue, headers, payload (bytes), sequence_number (uint64)
+- `StreamEnqueueResponse`: sequence_number, oneof result { message_id, error }
+- `StreamEnqueueRequest.payload` registered with `bytes()` in build.rs for zero-copy
+
+### File List
+
+- `crates/fila-proto/proto/fila/v1/service.proto` — new RPC + message types
+- `crates/fila-proto/build.rs` — bytes annotation for StreamEnqueueRequest.payload
+- `crates/fila-server/src/service.rs` — `enqueue_single_standalone()`, `stream_enqueue` handler
+- `crates/fila-sdk/tests/stream_enqueue.rs` — 4 integration tests
+
+### Completion Notes
+
+- All 4 streaming integration tests pass
+- Full workspace test suite passes (zero regressions)
+- `cargo fmt --check` and `cargo clippy -D warnings` clean
+- Benchmark validation (AC #12) deferred — streaming benchmark scenario to be added alongside SDK streaming support in Story 29.3

@@ -7,6 +7,7 @@ import "fila/v1/messages.proto";
 service FilaService {
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
   rpc BatchEnqueue(BatchEnqueueRequest) returns (BatchEnqueueResponse);
+  rpc StreamEnqueue(stream StreamEnqueueRequest) returns (stream StreamEnqueueResponse);
   rpc Consume(ConsumeRequest) returns (stream ConsumeResponse);
   rpc Ack(AckRequest) returns (AckResponse);
   rpc Nack(NackRequest) returns (NackResponse);
@@ -58,5 +59,20 @@ message BatchEnqueueResult {
   oneof result {
     EnqueueResponse success = 1;
     string error = 2;
+  }
+}
+
+message StreamEnqueueRequest {
+  string queue = 1;
+  map<string, string> headers = 2;
+  bytes payload = 3;
+  uint64 sequence_number = 4;
+}
+
+message StreamEnqueueResponse {
+  uint64 sequence_number = 1;
+  oneof result {
+    string message_id = 2;
+    string error = 3;
   }
 }

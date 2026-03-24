@@ -265,5 +265,5 @@ development_status:
   # Profiling shows 94% of per-message time is gRPC/HTTP2 overhead.
   epic-29: in-progress
   29-1-fair-competitive-benchmark: done
-  29-2-streaming-enqueue-rpc: backlog
+  29-2-streaming-enqueue-rpc: review
   29-3-sdk-streaming-enqueue: backlog
