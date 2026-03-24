@@ -12,7 +12,7 @@ stories:
   - id: "29.2"
     title: "Streaming Enqueue RPC (Server-Side)"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "review"
     branch: "feat/29.2-streaming-enqueue-rpc"
     pr: null
     dependsOn: []
