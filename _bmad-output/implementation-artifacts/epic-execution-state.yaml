@@ -1,24 +1,26 @@
-epic: "Epic 22: Tier 1 — Configuration Tuning & Data Structure Fixes"
+epic: "Epic 23: Tier 2 — Batching (Client, Server, Delivery)"
 baseBranch: main
-startedAt: "2026-03-23"
-completedAt: "2026-03-24"
+startedAt: "2026-03-24"
 stories:
-  - id: "22.1"
-    title: "RocksDB Queue-Optimized Configuration & gRPC Tuning"
+  - id: "23.1"
+    title: "Client-Side Batching & BatchEnqueue RPC"
     status: completed
     currentPhase: ""
-    branch: "feat/22.1-rocksdb-grpc-tuning"
-    pr: 95
+    branch: "feat/23.1-batch-enqueue"
+    pr: 97
     dependsOn: []
-  - id: "22.2"
-    title: "DRR Scheduler O(1) Key Selection"
-    status: completed
+  - id: "23.2"
+    title: "Server-Side Write Coalescing"
+    status: pending
     currentPhase: ""
-    branch: "feat/22.2-drr-o1-key-selection"
-    pr: 96
-    dependsOn: ["22.1"]
-summary:
-  total: 2
-  completed: 2
-  skipped: 0
+    branch: ""
+    pr: null
+    dependsOn: ["23.1"]
+  - id: "23.3"
+    title: "Delivery Batching (Consumer-Side)"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["23.1"]
 skippedIssues: []

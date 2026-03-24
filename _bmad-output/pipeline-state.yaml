@@ -1,8 +1,8 @@
 startedAt: "2026-03-22T00:00:00Z"
-currentEpic: 22
-currentEpicName: "Tier 1 — Configuration Tuning & Data Structure Fixes"
-currentPhase: "complete"
-cycleCount: 8
+currentEpic: 23
+currentEpicName: "Tier 2 — Batching (Client, Server, Delivery)"
+currentPhase: "execute"
+cycleCount: 9
 completedEpics:
   - epicNumber: 17
     epicName: "Cluster Hardening"

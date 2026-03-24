@@ -220,8 +220,8 @@ development_status:
 
   # Epic 23: Tier 2 — Batching (Client, Server, Delivery)
   # Target: 30K-100K msg/s (1KB). Client batching, write coalescing, delivery batching.
-  epic-23: backlog
-  23-1-client-side-batching-batch-enqueue-rpc: backlog
+  epic-23: in-progress
+  23-1-client-side-batching-batch-enqueue-rpc: done
   23-2-server-side-write-coalescing: backlog
   23-3-delivery-batching-consumer-side: backlog
   epic-23-retrospective: optional
