@@ -266,7 +266,10 @@ async fn auto_batch_flush_on_batch_size() {
 
     assert_eq!(ids.len(), 5);
     for id in &ids {
-        assert!(!id.is_empty(), "each message should have a broker-assigned ID");
+        assert!(
+            !id.is_empty(),
+            "each message should have a broker-assigned ID"
+        );
     }
 
     // Consume all 5 messages to verify they were stored correctly.

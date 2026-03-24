@@ -597,8 +597,7 @@ async fn run_batcher(
             }
         } else {
             // Buffer has items — race between more messages and the linger timer.
-            let deadline =
-                tokio::time::Instant::now() + Duration::from_millis(linger_ms);
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(linger_ms);
             let sleep = tokio::time::sleep_until(deadline);
             tokio::pin!(sleep);
 
@@ -636,7 +635,7 @@ async fn flush_batch(
     client: &FilaServiceClient<Channel>,
     api_key: &Option<String>,
 ) {
-    let items: Vec<BatchItem> = buffer.drain(..).collect();
+    let items: Vec<BatchItem> = std::mem::take(buffer);
     if items.is_empty() {
         return;
     }
@@ -654,8 +653,7 @@ async fn flush_batch(
         messages: proto_messages,
     });
     if let Some(ref key) = api_key {
-        if let Ok(val) =
-            tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
+        if let Ok(val) = tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
         {
             req.metadata_mut().insert("authorization", val);
         }
@@ -686,9 +684,11 @@ async fn flush_batch(
             let err = batch_enqueue_status_error(status);
             let msg = err.to_string();
             for item in items {
-                let _ = item.result_tx.send(Err(EnqueueError::Status(
-                    StatusError::Internal(msg.clone()),
-                )));
+                let _ = item
+                    .result_tx
+                    .send(Err(EnqueueError::Status(StatusError::Internal(
+                        msg.clone(),
+                    ))));
             }
         }
     }
