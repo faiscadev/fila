@@ -203,6 +203,10 @@ pub struct RocksDbConfig {
     pub leases_write_buffer_mb: usize,
     /// Enable pipelined writes (default: true).
     pub pipelined_write: bool,
+    /// Enable unordered writes for higher write throughput (default: true).
+    /// Safe when a single writer provides ordering (scheduler) or Raft provides
+    /// consensus. Supersedes `pipelined_write` when enabled.
+    pub unordered_write: bool,
     /// Enable manual WAL flush with buffering (default: false).
     /// When true, WAL entries are buffered in memory and a crash may lose
     /// unflushed writes. Only enable in cluster mode where Raft provides
@@ -241,6 +245,7 @@ impl Default for RocksDbConfig {
             messages_min_write_buffers_to_merge: 2,
             leases_write_buffer_mb: 64,
             pipelined_write: true,
+            unordered_write: true,
             manual_wal_flush: false,
             wal_bytes_per_sync: 524_288,
             compact_on_deletion: true,
@@ -513,6 +518,7 @@ mod tests {
         );
         assert_eq!(config.storage.rocksdb.leases_write_buffer_mb, 64);
         assert!(config.storage.rocksdb.pipelined_write);
+        assert!(config.storage.rocksdb.unordered_write);
         assert!(!config.storage.rocksdb.manual_wal_flush);
         assert_eq!(config.storage.rocksdb.wal_bytes_per_sync, 524_288);
         assert!(config.storage.rocksdb.compact_on_deletion);
@@ -529,6 +535,7 @@ mod tests {
             messages_min_write_buffers_to_merge = 4
             leases_write_buffer_mb = 128
             pipelined_write = false
+            unordered_write = false
             manual_wal_flush = false
             wal_bytes_per_sync = 1048576
             compact_on_deletion = false
@@ -544,6 +551,7 @@ mod tests {
         );
         assert_eq!(config.storage.rocksdb.leases_write_buffer_mb, 128);
         assert!(!config.storage.rocksdb.pipelined_write);
+        assert!(!config.storage.rocksdb.unordered_write);
         assert!(!config.storage.rocksdb.manual_wal_flush);
         assert_eq!(config.storage.rocksdb.wal_bytes_per_sync, 1_048_576);
         assert!(!config.storage.rocksdb.compact_on_deletion);
@@ -555,6 +563,7 @@ mod tests {
         let config: BrokerConfig = toml::from_str("").unwrap();
         assert_eq!(config.storage.rocksdb.block_cache_mb, 256);
         assert!(config.storage.rocksdb.pipelined_write);
+        assert!(config.storage.rocksdb.unordered_write);
     }
 
     #[test]

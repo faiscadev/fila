@@ -12,6 +12,7 @@ use crate::broker::metrics::Metrics;
 use crate::broker::router::QueueRouter;
 use crate::broker::throttle::ThrottleManager;
 use crate::lua::LuaEngine;
+use crate::queue::QueueConfig;
 use crate::storage::{Mutation, StorageEngine};
 
 mod admin_handlers;
@@ -67,6 +68,9 @@ pub struct Scheduler {
     lua_engine: Option<LuaEngine>,
     /// All known queue IDs, for zeroing gauges when queues become idle.
     known_queues: HashSet<String>,
+    /// In-memory cache of queue configs, eliminating per-message RocksDB reads
+    /// for queue existence checks in the enqueue hot path.
+    queue_cache: HashMap<String, QueueConfig>,
     /// Routes (queue_id, fairness_key) → GroupId for Raft group assignment.
     /// Phase 1: trivial 1:1 routing (every key maps to its queue).
     router: QueueRouter,
@@ -109,6 +113,7 @@ impl Scheduler {
             leased_msg_keys: HashMap::new(),
             lua_engine,
             known_queues: HashSet::new(),
+            queue_cache: HashMap::new(),
             router: QueueRouter::new(),
             metrics: if cluster_node_id > 0 {
                 Metrics::with_node_id(cluster_node_id)

@@ -152,11 +152,12 @@ impl Scheduler {
         self.pending_by_id.clear();
         self.leased_msg_keys.clear();
 
-        // Rebuild DRR active keys, known queues, and Lua script cache by scanning queues
+        // Rebuild DRR active keys, known queues, queue cache, and Lua script cache by scanning queues
         match self.storage.list_queues() {
             Ok(queues) => {
                 for queue in &queues {
                     self.known_queues.insert(queue.name.clone());
+                    self.queue_cache.insert(queue.name.clone(), queue.clone());
                     // Register per-queue safety config if any scripts are present
                     if queue.on_enqueue_script.is_some() || queue.on_failure_script.is_some() {
                         if let Some(ref mut lua_engine) = self.lua_engine {
@@ -280,6 +281,7 @@ impl Scheduler {
         match self.storage.get_queue(queue_id) {
             Ok(Some(queue)) => {
                 self.known_queues.insert(queue.name.clone());
+                self.queue_cache.insert(queue.name.clone(), queue.clone());
                 if queue.on_enqueue_script.is_some() || queue.on_failure_script.is_some() {
                     if let Some(ref mut lua_engine) = self.lua_engine {
                         lua_engine.register_queue_safety(
