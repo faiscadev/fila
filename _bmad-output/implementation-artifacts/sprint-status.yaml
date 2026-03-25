@@ -296,7 +296,7 @@ development_status:
   # Target: 40-100K msg/s enqueue. Research: technical-kafka-parity-profiling-strategy-2026-03-25.md
   epic-32: in-progress
   32-1-profile-baseline: done
-  32-2-rocksdb-quick-wins: in-progress
+  32-2-rocksdb-quick-wins: review
   32-3-string-interning: ready-for-dev
   32-4-hybrid-envelope-store-as-received: ready-for-dev
   32-5-arena-allocation: ready-for-dev
