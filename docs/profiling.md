@@ -56,7 +56,7 @@ make flamegraph
 | `enqueue-only` | Pure enqueue throughput. Measures the write path: gRPC receive, storage write, DRR scheduling. |
 | `consume-only` | Pre-fills the queue, then profiles consume + ack. Measures the read path: DRR delivery, gRPC streaming, ack processing. |
 | `lifecycle` | Concurrent producers and consumers. Realistic mixed workload. |
-| `batch-enqueue` | Enqueue with auto-batching enabled. Profiles the Nagle-style batcher and BatchEnqueue RPC path. |
+| `batch-enqueue` | Enqueue with multi-message batching enabled. Profiles the accumulator and unified Enqueue RPC path with multiple messages per request. |
 
 ### Script options
 

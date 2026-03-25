@@ -1,45 +1,17 @@
-epic: "Epic 21: Trustworthy Benchmark Suite"
+epic: "Epic 31: Documentation Cleanup — Post-Unification Docs Update"
 baseBranch: main
-startedAt: "2026-03-23T00:00:00Z"
-completedAt: "2026-03-23T23:59:00Z"
+startedAt: "2026-03-25T00:00:00Z"
+completedAt: "2026-03-25T23:59:00Z"
 stories:
-  - id: "21.1"
-    title: "Statistical Foundation — HdrHistogram & Measurement Rigor"
+  - id: "31.1"
+    title: "Stale Documentation Cleanup"
     status: completed
     currentPhase: ""
-    branch: "feat/21.1-hdrhistogram-measurement-rigor"
-    pr: 90
+    branch: "feat/31.1-stale-documentation-cleanup"
+    pr: 117
     dependsOn: []
-  - id: "21.2"
-    title: "Competitive Benchmark Overhaul"
-    status: completed
-    currentPhase: ""
-    branch: "feat/21.2-competitive-benchmark-overhaul"
-    pr: 91
-    dependsOn: ["21.1"]
-  - id: "21.3"
-    title: "Open-Loop Load Generation & Latency-Under-Load Benchmarks"
-    status: completed
-    currentPhase: ""
-    branch: "feat/21.3-open-loop-latency-under-load"
-    pr: 92
-    dependsOn: ["21.1"]
-  - id: "21.4"
-    title: "Failure-Path & Fairness Benchmarks"
-    status: completed
-    currentPhase: ""
-    branch: "feat/21.4-failure-path-fairness-benchmarks"
-    pr: 93
-    dependsOn: ["21.1"]
-  - id: "21.5"
-    title: "CI Visualization & Reporting"
-    status: completed
-    currentPhase: ""
-    branch: "feat/21.5-ci-visualization-reporting"
-    pr: 94
-    dependsOn: ["21.1"]
 skippedIssues: []
 summary:
-  total: 5
-  completed: 5
+  total: 1
+  completed: 1
   skipped: 0

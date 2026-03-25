@@ -287,8 +287,8 @@ development_status:
 
   # Epic 31: Documentation Cleanup — Post-Unification Docs Update
   # Quick cleanup of stale docs from Epic 30 API unification.
-  epic-31: backlog
-  31-1-stale-documentation-cleanup: ready-for-dev
+  epic-31: done
+  31-1-stale-documentation-cleanup: done
   epic-31-retrospective: optional
 
   # Epic 32: Plateau 1 — Eliminate Per-Message Overhead

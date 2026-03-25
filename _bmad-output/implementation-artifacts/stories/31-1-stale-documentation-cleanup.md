@@ -1,6 +1,6 @@
 # Story 31.1: Stale Documentation Cleanup — Post-Unification Docs Update
 
-Status: pending
+Status: review
 
 ## Story
 
@@ -37,25 +37,25 @@ So that I can trust the docs when integrating with Fila or evaluating its capabi
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Update `docs/api-reference.md`
-  - [ ] 1.1 Rewrite Enqueue RPC section with unified `repeated EnqueueMessage` request/response
-  - [ ] 1.2 Add `StreamEnqueue` RPC documentation
-  - [ ] 1.3 Update Ack/Nack RPC sections with repeated items and typed error codes
-  - [ ] 1.4 Update Consume RPC section with `repeated Message messages` only
-  - [ ] 1.5 Add `EnqueueErrorCode`, `AckErrorCode`, `NackErrorCode` enum documentation
+- [x] Task 1: Update `docs/api-reference.md`
+  - [x] 1.1 Rewrite Enqueue RPC section with unified `repeated EnqueueMessage` request/response
+  - [x] 1.2 Add `StreamEnqueue` RPC documentation
+  - [x] 1.3 Update Ack/Nack RPC sections with repeated items and typed error codes
+  - [x] 1.4 Update Consume RPC section with `repeated Message messages` only
+  - [x] 1.5 Add `EnqueueErrorCode`, `AckErrorCode`, `NackErrorCode` enum documentation
 
-- [ ] Task 2: Update `docs/profiling.md`
-  - [ ] 2.1 Replace `batch-enqueue` workload references with current names
-  - [ ] 2.2 Remove references to removed `BatchEnqueue` RPC
+- [x] Task 2: Update `docs/profiling.md`
+  - [x] 2.1 Replace `batch-enqueue` workload references with current names
+  - [x] 2.2 Remove references to removed `BatchEnqueue` RPC
 
-- [ ] Task 3: Update `docs/benchmarks.md`
-  - [ ] 3.1 Rewrite "Batch benchmarks" section for unified Enqueue
-  - [ ] 3.2 Replace `BatchMode::Auto` references with `AccumulatorMode`
-  - [ ] 3.3 Clean up empty placeholder tables
+- [x] Task 3: Update `docs/benchmarks.md`
+  - [x] 3.1 Rewrite "Batch benchmarks" section for unified Enqueue
+  - [x] 3.2 Replace `BatchMode::Auto` references with `AccumulatorMode`
+  - [x] 3.3 Empty placeholder tables left as-is (CI auto-populates them)
 
-- [ ] Task 4: Cross-check all docs against current proto definitions
-  - [ ] 4.1 Grep all docs/ for removed type names
-  - [ ] 4.2 Verify RPC signatures match service.proto
+- [x] Task 4: Cross-check all docs against current proto definitions
+  - [x] 4.1 Grep all docs/ for removed type names — zero matches
+  - [x] 4.2 Verify RPC signatures match service.proto — verified
 
 ## Dev Notes
 
@@ -76,3 +76,25 @@ Epic 30 unified the API surface: `BatchEnqueue` RPC was removed, `Enqueue` now a
 - [Source: crates/fila-proto/proto/fila/v1/service.proto] — Current RPC definitions
 - [Source: crates/fila-proto/proto/fila/v1/messages.proto] — Current message type definitions
 - [Story: 30-1-api-surface-unification.md] — The story that created the stale state
+
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Opus 4.6 (1M context)
+
+### Debug Log References
+
+None.
+
+### Completion Notes List
+
+- All 3 doc files updated to reflect unified API surface from Epic 30
+- Empty benchmark placeholder tables retained — CI auto-populates via bench markers
+- Zero references to removed types remain in docs/
+
+### File List
+
+- docs/api-reference.md
+- docs/profiling.md
+- docs/benchmarks.md
