@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use fila_proto::fila_admin_client::FilaAdminClient;
 use fila_proto::{CreateQueueRequest, QueueConfig};
-use fila_sdk::{AckError, BatchMode, ConnectOptions, EnqueueError, FilaClient};
+use fila_sdk::{AccumulatorMode, AckError, ConnectOptions, EnqueueError, FilaClient};
 use tokio_stream::StreamExt;
 
 /// Find a free TCP port by binding to port 0 and reading the assigned port.
@@ -245,7 +245,7 @@ async fn enqueue_to_nonexistent_queue() {
 #[tokio::test]
 async fn auto_batch_flush_on_batch_size() {
     let server = TestServer::start();
-    let opts = ConnectOptions::new(server.addr()).with_batch_mode(BatchMode::Linger {
+    let opts = ConnectOptions::new(server.addr()).with_accumulator(AccumulatorMode::Linger {
         linger_ms: 30000, // Very high linger — flush MUST happen by batch_size
         batch_size: 5,
     });
@@ -308,7 +308,7 @@ async fn auto_batch_flush_on_batch_size() {
 #[tokio::test]
 async fn auto_batch_flush_on_linger_timeout() {
     let server = TestServer::start();
-    let opts = ConnectOptions::new(server.addr()).with_batch_mode(BatchMode::Linger {
+    let opts = ConnectOptions::new(server.addr()).with_accumulator(AccumulatorMode::Linger {
         linger_ms: 100,   // 100ms linger
         batch_size: 1000, // High batch_size — flush should happen by timer
     });
@@ -340,7 +340,7 @@ async fn auto_batch_flush_on_linger_timeout() {
 #[tokio::test]
 async fn batch_disabled_uses_single_message_rpc() {
     let server = TestServer::start();
-    let opts = ConnectOptions::new(server.addr()).with_batch_mode(BatchMode::Disabled);
+    let opts = ConnectOptions::new(server.addr()).with_accumulator(AccumulatorMode::Disabled);
     let client = FilaClient::connect_with_options(opts).await.unwrap();
 
     let queue = "test-no-batch";
@@ -364,7 +364,7 @@ async fn batch_disabled_uses_single_message_rpc() {
 #[tokio::test]
 async fn nagle_auto_batch_sends_immediately_when_idle() {
     let server = TestServer::start();
-    // Default connect() uses BatchMode::Auto (Nagle-style).
+    // Default connect() uses AccumulatorMode::Auto (Nagle-style).
     let client = FilaClient::connect(server.addr()).await.unwrap();
 
     let queue = "test-nagle-idle";
@@ -422,7 +422,7 @@ async fn nagle_auto_batch_buffers_under_load() {
 #[tokio::test]
 async fn auto_batch_partial_failure_propagation() {
     let server = TestServer::start();
-    let opts = ConnectOptions::new(server.addr()).with_batch_mode(BatchMode::Linger {
+    let opts = ConnectOptions::new(server.addr()).with_accumulator(AccumulatorMode::Linger {
         linger_ms: 30000,
         batch_size: 2,
     });
@@ -462,18 +462,16 @@ async fn auto_batch_partial_failure_propagation() {
 }
 
 #[tokio::test]
-async fn explicit_batch_enqueue_works_with_auto_batching() {
-    use fila_sdk::{BatchEnqueueResult, EnqueueMessage};
+async fn enqueue_many_works_with_auto_accumulation() {
+    use fila_sdk::EnqueueMessage;
 
     let server = TestServer::start();
-    // Explicit batch_enqueue() should work alongside any batch mode.
     let opts = ConnectOptions::new(server.addr());
     let client = FilaClient::connect_with_options(opts).await.unwrap();
 
-    let queue = "test-explicit-with-auto";
+    let queue = "test-enqueue-many-auto";
     create_queue(server.addr(), queue).await;
 
-    // Explicit batch_enqueue should still work even with auto-batching enabled.
     let messages = vec![
         EnqueueMessage {
             queue: queue.to_string(),
@@ -487,13 +485,10 @@ async fn explicit_batch_enqueue_works_with_auto_batching() {
         },
     ];
 
-    let results = client.batch_enqueue(messages).await.unwrap();
+    let results = client.enqueue_many(messages).await;
     assert_eq!(results.len(), 2);
     for result in &results {
-        assert!(
-            matches!(result, BatchEnqueueResult::Success(_)),
-            "expected Success, got: {result:?}"
-        );
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
     }
 }
 
@@ -502,7 +497,7 @@ async fn explicit_batch_enqueue_works_with_auto_batching() {
 #[tokio::test]
 async fn streaming_enqueue_basic_flow() {
     let server = TestServer::start();
-    // Default BatchMode::Auto uses streaming when available.
+    // Default AccumulatorMode::Auto uses streaming when available.
     let client = FilaClient::connect(server.addr()).await.unwrap();
 
     let queue = "test-streaming-basic";
@@ -605,7 +600,7 @@ async fn streaming_enqueue_per_message_error() {
 #[tokio::test]
 async fn streaming_linger_mode_uses_stream() {
     let server = TestServer::start();
-    let opts = ConnectOptions::new(server.addr()).with_batch_mode(BatchMode::Linger {
+    let opts = ConnectOptions::new(server.addr()).with_accumulator(AccumulatorMode::Linger {
         linger_ms: 100,
         batch_size: 10,
     });

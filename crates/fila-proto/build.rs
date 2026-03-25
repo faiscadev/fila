@@ -20,8 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Use bytes::Bytes for payload fields on the hot path (zero-copy
         // reference-counted clones instead of Vec<u8> memcpy).
         .bytes(".fila.v1.Message.payload")
-        .bytes(".fila.v1.EnqueueRequest.payload")
-        .bytes(".fila.v1.StreamEnqueueRequest.payload")
+        .bytes(".fila.v1.EnqueueMessage.payload")
         .bytes(".fila.v1.RaftInstallSnapshotRequest.data")
         .compile_protos(
             &proto_files

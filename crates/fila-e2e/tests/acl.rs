@@ -44,9 +44,7 @@ fn cli_create_regular_key(addr: &str, name: &str) -> (String, String) {
 fn assert_permission_denied_enqueue(result: Result<String, fila_sdk::EnqueueError>, context: &str) {
     match result {
         Ok(_) => panic!("{context}: expected PERMISSION_DENIED, got Ok"),
-        Err(fila_sdk::EnqueueError::Status(fila_sdk::StatusError::Rpc { code, .. }))
-            if code == tonic::Code::PermissionDenied =>
-        {
+        Err(fila_sdk::EnqueueError::PermissionDenied(_)) => {
             // correct
         }
         Err(e) => panic!("{context}: expected PERMISSION_DENIED, got: {e:?}"),
@@ -370,8 +368,7 @@ async fn key_without_consume_permission_cannot_nack() {
         .nack("nack-acl-q", "00000000-0000-0000-0000-000000000000", "err")
         .await;
     match result {
-        Err(fila_sdk::NackError::Status(fila_sdk::StatusError::Rpc { code, .. }))
-            if code == tonic::Code::PermissionDenied => {}
+        Err(fila_sdk::NackError::PermissionDenied(_)) => {}
         other => panic!("expected PERMISSION_DENIED, got: {other:?}"),
     }
 }

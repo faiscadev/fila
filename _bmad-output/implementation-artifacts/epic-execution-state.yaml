@@ -1,27 +1,61 @@
-epic: "Epic 29: Transport Optimization — Fair Benchmarks & Streaming Enqueue"
+epic: "Epic 30: Batch Pipeline — Scheduler Batching & Batch-Aware Protocol"
 baseBranch: main
 startedAt: "2026-03-24"
-completedAt: "2026-03-24"
 stories:
-  - id: "29.1"
-    title: "Fair Competitive Benchmark"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/29.1-fair-competitive-benchmark"
-    pr: 109
+  - id: "30.1"
+    title: "API Surface Unification — Proto, Server, Rust SDK"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/30.1-api-surface-unification"
+    pr: null
     dependsOn: []
-  - id: "29.2"
-    title: "Streaming Enqueue RPC (Server-Side)"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/29.2-streaming-enqueue-rpc"
-    pr: 110
-    dependsOn: []
-  - id: "29.3"
-    title: "SDK Streaming Enqueue Integration"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/29.3-sdk-streaming-enqueue"
-    pr: 111
-    dependsOn: ["29.2"]
+  - id: "30.2"
+    title: "External SDK Unification — Go, Python, JS, Ruby, Java"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["30.1"]
+  - id: "30.3"
+    title: "SchedulerCommand::Enqueue Batch Refactor & Scheduler Handler"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["30.2"]
+  - id: "30.4"
+    title: "Unified Enqueue Handler — Throughput Fix"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["30.3"]
+  - id: "30.5"
+    title: "Profile Checkpoint — Post-Tier 0 Analysis"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["30.4"]
+  - id: "30.6"
+    title: "StreamEnqueue with Batch-Within-Stream (Conditional)"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["30.5"]
+  - id: "30.7"
+    title: "SDK Adaptive Client-Side Accumulator (Conditional)"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["30.6"]
+  - id: "30.8"
+    title: "Profile Checkpoint & Competitive Benchmark Update (Conditional)"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["30.7"]
 skippedIssues: []

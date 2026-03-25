@@ -273,8 +273,8 @@ development_status:
   # Unify API surface (batch is the only path), fix handler→scheduler bridge,
   # then conditional Tier 1 (batch-within-stream, adaptive SDK accumulator).
   # Stories 30.6-30.8 conditional on 30.5 profiling results.
-  epic-30: backlog
-  30-1-api-surface-unification: backlog
+  epic-30: in-progress
+  30-1-api-surface-unification: in-progress
   30-2-external-sdk-unification: backlog
   30-3-scheduler-enqueue-batch-refactor: backlog
   30-4-unified-enqueue-handler-throughput-fix: backlog

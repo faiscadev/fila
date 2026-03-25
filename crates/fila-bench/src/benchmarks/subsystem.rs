@@ -99,9 +99,11 @@ pub fn bench_serialization(results: &mut Vec<BenchResult>) {
 
         // -- EnqueueRequest encode/decode --
         let enqueue_req = fila_proto::EnqueueRequest {
-            queue: "bench-queue".to_string(),
-            headers: headers.clone(),
-            payload: bytes::Bytes::copy_from_slice(&payload),
+            messages: vec![fila_proto::EnqueueMessage {
+                queue: "bench-queue".to_string(),
+                headers: headers.clone(),
+                payload: bytes::Bytes::copy_from_slice(&payload),
+            }],
         };
 
         // Warmup
@@ -536,7 +538,6 @@ fn make_consume_response(payload: &[u8]) -> fila_proto::ConsumeResponse {
         }),
     };
     fila_proto::ConsumeResponse {
-        message: Some(msg),
-        messages: Vec::new(),
+        messages: vec![msg],
     }
 }
