@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use std::time::Duration;
 
-use fila_core::{Broker, BrokerConfig, RocksDbEngine, TlsParams};
+use fila_core::{Broker, BrokerConfig, InMemoryEngine, RocksDbEngine, TlsParams};
 use fila_proto::fila_admin_server::FilaAdminServer;
 use fila_proto::fila_service_server::FilaServiceServer;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
@@ -89,22 +89,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_config = config.grpc.clone();
     let delivery_batch_max = config.scheduler.delivery_batch_max_messages;
 
+    let use_memory = std::env::var("FILA_STORAGE")
+        .map(|v| v.eq_ignore_ascii_case("memory"))
+        .unwrap_or(false);
+
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
-    let rocksdb = Arc::new(RocksDbEngine::open_with_config(
-        &data_dir,
-        &config.storage.rocksdb,
-    )?);
-    let storage: Arc<dyn fila_core::StorageEngine> = Arc::clone(&rocksdb) as _;
+
+    // Build the storage engine based on FILA_STORAGE env var.
+    // "memory" → in-memory (for profiling/benchmarking), anything else → RocksDB.
+    let (storage, rocksdb): (Arc<dyn fila_core::StorageEngine>, Option<Arc<RocksDbEngine>>) =
+        if use_memory {
+            info!("using in-memory storage engine (FILA_STORAGE=memory)");
+            (Arc::new(InMemoryEngine::new()), None)
+        } else {
+            let db = Arc::new(RocksDbEngine::open_with_config(
+                &data_dir,
+                &config.storage.rocksdb,
+            )?);
+            let storage = Arc::clone(&db) as Arc<dyn fila_core::StorageEngine>;
+            (storage, Some(db))
+        };
 
     // Conditionally start cluster manager (Raft consensus).
+    // Requires RocksDB for Raft key-value store — not available with in-memory backend.
     let cluster_config = config.cluster.clone();
     let tls_params = config.tls.clone();
     let (meta_event_tx, meta_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let cluster_manager = if cluster_config.enabled {
+        let raft_kv = rocksdb
+            .as_ref()
+            .expect("clustering requires RocksDB storage (FILA_STORAGE=memory not supported with clustering)");
         Some(
             fila_core::cluster::ClusterManager::start(
                 &cluster_config,
-                Arc::clone(&rocksdb) as _,
+                Arc::clone(raft_kv) as _,
                 Arc::clone(&storage),
                 Some(meta_event_tx),
                 tls_params.as_ref(),

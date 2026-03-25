@@ -18,7 +18,7 @@ pub use error::{
 };
 pub use message::Message;
 pub use queue::QueueConfig;
-pub use storage::{Mutation, RocksDbEngine, StorageEngine};
+pub use storage::{InMemoryEngine, Mutation, RocksDbEngine, StorageEngine};
 
 pub use cluster::{
     ClusterHandle, ClusterManager, ClusterRequest, ClusterResponse, ClusterWriteError,

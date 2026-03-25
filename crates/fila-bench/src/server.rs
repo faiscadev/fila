@@ -17,11 +17,20 @@ pub struct BenchServer {
 impl BenchServer {
     /// Start a new fila-server instance for benchmarking.
     pub fn start() -> Self {
-        Self::start_with_quantum(None)
+        Self::start_inner(None, false)
+    }
+
+    /// Start a new fila-server instance with in-memory storage (no RocksDB).
+    pub fn start_in_memory() -> Self {
+        Self::start_inner(None, true)
     }
 
     /// Start a new fila-server instance with a specific DRR quantum.
     pub fn start_with_quantum(quantum: Option<u32>) -> Self {
+        Self::start_inner(quantum, false)
+    }
+
+    fn start_inner(quantum: Option<u32>, in_memory: bool) -> Self {
         let port = free_port();
         let addr = format!("127.0.0.1:{port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");
@@ -47,11 +56,15 @@ otlp_endpoint = ""
             "fila-server binary not found at {binary:?}. Run `cargo build` first."
         );
 
-        let mut child = Command::new(&binary)
-            .env(
-                "FILA_DATA_DIR",
-                data_dir.path().join("data").to_str().unwrap(),
-            )
+        let mut cmd = Command::new(&binary);
+        cmd.env(
+            "FILA_DATA_DIR",
+            data_dir.path().join("data").to_str().unwrap(),
+        );
+        if in_memory {
+            cmd.env("FILA_STORAGE", "memory");
+        }
+        let mut child = cmd
             .current_dir(data_dir.path())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
