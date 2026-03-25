@@ -124,7 +124,7 @@ Compaction has no measurable negative impact on tail latency in single-node benc
 
 ## Batch benchmarks
 
-Batch benchmarks measure throughput and latency of the `BatchEnqueue` RPC and compare it against single-message enqueue. These benchmarks are gated behind `FILA_BENCH_BATCH=1` because they exercise batch-specific code paths and take additional time.
+Batch benchmarks measure throughput and latency of multi-message Enqueue (multiple `EnqueueMessage` items per `EnqueueRequest`) and compare it against single-message enqueue. These benchmarks are gated behind `FILA_BENCH_BATCH=1` because they exercise batch-specific code paths and take additional time.
 
 Enable with `FILA_BENCH_BATCH=1`:
 
@@ -132,9 +132,9 @@ Enable with `FILA_BENCH_BATCH=1`:
 FILA_BENCH_BATCH=1 cargo bench -p fila-bench --bench system
 ```
 
-### BatchEnqueue throughput
+### Multi-message enqueue throughput
 
-Measures `BatchEnqueue` RPC throughput at various batch sizes with 1KB messages. Reports both messages/s and batches/s.
+Measures multi-message Enqueue throughput at various batch sizes with 1KB messages. Reports both messages/s and batches/s.
 
 <!-- bench:batch-enqueue-throughput-start -->
 | Batch size | Throughput (msg/s) | Batches/s |
@@ -166,7 +166,7 @@ Measures throughput as a function of batch size (1 to 1000) to identify the poin
 
 ### Auto-batching latency
 
-Measures end-to-end latency (batch enqueue to consume) at various producer concurrency levels. Simulates client-side auto-batching by accumulating messages and flushing via `batch_enqueue` at batch size 50.
+Measures end-to-end latency (multi-message enqueue to consume) at various producer concurrency levels. Simulates client-side auto-batching by accumulating messages and flushing via the Enqueue RPC with 50 messages per request.
 
 <!-- bench:auto-batching-latency-start -->
 | Producers | p50 | p95 | p99 | p99.9 | p99.99 | max |
@@ -192,7 +192,7 @@ Speedup ratios are computed relative to the unbatched baseline.
 
 ### Delivery batching throughput
 
-Measures consumer throughput with varying concurrent consumer counts. Messages are pre-loaded and continuously produced via `batch_enqueue`.
+Measures consumer throughput with varying concurrent consumer counts. Messages are pre-loaded and continuously produced via multi-message Enqueue.
 
 <!-- bench:delivery-batching-start -->
 | Consumers | Throughput (msg/s) |
@@ -204,7 +204,7 @@ Measures consumer throughput with varying concurrent consumer counts. Messages a
 
 ### Concurrent producer batching
 
-Measures aggregate throughput with multiple concurrent producers all using `batch_enqueue` (batch size 100).
+Measures aggregate throughput with multiple concurrent producers all using multi-message Enqueue (batch size 100).
 
 <!-- bench:concurrent-producer-batching-start -->
 | Producers | Throughput (msg/s) |
@@ -316,7 +316,7 @@ Each broker is tested with identical workloads using its recommended high-throug
 
 | Broker | Version | Mode | Throughput batching |
 |--------|---------|------|---------------------|
-| Fila | latest | Docker container, DRR scheduler | `BatchMode::Auto` (4 concurrent producers) |
+| Fila | latest | Docker container, DRR scheduler | `AccumulatorMode::Auto` (4 concurrent producers) |
 | Kafka | 3.9 | KRaft (no ZooKeeper), 1 partition | `linger.ms=5`, `batch.num.messages=1000` |
 | RabbitMQ | 3.13 | Quorum queues, durable, manual ack | Per-message (no client-side batching) |
 | NATS | 2.11 | JetStream, file storage, pull-subscribe | Per-message (no client-side batching) |

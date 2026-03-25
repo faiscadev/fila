@@ -8,28 +8,64 @@ Used by producers and consumers for message operations.
 
 ### Enqueue
 
-Add a message to a queue.
+Enqueue one or more messages. Single-message enqueue is a batch of one.
 
 ```protobuf
 rpc Enqueue(EnqueueRequest) returns (EnqueueResponse)
 ```
 
-**Request:**
+**Request (`EnqueueRequest`):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `messages` | repeated EnqueueMessage | One or more messages to enqueue |
+
+**EnqueueMessage:**
 | Field | Type | Description |
 |-------|------|-------------|
 | `queue` | string | Queue name |
 | `headers` | map&lt;string, string&gt; | Arbitrary key-value headers (accessible in Lua hooks) |
 | `payload` | bytes | Message body |
 
-**Response:**
+**Response (`EnqueueResponse`):**
 | Field | Type | Description |
 |-------|------|-------------|
-| `message_id` | string | UUID assigned to the message |
+| `results` | repeated EnqueueResult | One result per input message (same order) |
 
-**Errors:**
-| gRPC Status | Condition |
-|-------------|-----------|
-| `NOT_FOUND` | Queue does not exist |
+**EnqueueResult:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `message_id` | string | UUID assigned (on success) |
+| `error` | EnqueueError | Error details (on failure) |
+
+Only one of `message_id` or `error` is set (protobuf `oneof`).
+
+**EnqueueErrorCode:**
+| Code | Description |
+|------|-------------|
+| `ENQUEUE_ERROR_CODE_QUEUE_NOT_FOUND` | Queue does not exist |
+| `ENQUEUE_ERROR_CODE_STORAGE` | Storage layer error |
+| `ENQUEUE_ERROR_CODE_LUA` | Lua hook rejected the message |
+| `ENQUEUE_ERROR_CODE_PERMISSION_DENIED` | Caller lacks permission |
+
+### StreamEnqueue
+
+Bidirectional streaming enqueue with sequence tracking. The client sends batches of messages on the request stream and receives per-batch results on the response stream. Sequence numbers allow the client to correlate responses with requests.
+
+```protobuf
+rpc StreamEnqueue(stream StreamEnqueueRequest) returns (stream StreamEnqueueResponse)
+```
+
+**Request (stream, `StreamEnqueueRequest`):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `messages` | repeated EnqueueMessage | Messages to enqueue in this batch |
+| `sequence_number` | uint64 | Client-assigned sequence number for correlation |
+
+**Response (stream, `StreamEnqueueResponse`):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `sequence_number` | uint64 | Echoed sequence number from the request |
+| `results` | repeated EnqueueResult | One result per input message |
 
 ### Consume
 
@@ -44,10 +80,10 @@ rpc Consume(ConsumeRequest) returns (stream ConsumeResponse)
 |-------|------|-------------|
 | `queue` | string | Queue name to consume from |
 
-**Response (stream):**
+**Response (stream, `ConsumeResponse`):**
 | Field | Type | Description |
 |-------|------|-------------|
-| `message` | Message | The delivered message (see [Message](#message) below) |
+| `messages` | repeated Message | One or more delivered messages (see [Message](#message) below) |
 
 The stream stays open until the client disconnects. Messages are delivered as they become available — the stream blocks when no messages are ready.
 
@@ -58,42 +94,78 @@ The stream stays open until the client disconnects. Messages are delivered as th
 
 ### Ack
 
-Acknowledge successful processing of a message. Removes the message from the broker.
+Acknowledge one or more messages. Removes acknowledged messages from the broker.
 
 ```protobuf
 rpc Ack(AckRequest) returns (AckResponse)
 ```
 
-**Request:**
+**Request (`AckRequest`):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `messages` | repeated AckMessage | One or more messages to acknowledge |
+
+**AckMessage:**
 | Field | Type | Description |
 |-------|------|-------------|
 | `queue` | string | Queue name |
 | `message_id` | string | ID of the message to acknowledge |
 
-**Errors:**
-| gRPC Status | Condition |
-|-------------|-----------|
-| `NOT_FOUND` | Queue or message does not exist |
+**Response (`AckResponse`):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `results` | repeated AckResult | One result per input message |
+
+**AckResult:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | AckSuccess | Empty message (on success) |
+| `error` | AckError | Error details (on failure) |
+
+**AckErrorCode:**
+| Code | Description |
+|------|-------------|
+| `ACK_ERROR_CODE_MESSAGE_NOT_FOUND` | Message does not exist or is not leased |
+| `ACK_ERROR_CODE_STORAGE` | Storage layer error |
+| `ACK_ERROR_CODE_PERMISSION_DENIED` | Caller lacks permission |
 
 ### Nack
 
-Reject a message. Triggers the `on_failure` Lua hook (if configured) to decide retry vs. dead-letter.
+Reject one or more messages. Triggers the `on_failure` Lua hook (if configured) to decide retry vs. dead-letter.
 
 ```protobuf
 rpc Nack(NackRequest) returns (NackResponse)
 ```
 
-**Request:**
+**Request (`NackRequest`):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `messages` | repeated NackMessage | One or more messages to reject |
+
+**NackMessage:**
 | Field | Type | Description |
 |-------|------|-------------|
 | `queue` | string | Queue name |
 | `message_id` | string | ID of the message to reject |
 | `error` | string | Error description (passed to `on_failure` hook as `msg.error`) |
 
-**Errors:**
-| gRPC Status | Condition |
-|-------------|-----------|
-| `NOT_FOUND` | Queue or message does not exist |
+**Response (`NackResponse`):**
+| Field | Type | Description |
+|-------|------|-------------|
+| `results` | repeated NackResult | One result per input message |
+
+**NackResult:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | NackSuccess | Empty message (on success) |
+| `error` | NackError | Error details (on failure) |
+
+**NackErrorCode:**
+| Code | Description |
+|------|-------------|
+| `NACK_ERROR_CODE_MESSAGE_NOT_FOUND` | Message does not exist or is not leased |
+| `NACK_ERROR_CODE_STORAGE` | Storage layer error |
+| `NACK_ERROR_CODE_PERMISSION_DENIED` | Caller lacks permission |
 
 ---
 
