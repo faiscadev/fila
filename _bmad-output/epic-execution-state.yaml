@@ -4,9 +4,9 @@ startedAt: "2026-03-25T00:00:00Z"
 stories:
   - id: "34.1"
     title: "Titan Blob Separation"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
+    branch: "feat/34.1-titan-blob-separation"
     pr: null
     dependsOn: []
   - id: "34.2"
