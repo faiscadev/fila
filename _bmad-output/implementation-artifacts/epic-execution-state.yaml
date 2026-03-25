@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "30.2"
     title: "External SDK Unification — Go, Python, JS, Ruby, Java"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/30.2-external-sdk-unification"
-    pr: null
+    pr: 113
     dependsOn: ["30.1"]
   - id: "30.3"
     title: "SchedulerCommand::Enqueue Batch Refactor & Scheduler Handler"
