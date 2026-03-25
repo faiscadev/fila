@@ -97,15 +97,17 @@ impl Scheduler {
             ));
         }
 
+        let queue_id_spur = self.interner.get_or_intern(queue_id);
+
         // Count pending messages per fairness key
         let mut pending_total: u64 = 0;
-        let mut pending_by_key: std::collections::HashMap<&str, u64> =
+        let mut pending_by_key: std::collections::HashMap<Spur, u64> =
             std::collections::HashMap::new();
-        for ((q, fk), entries) in &self.pending {
-            if q == queue_id {
+        for ((q_spur, fk_spur), entries) in &self.pending {
+            if *q_spur == queue_id_spur {
                 let count = entries.len() as u64;
                 pending_total += count;
-                pending_by_key.insert(fk, count);
+                *pending_by_key.entry(*fk_spur).or_default() += count;
             }
         }
 
@@ -128,11 +130,12 @@ impl Scheduler {
         let active_consumers = u32::try_from(active_consumers).unwrap_or(u32::MAX);
 
         // Collect per-fairness-key stats from DRR
-        let drr_stats = self.drr.key_stats(queue_id);
+        let drr_stats = self.drr.key_stats(queue_id_spur);
         let per_key_stats: Vec<FairnessKeyStats> = drr_stats
             .into_iter()
-            .map(|(key, deficit, weight)| {
-                let pending_count = pending_by_key.get(key.as_str()).copied().unwrap_or(0);
+            .map(|(key_spur, deficit, weight)| {
+                let pending_count = pending_by_key.get(&key_spur).copied().unwrap_or(0);
+                let key = self.interner.resolve(&key_spur).to_string();
                 FairnessKeyStats {
                     key,
                     pending_count,
@@ -214,6 +217,8 @@ impl Scheduler {
         let limit = if count == 0 { u64::MAX } else { count };
         let mut redriven: u64 = 0;
 
+        let parent_spur = self.intern(parent_queue_id);
+
         for (dlq_key, mut msg) in messages {
             if redriven >= limit {
                 break;
@@ -265,16 +270,17 @@ impl Scheduler {
                     if deque.is_empty() {
                         self.pending.remove(&pk);
                         // Clean up DRR active set for DLQ if no more pending
-                        self.drr.remove_key(&pk.0, &pk.1);
+                        self.drr.remove_key(pk.0, pk.1);
                     }
                 }
             }
 
             // Add to parent queue's in-memory indices
-            self.drr.add_key(parent_queue_id, &fairness_key, weight);
+            let fk_spur = self.intern(&fairness_key);
+            self.drr.add_key(parent_spur, fk_spur, weight);
             self.pending_push(
-                parent_queue_id,
-                &fairness_key,
+                parent_spur,
+                fk_spur,
                 PendingEntry {
                     msg_key: parent_key,
                     msg_id,
@@ -307,8 +313,9 @@ impl Scheduler {
 
         // Pre-compute per-queue pending counts in a single pass over the pending map
         let mut pending_by_queue: HashMap<&str, u64> = HashMap::new();
-        for ((qid, _), entries) in &self.pending {
-            *pending_by_queue.entry(qid.as_str()).or_default() += entries.len() as u64;
+        for ((qid_spur, _), entries) in &self.pending {
+            let qid_str = self.interner.resolve(qid_spur);
+            *pending_by_queue.entry(qid_str).or_default() += entries.len() as u64;
         }
 
         // Pre-compute per-queue in-flight counts in a single pass over leased keys

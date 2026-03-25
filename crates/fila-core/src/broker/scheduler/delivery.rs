@@ -19,12 +19,14 @@ impl Scheduler {
 
     /// Remove all pending and leased index entries for a queue (used on queue deletion).
     pub(super) fn remove_pending_for_queue(&mut self, queue_id: &str) {
+        let queue_id_spur = self.intern(queue_id);
+
         // Remove pending (not-yet-delivered) entries
-        let keys_to_remove: Vec<(String, String)> = self
+        let keys_to_remove: Vec<(Spur, Spur)> = self
             .pending
             .keys()
-            .filter(|(qid, _)| qid == queue_id)
-            .cloned()
+            .filter(|(qid, _)| *qid == queue_id_spur)
+            .copied()
             .collect();
         for key in keys_to_remove {
             if let Some(entries) = self.pending.remove(&key) {
@@ -40,10 +42,10 @@ impl Scheduler {
             .retain(|_, msg_key| !msg_key.starts_with(&prefix));
     }
 
-    /// Add a message to the pending index.
-    pub(super) fn pending_push(&mut self, queue_id: &str, fairness_key: &str, entry: PendingEntry) {
-        let pk = (queue_id.to_string(), fairness_key.to_string());
-        self.pending_by_id.insert(entry.msg_id, pk.clone());
+    /// Add a message to the pending index using interned keys.
+    pub(super) fn pending_push(&mut self, queue_id: Spur, fairness_key: Spur, entry: PendingEntry) {
+        let pk = (queue_id, fairness_key);
+        self.pending_by_id.insert(entry.msg_id, pk);
         self.pending.entry(pk).or_default().push_back(entry);
     }
 
@@ -51,13 +53,23 @@ impl Scheduler {
     /// and registered consumers.
     pub(super) fn drr_deliver(&mut self) {
         // Collect queue IDs that have both consumers and active DRR keys
-        let queue_ids: Vec<String> = self
+        let queue_id_spurs: Vec<Spur> = self
             .drr
             .queue_ids()
             .into_iter()
-            .filter(|qid| {
-                self.drr.has_active_keys(qid) && self.consumers.values().any(|e| e.queue_id == *qid)
+            .filter(|&qid_spur| {
+                if !self.drr.has_active_keys(qid_spur) {
+                    return false;
+                }
+                let qid_str = self.resolve(qid_spur);
+                self.consumers.values().any(|e| e.queue_id == qid_str)
             })
+            .collect();
+
+        // Resolve to strings for drr_deliver_queue (which takes &str for storage APIs)
+        let queue_ids: Vec<String> = queue_id_spurs
+            .iter()
+            .map(|&s| self.resolve(s).to_string())
             .collect();
 
         for queue_id in &queue_ids {
@@ -72,7 +84,9 @@ impl Scheduler {
     /// Uses the in-memory pending index instead of scanning storage, giving
     /// O(1) per-message delivery instead of the previous O(n) scan.
     pub(super) fn drr_deliver_queue(&mut self, queue_id: &str) {
-        if !self.drr.has_active_keys(queue_id) {
+        let queue_id_spur = self.intern(queue_id);
+
+        if !self.drr.has_active_keys(queue_id_spur) {
             return;
         }
 
@@ -83,7 +97,7 @@ impl Scheduler {
         }
 
         // Start a new round (refills deficits for all active keys)
-        if self.drr.start_new_round(queue_id) {
+        if self.drr.start_new_round(queue_id_spur) {
             self.metrics.record_drr_round(queue_id);
         }
 
@@ -96,13 +110,13 @@ impl Scheduler {
             .unwrap_or(30_000);
 
         loop {
-            let Some(fairness_key) = self.drr.next_key(queue_id) else {
+            let Some(fairness_key_spur) = self.drr.next_key(queue_id_spur) else {
                 // Round exhausted — all keys have non-positive deficit
                 break;
             };
             self.metrics.record_drr_key_processed(queue_id);
 
-            let pending_key = (queue_id.to_string(), fairness_key.clone());
+            let pending_key = (queue_id_spur, fairness_key_spur);
 
             // Peek at the front pending entry; if none, this fairness key is drained
             let Some(front) = self
@@ -110,7 +124,7 @@ impl Scheduler {
                 .get(&pending_key)
                 .and_then(|deque| deque.front())
             else {
-                self.drr.remove_key(queue_id, &fairness_key);
+                self.drr.remove_key(queue_id_spur, fairness_key_spur);
                 self.pending.remove(&pending_key);
                 continue;
             };
@@ -125,7 +139,7 @@ impl Scheduler {
                 // Throttled — drain all remaining deficit so DRR moves to next key
                 // in O(1) rather than iterating once per deficit unit.
                 // The key stays in the active set for the next round.
-                self.drr.drain_deficit(queue_id, &fairness_key);
+                self.drr.drain_deficit(queue_id_spur, fairness_key_spur);
                 continue;
             }
 
@@ -149,7 +163,7 @@ impl Scheduler {
                 Err(e) => {
                     error!(%queue_id, msg_id = %entry.msg_id, error = %e, "failed to read pending message");
                     // Put the entry back so we don't lose it
-                    self.pending_by_id.insert(entry.msg_id, pending_key.clone());
+                    self.pending_by_id.insert(entry.msg_id, pending_key);
                     self.pending
                         .entry(pending_key)
                         .or_default()
@@ -162,12 +176,12 @@ impl Scheduler {
             if self.try_deliver_to_consumer(queue_id, &msg, &lease_key, visibility_timeout_ms) {
                 self.metrics.record_lease(queue_id);
                 self.metrics
-                    .record_fairness_delivery(queue_id, &fairness_key);
+                    .record_fairness_delivery(queue_id, self.resolve(fairness_key_spur));
                 *self
                     .fairness_deliveries
-                    .entry((queue_id.to_string(), fairness_key.clone()))
+                    .entry((queue_id_spur, fairness_key_spur))
                     .or_default() += 1;
-                self.drr.consume_deficit(queue_id, &fairness_key);
+                self.drr.consume_deficit(queue_id_spur, fairness_key_spur);
                 // Consume throttle tokens only after successful delivery
                 self.throttle.consume_keys(&throttle_keys);
                 for tk in &throttle_keys {
@@ -179,7 +193,7 @@ impl Scheduler {
                 // Couldn't deliver (all consumers full/closed).
                 // Put the entry back at the front of the pending queue.
                 // No throttle tokens were consumed (peek-only check above).
-                self.pending_by_id.insert(entry.msg_id, pending_key.clone());
+                self.pending_by_id.insert(entry.msg_id, pending_key);
                 self.pending
                     .entry(pending_key)
                     .or_default()
@@ -212,10 +226,8 @@ impl Scheduler {
             return false;
         }
 
-        let rr_idx = self
-            .consumer_rr_idx
-            .entry(queue_id.to_string())
-            .or_insert(0);
+        let queue_id_spur = self.intern(queue_id);
+        let rr_idx = self.consumer_rr_idx.entry(queue_id_spur).or_insert(0);
         let mut attempts = 0;
 
         while attempts < queue_consumers.len() {

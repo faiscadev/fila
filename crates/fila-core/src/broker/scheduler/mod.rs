@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
+use lasso::{Spur, ThreadedRodeo};
 use tracing::{debug, error, info, warn};
 
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
@@ -43,6 +44,12 @@ pub(super) struct PendingEntry {
 
 /// Single-threaded scheduler core. Owns all mutable scheduler state and
 /// processes commands from IO threads via a crossbeam channel.
+///
+/// **String interning:** The scheduler uses `lasso::ThreadedRodeo` to intern
+/// `queue_id` and `fairness_key` strings. Internal data structures (DRR, pending
+/// index, fairness_deliveries) use `Spur` (4 bytes, Copy) instead of `String`.
+/// Strings are interned at entry points (enqueue, recovery) and resolved back
+/// to `&str` at system boundaries (storage writes, gRPC responses, logging).
 pub struct Scheduler {
     storage: Arc<dyn StorageEngine>,
     inbound: Receiver<SchedulerCommand>,
@@ -52,21 +59,22 @@ pub struct Scheduler {
     /// Per-queue round-robin index for delivering messages to consumers.
     /// Persists across calls so messages are distributed fairly across
     /// consumers within each queue independently.
-    consumer_rr_idx: HashMap<String, usize>,
+    consumer_rr_idx: HashMap<Spur, usize>,
     /// Deficit Round Robin scheduler for fair message delivery across
     /// fairness keys.
     drr: DrrScheduler,
     /// Token bucket rate limiter for throttle keys.
     throttle: ThrottleManager,
     /// Per-(queue_id, fairness_key) FIFO queue of pending (unleased) messages.
-    pending: HashMap<(String, String), VecDeque<PendingEntry>>,
+    /// Uses interned Spur keys instead of String for reduced allocation overhead.
+    pending: HashMap<(Spur, Spur), VecDeque<PendingEntry>>,
     /// Reverse index: msg_id → (queue_id, fairness_key) for O(1) lookup on ack/nack.
-    pending_by_id: HashMap<uuid::Uuid, (String, String)>,
+    pending_by_id: HashMap<uuid::Uuid, (Spur, Spur)>,
     /// Storage key for in-flight (leased) messages, for O(1) lookup on ack/nack.
     leased_msg_keys: HashMap<uuid::Uuid, Vec<u8>>,
     /// Lua rules engine for executing on_enqueue and on_failure scripts.
     lua_engine: Option<LuaEngine>,
-    /// All known queue IDs, for zeroing gauges when queues become idle.
+    /// All known queue IDs (as strings), for zeroing gauges when queues become idle.
     known_queues: HashSet<String>,
     /// In-memory cache of queue configs, eliminating per-message RocksDB reads
     /// for queue existence checks in the enqueue hot path.
@@ -77,10 +85,15 @@ pub struct Scheduler {
     /// OTel metrics for recording counters and gauges.
     metrics: Metrics,
     /// Per-(queue_id, fairness_key) delivery counts for fair share ratio calculation.
-    /// Reset each time record_gauges() is called.
-    fairness_deliveries: HashMap<(String, String), u64>,
+    /// Uses interned Spur keys. Reset each time record_gauges() is called.
+    fairness_deliveries: HashMap<(Spur, Spur), u64>,
     /// Maximum number of commands to drain per coalescing batch.
     write_coalesce_max_batch: usize,
+    /// String interner for queue_id and fairness_key strings.
+    /// Uses ThreadedRodeo (thread-safe) even though the scheduler is single-threaded,
+    /// because Rodeo is not Send and the scheduler is spawned on a dedicated thread.
+    /// Pinned to lasso 0.6.x — v0.7.0 has a known deadlock (lasso issue #39).
+    interner: ThreadedRodeo,
 }
 
 impl Scheduler {
@@ -122,7 +135,18 @@ impl Scheduler {
             },
             fairness_deliveries: HashMap::new(),
             write_coalesce_max_batch: config.write_coalesce_max_batch,
+            interner: ThreadedRodeo::default(),
         }
+    }
+
+    /// Intern a string, returning a `Spur` token. O(1) for already-interned strings.
+    pub(super) fn intern(&self, s: &str) -> Spur {
+        self.interner.get_or_intern(s)
+    }
+
+    /// Resolve a `Spur` token back to its string representation.
+    pub(super) fn resolve(&self, spur: Spur) -> &str {
+        self.interner.resolve(&spur)
     }
 
     /// Run the scheduler event loop. This blocks the current thread until
@@ -295,11 +319,11 @@ impl Scheduler {
             Ok(()) => {
                 debug!(batch_size, "coalesced enqueue batch committed");
 
-                let mut delivery_queues: HashSet<String> = HashSet::new();
+                let mut delivery_queues: HashSet<Spur> = HashSet::new();
 
                 // Phase 4: Finalize and place success results
                 for item in prepared_items {
-                    delivery_queues.insert(item.prep.queue_id.clone());
+                    delivery_queues.insert(item.prep.queue_id_spur);
                     let msg_id = item.prep.msg_id;
                     self.finalize_enqueue(&item.prep);
                     cmd_results[item.cmd_idx].0[item.msg_idx] = Some(Ok(msg_id));
@@ -311,8 +335,9 @@ impl Scheduler {
                 }
 
                 // Deliver immediately for responsiveness
-                for queue_id in &delivery_queues {
-                    self.drr_deliver_queue(queue_id);
+                for queue_id_spur in &delivery_queues {
+                    let queue_id = self.resolve(*queue_id_spur).to_string();
+                    self.drr_deliver_queue(&queue_id);
                 }
             }
             Err(storage_err) => {
