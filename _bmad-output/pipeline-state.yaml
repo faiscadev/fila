@@ -1,8 +1,8 @@
 startedAt: "2026-03-22T00:00:00Z"
-currentEpic: 32
-currentEpicName: "Plateau 1 — Eliminate Per-Message Overhead"
-currentPhase: "complete"
-cycleCount: 22
+currentEpic: 33
+currentEpicName: "Plateau 2 — Fix the Consume Path"
+currentPhase: "execute"
+cycleCount: 23
 completedEpics:
   - epicNumber: 17
     epicName: "Cluster Hardening"
