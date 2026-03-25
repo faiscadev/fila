@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "33.2"
     title: "In-Memory Lease Tracking"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/33.2-in-memory-lease-tracking"
     pr: null
     dependsOn: ["33.1"]
   - id: "33.3"
