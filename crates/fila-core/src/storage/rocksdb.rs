@@ -78,11 +78,15 @@ impl RocksDbEngine {
         let mut db_opts = Options::default();
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
-        db_opts.set_enable_pipelined_write(config.pipelined_write);
         // Unordered writes trade snapshot immutability for higher write throughput.
         // Safe for Fila: the single-threaded scheduler provides ordering, and Raft
-        // provides consensus in clustered mode. Supersedes pipelined_write when enabled.
-        db_opts.set_unordered_write(config.unordered_write);
+        // provides consensus in clustered mode. Mutually exclusive with pipelined_write.
+        if config.unordered_write {
+            db_opts.set_unordered_write(true);
+            db_opts.set_enable_pipelined_write(false);
+        } else {
+            db_opts.set_enable_pipelined_write(config.pipelined_write);
+        }
         db_opts.set_manual_wal_flush(config.manual_wal_flush);
         db_opts.set_wal_bytes_per_sync(config.wal_bytes_per_sync);
 
