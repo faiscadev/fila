@@ -1,6 +1,6 @@
 # Story 31.1: Stale Documentation Cleanup — Post-Unification Docs Update
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
