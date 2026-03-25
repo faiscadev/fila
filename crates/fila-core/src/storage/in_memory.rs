@@ -197,55 +197,52 @@ impl StorageEngine for InMemoryEngine {
     }
 
     fn apply_mutations(&self, mutations: Vec<Mutation>) -> StorageResult<()> {
+        // Acquire all locks upfront for atomicity — no reader can observe
+        // partial state while the batch is being applied.
+        let mut messages = self.messages.write().unwrap();
+        let mut leases = self.leases.write().unwrap();
+        let mut lease_expiry = self.lease_expiry.write().unwrap();
+        let mut queues = self.queues.write().unwrap();
+        let mut state = self.state.write().unwrap();
+        let mut msg_index = self.msg_index.write().unwrap();
+
         for mutation in mutations {
             match mutation {
                 Mutation::PutMessage { key, value } => {
-                    self.messages.write().unwrap().insert(key, value);
+                    messages.insert(key, value);
                 }
                 Mutation::DeleteMessage { key } => {
-                    self.messages.write().unwrap().remove(&key);
+                    messages.remove(&key);
                 }
                 Mutation::PutLease { key, value } => {
-                    self.leases.write().unwrap().insert(key, value);
+                    leases.insert(key, value);
                 }
                 Mutation::DeleteLease { key } => {
-                    self.leases.write().unwrap().remove(&key);
+                    leases.remove(&key);
                 }
                 Mutation::PutLeaseExpiry { key } => {
-                    self.lease_expiry.write().unwrap().insert(key, ());
+                    lease_expiry.insert(key, ());
                 }
                 Mutation::DeleteLeaseExpiry { key } => {
-                    self.lease_expiry.write().unwrap().remove(&key);
+                    lease_expiry.remove(&key);
                 }
                 Mutation::PutQueue { key, value } => {
-                    self.queues
-                        .write()
-                        .unwrap()
-                        .insert(String::from_utf8_lossy(&key).into_owned(), value);
+                    queues.insert(String::from_utf8_lossy(&key).into_owned(), value);
                 }
                 Mutation::DeleteQueue { key } => {
-                    self.queues
-                        .write()
-                        .unwrap()
-                        .remove(&String::from_utf8_lossy(&key).into_owned());
+                    queues.remove(&String::from_utf8_lossy(&key).into_owned());
                 }
                 Mutation::PutState { key, value } => {
-                    self.state
-                        .write()
-                        .unwrap()
-                        .insert(String::from_utf8_lossy(&key).into_owned(), value);
+                    state.insert(String::from_utf8_lossy(&key).into_owned(), value);
                 }
                 Mutation::DeleteState { key } => {
-                    self.state
-                        .write()
-                        .unwrap()
-                        .remove(&String::from_utf8_lossy(&key).into_owned());
+                    state.remove(&String::from_utf8_lossy(&key).into_owned());
                 }
                 Mutation::PutMsgIndex { key, value } => {
-                    self.msg_index.write().unwrap().insert(key, value);
+                    msg_index.insert(key, value);
                 }
                 Mutation::DeleteMsgIndex { key } => {
-                    self.msg_index.write().unwrap().remove(&key);
+                    msg_index.remove(&key);
                 }
             }
         }
