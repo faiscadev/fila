@@ -4,8 +4,8 @@ startedAt: "2026-03-24"
 stories:
   - id: "30.1"
     title: "API Surface Unification — Proto, Server, Rust SDK"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: "pr-complete"
     branch: "feat/30.1-api-surface-unification"
     pr: 112
     dependsOn: []
