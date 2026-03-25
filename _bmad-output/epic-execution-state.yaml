@@ -4,8 +4,8 @@ startedAt: "2026-03-25T00:00:00Z"
 stories:
   - id: "31.1"
     title: "Stale Documentation Cleanup"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/31.1-stale-documentation-cleanup"
     pr: 117
     dependsOn: []
