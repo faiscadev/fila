@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "30.2"
     title: "External SDK Unification — Go, Python, JS, Ruby, Java"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "pr-ci"
+    branch: "feat/30.2-external-sdk-unification"
     pr: null
     dependsOn: ["30.1"]
   - id: "30.3"
