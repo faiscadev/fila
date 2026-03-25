@@ -152,7 +152,16 @@ impl Broker {
     /// Determine the routing key for a command without consuming it.
     fn extract_route_key(cmd: &SchedulerCommand) -> RouteKey {
         match cmd {
-            SchedulerCommand::Enqueue { message, .. } => RouteKey::Queue(message.queue_id.clone()),
+            SchedulerCommand::Enqueue { messages, .. } => {
+                // Route by the first message's queue. In practice, batches target
+                // one queue. Multi-queue batches are split at the gRPC layer.
+                RouteKey::Queue(
+                    messages
+                        .first()
+                        .map(|m| m.queue_id.clone())
+                        .unwrap_or_default(),
+                )
+            }
             SchedulerCommand::Ack { queue_id, .. }
             | SchedulerCommand::Nack { queue_id, .. }
             | SchedulerCommand::RegisterConsumer { queue_id, .. }
@@ -574,13 +583,19 @@ mod tests {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         broker
             .send_command(SchedulerCommand::Enqueue {
-                message: msg,
+                messages: vec![msg],
                 reply: reply_tx,
             })
             .unwrap();
 
         // Give the scheduler thread time to process
-        let result = reply_rx.blocking_recv().unwrap().unwrap();
+        let result = reply_rx
+            .blocking_recv()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap();
         assert_eq!(result, msg_id);
 
         broker.shutdown().unwrap();
@@ -805,11 +820,16 @@ mod tests {
             let (tx, rx) = tokio::sync::oneshot::channel();
             broker
                 .send_command(SchedulerCommand::Enqueue {
-                    message: msg,
+                    messages: vec![msg],
                     reply: tx,
                 })
                 .unwrap();
-            rx.blocking_recv().unwrap().unwrap();
+            rx.blocking_recv()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .unwrap();
         }
 
         // ListQueues should aggregate from both shards
@@ -892,11 +912,16 @@ mod tests {
             let (tx, rx) = tokio::sync::oneshot::channel();
             broker
                 .send_command(SchedulerCommand::Enqueue {
-                    message: msg,
+                    messages: vec![msg],
                     reply: tx,
                 })
                 .unwrap();
-            rx.blocking_recv().unwrap().unwrap();
+            rx.blocking_recv()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .unwrap();
         }
 
         let (tx, rx) = tokio::sync::oneshot::channel();

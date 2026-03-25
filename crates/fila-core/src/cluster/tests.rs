@@ -669,13 +669,13 @@ mod tests {
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             node.broker
                 .send_command(crate::SchedulerCommand::Enqueue {
-                    message: msg,
+                    messages: vec![msg],
                     reply: reply_tx,
                 })
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                     format!("{e}").into()
                 })?;
-            let _ = reply_rx.await??;
+            let _ = reply_rx.await?.into_iter().next().unwrap()?;
         }
 
         Ok(msg_id)

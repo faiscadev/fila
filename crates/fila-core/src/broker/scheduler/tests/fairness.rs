@@ -23,7 +23,7 @@ fn drr_three_equal_weight_keys_get_equal_delivery() {
             ts += 1;
             let (reply_tx, _) = tokio::sync::oneshot::channel();
             tx.send(SchedulerCommand::Enqueue {
-                message: msg,
+                messages: vec![msg],
                 reply: reply_tx,
             })
             .unwrap();
@@ -83,7 +83,7 @@ fn drr_single_key_backward_compatible() {
         msg_ids.push(msg.id);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -124,7 +124,7 @@ fn drr_key_exhaustion_continues_other_keys() {
         ts += 1;
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -134,7 +134,7 @@ fn drr_key_exhaustion_continues_other_keys() {
         ts += 1;
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -187,7 +187,7 @@ fn drr_weighted_keys_proportional_delivery() {
         ts += 1;
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -197,7 +197,7 @@ fn drr_weighted_keys_proportional_delivery() {
         ts += 1;
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -280,7 +280,7 @@ fn drr_fairness_accuracy_10k_messages_6_keys() {
             ts += 1;
             let (reply_tx, _) = tokio::sync::oneshot::channel();
             tx.send(SchedulerCommand::Enqueue {
-                message: msg,
+                messages: vec![msg],
                 reply: reply_tx,
             })
             .unwrap();
@@ -361,7 +361,7 @@ fn drr_default_weight_is_one() {
         let msg = test_message_with_key("default-weight", "key_a", i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -370,7 +370,7 @@ fn drr_default_weight_is_one() {
         let msg = test_message_with_key("default-weight", "key_b", i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -409,7 +409,7 @@ fn drr_weight_zero_treated_as_one() {
         let msg = test_message_with_key_and_weight("weight-zero", "key_a", 0, i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -418,7 +418,7 @@ fn drr_weight_zero_treated_as_one() {
         let msg = test_message_with_key_and_weight("weight-zero", "key_b", 0, i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -469,7 +469,7 @@ fn drr_weight_update_changes_proportions() {
     let msg = test_message_with_key_and_weight("weight-update", "key_a", 1, 0);
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -481,7 +481,7 @@ fn drr_weight_update_changes_proportions() {
         ts += 1;
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -493,7 +493,7 @@ fn drr_weight_update_changes_proportions() {
         ts += 1;
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();

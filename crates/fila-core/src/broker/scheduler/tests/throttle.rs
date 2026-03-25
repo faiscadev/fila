@@ -28,7 +28,7 @@ fn throttle_skips_throttled_message() {
         let msg = test_message_with_throttle_keys("throttle-q", vec!["rate:global".to_string()], i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -82,7 +82,7 @@ fn throttle_multi_key_all_must_pass() {
         );
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -125,7 +125,7 @@ fn throttle_refill_allows_delivery() {
         let msg = test_message_with_throttle_keys("refill-q", vec!["rate:fast".to_string()], i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -173,7 +173,7 @@ fn throttle_skipped_key_stays_active() {
     let msg = test_message_with_throttle_keys("active-q", vec!["rate:exhausted".to_string()], 0);
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -214,7 +214,7 @@ fn throttle_empty_keys_unthrottled() {
         let msg = test_message_with_throttle_keys("unthrottled-q", vec![], i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();

@@ -53,7 +53,7 @@ impl ClusterGrpcService {
             super::types::ClusterRequest::Enqueue { message } => {
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::Enqueue {
-                    message: message.clone(),
+                    messages: vec![message.clone()],
                     reply: reply_tx,
                 }) {
                     tracing::error!(error = %e, "failed to apply forwarded enqueue to scheduler");
@@ -63,10 +63,11 @@ impl ClusterGrpcService {
                     Err(e) => {
                         tracing::error!(error = %e, "scheduler dropped reply for forwarded enqueue");
                     }
-                    Ok(Err(e)) => {
-                        tracing::error!(error = %e, "scheduler rejected forwarded enqueue");
+                    Ok(results) => {
+                        if let Some(Err(e)) = results.into_iter().next() {
+                            tracing::error!(error = %e, "scheduler rejected forwarded enqueue");
+                        }
                     }
-                    Ok(Ok(_)) => {}
                 }
             }
             super::types::ClusterRequest::Ack { queue_id, msg_id } => {

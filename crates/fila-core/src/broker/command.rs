@@ -38,8 +38,8 @@ pub struct QueueSummary {
 /// for the reply. Fire-and-forget commands omit the reply channel.
 pub enum SchedulerCommand {
     Enqueue {
-        message: crate::message::Message,
-        reply: tokio::sync::oneshot::Sender<Result<Uuid, EnqueueError>>,
+        messages: Vec<crate::message::Message>,
+        reply: tokio::sync::oneshot::Sender<Vec<Result<Uuid, EnqueueError>>>,
     },
     Ack {
         queue_id: String,

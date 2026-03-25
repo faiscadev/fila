@@ -27,7 +27,7 @@ fn commands_processed_in_fifo_order() {
         expected_ids.push(msg.id);
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -41,7 +41,7 @@ fn commands_processed_in_fifo_order() {
 
     // Verify all replies were received and IDs match (FIFO order)
     for (i, mut rx) in receivers.into_iter().enumerate() {
-        let result = rx.try_recv().unwrap().unwrap();
+        let result = rx.try_recv().unwrap().into_iter().next().unwrap().unwrap();
         assert_eq!(result, expected_ids[i], "command {i} should return its ID");
     }
 }
@@ -57,7 +57,7 @@ fn enqueue_reply_received() {
     let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
 
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -65,7 +65,13 @@ fn enqueue_reply_received() {
 
     scheduler.run();
 
-    let result = reply_rx.try_recv().unwrap().unwrap();
+    let result = reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap();
     assert_eq!(result, msg_id);
 }
 

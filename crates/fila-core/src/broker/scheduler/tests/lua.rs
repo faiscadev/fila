@@ -17,7 +17,7 @@ fn on_enqueue_assigns_fairness_key_from_header() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -55,7 +55,7 @@ fn on_enqueue_assigns_weight_and_throttle_keys() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -87,7 +87,7 @@ fn queue_without_script_uses_defaults() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -134,7 +134,7 @@ fn on_enqueue_reads_config_via_fila_get() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -192,7 +192,7 @@ fn on_enqueue_infinite_loop_falls_back_to_defaults() {
     let msg_id = msg.id;
     let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -201,7 +201,13 @@ fn on_enqueue_infinite_loop_falls_back_to_defaults() {
     scheduler.run();
 
     // Enqueue should succeed (Lua failure falls back to defaults)
-    assert!(reply_rx.try_recv().unwrap().is_ok());
+    assert!(reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .is_ok());
 
     // Message should have default fairness_key
     let key =
@@ -234,7 +240,7 @@ fn on_enqueue_memory_bomb_falls_back_to_defaults() {
     let msg_id = msg.id;
     let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -243,7 +249,13 @@ fn on_enqueue_memory_bomb_falls_back_to_defaults() {
     scheduler.run();
 
     // Enqueue should succeed (Lua failure falls back to defaults)
-    assert!(reply_rx.try_recv().unwrap().is_ok());
+    assert!(reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .is_ok());
 
     // Message should have default fairness_key
     let key =
@@ -278,7 +290,7 @@ fn circuit_breaker_trips_and_bypasses_lua() {
         msg_ids.push(msg.id);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -324,7 +336,7 @@ fn failed_script_does_not_break_subsequent_good_scripts() {
     let bad_msg = test_message("bad-queue");
     let (reply_tx1, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: bad_msg,
+        messages: vec![bad_msg],
         reply: reply_tx1,
     })
     .unwrap();
@@ -333,7 +345,7 @@ fn failed_script_does_not_break_subsequent_good_scripts() {
     let good_msg_id = good_msg.id;
     let (reply_tx2, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: good_msg,
+        messages: vec![good_msg],
         reply: reply_tx2,
     })
     .unwrap();
@@ -378,7 +390,7 @@ fn on_failure_retry_requeues_message() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -443,7 +455,7 @@ fn on_failure_dlq_moves_message_to_dead_letter_queue() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -523,7 +535,7 @@ fn on_failure_dlq_without_dlq_configured_falls_back_to_retry() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -589,7 +601,7 @@ fn on_failure_receives_attempt_count_and_error() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -670,7 +682,7 @@ fn on_failure_no_script_uses_default_retry() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -716,7 +728,7 @@ fn recovery_restores_on_failure_scripts() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
