@@ -301,7 +301,7 @@ development_status:
   32-4-hybrid-envelope-store-as-received: done
   32-5-arena-allocation: done
   32-6-plateau-1-profile-checkpoint: done
-  epic-32-retrospective: optional
+  epic-32-retrospective: done
 
   # Epic 33: Plateau 2 — Fix the Consume Path (conditional on Epic 32 results)
   # In-memory delivery, in-memory lease tracking, batch ack processing.
