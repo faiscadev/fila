@@ -307,7 +307,7 @@ development_status:
   # In-memory delivery, in-memory lease tracking, batch ack processing.
   # Target: 100-200K msg/s end-to-end. Conditional on 32.6 go/no-go.
   epic-33: in-progress
-  33-1-in-memory-delivery-queue: in-progress
+  33-1-in-memory-delivery-queue: done
   33-2-in-memory-lease-tracking: ready-for-dev
   33-3-batch-ack-processing: ready-for-dev
   33-4-plateau-2-profile-checkpoint: ready-for-dev
