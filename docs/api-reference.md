@@ -122,6 +122,8 @@ rpc Ack(AckRequest) returns (AckResponse)
 | `success` | AckSuccess | Empty message (on success) |
 | `error` | AckError | Error details (on failure) |
 
+Only one of `success` or `error` is set (protobuf `oneof`).
+
 **AckErrorCode:**
 | Code | Description |
 |------|-------------|
@@ -159,6 +161,8 @@ rpc Nack(NackRequest) returns (NackResponse)
 |-------|------|-------------|
 | `success` | NackSuccess | Empty message (on success) |
 | `error` | NackError | Error details (on failure) |
+
+Only one of `success` or `error` is set (protobuf `oneof`).
 
 **NackErrorCode:**
 | Code | Description |
