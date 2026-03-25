@@ -28,34 +28,37 @@ stories:
     status: completed
     currentPhase: "pr-complete"
     branch: "feat/30.4-unified-enqueue-handler"
-    pr: null
+    pr: 115
     dependsOn: ["30.3"]
   - id: "30.5"
     title: "Profile Checkpoint — Post-Tier 0 Analysis"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: completed
+    currentPhase: "pr-complete"
+    branch: "feat/30.5-profile-checkpoint"
     pr: null
     dependsOn: ["30.4"]
   - id: "30.6"
     title: "StreamEnqueue with Batch-Within-Stream (Conditional)"
-    status: pending
+    status: skipped
     currentPhase: ""
     branch: ""
     pr: null
     dependsOn: ["30.5"]
+    skipReason: "NO-GO from 30.5 profiling: bottleneck is RocksDB, not gRPC transport"
   - id: "30.7"
     title: "SDK Adaptive Client-Side Accumulator (Conditional)"
-    status: pending
+    status: skipped
     currentPhase: ""
     branch: ""
     pr: null
     dependsOn: ["30.6"]
+    skipReason: "NO-GO from 30.5 profiling: AccumulatorMode::Auto already exists"
   - id: "30.8"
     title: "Profile Checkpoint & Competitive Benchmark Update (Conditional)"
-    status: pending
+    status: skipped
     currentPhase: ""
     branch: ""
     pr: null
     dependsOn: ["30.7"]
+    skipReason: "NO-GO from 30.5 profiling: 30.6-30.7 skipped"
 skippedIssues: []
