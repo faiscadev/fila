@@ -130,9 +130,6 @@ impl Scheduler {
             };
             let throttle_keys = front.throttle_keys.clone();
 
-            // Resolve fairness_key to string for metrics/logging at boundary
-            let fairness_key_str = self.resolve(fairness_key_spur).to_string();
-
             // Throttle check (peek only — no tokens consumed yet): if ANY configured
             // key is exhausted, skip this fairness key entirely.
             if !self.throttle.peek_keys(&throttle_keys) {
@@ -179,7 +176,7 @@ impl Scheduler {
             if self.try_deliver_to_consumer(queue_id, &msg, &lease_key, visibility_timeout_ms) {
                 self.metrics.record_lease(queue_id);
                 self.metrics
-                    .record_fairness_delivery(queue_id, &fairness_key_str);
+                    .record_fairness_delivery(queue_id, self.resolve(fairness_key_spur));
                 *self
                     .fairness_deliveries
                     .entry((queue_id_spur, fairness_key_spur))
