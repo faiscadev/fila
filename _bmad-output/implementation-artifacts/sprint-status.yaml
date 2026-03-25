@@ -1,4 +1,4 @@
-# generated: 2026-03-23
+# generated: 2026-03-25
 # project: fila
 # project_key: NOKEY
 # tracking_system: file-system
@@ -33,7 +33,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-23
+generated: 2026-03-25
 project: fila
 project_key: NOKEY
 tracking_system: file-system
@@ -259,6 +259,7 @@ development_status:
   # Epic 28: Auto-Update Benchmarks Doc
   epic-28: done
   28-1-auto-update-benchmarks-doc: done
+  epic-28-retrospective: optional
 
   # Epic 29: Transport Optimization — Fair Benchmarks & Streaming Enqueue
   # Fix competitive benchmark to use batching (P0), add streaming enqueue RPC (P1).
@@ -287,35 +288,39 @@ development_status:
   # Epic 31: Documentation Cleanup — Post-Unification Docs Update
   # Quick cleanup of stale docs from Epic 30 API unification.
   epic-31: backlog
-  31-1-stale-documentation-cleanup: backlog
+  31-1-stale-documentation-cleanup: ready-for-dev
+  epic-31-retrospective: optional
 
   # Epic 32: Plateau 1 — Eliminate Per-Message Overhead
   # Profile baseline, then: RocksDB tuning, string interning, store-as-received, arena allocation.
   # Target: 40-100K msg/s enqueue. Research: technical-kafka-parity-profiling-strategy-2026-03-25.md
   epic-32: backlog
-  32-1-profile-baseline: backlog
-  32-2-rocksdb-quick-wins: backlog
-  32-3-string-interning: backlog
-  32-4-hybrid-envelope-store-as-received: backlog
-  32-5-arena-allocation: backlog
-  32-6-plateau-1-profile-checkpoint: backlog
+  32-1-profile-baseline: ready-for-dev
+  32-2-rocksdb-quick-wins: ready-for-dev
+  32-3-string-interning: ready-for-dev
+  32-4-hybrid-envelope-store-as-received: ready-for-dev
+  32-5-arena-allocation: ready-for-dev
+  32-6-plateau-1-profile-checkpoint: ready-for-dev
+  epic-32-retrospective: optional
 
   # Epic 33: Plateau 2 — Fix the Consume Path (conditional on Epic 32 results)
   # In-memory delivery, in-memory lease tracking, batch ack processing.
   # Target: 100-200K msg/s end-to-end. Conditional on 32.6 go/no-go.
   epic-33: backlog
-  33-1-in-memory-delivery-queue: backlog
-  33-2-in-memory-lease-tracking: backlog
-  33-3-batch-ack-processing: backlog
-  33-4-plateau-2-profile-checkpoint: backlog
+  33-1-in-memory-delivery-queue: ready-for-dev
+  33-2-in-memory-lease-tracking: ready-for-dev
+  33-3-batch-ack-processing: ready-for-dev
+  33-4-plateau-2-profile-checkpoint: ready-for-dev
+  epic-33-retrospective: optional
 
   # Epic 34: Plateau 3 — Storage Engine + Scale Out (conditional on Epic 33 results)
   # Titan blob separation, custom append-only log, multi-shard, H-DRR.
   # Target: 200-400K+ msg/s. Conditional on 33.4 go/no-go. Stories 34.2/34.3 conditional on 34.1.
   epic-34: backlog
-  34-1-titan-blob-separation: backlog
-  34-2-append-only-log-prototype: backlog
-  34-3-tee-engine-validation: backlog
-  34-4-multi-shard-default: backlog
-  34-5-hierarchical-drr: backlog
-  34-6-plateau-3-final-benchmarks: backlog
+  34-1-titan-blob-separation: ready-for-dev
+  34-2-append-only-log-prototype: ready-for-dev
+  34-3-tee-engine-validation: ready-for-dev
+  34-4-multi-shard-default: ready-for-dev
+  34-5-hierarchical-drr: ready-for-dev
+  34-6-plateau-3-final-benchmarks: ready-for-dev
+  epic-34-retrospective: optional
