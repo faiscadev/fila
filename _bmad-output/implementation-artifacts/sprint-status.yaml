@@ -294,8 +294,8 @@ development_status:
   # Epic 32: Plateau 1 — Eliminate Per-Message Overhead
   # Profile baseline, then: RocksDB tuning, string interning, store-as-received, arena allocation.
   # Target: 40-100K msg/s enqueue. Research: technical-kafka-parity-profiling-strategy-2026-03-25.md
-  epic-32: backlog
-  32-1-profile-baseline: ready-for-dev
+  epic-32: in-progress
+  32-1-profile-baseline: in-progress
   32-2-rocksdb-quick-wins: ready-for-dev
   32-3-string-interning: ready-for-dev
   32-4-hybrid-envelope-store-as-received: ready-for-dev

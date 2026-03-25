@@ -4,9 +4,9 @@ startedAt: "2026-03-25T00:00:00Z"
 stories:
   - id: "32.1"
     title: "Profile Baseline"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/32.1-profile-baseline"
     pr: null
     dependsOn: []
   - id: "32.2"

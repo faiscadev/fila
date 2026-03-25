@@ -1,6 +1,6 @@
 # Story 32.1: Profile Baseline — End-to-End Hot Path Measurement
 
-Status: pending
+Status: ready-for-dev
 
 ## Story
 
