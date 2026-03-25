@@ -245,6 +245,20 @@ Charlie (Senior Dev): "Good idea - those dev notes always have gold in them."
 - Track where pair programming or mob programming was effective
 - Document effective problem-solving sessions
 
+**Documentation Health:**
+
+- Scan docs/ directory for files that reference APIs, types, or config keys changed during this epic
+- Check modification dates of docs/ files — any file older than 30 days that references changed APIs is stale
+- List stale docs with specific outdated references (file:line, stale term)
+- This surfaces documentation drift as a concrete retro finding, not an afterthought
+
+**Codebase Health:**
+
+- Check line counts of all source files modified during the epic
+- Flag any file over 800 lines as a potential decomposition candidate
+- Check if previously-decomposed modules (e.g., scheduler/) have grown back past their target
+- This surfaces maintainability debt before it becomes an emergency
+
 <action>Store this synthesis - these patterns will drive the retrospective discussion</action>
 
 <output>
@@ -827,13 +841,14 @@ Bob (Scrum Master): "I want specific, achievable actions with clear owners. Not 
 - Relevant: Addresses real issues from retro
 - Time-bound: Has clear deadline
 
-<critical>ENCODE OR DROP RULE: Every action item MUST identify a specific target file where it will be encoded. Action items that live only in the retro document have ~30% follow-through and are effectively ignored. Acceptable targets (in priority order):
-- **Workflow files** (PREFERRED) — Steps added to existing workflows (dev-story, execute-epic, create-story, retrospective, etc.). Most process learnings belong here — structural enforcement is the most reliable.
-- **Story/epic definitions** — Requirements baked into epics.md or story files
-- **New stories for future epics** — When the retro identifies missing work (feature gaps, unfinished cross-cutting concerns, deferred scope), add the story directly to epics.md with full ACs AND add the corresponding entry to {sprint_status_file}. A "recommendation" to add a story later is NOT encoding — write the story now or drop it.
-- **Code changes** — A concrete task/PR to execute before the next epic
-- **CLAUDE.md** (SOMETIMES) — Project instructions that all agents read every session. Only for cross-cutting rules that don't fit in a specific workflow.
-- **Memory files** (RARELY) — Only for epic results tracking and codebase state. Do NOT encode process learnings here — they belong in workflows.
+<critical>ENCODE OR DROP RULE: Every action item MUST identify a specific target file where it will be encoded. Action items that live only in the retro document have ~30% follow-through and are effectively ignored. Acceptable targets (in STRICT priority order — always prefer higher-priority targets):
+
+1. **Workflow files** (STRONGLY PREFERRED) — Steps added to existing workflows (dev-story, execute-epic, create-story, code-review, retrospective, etc.). Most process learnings belong here — structural enforcement is the most reliable. When a rule applies to multiple dev-focused workflows, add it to ALL relevant workflows, not just one. Think about where in the workflow lifecycle the rule should fire: planning (create-epics-and-stories), development (dev-story), review (code-review), PR (execute-epic step-05), completion (execute-epic step-06), or retrospective.
+2. **Story/epic definitions** — Requirements baked into epics.md or story files
+3. **New stories for future epics** — When the retro identifies missing work (feature gaps, unfinished cross-cutting concerns, deferred scope), add the story directly to epics.md with full ACs AND add the corresponding entry to {sprint_status_file}. A "recommendation" to add a story later is NOT encoding — write the story now or drop it.
+4. **Code changes** — A concrete task/PR to execute before the next epic
+5. **CLAUDE.md** (ONLY when no workflow fits) — Project instructions that all agents read every session. Only for cross-cutting general rules that are not tied to a specific workflow step (e.g., "always use explicit error mapping"). If a rule CAN be a workflow step, it MUST be a workflow step — not a CLAUDE.md entry.
+6. **Memory files** (ONLY for epic results and codebase state) — Do NOT encode process learnings here — they belong in workflows. Memory is for recording what happened, not for changing future behavior.
 
 If an action item cannot be mapped to one of these targets, it must be either converted into a concrete file change or explicitly dropped. Do NOT create "team agreements" or "recommendations" that exist only in the retro document — they will not be followed.</critical>
 
@@ -1318,7 +1333,9 @@ Bob (Scrum Master): "See you all when prep work is done. Meeting adjourned!"
 <action>Ensure retrospectives folder exists: {implementation_artifacts}</action>
 <action>Create folder if it doesn't exist</action>
 
-<critical>EXECUTE ALL ENCODED CHANGES NOW — the retro is not complete until every action item's file change has been written. This is the step where retro commitments become real.</critical>
+<critical>EXECUTE ALL ENCODED CHANGES NOW — the retro is not complete until every action item's file change has been written. This is the step where retro commitments become real.
+
+VERIFICATION GATE: After executing all file changes below, you MUST list each action item and confirm the file was written/edited with a specific diff or content snippet. If an action item marked "encode" has NOT been written to its target file by the end of this step, it MUST be either (a) executed immediately or (b) explicitly changed to "drop" with a rationale. No action item may leave this step in an "encode" state without a corresponding file change. This gate exists because Epic 29's retro marked items as "encode" but never wrote them — resulting in 25% follow-through.</critical>
 
 <action>For each action item with a target file identified in Step 8 (in priority order):</action>
 - If target is a workflow file (PREFERRED) → Edit the workflow instructions to add the new step/rule

@@ -282,3 +282,4 @@ development_status:
   30-6-stream-enqueue-batch-within-stream: skipped  # NO-GO: bottleneck is RocksDB, not gRPC
   30-7-sdk-adaptive-accumulator: skipped  # NO-GO: AccumulatorMode::Auto already exists
   30-8-profile-checkpoint-competitive-benchmarks: skipped  # NO-GO: 30.6-30.7 skipped
+  epic-30-retrospective: done

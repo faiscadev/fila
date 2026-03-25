@@ -92,6 +92,8 @@
       3. **Error Handling**: Missing try/catch, poor error messages
       4. **Code Quality**: Complex functions, magic numbers, poor naming
       5. **Test Quality**: Are tests real assertions or placeholders?
+      6. **File Size**: Flag any production source file over 800 lines as a decomposition candidate (MEDIUM finding)
+      7. **Documentation Drift**: If the story changed public APIs, proto definitions, config options, CLI commands, or SDK interfaces, check that docs/ files referencing the old names were updated. Stale doc references = MEDIUM finding.
     </action>
 
     <check if="total_issues_found lt 3">

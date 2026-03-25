@@ -214,8 +214,16 @@ Bring all 5 external SDKs to batch operation parity with the Rust SDK and delive
 ### Epic 27: Profiling Infrastructure
 Build profiling tooling (flamegraphs, subsystem benchmarks, batch benchmark scenarios) so future performance work targets real bottlenecks. Full breakdown in `performance-optimization-epics.md`.
 
+### Epic 28: Auto-Update Benchmarks Doc
+Automate benchmark documentation updates so `docs/benchmarks.md` stays current without manual editing.
+
 ### Epic 29: Transport Optimization — Fair Benchmarks & Streaming Enqueue
 Fix the competitive benchmark to use batching (fair comparison), add bidirectional streaming `StreamEnqueue` RPC, and integrate streaming transparently into the Rust SDK. Profiling showed 94% of per-message time is gRPC/HTTP2 overhead. Full breakdown in `transport-optimization-epics.md`.
+
+### Epic 30: Batch Pipeline — Scheduler Batching & Batch-Aware Protocol
+Close the throughput gap by propagating batches end-to-end from gRPC handlers through to the scheduler. Unified API surface (batch is the only path, single = batch of 1), fixed the handler→scheduler bridge (the root cause of the 19x gap), and profiled to identify the next bottleneck (RocksDB). Stories 30.6-30.8 conditional on profiling — all NO-GO (bottleneck shifted to storage, not transport). Full breakdown in `batch-pipeline-epics.md`.
+**FRs covered:** FR-B1, FR-B2, FR-B3, FR-B4
+**Result:** 3.1x throughput improvement (3,478 → 10,785 msg/s). 5/8 stories done, 3 skipped by design.
 
 ---
 

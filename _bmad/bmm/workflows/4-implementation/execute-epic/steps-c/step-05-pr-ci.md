@@ -167,6 +167,23 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/comments
 4. Commit and push
 5. **Go back to LOOP START** (re-check CI and reviews)
 
+### 4b. External SDK PR Lifecycle Gate
+
+**If the story opened PRs in external repositories** (e.g., SDK repos like fila-go, fila-python, fila-js, fila-ruby, fila-java):
+
+A story with external PRs is **NOT done** until every external PR has:
+1. **CI passing** — check with `gh pr checks {pr-number} -R {org}/{repo}`
+2. **Cubic review checked** — 0 issues found, or all findings addressed
+3. **PR merged** — `gh pr merge {pr-number} -R {org}/{repo}` (or left for human review if configured)
+
+For each external PR:
+- Run the same CI + Cubic check loop as step 4 above
+- If CI fails, launch a fix agent for that repo and re-check
+- If Cubic has findings, address them and push fixes
+- Do NOT proceed to step 5 until all external PRs are green
+
+**Opening external PRs is not completing them.** This gate was added after Epic 30, where 5 SDK PRs were opened but not reviewed — all had CI failures and 11 Cubic findings.
+
 ### 5. Update State and Auto-Proceed
 
 Update {stateFile}:

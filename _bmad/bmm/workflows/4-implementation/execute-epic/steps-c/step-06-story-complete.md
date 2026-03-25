@@ -79,6 +79,14 @@ Load the story artifact file (in `_bmad-output/implementation-artifacts/`). Chan
 
 **CRITICAL:** Before switching to a new branch for the next story, commit and push ALL tracking file changes (state file, sprint-status, story artifact) on the current branch in a single commit. The state file reverts to main's version when switching branches — if not committed first, progress is lost.
 
+### 1e. Documentation and Code Quality Check
+
+Before moving to the next story, verify:
+
+**Documentation impact:** If the completed story changed any public APIs, proto definitions, configuration options, CLI commands, or SDK interfaces, check that the corresponding docs/ files were updated. Grep docs/ for references to renamed/removed/added symbols. If stale references are found, fix them on the current branch before proceeding.
+
+**File size monitoring:** Check if any source file modified in this story now exceeds 800 lines. If so, note it in the execution state file under a `fileSizeWarnings` key for the retrospective to review.
+
 ### 2. Check for Remaining Stories
 
 Count stories with status "pending":

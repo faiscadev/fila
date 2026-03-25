@@ -87,6 +87,12 @@ Create tables/entities ONLY when needed by the story:
 - ❌ WRONG: Epic 1 Story 1 creates all 50 database tables
 - ✅ RIGHT: Each story creates/alters ONLY the tables it needs
 
+**📖 DOCUMENTATION IMPACT PRINCIPLE:**
+When a story changes public APIs, proto definitions, configuration options, CLI commands, or SDK interfaces, the story's ACs MUST include updating the affected docs/ files. Documentation is not a follow-up task — it ships with the code change.
+
+- ❌ WRONG: Story changes the Enqueue RPC proto but doesn't mention docs
+- ✅ RIGHT: Story AC includes "docs/api-reference.md updated to reflect unified Enqueue RPC"
+
 **🔗 STORY DEPENDENCY PRINCIPLE:**
 Stories must be independently completable in sequence:
 

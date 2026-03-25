@@ -98,8 +98,9 @@ Stories that modify external repositories (e.g., SDK repos like fila-go, fila-py
 2. Story ACs for multi-repo stories should list all repos and expected PRs
 3. The execute-epic workflow must record PR numbers for external repos alongside the main repo PR
 4. Epic-review must verify that each external repo PR was properly reviewed before the story is marked done
+5. **A story with external PRs is NOT done until every external PR has: (a) CI passing, (b) Cubic review checked (0 issues or all findings addressed), and (c) PR merged.** Opening PRs is not completing them. The dev agent must wait for CI + Cubic on each external PR before marking the story done — the same way it does for main-repo PRs.
 
-This rule was added after Epic 16, where 5 external SDKs received auth/TLS code pushed directly to main. Retroactive PRs caught 28 Cubic findings (5 P1s including silent TLS downgrade).
+This rule was added after Epic 16, where 5 external SDKs received auth/TLS code pushed directly to main. Retroactive PRs caught 28 Cubic findings (5 P1s including silent TLS downgrade). Rule 5 added after Epic 30, where 5 SDK PRs were opened but not reviewed — all had CI failures and 11 Cubic findings requiring a second round of fix agents.
 
 ## PR Review — Cubic Automated Review
 
@@ -123,3 +124,11 @@ After creating a PR:
 5. Only then mark the story as complete
 
 **Never skip this step.** Cubic catches real bugs — safety issues, correctness problems, edge cases. Ignoring its findings means shipping known defects.
+
+## CI Failure Investigation
+
+When a CI test fails, **investigate the root cause** before retrying. Do not push empty "retry" commits (e.g., `ci: retry`) to re-trigger CI without understanding the failure. A test that fails in CI but passes locally is a real signal — it may indicate timing sensitivity, resource contention, or environment differences. Diagnose first, fix if needed, then retry.
+
+## Dead Code After Review Fixes
+
+When fixing a Cubic or code review finding that removes a call site (e.g., replacing a helper function with a direct call), check whether the removed call site was the **last caller** of that function. If so, remove the now-dead function in the same commit to avoid a Clippy `dead_code` failure on the next CI run.
