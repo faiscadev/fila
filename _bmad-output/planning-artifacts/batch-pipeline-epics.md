@@ -104,6 +104,11 @@ So that the codebase has one code path per operation, no "batch" prefixes/suffix
 **And** `batch_enqueue()` is removed
 **And** `BatchMode` is renamed to remove "batch" terminology (e.g. `AccumulatorMode` or folded into client config)
 
+**Given** the current `BatchEnqueueResult` uses `oneof { EnqueueResponse success, string error }` which loses structured error codes (issue #103)
+**When** the unified `EnqueueResult` proto type is designed
+**Then** it uses a typed error code enum (e.g. `QueueNotFound`, `StorageError`, `LuaError`) instead of a string error field
+**And** issue #103 is closed when this story ships
+
 **And** all existing tests are updated to use the unified API
 **And** all tests pass
 **And** no "batch" prefix/suffix remains in public API names (proto, SDK, CLI) — only internal implementation details where semantically accurate
