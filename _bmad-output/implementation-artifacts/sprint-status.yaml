@@ -289,7 +289,7 @@ development_status:
   # Quick cleanup of stale docs from Epic 30 API unification.
   epic-31: done
   31-1-stale-documentation-cleanup: done
-  epic-31-retrospective: optional
+  epic-31-retrospective: done
 
   # Epic 32: Plateau 1 — Eliminate Per-Message Overhead
   # Profile baseline, then: RocksDB tuning, string interning, store-as-received, arena allocation.
