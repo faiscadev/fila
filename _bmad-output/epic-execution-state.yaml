@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "32.2"
     title: "RocksDB Quick Wins"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/32.2-rocksdb-quick-wins"
     pr: null
     dependsOn: ["32.1"]
   - id: "32.3"

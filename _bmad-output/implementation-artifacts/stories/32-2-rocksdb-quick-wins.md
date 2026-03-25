@@ -1,6 +1,6 @@
 # Story 32.2: RocksDB Quick Wins — Tuning & Queue Config Cache
 
-Status: pending
+Status: in-progress
 
 ## Story
 
