@@ -25,9 +25,9 @@ stories:
     dependsOn: ["32.1"]
   - id: "32.4"
     title: "Hybrid Envelope — Store-as-Received"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
+    branch: "feat/32.4-hybrid-envelope"
     pr: null
     dependsOn: ["32.1"]
   - id: "32.5"
