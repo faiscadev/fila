@@ -278,7 +278,7 @@ development_status:
   30-2-external-sdk-unification: done
   30-3-scheduler-enqueue-batch-refactor: done
   30-4-unified-enqueue-handler-throughput-fix: done
-  30-5-profile-checkpoint-post-tier-0: backlog
-  30-6-stream-enqueue-batch-within-stream: backlog
-  30-7-sdk-adaptive-accumulator: backlog
-  30-8-profile-checkpoint-competitive-benchmarks: backlog
+  30-5-profile-checkpoint-post-tier-0: done
+  30-6-stream-enqueue-batch-within-stream: skipped  # NO-GO: bottleneck is RocksDB, not gRPC
+  30-7-sdk-adaptive-accumulator: skipped  # NO-GO: AccumulatorMode::Auto already exists
+  30-8-profile-checkpoint-competitive-benchmarks: skipped  # NO-GO: 30.6-30.7 skipped
