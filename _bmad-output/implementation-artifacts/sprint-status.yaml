@@ -309,7 +309,7 @@ development_status:
   epic-33: in-progress
   33-1-in-memory-delivery-queue: done
   33-2-in-memory-lease-tracking: done
-  33-3-batch-ack-processing: in-progress
+  33-3-batch-ack-processing: done
   33-4-plateau-2-profile-checkpoint: ready-for-dev
   epic-33-retrospective: optional
 

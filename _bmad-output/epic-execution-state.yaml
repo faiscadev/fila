@@ -18,8 +18,8 @@ stories:
     dependsOn: ["33.1"]
   - id: "33.3"
     title: "Batch Ack/Nack Processing"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/33.3-batch-ack"
     pr: null
     dependsOn: ["33.2"]
