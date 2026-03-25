@@ -297,7 +297,7 @@ development_status:
   epic-32: in-progress
   32-1-profile-baseline: done
   32-2-rocksdb-quick-wins: done
-  32-3-string-interning: in-progress
+  32-3-string-interning: review
   32-4-hybrid-envelope-store-as-received: ready-for-dev
   32-5-arena-allocation: ready-for-dev
   32-6-plateau-1-profile-checkpoint: ready-for-dev

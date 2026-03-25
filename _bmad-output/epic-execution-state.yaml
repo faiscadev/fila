@@ -19,7 +19,7 @@ stories:
   - id: "32.3"
     title: "String Interning"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/32.3-string-interning"
     pr: null
     dependsOn: ["32.1"]
