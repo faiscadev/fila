@@ -5,9 +5,9 @@ stories:
   - id: "32.1"
     title: "Profile Baseline"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/32.1-profile-baseline"
-    pr: null
+    pr: 118
     dependsOn: []
   - id: "32.2"
     title: "RocksDB Quick Wins"
