@@ -26,8 +26,8 @@ impl Scheduler {
         &mut self,
         mut message: crate::message::Message,
     ) -> Result<PreparedEnqueue, crate::error::EnqueueError> {
-        // Verify queue exists
-        if self.storage.get_queue(&message.queue_id)?.is_none() {
+        // Verify queue exists (cache lookup — no RocksDB read on the hot path)
+        if !self.queue_cache.contains_key(&message.queue_id) {
             return Err(crate::error::EnqueueError::QueueNotFound(
                 message.queue_id.clone(),
             ));
@@ -143,7 +143,7 @@ impl Scheduler {
         // only way to enforce uniqueness.
         // TODO(cluster): replace with atomic put-if-absent or distributed lock
         // when moving to a multi-node scheduler.
-        if self.storage.get_queue(&name)?.is_some() {
+        if self.queue_cache.contains_key(&name) {
             return Err(crate::error::CreateQueueError::QueueAlreadyExists(name));
         }
 
@@ -193,10 +193,11 @@ impl Scheduler {
             self.storage.put_queue(&name, &config)?;
 
             // Only create if it doesn't already exist (idempotent)
-            if self.storage.get_queue(&dlq_name)?.is_none() {
+            if !self.queue_cache.contains_key(&dlq_name) {
                 let dlq_config = crate::queue::QueueConfig::new(dlq_name.clone());
                 self.storage.put_queue(&dlq_name, &dlq_config)?;
                 self.known_queues.insert(dlq_name.clone());
+                self.queue_cache.insert(dlq_name.clone(), dlq_config);
                 debug!(queue = %name, dlq = %dlq_name, "auto-created dead-letter queue");
             }
         } else {
@@ -206,6 +207,7 @@ impl Scheduler {
         }
 
         self.known_queues.insert(name.clone());
+        self.queue_cache.insert(name.clone(), config);
         Ok(name)
     }
 
@@ -217,16 +219,17 @@ impl Scheduler {
         // RocksDB delete is a no-op on missing keys, so the explicit check is
         // the only way to return a meaningful NotFound error.
         // TODO(cluster): same as handle_create_queue — needs atomic operation.
-        let queue_config = self
-            .storage
-            .get_queue(queue_id)?
-            .ok_or_else(|| crate::error::DeleteQueueError::QueueNotFound(queue_id.to_string()))?;
+        let queue_config =
+            self.queue_cache.get(queue_id).cloned().ok_or_else(|| {
+                crate::error::DeleteQueueError::QueueNotFound(queue_id.to_string())
+            })?;
 
         self.storage.delete_queue(queue_id)?;
         self.drr.remove_queue(queue_id);
         self.consumer_rr_idx.remove(queue_id);
         self.remove_pending_for_queue(queue_id);
         self.known_queues.remove(queue_id);
+        self.queue_cache.remove(queue_id);
         if let Some(ref mut lua_engine) = self.lua_engine {
             lua_engine.remove_queue_scripts(queue_id);
         }
@@ -235,13 +238,14 @@ impl Scheduler {
         // Custom/shared DLQs configured via dlq_queue_id are left untouched.
         let auto_dlq_name = format!("{queue_id}.dlq");
         if queue_config.dlq_queue_id.as_deref() == Some(auto_dlq_name.as_str())
-            && self.storage.get_queue(&auto_dlq_name)?.is_some()
+            && self.queue_cache.contains_key(&auto_dlq_name)
         {
             self.storage.delete_queue(&auto_dlq_name)?;
             self.drr.remove_queue(&auto_dlq_name);
             self.consumer_rr_idx.remove(&auto_dlq_name);
             self.remove_pending_for_queue(&auto_dlq_name);
             self.known_queues.remove(&auto_dlq_name);
+            self.queue_cache.remove(&auto_dlq_name);
             if let Some(ref mut lua_engine) = self.lua_engine {
                 lua_engine.remove_queue_scripts(&auto_dlq_name);
             }
