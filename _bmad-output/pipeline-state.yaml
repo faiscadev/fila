@@ -1,8 +1,8 @@
 startedAt: "2026-03-22T00:00:00Z"
-currentEpic: 33
-currentEpicName: "Plateau 2 — Fix the Consume Path"
-currentPhase: "complete"
-cycleCount: 24
+currentEpic: 34
+currentEpicName: "Plateau 3 — Storage Engine + Scale Out"
+currentPhase: "execute"
+cycleCount: 25
 completedEpics:
   - epicNumber: 17
     epicName: "Cluster Hardening"

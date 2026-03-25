@@ -316,8 +316,8 @@ development_status:
   # Epic 34: Plateau 3 — Storage Engine + Scale Out (conditional on Epic 33 results)
   # Titan blob separation, custom append-only log, multi-shard, H-DRR.
   # Target: 200-400K+ msg/s. Conditional on 33.4 go/no-go. Stories 34.2/34.3 conditional on 34.1.
-  epic-34: backlog
-  34-1-titan-blob-separation: ready-for-dev
+  epic-34: in-progress
+  34-1-titan-blob-separation: in-progress
   34-2-append-only-log-prototype: ready-for-dev
   34-3-tee-engine-validation: ready-for-dev
   34-4-multi-shard-default: ready-for-dev
