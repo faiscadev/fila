@@ -6,19 +6,49 @@ import "fila/v1/messages.proto";
 // Hot-path RPCs for producers and consumers.
 service FilaService {
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+  rpc StreamEnqueue(stream StreamEnqueueRequest) returns (stream StreamEnqueueResponse);
   rpc Consume(ConsumeRequest) returns (stream ConsumeResponse);
   rpc Ack(AckRequest) returns (AckResponse);
   rpc Nack(NackRequest) returns (NackResponse);
 }
 
-message EnqueueRequest {
+// Individual message to enqueue.
+message EnqueueMessage {
   string queue = 1;
   map<string, string> headers = 2;
   bytes payload = 3;
 }
 
+// Enqueue one or more messages.
+message EnqueueRequest {
+  repeated EnqueueMessage messages = 1;
+}
+
+// Per-message enqueue result.
+message EnqueueResult {
+  oneof result {
+    string message_id = 1;
+    EnqueueError error = 2;
+  }
+}
+
+// Typed enqueue error with structured error code.
+message EnqueueError {
+  EnqueueErrorCode code = 1;
+  string message = 2;
+}
+
+enum EnqueueErrorCode {
+  ENQUEUE_ERROR_CODE_UNSPECIFIED = 0;
+  ENQUEUE_ERROR_CODE_QUEUE_NOT_FOUND = 1;
+  ENQUEUE_ERROR_CODE_STORAGE = 2;
+  ENQUEUE_ERROR_CODE_LUA = 3;
+  ENQUEUE_ERROR_CODE_PERMISSION_DENIED = 4;
+}
+
+// One result per input message.
 message EnqueueResponse {
-  string message_id = 1;
+  repeated EnqueueResult results = 1;
 }
 
 message ConsumeRequest {
@@ -26,20 +56,87 @@ message ConsumeRequest {
 }
 
 message ConsumeResponse {
-  Message message = 1;
+  repeated Message messages = 1;
 }
 
-message AckRequest {
+// Individual ack item.
+message AckMessage {
   string queue = 1;
   string message_id = 2;
 }
 
-message AckResponse {}
+message AckRequest {
+  repeated AckMessage messages = 1;
+}
 
-message NackRequest {
+message AckResult {
+  oneof result {
+    AckSuccess success = 1;
+    AckError error = 2;
+  }
+}
+
+message AckSuccess {}
+
+message AckError {
+  AckErrorCode code = 1;
+  string message = 2;
+}
+
+enum AckErrorCode {
+  ACK_ERROR_CODE_UNSPECIFIED = 0;
+  ACK_ERROR_CODE_MESSAGE_NOT_FOUND = 1;
+  ACK_ERROR_CODE_STORAGE = 2;
+  ACK_ERROR_CODE_PERMISSION_DENIED = 3;
+}
+
+message AckResponse {
+  repeated AckResult results = 1;
+}
+
+// Individual nack item.
+message NackMessage {
   string queue = 1;
   string message_id = 2;
   string error = 3;
 }
 
-message NackResponse {}
+message NackRequest {
+  repeated NackMessage messages = 1;
+}
+
+message NackResult {
+  oneof result {
+    NackSuccess success = 1;
+    NackError error = 2;
+  }
+}
+
+message NackSuccess {}
+
+message NackError {
+  NackErrorCode code = 1;
+  string message = 2;
+}
+
+enum NackErrorCode {
+  NACK_ERROR_CODE_UNSPECIFIED = 0;
+  NACK_ERROR_CODE_MESSAGE_NOT_FOUND = 1;
+  NACK_ERROR_CODE_STORAGE = 2;
+  NACK_ERROR_CODE_PERMISSION_DENIED = 3;
+}
+
+message NackResponse {
+  repeated NackResult results = 1;
+}
+
+// Stream enqueue — per-write batch with sequence tracking.
+message StreamEnqueueRequest {
+  repeated EnqueueMessage messages = 1;
+  uint64 sequence_number = 2;
+}
+
+message StreamEnqueueResponse {
+  uint64 sequence_number = 1;
+  repeated EnqueueResult results = 2;
+}

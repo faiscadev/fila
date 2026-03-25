@@ -1036,7 +1036,7 @@ mod nats {
 mod fila {
     use super::*;
     use fila_bench::server::create_queue_cli;
-    use fila_sdk::{BatchMode, ConnectOptions, FilaClient};
+    use fila_sdk::{AccumulatorMode, ConnectOptions, FilaClient};
     use tokio_stream::StreamExt;
 
     const ADDR: &str = "http://localhost:5555";
@@ -1127,7 +1127,7 @@ mod fila {
             // Producer task — use Disabled batching for accurate per-message latency
             let producer_handle = {
                 let queue = queue.to_string();
-                let opts = ConnectOptions::new(addr).with_batch_mode(BatchMode::Disabled);
+                let opts = ConnectOptions::new(addr).with_accumulator(AccumulatorMode::Disabled);
                 let client = FilaClient::connect_with_options(opts)
                     .await
                     .expect("fila connect");
@@ -1185,7 +1185,7 @@ mod fila {
         {
             let queue = "bench-lifecycle";
             create_queue_cli(addr, queue);
-            let opts = ConnectOptions::new(addr).with_batch_mode(BatchMode::Disabled);
+            let opts = ConnectOptions::new(addr).with_accumulator(AccumulatorMode::Disabled);
             let client = FilaClient::connect_with_options(opts)
                 .await
                 .expect("fila connect");

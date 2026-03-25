@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use fila_bench::server::{create_queue_cli, BenchServer};
-use fila_sdk::{BatchMode, ConnectOptions, FilaClient};
+use fila_sdk::{AccumulatorMode, ConnectOptions, FilaClient};
 use tokio_stream::StreamExt;
 
 /// Profiling workload driver for flamegraph generation.
@@ -83,7 +83,7 @@ async fn connect(addr: &str) -> FilaClient {
     FilaClient::connect_with_options(
         ConnectOptions::new(addr)
             .with_timeout(Duration::from_secs(30))
-            .with_batch_mode(BatchMode::Disabled),
+            .with_accumulator(AccumulatorMode::Disabled),
     )
     .await
     .expect("connect to fila-server")

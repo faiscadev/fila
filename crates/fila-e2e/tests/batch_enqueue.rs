@@ -3,18 +3,17 @@ mod helpers;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use fila_sdk::{BatchEnqueueResult, EnqueueMessage};
+use fila_sdk::EnqueueMessage;
 use tokio_stream::StreamExt;
 
-/// Batch enqueue multiple messages and verify all are stored and consumable.
+/// Enqueue multiple messages in one call and verify all are stored and consumable.
 #[tokio::test]
-async fn e2e_batch_enqueue_all_stored() {
+async fn e2e_enqueue_many_all_stored() {
     let server = helpers::TestServer::start();
     helpers::create_queue_cli(server.addr(), "batch-all");
 
     let client = helpers::sdk_client(server.addr()).await;
 
-    // Build a batch of 5 messages
     let messages: Vec<EnqueueMessage> = (0..5)
         .map(|i| EnqueueMessage {
             queue: "batch-all".to_string(),
@@ -27,28 +26,21 @@ async fn e2e_batch_enqueue_all_stored() {
         })
         .collect();
 
-    let results = client.batch_enqueue(messages).await.unwrap();
+    let results = client.enqueue_many(messages).await;
 
-    // All 5 should succeed
     assert_eq!(results.len(), 5);
     let mut msg_ids = Vec::new();
     for (i, result) in results.iter().enumerate() {
-        match result {
-            BatchEnqueueResult::Success(id) => {
-                assert!(!id.is_empty(), "message {i} has empty ID");
-                msg_ids.push(id.clone());
-            }
-            BatchEnqueueResult::Error(err) => {
-                panic!("message {i} failed: {err}");
-            }
-        }
+        let id = result
+            .as_ref()
+            .unwrap_or_else(|e| panic!("message {i} failed: {e}"));
+        assert!(!id.is_empty(), "message {i} has empty ID");
+        msg_ids.push(id.clone());
     }
 
-    // All IDs should be unique
     let unique: std::collections::HashSet<_> = msg_ids.iter().collect();
     assert_eq!(unique.len(), 5, "all message IDs should be unique");
 
-    // Consume all 5 messages
     let mut stream = client.consume("batch-all").await.unwrap();
     let mut consumed = Vec::new();
     for _ in 0..5 {
@@ -60,7 +52,6 @@ async fn e2e_batch_enqueue_all_stored() {
         consumed.push(msg);
     }
 
-    // Verify all message IDs are present
     let consumed_ids: std::collections::HashSet<_> = consumed.iter().map(|m| &m.id).collect();
     for id in &msg_ids {
         assert!(
@@ -70,10 +61,9 @@ async fn e2e_batch_enqueue_all_stored() {
     }
 }
 
-/// Batch enqueue with one invalid message (empty queue name) should succeed
-/// for the valid messages and return an error for the invalid one.
+/// Enqueue many with one invalid message — valid messages succeed, invalid gets error.
 #[tokio::test]
-async fn e2e_batch_enqueue_partial_failure() {
+async fn e2e_enqueue_many_partial_failure() {
     let server = helpers::TestServer::start();
     helpers::create_queue_cli(server.addr(), "batch-partial");
 
@@ -97,32 +87,28 @@ async fn e2e_batch_enqueue_partial_failure() {
         },
     ];
 
-    let results = client.batch_enqueue(messages).await.unwrap();
+    let results = client.enqueue_many(messages).await;
 
     assert_eq!(results.len(), 3);
 
-    // First message: success
     assert!(
-        matches!(&results[0], BatchEnqueueResult::Success(_)),
+        results[0].is_ok(),
         "expected first message to succeed, got: {:?}",
         results[0]
     );
 
-    // Second message: error (empty queue name)
     assert!(
-        matches!(&results[1], BatchEnqueueResult::Error(_)),
+        results[1].is_err(),
         "expected second message to fail, got: {:?}",
         results[1]
     );
 
-    // Third message: success (not affected by the second)
     assert!(
-        matches!(&results[2], BatchEnqueueResult::Success(_)),
+        results[2].is_ok(),
         "expected third message to succeed, got: {:?}",
         results[2]
     );
 
-    // Verify the two successful messages are consumable
     let mut stream = client.consume("batch-partial").await.unwrap();
     for _ in 0..2 {
         let _msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
@@ -133,16 +119,14 @@ async fn e2e_batch_enqueue_partial_failure() {
     }
 }
 
-/// Batch enqueue preserves per-queue ordering: messages to the same queue
-/// appear in the order they were submitted in the batch.
+/// Enqueue many preserves per-queue ordering.
 #[tokio::test]
-async fn e2e_batch_enqueue_ordering_preserved() {
+async fn e2e_enqueue_many_ordering_preserved() {
     let server = helpers::TestServer::start();
     helpers::create_queue_cli(server.addr(), "batch-order");
 
     let client = helpers::sdk_client(server.addr()).await;
 
-    // Enqueue 10 messages with sequenced payloads
     let messages: Vec<EnqueueMessage> = (0..10)
         .map(|i| EnqueueMessage {
             queue: "batch-order".to_string(),
@@ -151,18 +135,13 @@ async fn e2e_batch_enqueue_ordering_preserved() {
         })
         .collect();
 
-    let results = client.batch_enqueue(messages).await.unwrap();
+    let results = client.enqueue_many(messages).await;
 
-    // Collect IDs in batch order
     let batch_ids: Vec<String> = results
         .into_iter()
-        .map(|r| match r {
-            BatchEnqueueResult::Success(id) => id,
-            BatchEnqueueResult::Error(e) => panic!("unexpected error: {e}"),
-        })
+        .map(|r| r.unwrap_or_else(|e| panic!("unexpected error: {e}")))
         .collect();
 
-    // Consume all 10 messages
     let mut stream = client.consume("batch-order").await.unwrap();
     let mut consumed_ids = Vec::new();
     for _ in 0..10 {
@@ -174,23 +153,19 @@ async fn e2e_batch_enqueue_ordering_preserved() {
         consumed_ids.push(msg.id);
     }
 
-    // Messages should be delivered in the same order they were enqueued
     assert_eq!(
         batch_ids, consumed_ids,
-        "batch order should be preserved in delivery"
+        "order should be preserved in delivery"
     );
 }
 
-/// Empty batch should return empty results.
+/// Empty enqueue_many should return empty results.
 #[tokio::test]
-async fn e2e_batch_enqueue_empty_batch() {
+async fn e2e_enqueue_many_empty() {
     let server = helpers::TestServer::start();
 
     let client = helpers::sdk_client(server.addr()).await;
 
-    let results = client.batch_enqueue(vec![]).await.unwrap();
-    assert!(
-        results.is_empty(),
-        "empty batch should return empty results"
-    );
+    let results = client.enqueue_many(vec![]).await;
+    assert!(results.is_empty(), "empty call should return empty results");
 }

@@ -35,6 +35,9 @@ pub enum EnqueueError {
     #[error("queue not found: {0}")]
     QueueNotFound(String),
 
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
+
     #[error(transparent)]
     Status(#[from] StatusError),
 }
@@ -53,6 +56,9 @@ pub enum AckError {
     #[error("message not found: {0}")]
     MessageNotFound(String),
 
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
+
     #[error(transparent)]
     Status(#[from] StatusError),
 }
@@ -62,17 +68,9 @@ pub enum NackError {
     #[error("message not found: {0}")]
     MessageNotFound(String),
 
-    #[error(transparent)]
-    Status(#[from] StatusError),
-}
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
 
-/// Error from a batch enqueue RPC call.
-///
-/// This represents transport/server-level failures of the entire batch RPC,
-/// not per-message failures. Per-message results (success or error) are
-/// returned in [`BatchEnqueueResult`](crate::BatchEnqueueResult).
-#[derive(Debug, thiserror::Error)]
-pub enum BatchEnqueueError {
     #[error(transparent)]
     Status(#[from] StatusError),
 }
@@ -93,6 +91,7 @@ pub(crate) fn enqueue_status_error(status: tonic::Status) -> EnqueueError {
     let message = status.message().to_string();
     match status.code() {
         Code::NotFound => EnqueueError::QueueNotFound(message),
+        Code::PermissionDenied => EnqueueError::PermissionDenied(message),
         _ => EnqueueError::Status(status_error(status)),
     }
 }
@@ -109,6 +108,7 @@ pub(crate) fn ack_status_error(status: tonic::Status) -> AckError {
     let message = status.message().to_string();
     match status.code() {
         Code::NotFound => AckError::MessageNotFound(message),
+        Code::PermissionDenied => AckError::PermissionDenied(message),
         _ => AckError::Status(status_error(status)),
     }
 }
@@ -117,10 +117,7 @@ pub(crate) fn nack_status_error(status: tonic::Status) -> NackError {
     let message = status.message().to_string();
     match status.code() {
         Code::NotFound => NackError::MessageNotFound(message),
+        Code::PermissionDenied => NackError::PermissionDenied(message),
         _ => NackError::Status(status_error(status)),
     }
-}
-
-pub(crate) fn batch_enqueue_status_error(status: tonic::Status) -> BatchEnqueueError {
-    BatchEnqueueError::Status(status_error(status))
 }

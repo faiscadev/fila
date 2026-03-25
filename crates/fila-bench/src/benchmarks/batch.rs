@@ -28,11 +28,8 @@ fn make_batch(queue: &str, batch_size: usize, payload: &[u8]) -> Vec<fila_sdk::E
 }
 
 /// Count successful results in a batch enqueue response.
-fn count_successes(results: &[fila_sdk::BatchEnqueueResult]) -> u64 {
-    results
-        .iter()
-        .filter(|r| matches!(r, fila_sdk::BatchEnqueueResult::Success(_)))
-        .count() as u64
+fn count_successes(results: &[Result<String, fila_sdk::EnqueueError>]) -> u64 {
+    results.iter().filter(|r| r.is_ok()).count() as u64
 }
 
 // ─── Benchmark 1: BatchEnqueue throughput ────────────────────────────────────
@@ -56,7 +53,7 @@ pub async fn bench_batch_enqueue_throughput(server: &BenchServer) -> Vec<BenchRe
         let warmup_deadline = tokio::time::Instant::now() + Duration::from_secs(WARMUP_SECS);
         while tokio::time::Instant::now() < warmup_deadline {
             let batch = make_batch(&queue, batch_size, &payload);
-            let _ = client.batch_enqueue(batch).await;
+            let _ = client.enqueue_many(batch).await;
         }
 
         // Measure
@@ -65,11 +62,10 @@ pub async fn bench_batch_enqueue_throughput(server: &BenchServer) -> Vec<BenchRe
         let measure_deadline = tokio::time::Instant::now() + Duration::from_secs(MEASURE_SECS);
         while tokio::time::Instant::now() < measure_deadline {
             let batch = make_batch(&queue, batch_size, &payload);
-            if let Ok(batch_results) = client.batch_enqueue(batch).await {
-                let successes = count_successes(&batch_results);
-                msg_meter.increment_by(successes);
-                batch_count += 1;
-            }
+            let batch_results = client.enqueue_many(batch).await;
+            let successes = count_successes(&batch_results);
+            msg_meter.increment_by(successes);
+            batch_count += 1;
         }
 
         let elapsed_secs = msg_meter.elapsed().as_secs_f64();
@@ -130,7 +126,7 @@ pub async fn bench_batch_size_scaling(server: &BenchServer) -> Vec<BenchResult> 
         let warmup_deadline = tokio::time::Instant::now() + Duration::from_secs(WARMUP_SECS);
         while tokio::time::Instant::now() < warmup_deadline {
             let batch = make_batch(&queue, batch_size, &payload);
-            let _ = client.batch_enqueue(batch).await;
+            let _ = client.enqueue_many(batch).await;
         }
 
         // Measure
@@ -138,9 +134,8 @@ pub async fn bench_batch_size_scaling(server: &BenchServer) -> Vec<BenchResult> 
         let measure_deadline = tokio::time::Instant::now() + Duration::from_secs(MEASURE_SECS);
         while tokio::time::Instant::now() < measure_deadline {
             let batch = make_batch(&queue, batch_size, &payload);
-            if let Ok(batch_results) = client.batch_enqueue(batch).await {
-                meter.increment_by(count_successes(&batch_results));
-            }
+            let batch_results = client.enqueue_many(batch).await;
+            meter.increment_by(count_successes(&batch_results));
         }
 
         results.push(BenchResult {
@@ -204,9 +199,8 @@ pub async fn bench_auto_batching_latency(server: &BenchServer) -> Vec<BenchResul
             producer_handles.push(tokio::spawn(async move {
                 while !ps.load(Ordering::Relaxed) {
                     let batch = make_batch(&pq, batch_size, &pp);
-                    if let Ok(batch_results) = pc.batch_enqueue(batch).await {
-                        tp.fetch_add(count_successes(&batch_results), Ordering::Relaxed);
-                    }
+                    let batch_results = pc.enqueue_many(batch).await;
+                    tp.fetch_add(count_successes(&batch_results), Ordering::Relaxed);
                 }
             }));
         }
@@ -248,10 +242,7 @@ pub async fn bench_auto_batching_latency(server: &BenchServer) -> Vec<BenchResul
         while measure_start.elapsed() < measure_duration {
             let sample_start = Instant::now();
             let batch = make_batch(&queue, batch_size, &payload);
-            let enqueue_result = client.batch_enqueue(batch).await;
-            let Ok(batch_results) = enqueue_result else {
-                continue;
-            };
+            let batch_results = client.enqueue_many(batch).await;
 
             let expected = count_successes(&batch_results) as usize;
             let mut received = 0;
@@ -361,7 +352,7 @@ pub async fn bench_batched_vs_unbatched(server: &BenchServer) -> Vec<BenchResult
 
         // Warmup
         let warmup_batch = make_batch(queue, batch_size, &payload);
-        let _ = client.batch_enqueue(warmup_batch).await;
+        let _ = client.enqueue_many(warmup_batch).await;
 
         let mut meter = ThroughputMeter::start();
         let full_batches = message_count as usize / batch_size;
@@ -369,15 +360,13 @@ pub async fn bench_batched_vs_unbatched(server: &BenchServer) -> Vec<BenchResult
 
         for _ in 0..full_batches {
             let batch = make_batch(queue, batch_size, &payload);
-            if let Ok(batch_results) = client.batch_enqueue(batch).await {
-                meter.increment_by(count_successes(&batch_results));
-            }
+            let batch_results = client.enqueue_many(batch).await;
+            meter.increment_by(count_successes(&batch_results));
         }
         if remainder > 0 {
             let batch = make_batch(queue, remainder, &payload);
-            if let Ok(batch_results) = client.batch_enqueue(batch).await {
-                meter.increment_by(count_successes(&batch_results));
-            }
+            let batch_results = client.enqueue_many(batch).await;
+            meter.increment_by(count_successes(&batch_results));
         }
 
         results.push(BenchResult {
@@ -428,9 +417,8 @@ pub async fn bench_batched_vs_unbatched(server: &BenchServer) -> Vec<BenchResult
 
             if buffer.len() >= batch_size || produced == message_count {
                 let batch = std::mem::take(&mut buffer);
-                if let Ok(batch_results) = client.batch_enqueue(batch).await {
-                    meter.increment_by(count_successes(&batch_results));
-                }
+                let batch_results = client.enqueue_many(batch).await;
+                meter.increment_by(count_successes(&batch_results));
             }
         }
 
@@ -501,15 +489,14 @@ pub async fn bench_delivery_batching_throughput(server: &BenchServer) -> Vec<Ben
             .await
             .expect("connect");
 
-        // Pre-load messages via batch_enqueue
+        // Pre-load messages via enqueue_many
         let mut loaded: u64 = 0;
         while loaded < pre_load {
             let remaining = (pre_load - loaded) as usize;
             let this_batch = remaining.min(batch_size);
             let batch = make_batch(&queue, this_batch, &payload);
-            if let Ok(batch_results) = client.batch_enqueue(batch).await {
-                loaded += count_successes(&batch_results);
-            }
+            let batch_results = client.enqueue_many(batch).await;
+            loaded += count_successes(&batch_results);
         }
 
         // Spawn consumers
@@ -550,7 +537,7 @@ pub async fn bench_delivery_batching_throughput(server: &BenchServer) -> Vec<Ben
         let producer = tokio::spawn(async move {
             while !producer_stop.load(Ordering::Relaxed) {
                 let batch = make_batch(&producer_queue, batch_size, &producer_payload);
-                let _ = producer_client.batch_enqueue(batch).await;
+                let _ = producer_client.enqueue_many(batch).await;
             }
         });
 
@@ -607,7 +594,7 @@ pub async fn bench_concurrent_producer_batching(server: &BenchServer) -> Vec<Ben
         let warmup_deadline = tokio::time::Instant::now() + Duration::from_secs(WARMUP_SECS);
         while tokio::time::Instant::now() < warmup_deadline {
             let batch = make_batch(&queue, batch_size, &payload);
-            let _ = warmup_client.batch_enqueue(batch).await;
+            let _ = warmup_client.enqueue_many(batch).await;
         }
         drop(warmup_client);
 
@@ -627,9 +614,8 @@ pub async fn bench_concurrent_producer_batching(server: &BenchServer) -> Vec<Ben
             handles.push(tokio::spawn(async move {
                 while !ps.load(Ordering::Relaxed) {
                     let batch = make_batch(&pq, batch_size, &pp);
-                    if let Ok(batch_results) = pc.batch_enqueue(batch).await {
-                        tm.fetch_add(count_successes(&batch_results), Ordering::Relaxed);
-                    }
+                    let batch_results = pc.enqueue_many(batch).await;
+                    tm.fetch_add(count_successes(&batch_results), Ordering::Relaxed);
                 }
             }));
         }
