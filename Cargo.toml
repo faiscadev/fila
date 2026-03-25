@@ -46,6 +46,8 @@ openraft = { version = "0.9", features = ["serde"] }
 nonempty = "0.12"
 rcgen = "0.12"
 sha2 = "0.10"
+# String interning for scheduler hot path (pinned to 0.6.x — v0.7.0 has deadlock issue #39)
+lasso = { version = "0.6", features = ["multi-threaded"] }
 
 tokio-stream = "0.1"
 tower = "0.5"

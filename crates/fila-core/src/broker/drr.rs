@@ -1,20 +1,22 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use lasso::Spur;
+
 /// Per-queue DRR scheduling state.
 #[derive(Default)]
 struct DrrQueueState {
     /// Active fairness keys in round-robin order (canonical order for replenish).
-    active_keys: VecDeque<String>,
+    active_keys: VecDeque<Spur>,
     /// Set for O(1) membership checks.
-    active_set: HashSet<String>,
+    active_set: HashSet<Spur>,
     /// Remaining deficit per fairness key. A key can deliver messages
     /// as long as its deficit is positive.
-    deficits: HashMap<String, i64>,
+    deficits: HashMap<Spur, i64>,
     /// Weight per fairness key (default 1).
-    weights: HashMap<String, u32>,
+    weights: HashMap<Spur, u32>,
     /// Keys with positive deficit, in round-robin delivery order.
     /// Replaces the O(n) `round_position` scan with O(1) front pop.
-    eligible_keys: VecDeque<String>,
+    eligible_keys: VecDeque<Spur>,
     /// Whether a round is currently active (deficits have been allocated
     /// but not yet exhausted). Prevents `start_new_round` from being
     /// called multiple times before the current round finishes.
@@ -25,7 +27,7 @@ struct DrrQueueState {
     burst_delivered: u32,
     /// The key currently being burst-served. When `consume_deficit` is
     /// called for a different key, the burst resets.
-    current_burst_key: Option<String>,
+    current_burst_key: Option<Spur>,
 }
 
 /// Deficit Round Robin scheduler. Manages per-queue fairness state.
@@ -40,8 +42,13 @@ struct DrrQueueState {
 /// In phase 1, the caller adds all fairness keys for a queue. In phase 2
 /// (hierarchical scaling), each Raft group adds only its assigned subset of
 /// fairness keys, and the DRR engine works unchanged.
+///
+/// **String interning:** All queue_id and fairness_key parameters are `Spur`
+/// tokens from the scheduler's `ThreadedRodeo` interner. This eliminates
+/// per-message string cloning and reduces HashMap key size from 24+ bytes
+/// (String) to 4 bytes (Spur, Copy).
 pub struct DrrScheduler {
-    queues: HashMap<String, DrrQueueState>,
+    queues: HashMap<Spur, DrrQueueState>,
     quantum: u32,
 }
 
@@ -57,35 +64,35 @@ impl DrrScheduler {
     /// Add a fairness key to the active set for a queue. If the key is already
     /// active, this is a no-op (deficit is not reset). Weight is updated if
     /// different from the current value.
-    pub fn add_key(&mut self, queue_id: &str, fairness_key: &str, weight: u32) {
-        let state = self.queues.entry(queue_id.to_string()).or_default();
+    pub fn add_key(&mut self, queue_id: Spur, fairness_key: Spur, weight: u32) {
+        let state = self.queues.entry(queue_id).or_default();
 
         let w = weight.max(1); // weight must be at least 1
-        state.weights.insert(fairness_key.to_string(), w);
+        state.weights.insert(fairness_key, w);
 
-        if !state.active_set.contains(fairness_key) {
-            state.active_set.insert(fairness_key.to_string());
-            state.active_keys.push_back(fairness_key.to_string());
+        if !state.active_set.contains(&fairness_key) {
+            state.active_set.insert(fairness_key);
+            state.active_keys.push_back(fairness_key);
             // New keys start with zero deficit — they receive allocation on the
             // next round start.
-            state.deficits.entry(fairness_key.to_string()).or_insert(0);
+            state.deficits.entry(fairness_key).or_insert(0);
         }
     }
 
     /// Remove a fairness key from the active set (e.g., when it has no more
     /// pending messages).
-    pub fn remove_key(&mut self, queue_id: &str, fairness_key: &str) {
-        let Some(state) = self.queues.get_mut(queue_id) else {
+    pub fn remove_key(&mut self, queue_id: Spur, fairness_key: Spur) {
+        let Some(state) = self.queues.get_mut(&queue_id) else {
             return;
         };
 
-        if state.active_set.remove(fairness_key) {
-            if let Some(idx) = state.active_keys.iter().position(|k| k == fairness_key) {
+        if state.active_set.remove(&fairness_key) {
+            if let Some(idx) = state.active_keys.iter().position(|k| *k == fairness_key) {
                 state.active_keys.remove(idx);
             }
-            state.deficits.remove(fairness_key);
-            state.weights.remove(fairness_key);
-            state.eligible_keys.retain(|k| k != fairness_key);
+            state.deficits.remove(&fairness_key);
+            state.weights.remove(&fairness_key);
+            state.eligible_keys.retain(|k| *k != fairness_key);
 
             if state.active_keys.is_empty() {
                 state.round_active = false;
@@ -93,7 +100,7 @@ impl DrrScheduler {
                 state.current_burst_key = None;
             } else {
                 // Reset burst if the removed key was the current burst key
-                if state.current_burst_key.as_deref() == Some(fairness_key) {
+                if state.current_burst_key == Some(fairness_key) {
                     state.burst_delivered = 0;
                     state.current_burst_key = None;
                 }
@@ -112,11 +119,11 @@ impl DrrScheduler {
     ///
     /// O(1) — reads from the front of the eligible deque instead of scanning
     /// all active keys.
-    pub fn next_key(&mut self, queue_id: &str) -> Option<String> {
-        let state = self.queues.get_mut(queue_id)?;
+    pub fn next_key(&mut self, queue_id: Spur) -> Option<Spur> {
+        let state = self.queues.get_mut(&queue_id)?;
 
-        if let Some(key) = state.eligible_keys.front() {
-            return Some(key.clone());
+        if let Some(&key) = state.eligible_keys.front() {
+            return Some(key);
         }
 
         // Eligible deque empty — round exhausted
@@ -128,12 +135,12 @@ impl DrrScheduler {
     /// Also tracks burst progression: each key delivers `weight` messages
     /// per turn before yielding to the next eligible key. This ensures
     /// proportional interleaving within any delivery window.
-    pub fn consume_deficit(&mut self, queue_id: &str, fairness_key: &str) {
-        let Some(state) = self.queues.get_mut(queue_id) else {
+    pub fn consume_deficit(&mut self, queue_id: Spur, fairness_key: Spur) {
+        let Some(state) = self.queues.get_mut(&queue_id) else {
             return;
         };
 
-        let remaining = if let Some(d) = state.deficits.get_mut(fairness_key) {
+        let remaining = if let Some(d) = state.deficits.get_mut(&fairness_key) {
             *d -= 1;
             *d
         } else {
@@ -142,8 +149,8 @@ impl DrrScheduler {
 
         // Track burst: if this is a different key than the current burst,
         // reset the burst counter.
-        if state.current_burst_key.as_deref() != Some(fairness_key) {
-            state.current_burst_key = Some(fairness_key.to_string());
+        if state.current_burst_key != Some(fairness_key) {
+            state.current_burst_key = Some(fairness_key);
             state.burst_delivered = 1;
         } else {
             state.burst_delivered += 1;
@@ -153,7 +160,7 @@ impl DrrScheduler {
         // exhausted (even mid-burst). The old linear-scan `next_key` would
         // skip keys with non-positive deficit; we maintain the same behavior
         // by eagerly removing them from the eligible deque.
-        let weight = state.weights.get(fairness_key).copied().unwrap_or(1);
+        let weight = state.weights.get(&fairness_key).copied().unwrap_or(1);
         let burst_done = state.burst_delivered >= weight;
         let deficit_exhausted = remaining <= 0;
 
@@ -162,13 +169,13 @@ impl DrrScheduler {
             state.current_burst_key = None;
 
             // Remove current key from front of eligible deque
-            if state.eligible_keys.front().map(|k| k.as_str()) == Some(fairness_key) {
+            if state.eligible_keys.front().copied() == Some(fairness_key) {
                 state.eligible_keys.pop_front();
             }
 
             // Re-append at back only if it still has positive deficit
             if remaining > 0 {
-                state.eligible_keys.push_back(fairness_key.to_string());
+                state.eligible_keys.push_back(fairness_key);
             }
         }
     }
@@ -177,20 +184,20 @@ impl DrrScheduler {
     /// Used when a key is throttled to skip all its remaining deficit in O(1)
     /// rather than consuming one at a time. Also resets burst state and
     /// removes the key from the eligible deque.
-    pub fn drain_deficit(&mut self, queue_id: &str, fairness_key: &str) {
-        let Some(state) = self.queues.get_mut(queue_id) else {
+    pub fn drain_deficit(&mut self, queue_id: Spur, fairness_key: Spur) {
+        let Some(state) = self.queues.get_mut(&queue_id) else {
             return;
         };
-        if let Some(d) = state.deficits.get_mut(fairness_key) {
+        if let Some(d) = state.deficits.get_mut(&fairness_key) {
             *d = 0;
         }
         // Reset burst if this was the current burst key
-        if state.current_burst_key.as_deref() == Some(fairness_key) {
+        if state.current_burst_key == Some(fairness_key) {
             state.burst_delivered = 0;
             state.current_burst_key = None;
         }
         // Remove from eligible deque so next_key skips it
-        state.eligible_keys.retain(|k| k != fairness_key);
+        state.eligible_keys.retain(|k| *k != fairness_key);
     }
 
     /// Start a new DRR round for a queue: refill deficit for all active keys
@@ -198,8 +205,8 @@ impl DrrScheduler {
     /// (prevents unbounded deficit accumulation from repeated calls).
     /// Returns `true` if a new round was actually started, `false` if the
     /// previous round is still active.
-    pub fn start_new_round(&mut self, queue_id: &str) -> bool {
-        let Some(state) = self.queues.get_mut(queue_id) else {
+    pub fn start_new_round(&mut self, queue_id: Spur) -> bool {
+        let Some(state) = self.queues.get_mut(&queue_id) else {
             return false;
         };
 
@@ -210,12 +217,12 @@ impl DrrScheduler {
         // Rebuild eligible deque: replenish deficits and include keys with
         // positive deficit in active_keys order.
         state.eligible_keys.clear();
-        for key in &state.active_keys {
-            let weight = state.weights.get(key).copied().unwrap_or(1);
-            let deficit = state.deficits.entry(key.clone()).or_insert(0);
+        for &key in &state.active_keys {
+            let weight = state.weights.get(&key).copied().unwrap_or(1);
+            let deficit = state.deficits.entry(key).or_insert(0);
             *deficit += (weight as i64) * (self.quantum as i64);
             if *deficit > 0 {
-                state.eligible_keys.push_back(key.clone());
+                state.eligible_keys.push_back(key);
             }
         }
 
@@ -226,37 +233,35 @@ impl DrrScheduler {
     }
 
     /// Remove all DRR state for a queue (e.g., when the queue is deleted).
-    pub fn remove_queue(&mut self, queue_id: &str) {
-        self.queues.remove(queue_id);
+    pub fn remove_queue(&mut self, queue_id: Spur) {
+        self.queues.remove(&queue_id);
     }
 
     /// Check whether a queue has any active fairness keys.
-    pub fn has_active_keys(&self, queue_id: &str) -> bool {
+    pub fn has_active_keys(&self, queue_id: Spur) -> bool {
         self.queues
-            .get(queue_id)
+            .get(&queue_id)
             .is_some_and(|s| !s.active_keys.is_empty())
     }
 
     /// Update the weight of a fairness key. Takes effect on the next round start.
-    pub fn update_weight(&mut self, queue_id: &str, fairness_key: &str, weight: u32) {
-        if let Some(state) = self.queues.get_mut(queue_id) {
-            state
-                .weights
-                .insert(fairness_key.to_string(), weight.max(1));
+    pub fn update_weight(&mut self, queue_id: Spur, fairness_key: Spur, weight: u32) {
+        if let Some(state) = self.queues.get_mut(&queue_id) {
+            state.weights.insert(fairness_key, weight.max(1));
         }
     }
 
-    /// Return the list of active fairness keys for a queue (for recovery).
-    pub fn active_keys(&self, queue_id: &str) -> Vec<String> {
+    /// Return the list of active fairness key spurs for a queue (for recovery).
+    pub fn active_keys(&self, queue_id: Spur) -> Vec<Spur> {
         self.queues
-            .get(queue_id)
-            .map(|s| s.active_keys.iter().cloned().collect())
+            .get(&queue_id)
+            .map(|s| s.active_keys.iter().copied().collect())
             .unwrap_or_default()
     }
 
-    /// Return all queue IDs that have DRR state.
-    pub fn queue_ids(&self) -> Vec<String> {
-        self.queues.keys().cloned().collect()
+    /// Return all queue ID spurs that have DRR state.
+    pub fn queue_ids(&self) -> Vec<Spur> {
+        self.queues.keys().copied().collect()
     }
 
     /// Return the global DRR quantum value.
@@ -264,18 +269,18 @@ impl DrrScheduler {
         self.quantum
     }
 
-    /// Return per-key stats for a queue: `(key, deficit, weight)` tuples.
-    pub fn key_stats(&self, queue_id: &str) -> Vec<(String, i64, u32)> {
-        let Some(state) = self.queues.get(queue_id) else {
+    /// Return per-key stats for a queue: `(spur, deficit, weight)` tuples.
+    pub fn key_stats(&self, queue_id: Spur) -> Vec<(Spur, i64, u32)> {
+        let Some(state) = self.queues.get(&queue_id) else {
             return Vec::new();
         };
         state
             .active_keys
             .iter()
-            .map(|key| {
-                let deficit = state.deficits.get(key).copied().unwrap_or(0);
-                let weight = state.weights.get(key).copied().unwrap_or(1);
-                (key.clone(), deficit, weight)
+            .map(|&key| {
+                let deficit = state.deficits.get(&key).copied().unwrap_or(0);
+                let weight = state.weights.get(&key).copied().unwrap_or(1);
+                (key, deficit, weight)
             })
             .collect()
     }
@@ -284,25 +289,34 @@ impl DrrScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lasso::ThreadedRodeo;
 
     #[test]
     fn three_equal_weight_keys_get_equal_deficit() {
-        let mut drr = DrrScheduler::new(10);
-        drr.add_key("q1", "a", 1);
-        drr.add_key("q1", "b", 1);
-        drr.add_key("q1", "c", 1);
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let a = interner.get_or_intern("a");
+        let b = interner.get_or_intern("b");
+        let c = interner.get_or_intern("c");
 
-        drr.start_new_round("q1");
+        let mut drr = DrrScheduler::new(10);
+        drr.add_key(q1, a, 1);
+        drr.add_key(q1, b, 1);
+        drr.add_key(q1, c, 1);
+
+        drr.start_new_round(q1);
 
         // Each key should get deficit = weight(1) * quantum(10) = 10
         let mut counts = HashMap::new();
         let mut delivered = 0;
         loop {
-            let Some(key) = drr.next_key("q1") else {
+            let Some(key) = drr.next_key(q1) else {
                 break;
             };
-            drr.consume_deficit("q1", &key);
-            *counts.entry(key).or_insert(0) += 1;
+            drr.consume_deficit(q1, key);
+            *counts
+                .entry(interner.resolve(&key).to_string())
+                .or_insert(0) += 1;
             delivered += 1;
             // Safety: prevent infinite loop
             if delivered > 100 {
@@ -318,15 +332,25 @@ mod tests {
 
     #[test]
     fn key_removal_removes_from_active_set() {
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let a = interner.get_or_intern("a");
+        let b = interner.get_or_intern("b");
+        let c = interner.get_or_intern("c");
+
         let mut drr = DrrScheduler::new(10);
-        drr.add_key("q1", "a", 1);
-        drr.add_key("q1", "b", 1);
-        drr.add_key("q1", "c", 1);
+        drr.add_key(q1, a, 1);
+        drr.add_key(q1, b, 1);
+        drr.add_key(q1, c, 1);
 
-        drr.remove_key("q1", "b");
+        drr.remove_key(q1, b);
 
-        assert!(drr.has_active_keys("q1"));
-        let keys = drr.active_keys("q1");
+        assert!(drr.has_active_keys(q1));
+        let keys: Vec<String> = drr
+            .active_keys(q1)
+            .iter()
+            .map(|s| interner.resolve(s).to_string())
+            .collect();
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&"a".to_string()));
         assert!(keys.contains(&"c".to_string()));
@@ -335,32 +359,43 @@ mod tests {
 
     #[test]
     fn re_adding_key_after_removal() {
-        let mut drr = DrrScheduler::new(10);
-        drr.add_key("q1", "a", 1);
-        drr.remove_key("q1", "a");
-        assert!(!drr.has_active_keys("q1"));
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let a = interner.get_or_intern("a");
 
-        drr.add_key("q1", "a", 1);
-        assert!(drr.has_active_keys("q1"));
-        assert_eq!(drr.active_keys("q1"), vec!["a".to_string()]);
+        let mut drr = DrrScheduler::new(10);
+        drr.add_key(q1, a, 1);
+        drr.remove_key(q1, a);
+        assert!(!drr.has_active_keys(q1));
+
+        drr.add_key(q1, a, 1);
+        assert!(drr.has_active_keys(q1));
+        assert_eq!(drr.active_keys(q1), vec![a]);
     }
 
     #[test]
     fn round_reset_refills_deficits() {
-        let mut drr = DrrScheduler::new(5);
-        drr.add_key("q1", "a", 2);
-        drr.add_key("q1", "b", 1);
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let a = interner.get_or_intern("a");
+        let b = interner.get_or_intern("b");
 
-        drr.start_new_round("q1");
+        let mut drr = DrrScheduler::new(5);
+        drr.add_key(q1, a, 2);
+        drr.add_key(q1, b, 1);
+
+        drr.start_new_round(q1);
 
         // a gets 2*5=10, b gets 1*5=5
         let mut counts = HashMap::new();
         loop {
-            let Some(key) = drr.next_key("q1") else {
+            let Some(key) = drr.next_key(q1) else {
                 break;
             };
-            drr.consume_deficit("q1", &key);
-            *counts.entry(key).or_insert(0) += 1;
+            drr.consume_deficit(q1, key);
+            *counts
+                .entry(interner.resolve(&key).to_string())
+                .or_insert(0) += 1;
         }
         assert_eq!(counts.get("a"), Some(&10));
         assert_eq!(counts.get("b"), Some(&5));
@@ -368,13 +403,17 @@ mod tests {
 
     #[test]
     fn single_key_gets_all_throughput() {
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let only = interner.get_or_intern("only");
+
         let mut drr = DrrScheduler::new(10);
-        drr.add_key("q1", "only", 1);
-        drr.start_new_round("q1");
+        drr.add_key(q1, only, 1);
+        drr.start_new_round(q1);
 
         let mut count = 0;
-        while drr.next_key("q1").is_some() {
-            drr.consume_deficit("q1", "only");
+        while drr.next_key(q1).is_some() {
+            drr.consume_deficit(q1, only);
             count += 1;
         }
         assert_eq!(count, 10);
@@ -382,29 +421,36 @@ mod tests {
 
     #[test]
     fn key_added_mid_round_gets_deficit_on_next_round() {
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let a = interner.get_or_intern("a");
+        let b = interner.get_or_intern("b");
+
         let mut drr = DrrScheduler::new(10);
-        drr.add_key("q1", "a", 1);
-        drr.start_new_round("q1");
+        drr.add_key(q1, a, 1);
+        drr.start_new_round(q1);
 
         // Consume some of a's deficit
-        drr.next_key("q1").unwrap();
-        drr.consume_deficit("q1", "a");
+        drr.next_key(q1).unwrap();
+        drr.consume_deficit(q1, a);
 
         // Add a new key mid-round — it should have deficit 0
-        drr.add_key("q1", "b", 1);
+        drr.add_key(q1, b, 1);
 
         // b should not be deliverable in the current round (deficit=0)
         let mut a_count = 0;
         let mut b_count = 0;
         loop {
-            let Some(key) = drr.next_key("q1") else {
+            let Some(key) = drr.next_key(q1) else {
                 break;
             };
-            drr.consume_deficit("q1", &key);
-            match key.as_str() {
-                "a" => a_count += 1,
-                "b" => b_count += 1,
-                _ => panic!("unexpected key"),
+            drr.consume_deficit(q1, key);
+            if key == a {
+                a_count += 1;
+            } else if key == b {
+                b_count += 1;
+            } else {
+                panic!("unexpected key");
             }
         }
         assert_eq!(
@@ -414,18 +460,20 @@ mod tests {
         assert_eq!(b_count, 0, "b should have 0 (added mid-round)");
 
         // After a new round, b should get deficit
-        drr.start_new_round("q1");
+        drr.start_new_round(q1);
         let mut a2 = 0;
         let mut b2 = 0;
         loop {
-            let Some(key) = drr.next_key("q1") else {
+            let Some(key) = drr.next_key(q1) else {
                 break;
             };
-            drr.consume_deficit("q1", &key);
-            match key.as_str() {
-                "a" => a2 += 1,
-                "b" => b2 += 1,
-                _ => panic!("unexpected key"),
+            drr.consume_deficit(q1, key);
+            if key == a {
+                a2 += 1;
+            } else if key == b {
+                b2 += 1;
+            } else {
+                panic!("unexpected key");
             }
         }
         assert_eq!(a2, 10);
@@ -434,21 +482,25 @@ mod tests {
 
     #[test]
     fn add_key_is_idempotent() {
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let a = interner.get_or_intern("a");
+
         let mut drr = DrrScheduler::new(10);
-        drr.add_key("q1", "a", 1);
-        drr.start_new_round("q1");
+        drr.add_key(q1, a, 1);
+        drr.start_new_round(q1);
 
         // Consume some deficit
-        drr.next_key("q1").unwrap();
-        drr.consume_deficit("q1", "a");
+        drr.next_key(q1).unwrap();
+        drr.consume_deficit(q1, a);
         // deficit is now 9
 
         // Re-adding should NOT reset deficit
-        drr.add_key("q1", "a", 1);
+        drr.add_key(q1, a, 1);
 
         let mut count = 0;
-        while drr.next_key("q1").is_some() {
-            drr.consume_deficit("q1", "a");
+        while drr.next_key(q1).is_some() {
+            drr.consume_deficit(q1, a);
             count += 1;
         }
         assert_eq!(count, 9, "deficit should not be reset by re-add");
@@ -456,49 +508,62 @@ mod tests {
 
     #[test]
     fn no_active_keys_returns_false() {
+        let interner = ThreadedRodeo::default();
+        let nonexistent = interner.get_or_intern("nonexistent");
         let drr = DrrScheduler::new(10);
-        assert!(!drr.has_active_keys("nonexistent"));
+        assert!(!drr.has_active_keys(nonexistent));
     }
 
     #[test]
     fn next_key_returns_none_for_empty_queue() {
+        let interner = ThreadedRodeo::default();
+        let nonexistent = interner.get_or_intern("nonexistent");
         let mut drr = DrrScheduler::new(10);
-        assert!(drr.next_key("nonexistent").is_none());
+        assert!(drr.next_key(nonexistent).is_none());
     }
 
     #[test]
     fn weight_update_takes_effect_next_round() {
-        let mut drr = DrrScheduler::new(10);
-        drr.add_key("q1", "a", 1);
-        drr.add_key("q1", "b", 1);
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let a = interner.get_or_intern("a");
+        let b = interner.get_or_intern("b");
 
-        drr.start_new_round("q1");
+        let mut drr = DrrScheduler::new(10);
+        drr.add_key(q1, a, 1);
+        drr.add_key(q1, b, 1);
+
+        drr.start_new_round(q1);
         // Both get 10
 
         // Update a's weight to 3 — should not affect current round
-        drr.update_weight("q1", "a", 3);
+        drr.update_weight(q1, a, 3);
 
         let mut counts = HashMap::new();
         loop {
-            let Some(key) = drr.next_key("q1") else {
+            let Some(key) = drr.next_key(q1) else {
                 break;
             };
-            drr.consume_deficit("q1", &key);
-            *counts.entry(key).or_insert(0) += 1;
+            drr.consume_deficit(q1, key);
+            *counts
+                .entry(interner.resolve(&key).to_string())
+                .or_insert(0) += 1;
         }
         // Current round still uses old deficit allocations
         assert_eq!(counts.get("a"), Some(&10));
         assert_eq!(counts.get("b"), Some(&10));
 
         // New round uses updated weight
-        drr.start_new_round("q1");
+        drr.start_new_round(q1);
         let mut counts2 = HashMap::new();
         loop {
-            let Some(key) = drr.next_key("q1") else {
+            let Some(key) = drr.next_key(q1) else {
                 break;
             };
-            drr.consume_deficit("q1", &key);
-            *counts2.entry(key).or_insert(0) += 1;
+            drr.consume_deficit(q1, key);
+            *counts2
+                .entry(interner.resolve(&key).to_string())
+                .or_insert(0) += 1;
         }
         assert_eq!(counts2.get("a"), Some(&30)); // weight 3 * quantum 10
         assert_eq!(counts2.get("b"), Some(&10)); // weight 1 * quantum 10
@@ -506,43 +571,49 @@ mod tests {
 
     #[test]
     fn independent_queue_state() {
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let q2 = interner.get_or_intern("q2");
+        let a = interner.get_or_intern("a");
+        let b = interner.get_or_intern("b");
+
         let mut drr = DrrScheduler::new(10);
-        drr.add_key("q1", "a", 1);
-        drr.add_key("q2", "b", 1);
+        drr.add_key(q1, a, 1);
+        drr.add_key(q2, b, 1);
 
-        assert!(drr.has_active_keys("q1"));
-        assert!(drr.has_active_keys("q2"));
+        assert!(drr.has_active_keys(q1));
+        assert!(drr.has_active_keys(q2));
 
-        drr.remove_key("q1", "a");
-        assert!(!drr.has_active_keys("q1"));
-        assert!(drr.has_active_keys("q2"));
+        drr.remove_key(q1, a);
+        assert!(!drr.has_active_keys(q1));
+        assert!(drr.has_active_keys(q2));
     }
 
     #[test]
     fn weighted_keys_deliver_proportionally_within_window() {
-        // 3 keys with weights 1, 2, 3 (total_weight = 6)
-        // quantum = 60 → deficits: 60, 120, 180 (total = 360)
-        // Deliver only 180 messages (half the round)
-        // Expected: key_1 ≈ 30 (16.7%), key_2 ≈ 60 (33.3%), key_3 ≈ 90 (50%)
-        //
-        // BUG: without weighted burst scheduling, the round-robin gives
-        // each key 1 message per turn → 60 each (33% uniform). This test
-        // catches the bug by asserting proportional delivery in a window.
-        let mut drr = DrrScheduler::new(60);
-        drr.add_key("q1", "key_1", 1);
-        drr.add_key("q1", "key_2", 2);
-        drr.add_key("q1", "key_3", 3);
+        let interner = ThreadedRodeo::default();
+        let q1 = interner.get_or_intern("q1");
+        let key_1 = interner.get_or_intern("key_1");
+        let key_2 = interner.get_or_intern("key_2");
+        let key_3 = interner.get_or_intern("key_3");
 
-        drr.start_new_round("q1");
+        let mut drr = DrrScheduler::new(60);
+        drr.add_key(q1, key_1, 1);
+        drr.add_key(q1, key_2, 2);
+        drr.add_key(q1, key_3, 3);
+
+        drr.start_new_round(q1);
 
         let window = 180;
         let mut counts = HashMap::new();
         for _ in 0..window {
-            let Some(key) = drr.next_key("q1") else {
+            let Some(key) = drr.next_key(q1) else {
                 break;
             };
-            drr.consume_deficit("q1", &key);
-            *counts.entry(key).or_insert(0) += 1;
+            drr.consume_deficit(q1, key);
+            *counts
+                .entry(interner.resolve(&key).to_string())
+                .or_insert(0) += 1;
         }
 
         let total: usize = counts.values().sum();
@@ -570,6 +641,7 @@ mod tests {
 
     mod proptests {
         use super::*;
+        use lasso::ThreadedRodeo;
         use proptest::prelude::*;
 
         /// Strategy for generating a vector of (key_name, weight) tuples.
@@ -597,35 +669,44 @@ mod tests {
             fn fairness_invariant_holds(scenario in fairness_scenario()) {
                 let quantum = 100u32;
                 let num_rounds = 10;
+                let interner = ThreadedRodeo::default();
+                let q1 = interner.get_or_intern("q1");
                 let mut drr = DrrScheduler::new(quantum);
 
                 let total_weight: u32 = scenario.iter().map(|(_, w)| *w).sum();
 
-                for (key, weight) in &scenario {
-                    drr.add_key("q1", key, *weight);
-                }
+                // Intern all keys and add to DRR
+                let interned_keys: Vec<(Spur, String, u32)> = scenario
+                    .iter()
+                    .map(|(key, weight)| {
+                        let spur = interner.get_or_intern(key);
+                        drr.add_key(q1, spur, *weight);
+                        (spur, key.clone(), *weight)
+                    })
+                    .collect();
 
                 // Track deliveries per key — unlimited message supply
                 let mut delivered: HashMap<String, usize> = HashMap::new();
                 let mut total_delivered = 0usize;
 
                 for _ in 0..num_rounds {
-                    drr.start_new_round("q1");
+                    drr.start_new_round(q1);
 
                     loop {
-                        let Some(key) = drr.next_key("q1") else {
+                        let Some(key) = drr.next_key(q1) else {
                             break;
                         };
                         // Unlimited messages — always deliver
-                        *delivered.entry(key.clone()).or_insert(0) += 1;
+                        let key_str = interner.resolve(&key).to_string();
+                        *delivered.entry(key_str).or_insert(0) += 1;
                         total_delivered += 1;
-                        drr.consume_deficit("q1", &key);
+                        drr.consume_deficit(q1, key);
                     }
                 }
 
                 prop_assert!(total_delivered > 0, "should have delivered some messages");
 
-                for (key, weight) in &scenario {
+                for (_, key, weight) in &interned_keys {
                     let expected_share = *weight as f64 / total_weight as f64;
                     let actual_delivered = delivered.get(key).copied().unwrap_or(0);
                     let actual_share = actual_delivered as f64 / total_delivered as f64;

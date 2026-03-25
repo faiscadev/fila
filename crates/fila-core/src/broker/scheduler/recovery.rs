@@ -108,13 +108,14 @@ impl Scheduler {
                 continue;
             }
 
-            self.drr
-                .add_key(&queue_id, &updated_msg.fairness_key, updated_msg.weight);
+            let queue_spur = self.intern(&queue_id);
+            let fk_spur = self.intern(&updated_msg.fairness_key);
+            self.drr.add_key(queue_spur, fk_spur, updated_msg.weight);
 
             // Re-add to pending index (message is back in ready pool)
             self.pending_push(
-                &queue_id,
-                &updated_msg.fairness_key,
+                queue_spur,
+                fk_spur,
                 PendingEntry {
                     msg_key,
                     msg_id,
@@ -200,11 +201,13 @@ impl Scheduler {
                     }
 
                     // Rebuild DRR active keys and pending index by scanning messages
+                    let queue_spur = self.intern(&queue.name);
                     let prefix = crate::storage::keys::message_prefix(&queue.name);
                     match self.storage.list_messages(&prefix) {
                         Ok(messages) => {
                             for (key, msg) in messages {
-                                self.drr.add_key(&queue.name, &msg.fairness_key, msg.weight);
+                                let fk_spur = self.intern(&msg.fairness_key);
+                                self.drr.add_key(queue_spur, fk_spur, msg.weight);
 
                                 // Only add unleased messages to pending index
                                 let lease_key =
@@ -215,8 +218,8 @@ impl Scheduler {
                                 } else {
                                     // Message is pending (available for delivery)
                                     self.pending_push(
-                                        &queue.name,
-                                        &msg.fairness_key,
+                                        queue_spur,
+                                        fk_spur,
                                         PendingEntry {
                                             msg_key: key,
                                             msg_id: msg.id,
@@ -277,6 +280,8 @@ impl Scheduler {
     /// from RocksDB for the specified queue only — without disrupting
     /// other queues.
     pub(super) fn recover_queue(&mut self, queue_id: &str) {
+        let queue_id_spur = self.intern(queue_id);
+
         // Load queue config to register known queue and Lua scripts.
         match self.storage.get_queue(queue_id) {
             Ok(Some(queue)) => {
@@ -329,8 +334,9 @@ impl Scheduler {
         }
 
         // Clear existing pending entries for this queue to rebuild fresh.
-        self.pending.retain(|(qid, _), _| qid != queue_id);
-        self.pending_by_id.retain(|_, (qid, _)| qid != queue_id);
+        self.pending.retain(|(qid, _), _| *qid != queue_id_spur);
+        self.pending_by_id
+            .retain(|_, (qid, _)| *qid != queue_id_spur);
         self.leased_msg_keys.retain(|_, key| {
             // Only keep entries for OTHER queues; this queue's entries are rebuilt below.
             !key.starts_with(crate::storage::keys::message_prefix(queue_id).as_slice())
@@ -341,15 +347,16 @@ impl Scheduler {
         match self.storage.list_messages(&prefix) {
             Ok(messages) => {
                 for (key, msg) in messages {
-                    self.drr.add_key(queue_id, &msg.fairness_key, msg.weight);
+                    let fk_spur = self.intern(&msg.fairness_key);
+                    self.drr.add_key(queue_id_spur, fk_spur, msg.weight);
 
                     let lease_key = crate::storage::keys::lease_key(queue_id, &msg.id);
                     if self.storage.get_lease(&lease_key).ok().flatten().is_some() {
                         self.leased_msg_keys.insert(msg.id, key);
                     } else {
                         self.pending_push(
-                            queue_id,
-                            &msg.fairness_key,
+                            queue_id_spur,
+                            fk_spur,
                             PendingEntry {
                                 msg_key: key,
                                 msg_id: msg.id,

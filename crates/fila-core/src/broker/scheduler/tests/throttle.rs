@@ -182,7 +182,7 @@ fn throttle_skipped_key_stays_active() {
 
     // Key should still be active in DRR (not removed)
     assert!(
-        scheduler.drr.has_active_keys("active-q"),
+        scheduler.drr.has_active_keys(scheduler.intern("active-q")),
         "throttled key should remain in active set"
     );
 }

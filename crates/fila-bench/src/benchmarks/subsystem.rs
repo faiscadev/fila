@@ -250,21 +250,28 @@ pub fn bench_serialization(results: &mut Vec<BenchResult>) {
 /// Measure DRR scheduler next_key + consume_deficit throughput at
 /// varying active key counts. Isolates scheduling algorithm from storage.
 pub fn bench_drr(results: &mut Vec<BenchResult>) {
+    let interner = lasso::ThreadedRodeo::default();
+
     for &(label, key_count) in &[("10", 10usize), ("1k", 1_000), ("10k", 10_000)] {
         let quantum = 100u32;
         let mut drr = fila_core::broker::drr::DrrScheduler::new(quantum);
 
-        // Set up keys with varying weights
-        for i in 0..key_count {
+        let queue_spur = interner.get_or_intern(format!("bench-queue-{label}"));
+
+        // Set up keys with varying weights (pre-intern all keys)
+        let key_spurs: Vec<_> = (0..key_count)
+            .map(|i| interner.get_or_intern(format!("key-{i}")))
+            .collect();
+        for (i, &spur) in key_spurs.iter().enumerate() {
             let weight = ((i % 5) + 1) as u32; // weights 1-5
-            drr.add_key("bench-queue", &format!("key-{i}"), weight);
+            drr.add_key(queue_spur, spur, weight);
         }
 
         // Warmup: run a few rounds
         for _ in 0..3 {
-            drr.start_new_round("bench-queue");
-            while let Some(key) = drr.next_key("bench-queue") {
-                drr.consume_deficit("bench-queue", &key);
+            drr.start_new_round(queue_spur);
+            while let Some(key) = drr.next_key(queue_spur) {
+                drr.consume_deficit(queue_spur, key);
             }
         }
 
@@ -273,12 +280,12 @@ pub fn bench_drr(results: &mut Vec<BenchResult>) {
         let deadline = Instant::now() + Duration::from_secs(MEASURE_SECS);
 
         while Instant::now() < deadline {
-            drr.start_new_round("bench-queue");
+            drr.start_new_round(queue_spur);
             loop {
-                let Some(key) = drr.next_key("bench-queue") else {
+                let Some(key) = drr.next_key(queue_spur) else {
                     break;
                 };
-                drr.consume_deficit("bench-queue", &key);
+                drr.consume_deficit(queue_spur, key);
                 meter.increment();
             }
         }

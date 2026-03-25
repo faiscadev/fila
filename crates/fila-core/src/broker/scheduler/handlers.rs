@@ -5,8 +5,12 @@ use super::*;
 /// needed to finalize the enqueue after the batch write commits.
 pub(super) struct PreparedEnqueue {
     pub(super) msg_id: uuid::Uuid,
+    /// Original queue_id string, kept for metrics recording at the boundary.
     pub(super) queue_id: String,
-    pub(super) fairness_key: String,
+    /// Interned queue_id for scheduler-internal data structures.
+    pub(super) queue_id_spur: Spur,
+    /// Interned fairness_key for scheduler-internal data structures.
+    pub(super) fairness_key_spur: Spur,
     pub(super) weight: u32,
     pub(super) throttle_keys: Vec<String>,
     pub(super) msg_key: Vec<u8>,
@@ -96,6 +100,10 @@ impl Scheduler {
             &msg_id,
         );
 
+        // Intern queue_id and fairness_key for scheduler-internal use
+        let queue_id_spur = self.intern(&message.queue_id);
+        let fairness_key_spur = self.intern(&message.fairness_key);
+
         // Serialize to protobuf for the mutation (same as put_message does internally)
         let proto = fila_proto::Message::from(message.clone());
         let value = prost::Message::encode_to_vec(&proto);
@@ -103,7 +111,8 @@ impl Scheduler {
         Ok(PreparedEnqueue {
             msg_id,
             queue_id: message.queue_id,
-            fairness_key: message.fairness_key,
+            queue_id_spur,
+            fairness_key_spur,
             weight: message.weight,
             throttle_keys: message.throttle_keys,
             msg_key: key,
@@ -117,13 +126,16 @@ impl Scheduler {
         self.metrics.record_enqueue(&prepared.queue_id);
 
         // Register the fairness key in DRR active set so it participates in scheduling
-        self.drr
-            .add_key(&prepared.queue_id, &prepared.fairness_key, prepared.weight);
+        self.drr.add_key(
+            prepared.queue_id_spur,
+            prepared.fairness_key_spur,
+            prepared.weight,
+        );
 
         // Add to pending index
         self.pending_push(
-            &prepared.queue_id,
-            &prepared.fairness_key,
+            prepared.queue_id_spur,
+            prepared.fairness_key_spur,
             PendingEntry {
                 msg_key: prepared.msg_key.clone(),
                 msg_id: prepared.msg_id,
@@ -224,9 +236,11 @@ impl Scheduler {
                 crate::error::DeleteQueueError::QueueNotFound(queue_id.to_string())
             })?;
 
+        let queue_id_spur = self.intern(queue_id);
+
         self.storage.delete_queue(queue_id)?;
-        self.drr.remove_queue(queue_id);
-        self.consumer_rr_idx.remove(queue_id);
+        self.drr.remove_queue(queue_id_spur);
+        self.consumer_rr_idx.remove(&queue_id_spur);
         self.remove_pending_for_queue(queue_id);
         self.known_queues.remove(queue_id);
         self.queue_cache.remove(queue_id);
@@ -240,9 +254,10 @@ impl Scheduler {
         if queue_config.dlq_queue_id.as_deref() == Some(auto_dlq_name.as_str())
             && self.queue_cache.contains_key(&auto_dlq_name)
         {
+            let dlq_spur = self.intern(&auto_dlq_name);
             self.storage.delete_queue(&auto_dlq_name)?;
-            self.drr.remove_queue(&auto_dlq_name);
-            self.consumer_rr_idx.remove(&auto_dlq_name);
+            self.drr.remove_queue(dlq_spur);
+            self.consumer_rr_idx.remove(&dlq_spur);
             self.remove_pending_for_queue(&auto_dlq_name);
             self.known_queues.remove(&auto_dlq_name);
             self.queue_cache.remove(&auto_dlq_name);
@@ -417,13 +432,14 @@ impl Scheduler {
                 self.storage.apply_mutations(ops)?;
 
                 // Add the message to the DLQ's DRR active set for delivery
-                self.drr
-                    .add_key(&dlq_queue_id, &msg.fairness_key, msg.weight);
+                let dlq_spur = self.intern(&dlq_queue_id);
+                let fk_spur = self.intern(&msg.fairness_key);
+                self.drr.add_key(dlq_spur, fk_spur, msg.weight);
 
                 // Add to DLQ's pending index
                 self.pending_push(
-                    &dlq_queue_id,
-                    &msg.fairness_key,
+                    dlq_spur,
+                    fk_spur,
                     PendingEntry {
                         msg_key: dlq_msg_key,
                         msg_id: msg.id,
@@ -465,12 +481,14 @@ impl Scheduler {
         self.storage.apply_mutations(ops)?;
 
         // Re-add the fairness key to DRR active set so the message can be scheduled
-        self.drr.add_key(queue_id, &msg.fairness_key, msg.weight);
+        let queue_spur = self.intern(queue_id);
+        let fk_spur = self.intern(&msg.fairness_key);
+        self.drr.add_key(queue_spur, fk_spur, msg.weight);
 
         // Re-add to pending index (message is back in ready pool)
         self.pending_push(
-            queue_id,
-            &msg.fairness_key,
+            queue_spur,
+            fk_spur,
             PendingEntry {
                 msg_key,
                 msg_id: msg.id,
