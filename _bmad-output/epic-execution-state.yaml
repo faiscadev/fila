@@ -1,47 +1,33 @@
-epic: "Epic 32: Plateau 1 — Eliminate Per-Message Overhead"
+epic: "Epic 33: Plateau 2 — Fix the Consume Path"
 baseBranch: main
 startedAt: "2026-03-25T00:00:00Z"
 stories:
-  - id: "32.1"
-    title: "Profile Baseline"
+  - id: "33.1"
+    title: "In-Memory Delivery Queue"
     status: completed
     currentPhase: ""
-    branch: "feat/32.1-profile-baseline"
-    pr: 118
+    branch: "feat/33.1-in-memory-delivery"
+    pr: null
     dependsOn: []
-  - id: "32.2"
-    title: "RocksDB Quick Wins"
-    status: completed
+  - id: "33.2"
+    title: "In-Memory Lease Tracking"
+    status: pending
     currentPhase: ""
-    branch: "feat/32.2-rocksdb-quick-wins"
-    pr: 119
-    dependsOn: ["32.1"]
-  - id: "32.3"
-    title: "String Interning"
-    status: completed
-    currentPhase: ""
-    branch: "feat/32.3-string-interning"
-    pr: 120
-    dependsOn: ["32.1"]
-  - id: "32.4"
-    title: "Hybrid Envelope — Store-as-Received"
-    status: completed
-    currentPhase: ""
-    branch: "feat/32.4-hybrid-envelope"
+    branch: ""
     pr: null
-    dependsOn: ["32.1"]
-  - id: "32.5"
-    title: "Arena Allocation"
-    status: completed
+    dependsOn: ["33.1"]
+  - id: "33.3"
+    title: "Batch Ack/Nack Processing"
+    status: pending
     currentPhase: ""
-    branch: "feat/32.5-arena-allocation"
+    branch: ""
     pr: null
-    dependsOn: ["32.1"]
-  - id: "32.6"
-    title: "Plateau 1 Profile Checkpoint"
-    status: completed
+    dependsOn: ["33.2"]
+  - id: "33.4"
+    title: "Plateau 2 Profile Checkpoint"
+    status: pending
     currentPhase: ""
-    branch: "feat/32.6-plateau-1-checkpoint"
+    branch: ""
     pr: null
-    dependsOn: ["32.2", "32.3", "32.4", "32.5"]
+    dependsOn: ["33.1", "33.2", "33.3"]
 skippedIssues: []
