@@ -11,10 +11,10 @@ stories:
     dependsOn: []
   - id: "32.2"
     title: "RocksDB Quick Wins"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/32.2-rocksdb-quick-wins"
-    pr: null
+    pr: 119
     dependsOn: ["32.1"]
   - id: "32.3"
     title: "String Interning"
