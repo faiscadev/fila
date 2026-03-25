@@ -21,13 +21,13 @@ stories:
     status: completed
     currentPhase: "pr-complete"
     branch: "feat/30.3-scheduler-enqueue-batch-refactor"
-    pr: null
+    pr: 114
     dependsOn: ["30.2"]
   - id: "30.4"
     title: "Unified Enqueue Handler — Throughput Fix"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: completed
+    currentPhase: "pr-complete"
+    branch: "feat/30.4-unified-enqueue-handler"
     pr: null
     dependsOn: ["30.3"]
   - id: "30.5"

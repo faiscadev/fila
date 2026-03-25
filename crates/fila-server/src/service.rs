@@ -104,18 +104,17 @@ fn nack_result_from(result: Result<(), Status>) -> NackResult {
     }
 }
 
-/// Process a single enqueue message. Used by the unary and streaming handlers.
-async fn process_enqueue_message(
+/// Validate and construct a Message from a proto EnqueueMessage.
+/// Performs ACL checks but does NOT send to the scheduler.
+fn prepare_enqueue_message(
     caller: &Option<CallerKey>,
-    broker: &Arc<Broker>,
-    cluster: &Option<Arc<ClusterHandle>>,
+    broker: &Broker,
     msg: EnqueueMessage,
-) -> Result<String, Status> {
+) -> Result<Message, Status> {
     if msg.queue.is_empty() {
         return Err(Status::invalid_argument("queue name must not be empty"));
     }
 
-    // ACL check: produce permission on this queue.
     if let Some(ref caller) = caller {
         let permitted = broker
             .check_permission(
@@ -137,11 +136,9 @@ async fn process_enqueue_message(
         .unwrap_or_default()
         .as_nanos() as u64;
 
-    let msg_id = Uuid::now_v7();
-
-    let message = Message {
-        id: msg_id,
-        queue_id: msg.queue.clone(),
+    Ok(Message {
+        id: Uuid::now_v7(),
+        queue_id: msg.queue,
         headers: msg.headers,
         payload: msg.payload,
         fairness_key: "default".to_string(),
@@ -150,12 +147,23 @@ async fn process_enqueue_message(
         attempt_count: 0,
         enqueued_at: now_ns,
         leased_at: None,
-    };
+    })
+}
+
+/// Process a single enqueue message end-to-end (cluster or local).
+/// Used by the streaming handler which processes messages individually.
+async fn process_enqueue_message(
+    caller: &Option<CallerKey>,
+    broker: &Arc<Broker>,
+    cluster: &Option<Arc<ClusterHandle>>,
+    msg: EnqueueMessage,
+) -> Result<String, Status> {
+    let message = prepare_enqueue_message(caller, broker, msg)?;
 
     if let Some(ref cluster) = cluster {
         let result = cluster
             .write_to_queue(
-                &msg.queue,
+                &message.queue_id,
                 ClusterRequest::Enqueue {
                     message: message.clone(),
                 },
@@ -444,11 +452,75 @@ impl FilaService for HotPathService {
 
         tracing::Span::current().record("batch_size", req.messages.len());
 
-        let mut results = Vec::with_capacity(req.messages.len());
-        for msg in req.messages {
-            let result = process_enqueue_message(&caller, &self.broker, &self.cluster, msg).await;
-            results.push(enqueue_result_from(result));
+        // Cluster mode: per-message cluster writes (Raft consensus per-message).
+        // Batch optimization for cluster enqueue is future work.
+        if self.cluster.is_some() {
+            let mut results = Vec::with_capacity(req.messages.len());
+            for msg in req.messages {
+                let result =
+                    process_enqueue_message(&caller, &self.broker, &self.cluster, msg).await;
+                results.push(enqueue_result_from(result));
+            }
+            return Ok(Response::new(EnqueueResponse { results }));
         }
+
+        // Non-cluster: prepare all messages (ACL + construction), then submit
+        // as a single SchedulerCommand::Enqueue. This eliminates the per-message
+        // round-trip bottleneck (328 msg/s = 3ms × N → single round-trip).
+        let msg_count = req.messages.len();
+        let mut valid_messages: Vec<Message> = Vec::with_capacity(msg_count);
+        // Track which input positions had ACL/validation failures (Some = error)
+        // vs which passed and need scheduler results (None = pending).
+        let mut result_slots: Vec<Option<EnqueueResult>> = Vec::with_capacity(msg_count);
+
+        for msg in req.messages {
+            match prepare_enqueue_message(&caller, &self.broker, msg) {
+                Ok(message) => {
+                    valid_messages.push(message);
+                    result_slots.push(None);
+                }
+                Err(status) => {
+                    result_slots.push(Some(enqueue_result_from(Err(status))));
+                }
+            }
+        }
+
+        if valid_messages.is_empty() {
+            // All messages failed validation/ACL
+            return Ok(Response::new(EnqueueResponse {
+                results: result_slots
+                    .into_iter()
+                    .map(|r| r.expect("all slots should be filled"))
+                    .collect(),
+            }));
+        }
+
+        // Single round-trip to the scheduler for all valid messages.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.broker
+            .send_command(SchedulerCommand::Enqueue {
+                messages: valid_messages,
+                reply: reply_tx,
+            })
+            .map_err(IntoStatus::into_status)?;
+
+        let scheduler_results = reply_rx
+            .await
+            .map_err(|_| Status::internal("scheduler reply channel dropped"))?;
+
+        // Merge scheduler results back into the slot positions.
+        let mut sched_iter = scheduler_results.into_iter();
+        let results: Vec<EnqueueResult> = result_slots
+            .into_iter()
+            .map(|slot| match slot {
+                Some(acl_error) => acl_error,
+                None => match sched_iter.next() {
+                    Some(Ok(msg_id)) => enqueue_result_from(Ok(msg_id.to_string())),
+                    Some(Err(e)) => enqueue_result_from(Err(IntoStatus::into_status(e))),
+                    None => enqueue_result_from(Err(Status::internal("missing scheduler result"))),
+                },
+            })
+            .collect();
 
         Ok(Response::new(EnqueueResponse { results }))
     }

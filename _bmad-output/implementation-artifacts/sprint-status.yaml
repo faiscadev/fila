@@ -277,7 +277,7 @@ development_status:
   30-1-api-surface-unification: done
   30-2-external-sdk-unification: done
   30-3-scheduler-enqueue-batch-refactor: done
-  30-4-unified-enqueue-handler-throughput-fix: backlog
+  30-4-unified-enqueue-handler-throughput-fix: done
   30-5-profile-checkpoint-post-tier-0: backlog
   30-6-stream-enqueue-batch-within-stream: backlog
   30-7-sdk-adaptive-accumulator: backlog
