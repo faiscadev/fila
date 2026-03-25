@@ -65,10 +65,11 @@ so that the codebase has one code path per operation, no "batch" prefixes/suffix
   - [x]Consolidate `enqueue_single`/`enqueue_single_standalone` into one helper
   - [x]Update `stream_enqueue()` for new request/response types
   - [x]Update ack/nack handlers for batch proto
-- [x] Task 3: SchedulerCommand Ack/Nack batch variants (AC: 4)
-  - [x]Change `Ack` to take `Vec<(String, Uuid)>` with `Vec<Result<(), AckError>>` reply
-  - [x]Change `Nack` to take `Vec<(String, Uuid, String)>` with `Vec<Result<(), NackError>>` reply
-  - [x]Update scheduler handler: `handle_ack` processes Vec, `handle_nack` processes Vec
+- [x] Task 3: Ack/Nack proto + handler batch support (AC: 4)
+  - [x] Proto: AckRequest/NackRequest accept repeated items with typed error codes
+  - [x] Server: per-message ack/nack processing via `process_ack_message`/`process_nack_message`
+  - [x] SDK: ack/nack wrap single item in repeated, parse typed per-message results
+  - Note: SchedulerCommand::Ack/Nack kept single-message; server iterates per-item. Batch scheduler command deferred to Story 30.3.
 - [x] Task 4: Consume delivery unification (AC: 5)
   - [x]Server delivery uses only `repeated Message messages`
   - [x]SDK consumer handles only `messages` field
@@ -123,7 +124,7 @@ None.
 
 ### Completion Notes List
 
-- SchedulerCommand::Ack/Nack NOT changed to batch variants — kept single-message since cluster mode needs per-item routing. Batch scheduler command is Story 30.3.
+- SchedulerCommand::Ack/Nack kept as single-message variants — server iterates per-item. Batch scheduler command deferred to Story 30.3 (same decision as for Enqueue).
 - Added PermissionDenied to AckErrorCode/NackErrorCode for per-message ACL errors.
 - SDK error propagation fixed to preserve gRPC status codes through enqueue_many.
 - 534 tests pass (up from 508), zero regressions.

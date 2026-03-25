@@ -291,6 +291,24 @@ async fn stream_enqueue_per_message_error() {
         "seq 2: expected error, got: {:?}",
         by_seq[&2].results
     );
+    // Verify the error references the missing queue.
+    let err_text = err_msg.unwrap();
+    assert!(
+        err_text.contains("nonexistent-queue") || err_text.contains("not found"),
+        "seq 2: expected queue-not-found error, got: {err_text}"
+    );
+    // Verify the error code is QueueNotFound.
+    let first_result = by_seq[&2].results.first().unwrap();
+    match &first_result.result {
+        Some(fila_proto::enqueue_result::Result::Error(err)) => {
+            assert_eq!(
+                err.code,
+                fila_proto::EnqueueErrorCode::QueueNotFound as i32,
+                "seq 2: expected QueueNotFound error code"
+            );
+        }
+        other => panic!("seq 2: expected Error, got: {other:?}"),
+    }
 
     // Seq 3 should be success (stream continues after per-message error).
     assert!(

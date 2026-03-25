@@ -341,7 +341,7 @@ impl FilaClient {
                 // RPC-level failure — broadcast the exact error to all items.
                 let code = status.code();
                 let message = status.message().to_string();
-                let count = msg_count.max(1);
+                let count = msg_count;
                 (0..count)
                     .map(|_| {
                         Err(enqueue_status_error(tonic::Status::new(
@@ -780,25 +780,7 @@ async fn resolve_stream_response(
 
     // Take the first result (one message per stream write for now).
     let result = if let Some(first_result) = response.results.into_iter().next() {
-        match first_result.result {
-            Some(fila_proto::enqueue_result::Result::MessageId(id)) => Ok(id),
-            Some(fila_proto::enqueue_result::Result::Error(err)) => {
-                Err(parse_stream_error(&format!(
-                    "[{}] {}",
-                    match fila_proto::EnqueueErrorCode::try_from(err.code) {
-                        Ok(fila_proto::EnqueueErrorCode::QueueNotFound) => "NotFound",
-                        Ok(fila_proto::EnqueueErrorCode::PermissionDenied) => "PermissionDenied",
-                        Ok(fila_proto::EnqueueErrorCode::Storage) => "Internal",
-                        Ok(fila_proto::EnqueueErrorCode::Lua) => "Internal",
-                        _ => "Internal",
-                    },
-                    err.message
-                )))
-            }
-            None => Err(EnqueueError::Status(StatusError::Internal(
-                "no result in stream response".to_string(),
-            ))),
-        }
+        parse_enqueue_result(first_result)
     } else {
         Err(EnqueueError::Status(StatusError::Internal(
             "empty results in stream response".to_string(),

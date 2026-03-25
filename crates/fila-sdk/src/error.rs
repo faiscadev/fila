@@ -108,6 +108,7 @@ pub(crate) fn ack_status_error(status: tonic::Status) -> AckError {
     let message = status.message().to_string();
     match status.code() {
         Code::NotFound => AckError::MessageNotFound(message),
+        Code::PermissionDenied => AckError::PermissionDenied(message),
         _ => AckError::Status(status_error(status)),
     }
 }
@@ -116,6 +117,7 @@ pub(crate) fn nack_status_error(status: tonic::Status) -> NackError {
     let message = status.message().to_string();
     match status.code() {
         Code::NotFound => NackError::MessageNotFound(message),
+        Code::PermissionDenied => NackError::PermissionDenied(message),
         _ => NackError::Status(status_error(status)),
     }
 }
