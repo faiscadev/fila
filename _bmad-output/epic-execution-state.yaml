@@ -32,8 +32,8 @@ stories:
     dependsOn: ["32.1"]
   - id: "32.5"
     title: "Arena Allocation"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/32.5-arena-allocation"
     pr: null
     dependsOn: ["32.1"]
