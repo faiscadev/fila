@@ -4,10 +4,10 @@ startedAt: "2026-03-25T00:00:00Z"
 stories:
   - id: "32.1"
     title: "Profile Baseline"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/32.1-profile-baseline"
+    pr: 118
     dependsOn: []
   - id: "32.2"
     title: "RocksDB Quick Wins"
