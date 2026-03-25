@@ -1,17 +1,47 @@
-epic: "Epic 31: Documentation Cleanup — Post-Unification Docs Update"
+epic: "Epic 32: Plateau 1 — Eliminate Per-Message Overhead"
 baseBranch: main
 startedAt: "2026-03-25T00:00:00Z"
-completedAt: "2026-03-25T23:59:00Z"
 stories:
-  - id: "31.1"
-    title: "Stale Documentation Cleanup"
-    status: completed
+  - id: "32.1"
+    title: "Profile Baseline"
+    status: pending
     currentPhase: ""
-    branch: "feat/31.1-stale-documentation-cleanup"
-    pr: 117
+    branch: ""
+    pr: null
     dependsOn: []
+  - id: "32.2"
+    title: "RocksDB Quick Wins"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["32.1"]
+  - id: "32.3"
+    title: "String Interning"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["32.1"]
+  - id: "32.4"
+    title: "Hybrid Envelope — Store-as-Received"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["32.1"]
+  - id: "32.5"
+    title: "Arena Allocation"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["32.1"]
+  - id: "32.6"
+    title: "Plateau 1 Profile Checkpoint"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["32.2", "32.3", "32.4", "32.5"]
 skippedIssues: []
-summary:
-  total: 1
-  completed: 1
-  skipped: 0
