@@ -1,6 +1,7 @@
 epic: "Epic 31: Documentation Cleanup — Post-Unification Docs Update"
 baseBranch: main
 startedAt: "2026-03-25T00:00:00Z"
+completedAt: "2026-03-25T23:59:00Z"
 stories:
   - id: "31.1"
     title: "Stale Documentation Cleanup"
@@ -10,3 +11,7 @@ stories:
     pr: 117
     dependsOn: []
 skippedIssues: []
+summary:
+  total: 1
+  completed: 1
+  skipped: 0
