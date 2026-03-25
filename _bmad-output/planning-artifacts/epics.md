@@ -133,7 +133,8 @@ FR-P7: Epic 23 — Delivery batching
 FR-P8: Epic 24 — Zero-copy protobuf passthrough
 FR-P9: Epic 24 — Scheduler sharding
 FR-P10: Epic 24 — Key encoding optimization
-FR-P11: Epic 25 (deferred) — Purpose-built storage engine (FR66)
+FR-P11: Epic 25 (deferred) → Epics 32-34 — Purpose-built storage engine optimization path (FR66)
+Docs maintenance: Epic 31 — Post-unification documentation cleanup (no FR, maintenance)
 
 ## Epic List
 
@@ -224,6 +225,27 @@ Fix the competitive benchmark to use batching (fair comparison), add bidirection
 Close the throughput gap by propagating batches end-to-end from gRPC handlers through to the scheduler. Unified API surface (batch is the only path, single = batch of 1), fixed the handler→scheduler bridge (the root cause of the 19x gap), and profiled to identify the next bottleneck (RocksDB). Stories 30.6-30.8 conditional on profiling — all NO-GO (bottleneck shifted to storage, not transport). Full breakdown in `batch-pipeline-epics.md`.
 **FRs covered:** FR-B1, FR-B2, FR-B3, FR-B4
 **Result:** 3.1x throughput improvement (3,478 → 10,785 msg/s). 5/8 stories done, 3 skipped by design.
+
+### Epic 31: Documentation Cleanup — Post-Unification Docs Update
+Update stale documentation left behind by Epic 30's API unification. Three files reference removed types (`BatchEnqueue`, `BatchMode::Auto`) and pre-unification RPC signatures. Quick cleanup that validates the docs-maintenance workflow rules from the Epic 30 retro.
+**FRs covered:** (maintenance — no new FRs)
+
+### Epic 32: Plateau 1 — Eliminate Per-Message Overhead
+Profile the current 10.8K msg/s baseline, then eliminate per-message CPU overhead: RocksDB tuning + queue config cache, string interning (lasso), hybrid envelope / store-as-received (eliminate clone+serialize+clone cycle), and arena allocation (bumpalo). Keep RocksDB, keep single scheduler thread. Target: 40-100K msg/s enqueue. Based on research at `technical-kafka-parity-profiling-strategy-2026-03-25.md`, Patterns P1/P4/P5/P7.
+**FRs covered:** FR-P11 (partial — optimizes existing storage path)
+**Gating:** Story 32.6 profiles results and issues go/no-go for Epic 33. Previous projections missed by 3x — profile after each story.
+
+### Epic 33: Plateau 2 — Fix the Consume Path (conditional on Epic 32 results)
+Shift the consume path from "storage read per delivery" to "memory is the hot path, storage is for durability." In-memory delivery queue (messages carried from enqueue to consume in memory), in-memory lease tracking (eliminate 2 per-delivery RocksDB writes), and batch ack processing (amortize delete writes). Target: 100-200K msg/s end-to-end. Based on Patterns P2/P3.
+**FRs covered:** FR-P11 (partial — reduces storage dependency on consume path)
+**Gating:** Conditional on Epic 32 Story 32.6 go/no-go. Story 33.4 profiles results and issues go/no-go for Epic 34.
+**Risk:** Memory management under consumer lag. Bounded buffers with spill-to-disk mitigate OOM.
+
+### Epic 34: Plateau 3 — Storage Engine + Scale Out (conditional on Epic 33 results)
+Replace or optimize RocksDB for message storage, enable multi-shard scaling. Titan blob separation (low-risk), custom append-only log + secondary indexes (high-effort), TeeEngine validation, multi-shard default, and optional Hierarchical DRR for single-queue scaling. Target: 200-400K+ msg/s. Based on Pattern P6 + Architecture Decision 3.
+**FRs covered:** FR-P11 (FR66), FR-P9
+**NFRs addressed:** NFR30, NFR31, NFR32, NFR33
+**Gating:** Conditional on Epic 33 Story 33.4 go/no-go. Stories 34.2/34.3 conditional on 34.1 results. Story 34.5 conditional on whether single-queue scaling is needed.
 
 ---
 
@@ -1024,3 +1046,274 @@ So that I can see performance trends over time and catch regressions without rea
 **Given** the CI benchmark workflow
 **When** all benchmarks (self + competitive) run end-to-end
 **Then** total CI wall-clock time is under 15 minutes (NFR-B2)
+
+---
+
+## Epic 31: Documentation Cleanup — Post-Unification Docs Update
+
+Update stale documentation left behind by Epic 30's API unification. Three doc files reference removed types and pre-unification RPC signatures. This is the first deliverable — small, quick, validates the docs-maintenance workflow rules encoded in the Epic 30 retro.
+
+### Story 31.1: Stale Documentation Cleanup
+
+As a developer or evaluator,
+I want documentation to accurately reflect the current unified API surface,
+So that I can trust the docs when integrating with Fila or evaluating its capabilities.
+
+**Acceptance Criteria:**
+
+**Given** `docs/api-reference.md` describes a single-message Enqueue RPC
+**When** the docs are updated
+**Then** the Enqueue RPC shows `repeated EnqueueMessage messages` request format, `repeated EnqueueResult results` response with `EnqueueErrorCode` enum, `StreamEnqueue` RPC is documented, Ack/Nack show repeated items with typed error codes, Consume shows `repeated Message messages` only
+
+**Given** `docs/profiling.md` references `BatchEnqueue` RPC
+**When** updated
+**Then** all references to the removed RPC are replaced with the unified Enqueue RPC
+
+**Given** `docs/benchmarks.md` references `BatchEnqueue` and `BatchMode::Auto`
+**When** updated
+**Then** the batch section is rewritten for multi-message Enqueue, `BatchMode::Auto` references removed, empty tables populated or removed
+
+**Given** the updates
+**When** reviewed against current proto definitions
+**Then** no references to removed types remain in any docs file
+
+---
+
+## Epic 32: Plateau 1 — Eliminate Per-Message Overhead
+
+Profile the current 10.8K msg/s baseline, then eliminate per-message CPU overhead through RocksDB tuning, string interning, store-as-received wire bytes, and arena allocation. Keep RocksDB, keep single scheduler thread, keep current gRPC. Every change is additive and testable against existing benchmarks.
+
+> **Research basis:** `_bmad-output/planning-artifacts/research/technical-kafka-parity-profiling-strategy-2026-03-25.md`, Patterns P1 (Hybrid Envelope), P4 (String Interning), P5 (Arena Allocation), P7 (RocksDB Tuning).
+
+### Story 32.1: Profile Baseline
+
+As a developer,
+I want flamegraph and tracing-span profiling of the current 10.8K msg/s enqueue and consume paths,
+So that optimization work in stories 32.2-32.5 targets measured bottlenecks, not estimates.
+
+**Acceptance Criteria:**
+
+**Given** the current codebase
+**When** CPU flamegraphs + tracing spans are collected for enqueue and consume paths
+**Then** per-function CPU time and per-operation wall-clock time are documented
+**And** a mock `StorageEngine` isolates storage I/O from CPU work
+**And** an analysis document validates or revises the research's 93μs decomposition model
+**And** profiling is reproducible (make target or documented command)
+
+### Story 32.2: RocksDB Quick Wins
+
+As a developer,
+I want low-risk RocksDB configuration tuning and an in-memory queue config cache,
+So that enqueue throughput improves by ~50-80% with minimal code changes.
+
+**Acceptance Criteria:**
+
+**Given** `unordered_write` is disabled and queue existence is checked via RocksDB per message
+**When** `unordered_write` is enabled, write buffers tuned, and queue config cached in memory
+**Then** per-message RocksDB read for queue existence is eliminated
+**And** write throughput improves measurably
+**And** all tests pass
+
+### Story 32.3: String Interning
+
+As a developer,
+I want `queue_id` and `fairness_key` interned as 4-byte `Spur` tokens via `lasso`,
+So that per-message string cloning and HashMap key allocation overhead is eliminated.
+
+**Acceptance Criteria:**
+
+**Given** repeated strings are cloned multiple times per message in the scheduler
+**When** `lasso::ThreadedRodeo` interning is introduced
+**Then** all scheduler operations use `Spur` (4 bytes, Copy) instead of String
+**And** resolution to `&str` only happens at system boundaries (storage write, gRPC response)
+**And** `lasso` is pinned to 0.6.x (v0.7.0 has known deadlock issue #39)
+
+### Story 32.4: Hybrid Envelope — Store-as-Received
+
+As a developer,
+I want the enqueue path to store original protobuf wire bytes instead of cloning and re-serializing,
+So that the largest per-message CPU costs (clone + serialize + mutation clone) are eliminated.
+
+**Acceptance Criteria:**
+
+**Given** the current path deep-clones Message and re-serializes via `encode_to_vec()`
+**When** the hybrid envelope pattern is implemented
+**Then** original wire bytes (Bytes) are stored directly, routing metadata extracted via partial protobuf decode
+**And** delivery sends stored wire bytes directly to consumers (no re-serialization)
+**And** Lua hooks receive extracted metadata; queues without Lua pay zero deserialization cost
+
+### Story 32.5: Arena Allocation
+
+As a developer,
+I want per-batch scratch memory allocated from a `bumpalo` arena,
+So that allocation churn and cache thrashing on the scheduler thread are reduced.
+
+**Acceptance Criteria:**
+
+**Given** batch processing creates multiple small heap allocations per message
+**When** `bumpalo` arena allocation is introduced
+**Then** per-batch scratch data is allocated from a single arena, dropped after commit
+**And** heap allocations per message decrease measurably
+
+### Story 32.6: Plateau 1 Profile Checkpoint
+
+As a developer,
+I want full profiling and competitive benchmarks after all Plateau 1 optimizations,
+So that the new bottleneck is identified and a go/no-go decision is made for Epic 33.
+
+**Acceptance Criteria:**
+
+**Given** stories 32.2-32.5 are complete
+**When** enqueue and consume throughput are measured and compared against competitive benchmarks
+**Then** the research's Plateau 1 projection (40-100K msg/s) is validated or revised
+**And** a go/no-go recommendation for Epic 33 is documented with supporting data
+**And** if go: identifies which Plateau 2 pattern to prioritize
+
+---
+
+## Epic 33: Plateau 2 — Fix the Consume Path
+
+Shift the consume path from "storage is the source of truth for every operation" to "memory is the hot path, storage is for durability." In-memory delivery eliminates per-message storage reads, in-memory lease tracking eliminates per-delivery writes, batch ack processing amortizes deletes. Conditional on Epic 32 Story 32.6 go/no-go.
+
+> **Research basis:** `_bmad-output/planning-artifacts/research/technical-kafka-parity-profiling-strategy-2026-03-25.md`, Patterns P2 (In-Memory Delivery Queue), P3 (In-Memory Lease Tracking).
+
+### Story 33.1: In-Memory Delivery Queue
+
+As a developer,
+I want messages carried in memory from enqueue to delivery,
+So that the consume path avoids per-message storage reads and matches enqueue throughput.
+
+**Acceptance Criteria:**
+
+**Given** consume currently reads each message from RocksDB (10-100μs)
+**When** PendingEntry carries wire bytes in memory
+**Then** delivery reads from memory, not storage (zero RocksDB reads for consumers keeping up)
+**And** a per-queue memory budget with eviction provides graceful degradation under consumer lag
+**And** crash recovery rebuilds in-memory state from storage
+
+### Story 33.2: In-Memory Lease Tracking
+
+As a developer,
+I want lease state tracked in memory with periodic checkpoints,
+So that 2 per-delivery RocksDB writes are eliminated from the hot path.
+
+**Acceptance Criteria:**
+
+**Given** delivery writes 2 RocksDB mutations per message (lease + expiry)
+**When** in-memory lease tracking with `DelayQueue` timing wheel is implemented
+**Then** zero disk writes occur on the delivery hot path
+**And** periodic checkpoints (configurable, default 100ms) persist lease state for crash recovery
+**And** at-least-once semantics are preserved (crash window = checkpoint interval)
+
+### Story 33.3: Batch Ack/Nack Processing
+
+As a developer,
+I want ack-triggered message deletes accumulated and batch-written periodically,
+So that per-ack storage write cost is amortized.
+
+**Acceptance Criteria:**
+
+**Given** in-memory lease tracking queues pending deletes
+**When** acks accumulate
+**Then** deletes are flushed as a single WriteBatch on the checkpoint interval
+**And** per-ack amortized storage cost is O(1/N)
+
+### Story 33.4: Plateau 2 Profile Checkpoint
+
+As a developer,
+I want full profiling after Plateau 2 including multi-shard benchmarks,
+So that the system's RocksDB-based throughput ceiling is known and Epic 34 is gated on data.
+
+**Acceptance Criteria:**
+
+**Given** stories 33.1-33.3 are complete
+**When** enqueue, consume, and end-to-end lifecycle throughput are measured
+**Then** single-shard and multi-shard results are documented
+**And** competitive benchmarks place Fila relative to Kafka/NATS/RabbitMQ
+**And** a go/no-go recommendation for Epic 34 is documented
+
+---
+
+## Epic 34: Plateau 3 — Storage Engine + Scale Out
+
+Replace or optimize RocksDB for message storage and enable multi-shard scaling. Start with Titan blob separation (low risk), optionally build a custom append-only log (high effort), validate via TeeEngine, default to multi-shard scheduling, and optionally implement Hierarchical DRR for single-queue scaling. Conditional on Epic 33 Story 33.4 go/no-go.
+
+> **Research basis:** `_bmad-output/planning-artifacts/research/technical-kafka-parity-profiling-strategy-2026-03-25.md`, Pattern P6 (Append-Only Log), Architecture Decisions 2-3.
+
+### Story 34.1: Titan Blob Separation
+
+As a developer,
+I want to evaluate Titan-style blob separation for CF_MESSAGES,
+So that RocksDB write amplification is reduced without full storage replacement.
+
+**Acceptance Criteria:**
+
+**Given** RocksDB level compaction produces ~33x write amplification
+**When** blob separation is enabled for message payloads
+**Then** write throughput improves (expected 2-6x)
+**And** a recommendation is made: Titan sufficient vs custom storage needed (gates stories 34.2/34.3)
+
+### Story 34.2: Append-Only Log Prototype (conditional on 34.1 results)
+
+As a developer,
+I want a prototype `AppendOnlyEngine` with CommitLog segments and secondary indexes,
+So that custom storage viability is validated.
+
+**Acceptance Criteria:**
+
+**Given** the `StorageEngine` trait
+**When** `AppendOnlyEngine` is implemented
+**Then** it passes the full test suite, uses 1GB segment files with sequential writes, per-(queue, fairness_key) secondary indexes, GC for consumed segments, and crash recovery via CommitLog replay
+
+### Story 34.3: Tee Engine Validation (conditional on 34.2)
+
+As a developer,
+I want a `TeeEngine` that dual-writes to RocksDB and AppendOnlyEngine,
+So that correctness is validated before cutover.
+
+**Acceptance Criteria:**
+
+**Given** both engines implement `StorageEngine`
+**When** TeeEngine sends writes to both and compares reads
+**Then** zero divergences across full test suite + load benchmark
+
+### Story 34.4: Multi-Shard Default
+
+As an operator,
+I want the scheduler to default to one shard per CPU core,
+So that multi-queue workloads scale linearly without manual tuning.
+
+**Acceptance Criteria:**
+
+**Given** shard_count defaults to 1
+**When** changed to CPU core count
+**Then** multi-queue throughput scales linearly
+**And** single-queue throughput is unchanged (documented limitation)
+**And** shard_count remains configurable (backward compatible)
+
+### Story 34.5: Hierarchical DRR (conditional — only if single-queue scaling needed)
+
+As a developer,
+I want per-fairness-key sharding within a single queue,
+So that single-queue workloads scale across multiple CPU cores.
+
+**Acceptance Criteria:**
+
+**Given** a single queue with many fairness keys
+**When** H-DRR is implemented
+**Then** fairness keys are distributed across shards with bounded cross-shard unfairness
+**And** single-queue throughput scales with min(fairness_keys, shards)
+
+### Story 34.6: Plateau 3 Final Benchmarks
+
+As a developer,
+I want comprehensive final benchmarks comparing Fila against Kafka,
+So that the Kafka parity goal is assessed with data.
+
+**Acceptance Criteria:**
+
+**Given** all applicable Plateau 3 stories are complete
+**When** Fila is benchmarked against Kafka under identical conditions
+**Then** the competitive ratio is calculated for all workload profiles
+**And** the full optimization journey (baseline → P1 → P2 → P3) is summarized
+**And** `docs/benchmarks.md` is updated with final numbers
