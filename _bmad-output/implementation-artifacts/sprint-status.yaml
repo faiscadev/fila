@@ -298,8 +298,8 @@ development_status:
   32-1-profile-baseline: done
   32-2-rocksdb-quick-wins: done
   32-3-string-interning: done
-  32-4-hybrid-envelope-store-as-received: review
-  32-5-arena-allocation: ready-for-dev
+  32-4-hybrid-envelope-store-as-received: done
+  32-5-arena-allocation: done
   32-6-plateau-1-profile-checkpoint: ready-for-dev
   epic-32-retrospective: optional
 
