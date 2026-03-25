@@ -25,21 +25,21 @@ stories:
     dependsOn: ["34.2"]
   - id: "34.4"
     title: "Multi-Shard Default"
-    status: in-progress
-    currentPhase: "dev"
+    status: completed
+    currentPhase: ""
     branch: "feat/34.4-multi-shard-default"
     pr: null
     dependsOn: []
   - id: "34.5"
     title: "Hierarchical DRR"
-    status: pending
+    status: skipped
     currentPhase: ""
     branch: ""
     pr: null
     dependsOn: ["34.4"]
   - id: "34.6"
     title: "Plateau 3 Final Benchmarks"
-    status: pending
+    status: completed
     currentPhase: ""
     branch: ""
     pr: null
