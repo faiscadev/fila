@@ -6,10 +6,9 @@ use fila_core::{
 };
 use fila_proto::fila_service_server::FilaService;
 use fila_proto::{
-    AckMessage, AckRequest, AckResponse, AckResult, AckSuccess,
-    ConsumeRequest, ConsumeResponse, EnqueueMessage, EnqueueRequest, EnqueueResponse,
-    EnqueueResult, NackMessage, NackRequest, NackResponse, NackResult, NackSuccess,
-    StreamEnqueueRequest, StreamEnqueueResponse,
+    AckMessage, AckRequest, AckResponse, AckResult, AckSuccess, ConsumeRequest, ConsumeResponse,
+    EnqueueMessage, EnqueueRequest, EnqueueResponse, EnqueueResult, NackMessage, NackRequest,
+    NackResponse, NackResult, NackSuccess, StreamEnqueueRequest, StreamEnqueueResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, instrument};
@@ -66,16 +65,18 @@ fn ack_result_from(result: Result<(), Status>) -> AckResult {
             result: Some(fila_proto::ack_result::Result::Success(AckSuccess {})),
         },
         Err(status) => AckResult {
-            result: Some(fila_proto::ack_result::Result::Error(fila_proto::AckError {
-                code: match status.code() {
-                    tonic::Code::NotFound => fila_proto::AckErrorCode::MessageNotFound as i32,
-                    tonic::Code::PermissionDenied => {
-                        fila_proto::AckErrorCode::PermissionDenied as i32
-                    }
-                    _ => fila_proto::AckErrorCode::Storage as i32,
+            result: Some(fila_proto::ack_result::Result::Error(
+                fila_proto::AckError {
+                    code: match status.code() {
+                        tonic::Code::NotFound => fila_proto::AckErrorCode::MessageNotFound as i32,
+                        tonic::Code::PermissionDenied => {
+                            fila_proto::AckErrorCode::PermissionDenied as i32
+                        }
+                        _ => fila_proto::AckErrorCode::Storage as i32,
+                    },
+                    message: status.message().to_string(),
                 },
-                message: status.message().to_string(),
-            })),
+            )),
         },
     }
 }
@@ -90,9 +91,7 @@ fn nack_result_from(result: Result<(), Status>) -> NackResult {
             result: Some(fila_proto::nack_result::Result::Error(
                 fila_proto::NackError {
                     code: match status.code() {
-                        tonic::Code::NotFound => {
-                            fila_proto::NackErrorCode::MessageNotFound as i32
-                        }
+                        tonic::Code::NotFound => fila_proto::NackErrorCode::MessageNotFound as i32,
                         tonic::Code::PermissionDenied => {
                             fila_proto::NackErrorCode::PermissionDenied as i32
                         }
@@ -502,8 +501,7 @@ impl FilaService for HotPathService {
 
                     let mut results = Vec::with_capacity(req.messages.len());
                     for msg in req.messages {
-                        let result =
-                            process_enqueue_message(&caller, &broker, &cluster, msg).await;
+                        let result = process_enqueue_message(&caller, &broker, &cluster, msg).await;
                         results.push(enqueue_result_from(result));
                     }
 

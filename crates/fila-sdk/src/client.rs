@@ -223,7 +223,9 @@ impl FilaClient {
                 let key = api_key.clone();
                 let batch_size = *batch_size;
                 let linger_ms = *linger_ms;
-                tokio::spawn(run_linger_accumulator(rx, client, key, batch_size, linger_ms));
+                tokio::spawn(run_linger_accumulator(
+                    rx, client, key, batch_size, linger_ms,
+                ));
                 Some(tx)
             }
             AccumulatorMode::Disabled => None,
@@ -1009,9 +1011,12 @@ async fn flush_items(
             let code = status.code();
             let message = status.message().to_string();
             for item in items {
-                let _ = item.result_tx.send(Err(enqueue_status_error(
-                    tonic::Status::new(code, message.clone()),
-                )));
+                let _ = item
+                    .result_tx
+                    .send(Err(enqueue_status_error(tonic::Status::new(
+                        code,
+                        message.clone(),
+                    ))));
             }
         }
     }

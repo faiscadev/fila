@@ -325,9 +325,13 @@ async fn stream_enqueue_concurrent_streams() {
             let mut resp_stream = response.into_inner();
 
             for i in 0u64..5 {
-                tx.send(stream_req(&q, format!("stream-{stream_idx}-msg-{i}"), stream_idx * 100 + i))
-                    .await
-                    .unwrap();
+                tx.send(stream_req(
+                    &q,
+                    format!("stream-{stream_idx}-msg-{i}"),
+                    stream_idx * 100 + i,
+                ))
+                .await
+                .unwrap();
             }
 
             let responses = collect_responses(&mut resp_stream, 5).await;
