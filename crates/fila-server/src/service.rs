@@ -175,7 +175,7 @@ async fn process_enqueue_message(
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             broker
                 .send_command(SchedulerCommand::Enqueue {
-                    message,
+                    messages: vec![message],
                     reply: reply_tx,
                 })
                 .map_err(IntoStatus::into_status)?;
@@ -183,6 +183,11 @@ async fn process_enqueue_message(
             let _ = reply_rx
                 .await
                 .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+                .into_iter()
+                .next()
+                .unwrap_or(Err(fila_core::error::EnqueueError::QueueNotFound(
+                    "no result".to_string(),
+                )))
                 .map_err(IntoStatus::into_status)?;
         }
 
@@ -191,7 +196,7 @@ async fn process_enqueue_message(
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         broker
             .send_command(SchedulerCommand::Enqueue {
-                message,
+                messages: vec![message],
                 reply: reply_tx,
             })
             .map_err(IntoStatus::into_status)?;
@@ -199,6 +204,11 @@ async fn process_enqueue_message(
         let msg_id = reply_rx
             .await
             .map_err(|_| Status::internal("scheduler reply channel dropped"))?
+            .into_iter()
+            .next()
+            .unwrap_or(Err(fila_core::error::EnqueueError::QueueNotFound(
+                "no result".to_string(),
+            )))
             .map_err(IntoStatus::into_status)?;
 
         Ok(msg_id.to_string())

@@ -20,7 +20,7 @@ fn ack_removes_message_lease_and_expiry() {
     let msg_id = msg.id;
     let (enq_tx, _enq_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -103,7 +103,7 @@ fn ack_same_message_twice_returns_not_found() {
     let msg_id = msg.id;
     let (enq_tx, _enq_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -163,7 +163,7 @@ fn nack_requeues_message_with_incremented_attempt_count() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -227,7 +227,7 @@ fn nack_removes_lease_and_lease_expiry() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -318,7 +318,7 @@ fn double_nack_returns_not_found() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -384,7 +384,7 @@ fn nack_then_ack_completes_message_lifecycle() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -462,7 +462,7 @@ fn lease_expiry_redelivers_message_with_incremented_attempt_count() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -528,7 +528,7 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -626,7 +626,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
     let msg_fast_id = msg_fast.id;
     let (enq_tx1, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg_fast,
+        messages: vec![msg_fast],
         reply: enq_tx1,
     })
     .unwrap();
@@ -634,7 +634,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
     let msg_slow = test_message("slow-queue");
     let (enq_tx2, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg_slow,
+        messages: vec![msg_slow],
         reply: enq_tx2,
     })
     .unwrap();
@@ -704,7 +704,7 @@ fn ack_before_expiry_prevents_redelivery() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();

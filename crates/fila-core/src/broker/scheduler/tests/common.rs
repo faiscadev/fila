@@ -206,7 +206,7 @@ pub(super) fn dlq_one_message(
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();

@@ -132,25 +132,6 @@ impl Scheduler {
         );
     }
 
-    /// Process a single enqueue command end-to-end (prepare + write + finalize).
-    /// Used for the non-coalesced path (single command or when coalescing is
-    /// disabled).
-    pub(super) fn handle_enqueue(
-        &mut self,
-        message: crate::message::Message,
-    ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
-        let prepared = self.prepare_enqueue(message)?;
-
-        let mutation = Mutation::PutMessage {
-            key: prepared.msg_key.clone(),
-            value: prepared.msg_value.clone(),
-        };
-        self.storage.apply_mutations(vec![mutation])?;
-        self.finalize_enqueue(&prepared);
-
-        Ok(prepared.msg_id)
-    }
-
     pub(super) fn handle_create_queue(
         &mut self,
         name: String,

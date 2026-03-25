@@ -14,7 +14,7 @@ fn single_message_fast_path() {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
 
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -22,7 +22,13 @@ fn single_message_fast_path() {
 
     scheduler.run();
 
-    let result = reply_rx.blocking_recv().unwrap().unwrap();
+    let result = reply_rx
+        .blocking_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap();
     assert_eq!(result, msg_id);
 
     // Verify message was persisted
@@ -51,7 +57,7 @@ fn multiple_enqueues_coalesced() {
         expected_ids.push(msg.id);
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -64,7 +70,14 @@ fn multiple_enqueues_coalesced() {
     // All callers should receive their msg_id
     let result_ids: Vec<uuid::Uuid> = receivers
         .into_iter()
-        .map(|rx| rx.blocking_recv().unwrap().unwrap())
+        .map(|rx| {
+            rx.blocking_recv()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .unwrap()
+        })
         .collect();
     assert_eq!(result_ids, expected_ids);
 
@@ -101,17 +114,17 @@ fn error_isolation_in_batch() {
     let (reply_tx2, reply_rx2) = tokio::sync::oneshot::channel();
 
     tx.send(SchedulerCommand::Enqueue {
-        message: good_msg1,
+        messages: vec![good_msg1],
         reply: reply_tx1,
     })
     .unwrap();
     tx.send(SchedulerCommand::Enqueue {
-        message: bad_msg,
+        messages: vec![bad_msg],
         reply: reply_tx_bad,
     })
     .unwrap();
     tx.send(SchedulerCommand::Enqueue {
-        message: good_msg2,
+        messages: vec![good_msg2],
         reply: reply_tx2,
     })
     .unwrap();
@@ -120,16 +133,31 @@ fn error_isolation_in_batch() {
     scheduler.run();
 
     // Good messages succeed
-    let result1 = reply_rx1.blocking_recv().unwrap();
+    let result1 = reply_rx1
+        .blocking_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
     assert!(result1.is_ok(), "first good message should succeed");
     assert_eq!(result1.unwrap(), good_id1);
 
-    let result2 = reply_rx2.blocking_recv().unwrap();
+    let result2 = reply_rx2
+        .blocking_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
     assert!(result2.is_ok(), "second good message should succeed");
     assert_eq!(result2.unwrap(), good_id2);
 
     // Bad message gets QueueNotFound error
-    let result_bad = reply_rx_bad.blocking_recv().unwrap();
+    let result_bad = reply_rx_bad
+        .blocking_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
     assert!(result_bad.is_err(), "bad message should fail");
     assert!(
         matches!(
@@ -159,7 +187,7 @@ fn non_enqueue_commands_interleaved() {
     let id1 = msg1.id;
     let (reply_tx1, reply_rx1) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg1,
+        messages: vec![msg1],
         reply: reply_tx1,
     })
     .unwrap();
@@ -179,7 +207,7 @@ fn non_enqueue_commands_interleaved() {
     let id2 = msg2.id;
     let (reply_tx2, reply_rx2) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg2,
+        messages: vec![msg2],
         reply: reply_tx2,
     })
     .unwrap();
@@ -188,8 +216,26 @@ fn non_enqueue_commands_interleaved() {
     scheduler.run();
 
     // All operations succeed
-    assert_eq!(reply_rx1.blocking_recv().unwrap().unwrap(), id1);
-    assert_eq!(reply_rx2.blocking_recv().unwrap().unwrap(), id2);
+    assert_eq!(
+        reply_rx1
+            .blocking_recv()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap(),
+        id1
+    );
+    assert_eq!(
+        reply_rx2
+            .blocking_recv()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap(),
+        id2
+    );
     assert!(create_reply_rx.blocking_recv().unwrap().is_ok());
 
     // Both messages persisted
@@ -223,12 +269,12 @@ fn coalescing_across_queues() {
     let (reply_tx_b, reply_rx_b) = tokio::sync::oneshot::channel();
 
     tx.send(SchedulerCommand::Enqueue {
-        message: msg_a,
+        messages: vec![msg_a],
         reply: reply_tx_a,
     })
     .unwrap();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg_b,
+        messages: vec![msg_b],
         reply: reply_tx_b,
     })
     .unwrap();
@@ -236,8 +282,26 @@ fn coalescing_across_queues() {
 
     scheduler.run();
 
-    assert_eq!(reply_rx_a.blocking_recv().unwrap().unwrap(), id_a);
-    assert_eq!(reply_rx_b.blocking_recv().unwrap().unwrap(), id_b);
+    assert_eq!(
+        reply_rx_a
+            .blocking_recv()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap(),
+        id_a
+    );
+    assert_eq!(
+        reply_rx_b
+            .blocking_recv()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap(),
+        id_b
+    );
 
     // Messages in their respective queues
     let prefix_a = crate::storage::keys::message_prefix("queue-a");
@@ -278,7 +342,7 @@ fn max_batch_size_respected() {
         msg.enqueued_at = i;
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -291,7 +355,14 @@ fn max_batch_size_respected() {
     // All 10 should still be processed (across multiple iterations)
     let ids: Vec<uuid::Uuid> = receivers
         .into_iter()
-        .map(|rx| rx.blocking_recv().unwrap().unwrap())
+        .map(|rx| {
+            rx.blocking_recv()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .unwrap()
+        })
         .collect();
     assert_eq!(ids.len(), 10);
 

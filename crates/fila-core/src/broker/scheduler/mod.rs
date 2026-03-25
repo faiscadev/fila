@@ -20,6 +20,12 @@ mod handlers;
 mod metrics_recording;
 mod recovery;
 
+/// A pending enqueue command: messages to process and a reply channel for results.
+type EnqueueBatch = (
+    Vec<crate::message::Message>,
+    tokio::sync::oneshot::Sender<Vec<Result<uuid::Uuid, crate::error::EnqueueError>>>,
+);
+
 /// A registered consumer waiting for messages.
 pub(super) struct ConsumerEntry {
     pub(super) queue_id: String,
@@ -170,11 +176,9 @@ impl Scheduler {
         let max_batch = self.write_coalesce_max_batch;
         let mut drained = 0;
 
-        // Accumulate enqueue commands for coalesced write
-        let mut pending_enqueues: Vec<(
-            crate::message::Message,
-            tokio::sync::oneshot::Sender<Result<uuid::Uuid, crate::error::EnqueueError>>,
-        )> = Vec::new();
+        // Accumulate enqueue commands for coalesced write.
+        // Each command may carry multiple messages with a single reply channel.
+        let mut pending_enqueues: Vec<EnqueueBatch> = Vec::new();
 
         // Drain commands from the channel (non-blocking)
         while drained < max_batch {
@@ -182,13 +186,12 @@ impl Scheduler {
                 Ok(cmd) => {
                     drained += 1;
                     match cmd {
-                        SchedulerCommand::Enqueue { message, reply } => {
+                        SchedulerCommand::Enqueue { messages, reply } => {
                             debug!(
-                                queue_id = %message.queue_id,
-                                msg_id = %message.id,
+                                batch_size = messages.len(),
                                 "enqueue command received (coalescing)"
                             );
-                            pending_enqueues.push((message, reply));
+                            pending_enqueues.push((messages, reply));
                         }
                         other => {
                             // Flush any accumulated enqueues before processing
@@ -215,66 +218,91 @@ impl Scheduler {
         drained
     }
 
-    /// Prepare all pending enqueue commands, commit their mutations in a single
-    /// WriteBatch, then finalize in-memory state and send responses.
-    fn flush_coalesced_enqueues(
-        &mut self,
-        pending: &mut Vec<(
-            crate::message::Message,
-            tokio::sync::oneshot::Sender<Result<uuid::Uuid, crate::error::EnqueueError>>,
-        )>,
-    ) {
+    /// Process a batch of enqueue commands: prepare all messages, commit mutations
+    /// in a single WriteBatch, finalize state, and send responses.
+    ///
+    /// Each command may contain multiple messages with a single reply channel.
+    /// Results are ordered to match each command's input message order.
+    fn flush_coalesced_enqueues(&mut self, pending: &mut Vec<EnqueueBatch>) {
         use crate::storage::Mutation;
 
-        let batch = pending.drain(..);
+        let commands = pending.drain(..);
 
-        // Phase 1: Prepare each enqueue (validation, Lua, serialization).
-        // Commands that fail preparation get their error sent immediately.
-        let mut prepared: Vec<(
-            handlers::PreparedEnqueue,
-            tokio::sync::oneshot::Sender<Result<uuid::Uuid, crate::error::EnqueueError>>,
-        )> = Vec::new();
-
-        for (message, reply) in batch {
-            match self.prepare_enqueue(message) {
-                Ok(prep) => {
-                    prepared.push((prep, reply));
-                }
-                Err(err) => {
-                    // Validation/Lua failure — send error immediately, no storage write needed
-                    let _ = reply.send(Err(err));
-                }
-            }
+        // Phase 1: Prepare each message. Track which command each prepared
+        // enqueue belongs to so we can fan results back correctly.
+        struct PreparedItem {
+            prep: handlers::PreparedEnqueue,
+            cmd_idx: usize,
+            msg_idx: usize,
         }
 
-        if prepared.is_empty() {
+        // Pre-allocate per-command result vecs
+        type EnqueueReply =
+            tokio::sync::oneshot::Sender<Vec<Result<uuid::Uuid, crate::error::EnqueueError>>>;
+        type EnqueueResultSlots = Vec<Option<Result<uuid::Uuid, crate::error::EnqueueError>>>;
+        let mut cmd_results: Vec<(EnqueueResultSlots, EnqueueReply)> = Vec::new();
+        let mut prepared_items: Vec<PreparedItem> = Vec::new();
+
+        for (cmd_idx, (messages, reply)) in commands.enumerate() {
+            let msg_count = messages.len();
+            let mut results: Vec<Option<Result<uuid::Uuid, crate::error::EnqueueError>>> =
+                (0..msg_count).map(|_| None).collect();
+
+            for (msg_idx, message) in messages.into_iter().enumerate() {
+                match self.prepare_enqueue(message) {
+                    Ok(prep) => {
+                        prepared_items.push(PreparedItem {
+                            prep,
+                            cmd_idx,
+                            msg_idx,
+                        });
+                    }
+                    Err(err) => {
+                        results[msg_idx] = Some(Err(err));
+                    }
+                }
+            }
+
+            cmd_results.push((results, reply));
+        }
+
+        if prepared_items.is_empty() {
+            // All messages failed preparation — send per-command results
+            for (results, reply) in cmd_results {
+                let _ = reply.send(results.into_iter().map(|r| r.unwrap()).collect());
+            }
             return;
         }
 
         // Phase 2: Collect all mutations into a single batch
-        let mutations: Vec<Mutation> = prepared
+        let mutations: Vec<Mutation> = prepared_items
             .iter()
-            .map(|(prep, _)| Mutation::PutMessage {
-                key: prep.msg_key.clone(),
-                value: prep.msg_value.clone(),
+            .map(|item| Mutation::PutMessage {
+                key: item.prep.msg_key.clone(),
+                value: item.prep.msg_value.clone(),
             })
             .collect();
 
-        let batch_size = prepared.len();
+        let batch_size = prepared_items.len();
 
         // Phase 3: Commit the coalesced batch
         match self.storage.apply_mutations(mutations) {
             Ok(()) => {
                 debug!(batch_size, "coalesced enqueue batch committed");
 
-                // Collect queue_ids that need delivery before sending responses
                 let mut delivery_queues: HashSet<String> = HashSet::new();
 
-                // Phase 4: Finalize in-memory state and send success responses
-                for (prep, reply) in prepared {
-                    delivery_queues.insert(prep.queue_id.clone());
-                    self.finalize_enqueue(&prep);
-                    let _ = reply.send(Ok(prep.msg_id));
+                // Phase 4: Finalize and place success results
+                for item in prepared_items {
+                    delivery_queues.insert(item.prep.queue_id.clone());
+                    let msg_id = item.prep.msg_id;
+                    self.finalize_enqueue(&item.prep);
+                    cmd_results[item.cmd_idx].0[item.msg_idx] = Some(Ok(msg_id));
+                }
+
+                // Send all per-command results
+                for (results, reply) in cmd_results {
+                    let _ = reply.send(results.into_iter().map(|r| r.unwrap()).collect());
                 }
 
                 // Deliver immediately for responsiveness
@@ -283,16 +311,21 @@ impl Scheduler {
                 }
             }
             Err(storage_err) => {
-                // Storage failure — all callers in the batch receive the error
+                // Storage failure — prepared messages get storage error,
+                // pre-failed messages keep their original error
                 warn!(
                     batch_size,
                     error = %storage_err,
                     "coalesced enqueue batch failed"
                 );
-                for (_, reply) in prepared {
-                    let _ = reply.send(Err(crate::error::EnqueueError::Storage(
-                        crate::error::StorageError::Engine(storage_err.to_string()),
-                    )));
+                for item in prepared_items {
+                    cmd_results[item.cmd_idx].0[item.msg_idx] =
+                        Some(Err(crate::error::EnqueueError::Storage(
+                            crate::error::StorageError::Engine(storage_err.to_string()),
+                        )));
+                }
+                for (results, reply) in cmd_results {
+                    let _ = reply.send(results.into_iter().map(|r| r.unwrap()).collect());
                 }
             }
         }
@@ -300,13 +333,11 @@ impl Scheduler {
 
     fn handle_command(&mut self, cmd: SchedulerCommand) {
         match cmd {
-            SchedulerCommand::Enqueue { message, reply } => {
-                debug!(queue_id = %message.queue_id, msg_id = %message.id, "enqueue command received");
-                let queue_id = message.queue_id.clone();
-                let result = self.handle_enqueue(message);
-                let _ = reply.send(result);
-                // Deliver immediately for responsiveness
-                self.drr_deliver_queue(&queue_id);
+            SchedulerCommand::Enqueue { messages, reply } => {
+                debug!(batch_size = messages.len(), "enqueue command received");
+                // Process via the batch path (single message = batch of 1)
+                let mut batch = vec![(messages, reply)];
+                self.flush_coalesced_enqueues(&mut batch);
             }
             SchedulerCommand::Ack {
                 queue_id,
