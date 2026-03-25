@@ -4,8 +4,8 @@ startedAt: "2026-03-25T00:00:00Z"
 stories:
   - id: "32.1"
     title: "Profile Baseline"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/32.1-profile-baseline"
     pr: 118
     dependsOn: []
