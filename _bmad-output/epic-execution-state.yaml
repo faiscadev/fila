@@ -18,9 +18,9 @@ stories:
     dependsOn: ["32.1"]
   - id: "32.3"
     title: "String Interning"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/32.3-string-interning"
     pr: null
     dependsOn: ["32.1"]
   - id: "32.4"
