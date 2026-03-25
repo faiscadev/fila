@@ -46,10 +46,7 @@ impl StorageEngine for InMemoryEngine {
     fn put_message(&self, key: &[u8], message: &Message) -> StorageResult<()> {
         let proto = fila_proto::Message::from(message.clone());
         let value = proto.encode_to_vec();
-        self.messages
-            .write()
-            .unwrap()
-            .insert(key.to_vec(), value);
+        self.messages.write().unwrap().insert(key.to_vec(), value);
         Ok(())
     }
 
