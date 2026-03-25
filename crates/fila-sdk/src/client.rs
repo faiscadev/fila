@@ -734,42 +734,6 @@ impl StreamManager {
     }
 }
 
-fn parse_grpc_code(s: &str) -> tonic::Code {
-    match s {
-        "Ok" => tonic::Code::Ok,
-        "Cancelled" => tonic::Code::Cancelled,
-        "Unknown" => tonic::Code::Unknown,
-        "InvalidArgument" => tonic::Code::InvalidArgument,
-        "DeadlineExceeded" => tonic::Code::DeadlineExceeded,
-        "NotFound" => tonic::Code::NotFound,
-        "AlreadyExists" => tonic::Code::AlreadyExists,
-        "PermissionDenied" => tonic::Code::PermissionDenied,
-        "ResourceExhausted" => tonic::Code::ResourceExhausted,
-        "FailedPrecondition" => tonic::Code::FailedPrecondition,
-        "Aborted" => tonic::Code::Aborted,
-        "OutOfRange" => tonic::Code::OutOfRange,
-        "Unimplemented" => tonic::Code::Unimplemented,
-        "Internal" => tonic::Code::Internal,
-        "Unavailable" => tonic::Code::Unavailable,
-        "DataLoss" => tonic::Code::DataLoss,
-        "Unauthenticated" => tonic::Code::Unauthenticated,
-        _ => tonic::Code::Unknown,
-    }
-}
-
-fn parse_stream_error(err: &str) -> EnqueueError {
-    if let Some(rest) = err.strip_prefix('[') {
-        if let Some(bracket_end) = rest.find(']') {
-            let code_str = &rest[..bracket_end];
-            let message = rest[bracket_end + 1..].trim_start().to_string();
-            let code = parse_grpc_code(code_str);
-            let status = tonic::Status::new(code, message);
-            return enqueue_status_error(status);
-        }
-    }
-    EnqueueError::Status(StatusError::Internal(err.to_string()))
-}
-
 /// Resolve a stream response. Each response carries results for a single
 /// stream write (currently one message per write, so one result per response).
 async fn resolve_stream_response(
