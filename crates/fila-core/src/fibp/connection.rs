@@ -381,7 +381,7 @@ impl FibpConnection {
             let err_frame = Frame::error(frame.correlation_id, &e.to_string());
             return self.write_frame(err_frame).await;
         }
-        let results = dispatch::dispatch_enqueue(&self.broker, req).await?;
+        let results = dispatch::dispatch_enqueue(&self.broker, self.cluster.as_ref(), req).await?;
         let payload = wire::encode_enqueue_response(&results);
         let resp = Frame::new(0, OP_ENQUEUE, frame.correlation_id, payload);
         self.write_frame(resp).await
@@ -406,6 +406,22 @@ impl FibpConnection {
         if let Err(e) = self.check_permission(Permission::Consume, &req.queue) {
             let err_frame = Frame::error(frame.correlation_id, &e.to_string());
             return self.write_frame(err_frame).await;
+        }
+
+        // In cluster mode, consume must happen on the leader. If this node
+        // is not the leader, send an error with the leader's client address
+        // so the SDK can transparently reconnect.
+        match dispatch::check_queue_leadership(self.cluster.as_ref(), &req.queue).await {
+            Ok(None) => {} // single-node or we are the leader — proceed
+            Ok(Some(leader_addr)) => {
+                let err_frame =
+                    Frame::error(frame.correlation_id, &format!("leader_hint:{leader_addr}"));
+                return self.write_frame(err_frame).await;
+            }
+            Err(e) => {
+                let err_frame = Frame::error(frame.correlation_id, &e.to_string());
+                return self.write_frame(err_frame).await;
+            }
         }
 
         let (consumer_id, ready_rx) = dispatch::register_consumer(&self.broker, &req.queue)?;
@@ -460,7 +476,7 @@ impl FibpConnection {
                 return self.write_frame(err_frame).await;
             }
         }
-        let results = dispatch::dispatch_ack(&self.broker, items).await?;
+        let results = dispatch::dispatch_ack(&self.broker, self.cluster.as_ref(), items).await?;
         let payload = wire::encode_ack_nack_response(&results);
         let resp = Frame::new(0, OP_ACK, frame.correlation_id, payload);
         self.write_frame(resp).await
@@ -475,7 +491,7 @@ impl FibpConnection {
                 return self.write_frame(err_frame).await;
             }
         }
-        let results = dispatch::dispatch_nack(&self.broker, items).await?;
+        let results = dispatch::dispatch_nack(&self.broker, self.cluster.as_ref(), items).await?;
         let payload = wire::encode_ack_nack_response(&results);
         let resp = Frame::new(0, OP_NACK, frame.correlation_id, payload);
         self.write_frame(resp).await

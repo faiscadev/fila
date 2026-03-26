@@ -495,7 +495,7 @@ where
                     return write_frame_generic(framed, err).await;
                 }
             }
-            let results = dispatch::dispatch_enqueue(broker, req).await?;
+            let results = dispatch::dispatch_enqueue(broker, cluster.as_ref(), req).await?;
             let payload = wire::encode_enqueue_response(&results);
             let resp = Frame::new(0, OP_ENQUEUE, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await
@@ -516,6 +516,20 @@ where
                     .map_err(FibpError::Storage)?;
                 if !p {
                     let err = Frame::error(frame.correlation_id, "permission denied");
+                    return write_frame_generic(framed, err).await;
+                }
+            }
+            // In cluster mode, consume must happen on the leader. Redirect
+            // if this node is not the leader.
+            match dispatch::check_queue_leadership(cluster.as_ref(), &req.queue).await {
+                Ok(None) => {} // single-node or we are the leader
+                Ok(Some(leader_addr)) => {
+                    let err =
+                        Frame::error(frame.correlation_id, &format!("leader_hint:{leader_addr}"));
+                    return write_frame_generic(framed, err).await;
+                }
+                Err(e) => {
+                    let err = Frame::error(frame.correlation_id, &e.to_string());
                     return write_frame_generic(framed, err).await;
                 }
             }
@@ -555,7 +569,7 @@ where
                     }
                 }
             }
-            let results = dispatch::dispatch_ack(broker, items).await?;
+            let results = dispatch::dispatch_ack(broker, cluster.as_ref(), items).await?;
             let payload = wire::encode_ack_nack_response(&results);
             let resp = Frame::new(0, OP_ACK, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await
@@ -573,7 +587,7 @@ where
                     }
                 }
             }
-            let results = dispatch::dispatch_nack(broker, items).await?;
+            let results = dispatch::dispatch_nack(broker, cluster.as_ref(), items).await?;
             let payload = wire::encode_ack_nack_response(&results);
             let resp = Frame::new(0, OP_NACK, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await

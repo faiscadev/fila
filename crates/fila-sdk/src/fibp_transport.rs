@@ -395,6 +395,11 @@ impl FibpTransport {
     }
 
     /// Open a consume stream via FIBP.
+    ///
+    /// In cluster mode, if the connected node is not the leader for the
+    /// requested queue, the server returns a `leader_hint:<addr>` error.
+    /// This method transparently opens a new connection to the leader and
+    /// returns a consume stream from that connection.
     pub async fn consume(
         &self,
         queue: &str,
@@ -403,16 +408,56 @@ impl FibpTransport {
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONSUME, corr_id, payload);
 
-        self.request(frame).await.map_err(|e| match e {
-            StatusError::Internal(ref msg)
+        match self.request(frame).await {
+            Ok(_response) => {
+                // Successfully opened consume on this node — set up push channel.
+                self.setup_consume_channel(queue).await
+            }
+            Err(StatusError::Internal(ref msg)) if msg.starts_with("leader_hint:") => {
+                // Server told us the leader address — connect there instead.
+                let leader_addr = msg["leader_hint:".len()..].to_string();
+                let leader_transport =
+                    FibpTransport::connect(&leader_addr, None)
+                        .await
+                        .map_err(|e| {
+                            ConsumeError::Status(StatusError::Internal(format!(
+                                "failed to connect to leader at {leader_addr}: {e}"
+                            )))
+                        })?;
+
+                // Send consume request to the leader (no recursion — single hop).
+                let payload2 = fibp_codec::encode_consume_request(queue, INITIAL_CREDITS);
+                let corr_id2 = leader_transport.next_id();
+                let frame2 = Frame::new(0, OP_CONSUME, corr_id2, payload2);
+
+                leader_transport
+                    .request(frame2)
+                    .await
+                    .map_err(|e| match e {
+                        StatusError::Internal(ref msg)
+                            if msg.contains("not found") || msg.contains("queue") =>
+                        {
+                            ConsumeError::QueueNotFound(msg.clone())
+                        }
+                        other => ConsumeError::Status(other),
+                    })?;
+
+                leader_transport.setup_consume_channel(queue).await
+            }
+            Err(StatusError::Internal(ref msg))
                 if msg.contains("not found") || msg.contains("queue") =>
             {
-                ConsumeError::QueueNotFound(msg.clone())
+                Err(ConsumeError::QueueNotFound(msg.clone()))
             }
-            other => ConsumeError::Status(other),
-        })?;
+            Err(other) => Err(ConsumeError::Status(other)),
+        }
+    }
 
-        // Set up the push channel for consume messages.
+    /// Set up the consume push channel after a successful OP_CONSUME response.
+    async fn setup_consume_channel(
+        &self,
+        queue: &str,
+    ) -> Result<mpsc::Receiver<Result<ConsumeMessage, StatusError>>, ConsumeError> {
         let (push_tx, push_rx) = mpsc::channel::<Result<ConsumeMessage, StatusError>>(64);
 
         {
