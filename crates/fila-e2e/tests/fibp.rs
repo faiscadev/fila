@@ -310,8 +310,14 @@ async fn e2e_fibp_nack_with_error() {
         .expect("timeout waiting for redelivery")
         .expect("stream ended")
         .expect("consume error");
-    assert_eq!(redelivered.id, msg_id, "redelivered message id should match");
-    assert_eq!(redelivered.attempt_count, 1, "attempt count should increment");
+    assert_eq!(
+        redelivered.id, msg_id,
+        "redelivered message id should match"
+    );
+    assert_eq!(
+        redelivered.attempt_count, 1,
+        "attempt count should increment"
+    );
 
     // Ack to clean up.
     client.ack("fibp-nack-queue", &msg_id).await.unwrap();
