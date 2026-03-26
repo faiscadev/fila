@@ -3,7 +3,7 @@ name: Bench Regression
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, fix/bench-regression-ghpages]
   workflow_dispatch:
     inputs:
       update_baseline:
@@ -97,6 +97,7 @@ jobs:
           benchmark-data-dir-path: dev/bench/latency
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
+          skip-fetch-gh-pages: true
           comment-on-alert: false
 
       - name: Store throughput benchmark results (main)
@@ -109,6 +110,7 @@ jobs:
           benchmark-data-dir-path: dev/bench/throughput
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
+          skip-fetch-gh-pages: true
           comment-on-alert: false
 
       - name: Compare latency benchmarks (PR)
@@ -120,6 +122,7 @@ jobs:
           benchmark-data-dir-path: dev/bench/latency
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: false
+          skip-fetch-gh-pages: true
           comment-on-alert: true
           alert-threshold: '115%'
           fail-on-alert: false
@@ -134,6 +137,7 @@ jobs:
           benchmark-data-dir-path: dev/bench/throughput
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: false
+          skip-fetch-gh-pages: true
           comment-on-alert: true
           alert-threshold: '115%'
           fail-on-alert: false
