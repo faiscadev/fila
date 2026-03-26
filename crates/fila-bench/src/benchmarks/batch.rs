@@ -209,15 +209,20 @@ pub async fn bench_auto_batching_latency(server: &BenchServer) -> Vec<BenchResul
         tokio::time::sleep(Duration::from_secs(WARMUP_SECS)).await;
 
         // Phase 2: Measure sequential enqueue-consume round-trip latency
-        // Drain existing messages first
+        // Drain existing messages first using a separate connection so the main
+        // client has no active consume session when measurement starts
+        // (FIBP allows only one consume session per connection).
         {
-            let mut drain = client.consume(&queue).await.expect("consume drain");
+            let drain_client = fila_sdk::FilaClient::connect(server.addr())
+                .await
+                .expect("connect drain");
+            let mut drain = drain_client.consume(&queue).await.expect("consume drain");
             let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
             loop {
                 let next = tokio::time::timeout(Duration::from_millis(200), drain.next()).await;
                 match next {
                     Ok(Some(Ok(msg))) => {
-                        let _ = client.ack(&queue, &msg.id).await;
+                        let _ = drain_client.ack(&queue, &msg.id).await;
                     }
                     _ => break,
                 }
@@ -226,6 +231,7 @@ pub async fn bench_auto_batching_latency(server: &BenchServer) -> Vec<BenchResul
                 }
             }
             drop(drain);
+            drop(drain_client);
         }
 
         // Stop background producers
