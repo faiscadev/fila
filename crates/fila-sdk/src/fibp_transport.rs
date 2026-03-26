@@ -61,6 +61,17 @@ pub struct FibpTransport {
     inner: Arc<FibpTransportInner>,
 }
 
+/// Connection configuration kept so a leader-redirect can reuse the same
+/// TLS and authentication settings as the original connection.
+#[derive(Clone)]
+struct TransportConnectConfig {
+    api_key: Option<String>,
+    tls_enabled: bool,
+    tls_ca_cert_pem: Option<Vec<u8>>,
+    tls_client_cert_pem: Option<Vec<u8>>,
+    tls_client_key_pem: Option<Vec<u8>>,
+}
+
 struct FibpTransportInner {
     writer_tx: mpsc::Sender<WriterCommand>,
     pending: Arc<Mutex<HashMap<u32, PendingRequest>>>,
@@ -69,6 +80,8 @@ struct FibpTransportInner {
     next_correlation_id: AtomicU32,
     /// Queue name for the active consume session.
     consume_queue: Arc<Mutex<Option<String>>>,
+    /// Configuration used to create this transport, preserved for leader redirects.
+    connect_config: TransportConnectConfig,
 }
 
 impl std::fmt::Debug for FibpTransport {
@@ -101,7 +114,14 @@ impl FibpTransport {
         let codec = FibpCodec::new(MAX_FRAME_SIZE);
         let framed = Framed::new(stream, codec);
 
-        Self::from_framed(framed, api_key).await
+        let config = TransportConnectConfig {
+            api_key,
+            tls_enabled: false,
+            tls_ca_cert_pem: None,
+            tls_client_cert_pem: None,
+            tls_client_key_pem: None,
+        };
+        Self::from_framed(framed, config).await
     }
 
     /// Connect to a Fila broker via FIBP over TLS.
@@ -196,13 +216,40 @@ impl FibpTransport {
         let codec = FibpCodec::new(MAX_FRAME_SIZE);
         let framed = Framed::new(tls_stream, codec);
 
-        Self::from_framed(framed, api_key).await
+        let config = TransportConnectConfig {
+            api_key,
+            tls_enabled: true,
+            tls_ca_cert_pem: tls_ca_cert_pem.map(|b| b.to_vec()),
+            tls_client_cert_pem: tls_client_cert_pem.map(|b| b.to_vec()),
+            tls_client_key_pem: tls_client_key_pem.map(|b| b.to_vec()),
+        };
+        Self::from_framed(framed, config).await
+    }
+
+    /// Connect to a new address reusing this transport's TLS and API key config.
+    ///
+    /// Used when handling leader-hint redirects so the redirect connection
+    /// inherits the same security settings as the original connection.
+    async fn connect_with_config(&self, addr: &str) -> Result<Self, ConnectError> {
+        let cfg = self.inner.connect_config.clone();
+        if cfg.tls_enabled {
+            Self::connect_tls(
+                addr,
+                cfg.api_key,
+                cfg.tls_ca_cert_pem.as_deref(),
+                cfg.tls_client_cert_pem.as_deref(),
+                cfg.tls_client_key_pem.as_deref(),
+            )
+            .await
+        } else {
+            Self::connect(addr, cfg.api_key).await
+        }
     }
 
     /// Create a transport from an already-handshaked framed stream.
     async fn from_framed<S>(
         framed: Framed<S, FibpCodec>,
-        api_key: Option<String>,
+        connect_config: TransportConnectConfig,
     ) -> Result<Self, ConnectError>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -222,6 +269,7 @@ impl FibpTransport {
             Arc::clone(&consume_queue),
         );
 
+        let api_key = connect_config.api_key.clone();
         let transport = FibpTransport {
             inner: Arc::new(FibpTransportInner {
                 writer_tx,
@@ -229,6 +277,7 @@ impl FibpTransport {
                 consume_push_tx,
                 next_correlation_id: AtomicU32::new(1),
                 consume_queue,
+                connect_config,
             }),
         };
 
@@ -395,6 +444,11 @@ impl FibpTransport {
     }
 
     /// Open a consume stream via FIBP.
+    ///
+    /// In cluster mode, if the connected node is not the leader for the
+    /// requested queue, the server returns a `leader_hint:<addr>` error.
+    /// This method transparently opens a new connection to the leader and
+    /// returns a consume stream from that connection.
     pub async fn consume(
         &self,
         queue: &str,
@@ -403,16 +457,55 @@ impl FibpTransport {
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONSUME, corr_id, payload);
 
-        self.request(frame).await.map_err(|e| match e {
-            StatusError::Internal(ref msg)
+        match self.request(frame).await {
+            Ok(_response) => {
+                // Successfully opened consume on this node — set up push channel.
+                self.setup_consume_channel(queue).await
+            }
+            Err(StatusError::Internal(ref msg)) if msg.starts_with("leader_hint:") => {
+                // Server told us the leader address — connect there instead,
+                // reusing the same TLS and API key configuration.
+                let leader_addr = msg["leader_hint:".len()..].to_string();
+                let leader_transport =
+                    self.connect_with_config(&leader_addr).await.map_err(|e| {
+                        ConsumeError::Status(StatusError::Internal(format!(
+                            "failed to connect to leader at {leader_addr}: {e}"
+                        )))
+                    })?;
+
+                // Send consume request to the leader (no recursion — single hop).
+                let payload2 = fibp_codec::encode_consume_request(queue, INITIAL_CREDITS);
+                let corr_id2 = leader_transport.next_id();
+                let frame2 = Frame::new(0, OP_CONSUME, corr_id2, payload2);
+
+                leader_transport
+                    .request(frame2)
+                    .await
+                    .map_err(|e| match e {
+                        StatusError::Internal(ref msg)
+                            if msg.contains("not found") || msg.contains("queue") =>
+                        {
+                            ConsumeError::QueueNotFound(msg.clone())
+                        }
+                        other => ConsumeError::Status(other),
+                    })?;
+
+                leader_transport.setup_consume_channel(queue).await
+            }
+            Err(StatusError::Internal(ref msg))
                 if msg.contains("not found") || msg.contains("queue") =>
             {
-                ConsumeError::QueueNotFound(msg.clone())
+                Err(ConsumeError::QueueNotFound(msg.clone()))
             }
-            other => ConsumeError::Status(other),
-        })?;
+            Err(other) => Err(ConsumeError::Status(other)),
+        }
+    }
 
-        // Set up the push channel for consume messages.
+    /// Set up the consume push channel after a successful OP_CONSUME response.
+    async fn setup_consume_channel(
+        &self,
+        queue: &str,
+    ) -> Result<mpsc::Receiver<Result<ConsumeMessage, StatusError>>, ConsumeError> {
         let (push_tx, push_rx) = mpsc::channel::<Result<ConsumeMessage, StatusError>>(64);
 
         {

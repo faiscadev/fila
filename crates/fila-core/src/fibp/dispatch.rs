@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use prost::Message as ProstMessage;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::broker::auth::CallerKey;
@@ -28,8 +29,15 @@ use super::error::FibpError;
 use super::wire;
 
 /// Dispatch FIBP enqueue requests to the scheduler and return wire results.
+///
+/// In single-node mode, messages are sent directly to the local scheduler.
+/// In cluster mode, messages are submitted through the queue's Raft group
+/// via `ClusterHandle::write_to_queue` for replication. When this node is
+/// the leader, the scheduler is also updated so in-memory state (depth, DRR,
+/// pending index) stays current.
 pub async fn dispatch_enqueue(
     broker: &Arc<Broker>,
+    cluster: Option<&Arc<ClusterHandle>>,
     req: wire::EnqueueRequest,
 ) -> Result<Vec<wire::EnqueueResultItem>, FibpError> {
     if req.queue.is_empty() {
@@ -61,36 +69,169 @@ pub async fn dispatch_enqueue(
         })
         .collect();
 
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    broker
-        .send_command(SchedulerCommand::Enqueue {
-            messages,
-            reply: reply_tx,
-        })
-        .map_err(FibpError::BrokerUnavailable)?;
+    if let Some(ch) = cluster {
+        let mut results = Vec::with_capacity(messages.len());
+        for message in messages {
+            let msg_id = message.id;
+            let queue_id = message.queue_id.clone();
+            match ch
+                .write_to_queue(
+                    &queue_id,
+                    ClusterRequest::Enqueue {
+                        message: message.clone(),
+                    },
+                )
+                .await
+            {
+                Ok(write_result) => {
+                    if write_result.handled_locally {
+                        // The Raft write succeeded — the message is durably committed.
+                        // Apply to the local scheduler for in-memory state consistency
+                        // (depth, DRR, pending index).  If the scheduler apply fails
+                        // we log a warning but still return success to the client:
+                        // returning an error here would cause the client to retry,
+                        // producing a duplicate message that IS already committed.
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        if let Err(e) = broker.send_command(SchedulerCommand::Enqueue {
+                            messages: vec![message],
+                            reply: reply_tx,
+                        }) {
+                            warn!(
+                                msg_id = %msg_id,
+                                error = %e,
+                                "raft write succeeded but local scheduler apply failed (send); \
+                                 returning success to prevent duplicate on client retry"
+                            );
+                            results.push(wire::EnqueueResultItem::Ok {
+                                msg_id: msg_id.to_string(),
+                            });
+                            continue;
+                        }
+                        match reply_rx.await {
+                            Ok(scheduler_results) => {
+                                for r in scheduler_results {
+                                    results.push(match r {
+                                        Ok(mid) => wire::EnqueueResultItem::Ok {
+                                            msg_id: mid.to_string(),
+                                        },
+                                        Err(err) => {
+                                            // Raft write succeeded; the scheduler apply
+                                            // error means local state is temporarily
+                                            // inconsistent but the message is committed.
+                                            // Log and return success.
+                                            warn!(
+                                                msg_id = %msg_id,
+                                                error = ?err,
+                                                "raft write succeeded but local scheduler \
+                                                 apply returned an error; returning success \
+                                                 to prevent duplicate on client retry"
+                                            );
+                                            wire::EnqueueResultItem::Ok {
+                                                msg_id: msg_id.to_string(),
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            Err(_) => {
+                                results.push(wire::EnqueueResultItem::Ok {
+                                    msg_id: msg_id.to_string(),
+                                });
+                            }
+                        }
+                    } else {
+                        match write_result.response {
+                            ClusterResponse::Enqueue { msg_id } => {
+                                results.push(wire::EnqueueResultItem::Ok {
+                                    msg_id: msg_id.to_string(),
+                                });
+                            }
+                            ClusterResponse::Error { message } => {
+                                results.push(wire::EnqueueResultItem::Err {
+                                    code: wire::enqueue_err::STORAGE,
+                                    message,
+                                });
+                            }
+                            _ => {
+                                results.push(wire::EnqueueResultItem::Ok {
+                                    msg_id: msg_id.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    results.push(wire::EnqueueResultItem::Err {
+                        code: wire::enqueue_err::STORAGE,
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(results)
+    } else {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::Enqueue {
+                messages,
+                reply: reply_tx,
+            })
+            .map_err(FibpError::BrokerUnavailable)?;
 
-    let scheduler_results = reply_rx.await.map_err(|_| FibpError::ReplyDropped)?;
+        let scheduler_results = reply_rx.await.map_err(|_| FibpError::ReplyDropped)?;
 
-    let results = scheduler_results
-        .into_iter()
-        .map(|r| match r {
-            Ok(msg_id) => wire::EnqueueResultItem::Ok {
-                msg_id: msg_id.to_string(),
-            },
-            Err(err) => match err {
-                EnqueueError::QueueNotFound(msg) => wire::EnqueueResultItem::Err {
-                    code: wire::enqueue_err::QUEUE_NOT_FOUND,
-                    message: msg,
+        let results = scheduler_results
+            .into_iter()
+            .map(|r| match r {
+                Ok(msg_id) => wire::EnqueueResultItem::Ok {
+                    msg_id: msg_id.to_string(),
                 },
-                EnqueueError::Storage(e) => wire::EnqueueResultItem::Err {
-                    code: wire::enqueue_err::STORAGE,
-                    message: e.to_string(),
+                Err(err) => match err {
+                    EnqueueError::QueueNotFound(msg) => wire::EnqueueResultItem::Err {
+                        code: wire::enqueue_err::QUEUE_NOT_FOUND,
+                        message: msg,
+                    },
+                    EnqueueError::Storage(e) => wire::EnqueueResultItem::Err {
+                        code: wire::enqueue_err::STORAGE,
+                        message: e.to_string(),
+                    },
                 },
-            },
-        })
-        .collect();
+            })
+            .collect();
 
-    Ok(results)
+        Ok(results)
+    }
+}
+
+/// Check whether this node is the leader for a queue in cluster mode.
+pub async fn check_queue_leadership(
+    cluster: Option<&Arc<ClusterHandle>>,
+    queue: &str,
+) -> Result<Option<String>, FibpError> {
+    let ch = match cluster {
+        Some(ch) => ch,
+        None => return Ok(None),
+    };
+    match ch.is_queue_leader(queue).await {
+        Some(true) => Ok(None),
+        Some(false) => match ch.get_queue_leader_client_addr(queue).await {
+            Some(addr) => Ok(Some(addr)),
+            None => Err(FibpError::InvalidPayload {
+                reason: "no leader available for queue".into(),
+            }),
+        },
+        None => {
+            if ch.multi_raft.is_queue_expected(queue).await {
+                Err(FibpError::InvalidPayload {
+                    reason: "node not ready for this queue".into(),
+                })
+            } else {
+                Err(FibpError::InvalidPayload {
+                    reason: "queue not found".into(),
+                })
+            }
+        }
+    }
 }
 
 /// Register a consumer for the given queue via the scheduler.
@@ -125,6 +266,7 @@ pub fn unregister_consumer(broker: &Arc<Broker>, consumer_id: &str) {
 /// Dispatch FIBP ack requests to the scheduler and return wire results.
 pub async fn dispatch_ack(
     broker: &Arc<Broker>,
+    cluster: Option<&Arc<ClusterHandle>>,
     items: Vec<wire::AckItem>,
 ) -> Result<Vec<wire::AckNackResultItem>, FibpError> {
     let mut results = Vec::with_capacity(items.len());
@@ -141,29 +283,99 @@ pub async fn dispatch_ack(
             }
         };
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        broker
-            .send_command(SchedulerCommand::Ack {
-                queue_id: item.queue,
-                msg_id,
-                reply: reply_tx,
-            })
-            .map_err(FibpError::BrokerUnavailable)?;
-
-        let outcome = reply_rx.await.map_err(|_| FibpError::ReplyDropped)?;
-        results.push(match outcome {
-            Ok(()) => wire::AckNackResultItem::Ok,
-            Err(err) => match err {
-                AckError::MessageNotFound(msg) => wire::AckNackResultItem::Err {
-                    code: wire::ack_nack_err::MESSAGE_NOT_FOUND,
-                    message: msg,
+        if let Some(ch) = cluster {
+            match ch
+                .write_to_queue(
+                    &item.queue,
+                    ClusterRequest::Ack {
+                        queue_id: item.queue.clone(),
+                        msg_id,
+                    },
+                )
+                .await
+            {
+                Ok(write_result) => {
+                    if write_result.handled_locally {
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        if let Err(e) = broker.send_command(SchedulerCommand::Ack {
+                            queue_id: item.queue,
+                            msg_id,
+                            reply: reply_tx,
+                        }) {
+                            results.push(wire::AckNackResultItem::Err {
+                                code: wire::ack_nack_err::STORAGE,
+                                message: e.to_string(),
+                            });
+                            continue;
+                        }
+                        match reply_rx.await {
+                            Ok(outcome) => results.push(match outcome {
+                                Ok(()) => wire::AckNackResultItem::Ok,
+                                Err(err) => match err {
+                                    AckError::MessageNotFound(msg) => {
+                                        wire::AckNackResultItem::Err {
+                                            code: wire::ack_nack_err::MESSAGE_NOT_FOUND,
+                                            message: msg,
+                                        }
+                                    }
+                                    AckError::Storage(e) => wire::AckNackResultItem::Err {
+                                        code: wire::ack_nack_err::STORAGE,
+                                        message: e.to_string(),
+                                    },
+                                },
+                            }),
+                            Err(_) => {
+                                results.push(wire::AckNackResultItem::Ok);
+                            }
+                        }
+                    } else {
+                        match write_result.response {
+                            ClusterResponse::Ack => {
+                                results.push(wire::AckNackResultItem::Ok);
+                            }
+                            ClusterResponse::Error { message } => {
+                                results.push(wire::AckNackResultItem::Err {
+                                    code: wire::ack_nack_err::STORAGE,
+                                    message,
+                                });
+                            }
+                            _ => {
+                                results.push(wire::AckNackResultItem::Ok);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    results.push(wire::AckNackResultItem::Err {
+                        code: wire::ack_nack_err::STORAGE,
+                        message: e.to_string(),
+                    });
+                }
+            }
+        } else {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            broker
+                .send_command(SchedulerCommand::Ack {
+                    queue_id: item.queue,
+                    msg_id,
+                    reply: reply_tx,
+                })
+                .map_err(FibpError::BrokerUnavailable)?;
+            let outcome = reply_rx.await.map_err(|_| FibpError::ReplyDropped)?;
+            results.push(match outcome {
+                Ok(()) => wire::AckNackResultItem::Ok,
+                Err(err) => match err {
+                    AckError::MessageNotFound(msg) => wire::AckNackResultItem::Err {
+                        code: wire::ack_nack_err::MESSAGE_NOT_FOUND,
+                        message: msg,
+                    },
+                    AckError::Storage(e) => wire::AckNackResultItem::Err {
+                        code: wire::ack_nack_err::STORAGE,
+                        message: e.to_string(),
+                    },
                 },
-                AckError::Storage(e) => wire::AckNackResultItem::Err {
-                    code: wire::ack_nack_err::STORAGE,
-                    message: e.to_string(),
-                },
-            },
-        });
+            });
+        }
     }
 
     Ok(results)
@@ -172,6 +384,7 @@ pub async fn dispatch_ack(
 /// Dispatch FIBP nack requests to the scheduler and return wire results.
 pub async fn dispatch_nack(
     broker: &Arc<Broker>,
+    cluster: Option<&Arc<ClusterHandle>>,
     items: Vec<wire::NackItem>,
 ) -> Result<Vec<wire::AckNackResultItem>, FibpError> {
     let mut results = Vec::with_capacity(items.len());
@@ -188,30 +401,102 @@ pub async fn dispatch_nack(
             }
         };
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        broker
-            .send_command(SchedulerCommand::Nack {
-                queue_id: item.queue,
-                msg_id,
-                error: item.error,
-                reply: reply_tx,
-            })
-            .map_err(FibpError::BrokerUnavailable)?;
-
-        let outcome = reply_rx.await.map_err(|_| FibpError::ReplyDropped)?;
-        results.push(match outcome {
-            Ok(()) => wire::AckNackResultItem::Ok,
-            Err(err) => match err {
-                NackError::MessageNotFound(msg) => wire::AckNackResultItem::Err {
-                    code: wire::ack_nack_err::MESSAGE_NOT_FOUND,
-                    message: msg,
+        if let Some(ch) = cluster {
+            match ch
+                .write_to_queue(
+                    &item.queue,
+                    ClusterRequest::Nack {
+                        queue_id: item.queue.clone(),
+                        msg_id,
+                        error: item.error.clone(),
+                    },
+                )
+                .await
+            {
+                Ok(write_result) => {
+                    if write_result.handled_locally {
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        if let Err(e) = broker.send_command(SchedulerCommand::Nack {
+                            queue_id: item.queue,
+                            msg_id,
+                            error: item.error,
+                            reply: reply_tx,
+                        }) {
+                            results.push(wire::AckNackResultItem::Err {
+                                code: wire::ack_nack_err::STORAGE,
+                                message: e.to_string(),
+                            });
+                            continue;
+                        }
+                        match reply_rx.await {
+                            Ok(outcome) => results.push(match outcome {
+                                Ok(()) => wire::AckNackResultItem::Ok,
+                                Err(err) => match err {
+                                    NackError::MessageNotFound(msg) => {
+                                        wire::AckNackResultItem::Err {
+                                            code: wire::ack_nack_err::MESSAGE_NOT_FOUND,
+                                            message: msg,
+                                        }
+                                    }
+                                    NackError::Storage(e) => wire::AckNackResultItem::Err {
+                                        code: wire::ack_nack_err::STORAGE,
+                                        message: e.to_string(),
+                                    },
+                                },
+                            }),
+                            Err(_) => {
+                                results.push(wire::AckNackResultItem::Ok);
+                            }
+                        }
+                    } else {
+                        match write_result.response {
+                            ClusterResponse::Nack => {
+                                results.push(wire::AckNackResultItem::Ok);
+                            }
+                            ClusterResponse::Error { message } => {
+                                results.push(wire::AckNackResultItem::Err {
+                                    code: wire::ack_nack_err::STORAGE,
+                                    message,
+                                });
+                            }
+                            _ => {
+                                results.push(wire::AckNackResultItem::Ok);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    results.push(wire::AckNackResultItem::Err {
+                        code: wire::ack_nack_err::STORAGE,
+                        message: e.to_string(),
+                    });
+                }
+            }
+        } else {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            broker
+                .send_command(SchedulerCommand::Nack {
+                    queue_id: item.queue,
+                    msg_id,
+                    error: item.error,
+                    reply: reply_tx,
+                })
+                .map_err(FibpError::BrokerUnavailable)?;
+            let outcome = reply_rx.await.map_err(|_| FibpError::ReplyDropped)?;
+            results.push(match outcome {
+                Ok(()) => wire::AckNackResultItem::Ok,
+                Err(err) => match err {
+                    NackError::MessageNotFound(msg) => wire::AckNackResultItem::Err {
+                        code: wire::ack_nack_err::MESSAGE_NOT_FOUND,
+                        message: msg,
+                    },
+                    NackError::Storage(e) => wire::AckNackResultItem::Err {
+                        code: wire::ack_nack_err::STORAGE,
+                        message: e.to_string(),
+                    },
                 },
-                NackError::Storage(e) => wire::AckNackResultItem::Err {
-                    code: wire::ack_nack_err::STORAGE,
-                    message: e.to_string(),
-                },
-            },
-        });
+            });
+        }
     }
 
     Ok(results)
