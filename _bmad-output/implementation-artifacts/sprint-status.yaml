@@ -331,7 +331,7 @@ development_status:
   epic-35: in-progress
   35-1-benchmark-baseline-measure-post-plateau-state: review
   35-2-sdk-streaming-batch-consolidation: review
-  35-3-grpc-transport-tuning: backlog
+  35-3-grpc-transport-tuning: review
   35-4-benchmark-checkpoint-phase-2-go-no-go: backlog
   epic-35-retrospective: optional
 

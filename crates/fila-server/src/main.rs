@@ -202,6 +202,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut server_builder = Server::builder()
         .initial_stream_window_size(grpc_config.initial_stream_window_size)
         .initial_connection_window_size(grpc_config.initial_connection_window_size)
+        .max_frame_size(grpc_config.http2_max_frame_size)
         .tcp_nodelay(grpc_config.tcp_nodelay)
         .http2_keepalive_interval(Some(Duration::from_secs(
             grpc_config.keepalive_interval_secs,
