@@ -3,7 +3,7 @@ name: Bench Regression
 on:
   pull_request:
   push:
-    branches: [main, fix/bench-regression-ghpages]
+    branches: [main]
   workflow_dispatch:
     inputs:
       update_baseline:
