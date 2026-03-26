@@ -338,10 +338,10 @@ development_status:
   # Epic 36: Phase 2 — Custom Binary Protocol (FIBP) (conditional on Epic 35 results)
   # Dual-protocol: FIBP (length-prefixed binary/TCP) alongside gRPC.
   # Target: 100-150K msg/s. Conditional on 35.4 go/no-go.
-  epic-36: in-progress
-  36-1-fibp-protocol-foundation: review
-  36-2-fibp-data-operations: review
-  36-3-fibp-admin-and-security: review
-  36-4-rust-sdk-fibp-transport: review
-  36-5-benchmark-checkpoint-fibp-vs-grpc: review
-  epic-36-retrospective: optional
+  epic-36: done
+  36-1-fibp-protocol-foundation: done
+  36-2-fibp-data-operations: done
+  36-3-fibp-admin-and-security: done
+  36-4-rust-sdk-fibp-transport: done
+  36-5-benchmark-checkpoint-fibp-vs-grpc: done
+  epic-36-retrospective: done
