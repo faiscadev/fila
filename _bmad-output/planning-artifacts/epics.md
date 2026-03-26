@@ -12,6 +12,8 @@ inputDocuments:
   - '_bmad-output/brainstorming/brainstorming-session-2026-03-04.md'
   - '_bmad-output/planning-artifacts/epics.md (existing epics 1-11)'
   - '_bmad-output/planning-artifacts/research/technical-benchmarking-methodology-research-2026-03-23.md'
+  - '_bmad-output/planning-artifacts/research/technical-custom-transport-kafka-parity-2026-03-25.md'
+  - '_bmad-output/planning-artifacts/research/in-memory-vs-rocksdb-benchmark-2026-03-25.md'
 ---
 
 # Fila - Epic Breakdown (Phase 2+)
@@ -51,6 +53,16 @@ FR-P8: Message payload uses bytes::Bytes for zero-copy passthrough
 FR-P9: Scheduler supports sharded execution across multiple threads
 FR-P10: Storage key encoding uses pre-allocated buffers
 FR-P11: Purpose-built append-only storage engine (FR66, deferred)
+FR-T1: Server exposes tuned gRPC HTTP/2 settings for high-throughput streaming (window sizes, max frame size, keepalive)
+FR-T2: SDK accumulator defaults match proven batch settings (~5ms linger, 100 msgs)
+FR-T3: Streaming enqueue path sends batches as single StreamEnqueueRequests (amortize HTTP/2 overhead)
+FR-T4: Server supports a custom binary protocol (FIBP) on a second TCP listener alongside gRPC
+FR-T5: FIBP uses length-prefixed framing (4-byte BE size + payload) with protobuf metadata and raw-bytes payloads
+FR-T6: FIBP supports pipelined requests via correlation-ID scheme (no HTTP/2 multiplexing)
+FR-T7: FIBP supports credit-based flow control for consume streams
+FR-T8: Rust SDK supports FIBP transport alongside existing gRPC transport
+FR-T9: FIBP supports TLS and API key authentication (parity with gRPC)
+FR-T10: Server shares a command/handler layer between gRPC and FIBP transports
 
 ### NonFunctional Requirements
 
@@ -72,6 +84,13 @@ NFR-P3: 10K fairness key throughput >= 1,500 msg/s (from 506 baseline)
 NFR-P4: Latency must not regress under batched workloads (p50 <= 1ms, p99 <= 5ms)
 NFR-P5: Memory RSS overhead from RocksDB tuning <= 512MB
 NFR-P6: CPU efficiency >= 500 msg/s per CPU percent
+NFR-T1: Single-producer enqueue throughput >= 30K msg/s (1KB) after Phase 1 gRPC tuning
+NFR-T2: Multi-producer (4x) enqueue throughput >= 80K msg/s (1KB) after Phase 1
+NFR-T3: Single-producer enqueue throughput >= 100K msg/s (1KB) after Phase 2 (FIBP)
+NFR-T4: Multi-producer (4x) enqueue throughput >= 200K msg/s (1KB) after Phase 2
+NFR-T5: FIBP per-frame overhead <= 10 bytes (vs gRPC's 84-182 bytes)
+NFR-T6: FIBP transport processing < 5 us per message (vs gRPC's 50-200 us)
+NFR-T7: Zero gRPC functionality regression — all existing SDKs and tools continue working
 
 ### Additional Requirements
 
@@ -135,6 +154,16 @@ FR-P9: Epic 24 — Scheduler sharding
 FR-P10: Epic 24 — Key encoding optimization
 FR-P11: Epic 25 (deferred) → Epics 32-34 — Purpose-built storage engine optimization path (FR66)
 Docs maintenance: Epic 31 — Post-unification documentation cleanup (no FR, maintenance)
+FR-T1: Epic 35 — gRPC HTTP/2 tuned transport settings
+FR-T2: Epic 35 — SDK accumulator defaults tuned for throughput
+FR-T3: Epic 35 — Streaming batch consolidation (N messages per StreamEnqueueRequest)
+FR-T4: Epic 36 — Custom binary protocol (FIBP) on second TCP listener
+FR-T5: Epic 36 — Length-prefixed framing with protobuf metadata + raw payloads
+FR-T6: Epic 36 — Pipelined requests via correlation-ID scheme
+FR-T7: Epic 36 — Credit-based flow control for consume streams
+FR-T8: Epic 36 — Rust SDK FIBP transport support
+FR-T9: Epic 36 — FIBP TLS + API key auth
+FR-T10: Epic 36 — Shared command layer between gRPC and FIBP
 
 ## Epic List
 
@@ -246,6 +275,17 @@ Replace or optimize RocksDB for message storage, enable multi-shard scaling. Tit
 **FRs covered:** FR-P11 (FR66), FR-P9
 **NFRs addressed:** NFR30, NFR31, NFR32, NFR33
 **Gating:** Conditional on Epic 33 Story 33.4 go/no-go. Stories 34.2/34.3 conditional on 34.1 results. Story 34.5 conditional on whether single-queue scaling is needed.
+
+### Epic 35: Phase 1 — gRPC Streaming & Batch Tuning
+Developers and operators get maximum throughput from the existing gRPC transport through batch consolidation, transport tuning, and verified benchmarks. No architectural changes — optimizes what exists. Addresses Epic 34 retro action item: "run full benchmark suite to measure cumulative impact." Based on Phase 1 of `technical-custom-transport-kafka-parity-2026-03-25.md`. Target: 30-50K msg/s single-producer (1KB).
+**FRs covered:** FR-T1, FR-T2, FR-T3
+**NFRs addressed:** NFR-T1, NFR-T2, NFR-T7
+
+### Epic 36: Phase 2 — Custom Binary Protocol (FIBP) (conditional on Epic 35 results)
+Developers get a high-throughput binary protocol alongside gRPC for performance-sensitive workloads. FIBP (Fila Binary Protocol) uses length-prefixed frames over raw TCP, eliminating HTTP/2 overhead (62% of server CPU). Dual-protocol: gRPC stays for compatibility, FIBP for throughput. Based on Phase 2 of `technical-custom-transport-kafka-parity-2026-03-25.md`. Target: 100-150K msg/s single-producer (1KB).
+**FRs covered:** FR-T4, FR-T5, FR-T6, FR-T7, FR-T8, FR-T9, FR-T10
+**NFRs addressed:** NFR-T3, NFR-T4, NFR-T5, NFR-T6, NFR-T7
+**Gating:** Conditional on Epic 35 Story 35.4 go/no-go. If HTTP/2 transport is no longer the dominant CPU cost after Phase 1, Epic 36 may be deferred.
 
 ---
 
@@ -1317,3 +1357,251 @@ So that the Kafka parity goal is assessed with data.
 **Then** the competitive ratio is calculated for all workload profiles
 **And** the full optimization journey (baseline → P1 → P2 → P3) is summarized
 **And** `docs/benchmarks.md` is updated with final numbers
+
+---
+
+## Epic 35: Phase 1 — gRPC Streaming & Batch Tuning
+
+Developers and operators get maximum throughput from the existing gRPC transport through batch consolidation, transport tuning, and verified benchmarks. No architectural changes — optimizes what exists. Addresses Epic 34 retro action item: "run full benchmark suite to measure cumulative impact."
+
+> **Context:** Profiling (commit 1584ee8) shows 62% of server CPU in HTTP/2 transport (h2/hyper/tonic). Phase 1 targets the gRPC layer without replacing it. Phase 2 (Epic 36) replaces it with a custom binary protocol — but only if Phase 1 results justify the investment. Research: `_bmad-output/planning-artifacts/research/technical-custom-transport-kafka-parity-2026-03-25.md`.
+
+> **Baseline (commit eed6eef):** Single-producer 1KB enqueue: 9,488 msg/s (RocksDB), 10,344 msg/s (InMemory). 4-producer: 23,354 msg/s (RocksDB). Lifecycle: 6,605 msg/s.
+
+### Story 35.1: Benchmark Baseline — Measure Post-Plateau State
+
+As a developer,
+I want actual benchmark numbers for the current codebase (post-Plateaus 1-3 + tracing fix),
+So that I have a verified starting point for Phase 1 tuning and can quantify the cumulative impact of Epics 32-34.
+
+**Acceptance Criteria:**
+
+**Given** the current codebase at HEAD of main
+**When** the full benchmark suite is executed
+**Then** the following scenarios are measured and numbers pasted into a results document:
+- Single-producer enqueue (1KB, RocksDB) — `cargo bench` or `profile-workload`
+- Single-producer enqueue (1KB, InMemoryEngine via `FILA_STORAGE=memory`)
+- 4-producer enqueue (1KB, RocksDB)
+- 4-producer enqueue (1KB, InMemoryEngine)
+- Lifecycle enqueue+consume+ack (1KB, RocksDB)
+- Lifecycle enqueue+consume+ack (1KB, InMemoryEngine)
+- Batch enqueue with SDK accumulator (1KB, RocksDB)
+**And** each scenario runs for at least 10 seconds with 2+ runs for stability
+**And** a server-side flamegraph is captured during single-producer enqueue (InMemoryEngine) to verify the current CPU distribution
+**And** results are committed as `_bmad-output/planning-artifacts/research/epic-35-baseline-benchmarks.md`
+**And** the document includes a comparison table against pre-Plateau numbers (8,264 msg/s from the original profiling baseline) showing cumulative gain
+
+### Story 35.2: SDK Streaming Batch Consolidation
+
+As a developer,
+I want the SDK to send accumulated messages as a single StreamEnqueueRequest per batch (not one request per message),
+So that HTTP/2 DATA frame overhead is amortized across the batch instead of paid per message.
+
+**Acceptance Criteria:**
+
+**Given** the SDK's `StreamManager::send_batch()` currently sends one `StreamEnqueueRequest` per message
+**When** the SDK accumulates N messages (via Auto or Linger mode)
+**Then** `send_batch()` sends a single `StreamEnqueueRequest` containing all N messages with one sequence number
+**And** the server's `stream_enqueue` handler correctly processes multi-message requests (already supported — `request.messages` is a `repeated` field)
+**And** the response maps the single sequence number back to per-message results
+**And** the SDK's Auto accumulator default `max_batch_size` is tuned to 100 (from current value) based on Kafka's proven batch defaults
+**And** the SDK's Linger accumulator default `linger_ms` is set to 5ms and default `batch_size` to 100 (matching Kafka's `linger.ms=5` default)
+**And** existing SDK tests pass without modification
+**And** a new integration test verifies that a Linger-mode client sending 1000 messages over 2 seconds produces fewer than 50 StreamEnqueueRequests (proving consolidation)
+**And** `docs/configuration.md` is updated if any default values change
+
+### Story 35.3: gRPC Transport Tuning
+
+As an operator,
+I want optimized gRPC transport settings for high-throughput workloads,
+So that the existing gRPC stack extracts maximum performance without protocol changes.
+
+**Acceptance Criteria:**
+
+**Given** the current `GrpcConfig` defaults (2MB stream window, 4MB connection window, TCP_NODELAY on)
+**When** the gRPC transport settings are tuned
+**Then** the following settings are evaluated and configured to optimal values:
+- `initial_stream_window_size` increased if benchmarks show improvement (test 4MB, 8MB, 16MB)
+- `initial_connection_window_size` increased proportionally
+- `http2_max_frame_size` configured (default 16KB — test 32KB, 64KB for large batches)
+- `max_concurrent_streams` configured if not already set
+- tonic server `concurrency_limit_per_connection` evaluated
+**And** the scheduler's `write_coalesce_max_batch` default is evaluated (current: 100) and increased if profiling shows batches are consistently hitting the cap
+**And** the scheduler's `delivery_batch_max_messages` default is evaluated (current: 10) and increased if consumer throughput improves
+**And** each setting change is validated by running the single-producer enqueue benchmark (RocksDB + InMemoryEngine) before and after
+**And** settings that show no improvement or regression are reverted
+**And** `docs/configuration.md` is updated with new defaults and tuning guidance
+**And** all existing tests pass
+
+### Story 35.4: Benchmark Checkpoint & Phase 2 Go/No-Go
+
+As a developer,
+I want verified benchmark numbers after Phase 1 optimizations with a hard go/no-go gate for Phase 2,
+So that Phase 2 (FIBP custom protocol) is pursued only if the data justifies the architectural investment.
+
+**Acceptance Criteria:**
+
+**Given** Stories 35.1-35.3 are complete and merged to the feature branch
+**When** the full benchmark suite is executed
+**Then** the following scenarios are measured and **actual numbers pasted** into the checkpoint document:
+- Single-producer enqueue (1KB, RocksDB)
+- Single-producer enqueue (1KB, InMemoryEngine)
+- 4-producer enqueue (1KB, RocksDB)
+- 4-producer enqueue (1KB, InMemoryEngine)
+- Lifecycle enqueue+consume+ack (1KB, RocksDB)
+- Batch enqueue with SDK accumulator (1KB, RocksDB)
+**And** a server-side flamegraph is captured during single-producer enqueue (InMemoryEngine) showing current CPU distribution
+**And** the document includes a comparison table: baseline (35.1) vs post-tuning (35.4) with percentage change per scenario
+**And** the document includes a delta flamegraph or side-by-side comparison showing where CPU time shifted
+**And** the document includes a **go/no-go recommendation for Epic 36** based on:
+  - If HTTP/2 transport still dominates CPU (>40%): GO — FIBP will yield significant gains
+  - If transport is no longer dominant (<20%): NO-GO — diminishing returns from protocol change
+  - If throughput already exceeds 50K msg/s: EVALUATE — Phase 2 may not be worth the complexity
+**And** results are committed as `_bmad-output/planning-artifacts/research/epic-35-checkpoint-benchmarks.md`
+**And** no estimates, no projections, no "expected gains" — only measured numbers from actual benchmark runs
+
+---
+
+## Epic 36: Phase 2 — Custom Binary Protocol (FIBP)
+
+Developers get a high-throughput binary protocol alongside gRPC for performance-sensitive workloads. FIBP (Fila Binary Protocol) uses length-prefixed frames over raw TCP, eliminating HTTP/2 overhead. Dual-protocol: gRPC stays for compatibility, FIBP for throughput. Conditional on Epic 35 Story 35.4 go/no-go.
+
+> **Context:** Research at `technical-custom-transport-kafka-parity-2026-03-25.md` shows 62% of server CPU is HTTP/2 transport. FIBP eliminates this with 10 bytes per-frame overhead (vs 84-182 bytes for gRPC). Protocol design informed by Kafka (length-prefixed, correlation IDs), Pulsar (credit-based flow, protobuf+raw split), and Iggy (Rust, dual-protocol, shared command layer).
+
+> **Target:** 100-150K msg/s single-producer (1KB) via FIBP. Theoretical ceiling with batch amortization: ~237K msg/s per scheduler thread (all features enabled).
+
+### Story 36.1: FIBP Protocol Foundation
+
+As a developer,
+I want a custom binary TCP protocol listener running alongside gRPC with frame encoding/decoding and connection lifecycle,
+So that Fila has a low-overhead transport path that eliminates HTTP/2 framing costs.
+
+**Acceptance Criteria:**
+
+**Given** the `BrokerConfig` and server startup code
+**When** FIBP is enabled via configuration (`fibp.listen_addr = "0.0.0.0:5557"`)
+**Then** the server binds a second TCP listener on the configured address
+**And** FIBP is disabled by default (no listener started unless `fibp` section is present in config)
+**And** the frame codec uses 4-byte big-endian length prefix via `tokio_util::codec::LengthDelimitedCodec` (or custom `Decoder`/`Encoder`)
+**And** each frame body has the structure: `flags:u8 | op:u8 | corr_id:u32 | payload`
+**And** connection handshake exchanges magic bytes (`FIBP\x01\x00`) and version on connect
+**And** the server rejects connections with unsupported protocol versions with a clear error
+**And** heartbeat frames (op 0x21) are supported in both directions with configurable keepalive timeout
+**And** the server sends GoAway (op 0xFF) before graceful shutdown, draining in-flight requests
+**And** a `FibpCodec` struct implements `tokio_util::codec::Decoder<Item=Frame>` and `Encoder<Frame>` with zero-copy `Bytes` slicing for payloads
+**And** maximum frame size is configurable (default 16MB) and oversized frames are rejected with an error response
+**And** `docs/configuration.md` is updated with the new `[fibp]` configuration section
+**And** unit tests verify: frame encode/decode round-trip, handshake success/failure, oversized frame rejection, heartbeat echo
+**And** an integration test verifies: raw TCP client connects, completes handshake, sends a heartbeat, receives heartbeat response
+
+### Story 36.2: FIBP Data Operations
+
+As a developer,
+I want enqueue, consume, ack, and nack operations over FIBP,
+So that the hot-path message operations bypass HTTP/2 entirely.
+
+**Acceptance Criteria:**
+
+**Given** the FIBP listener and frame codec from Story 36.1
+**When** a client sends an Enqueue request (op 0x01) over FIBP
+**Then** the frame payload is parsed as: `queue_len:u16 | queue:utf8 | msg_count:u16 | messages...` where each message is `header_count:u8 | headers:repeated(u16+key,u16+value) | payload_len:u32 | payload:raw_bytes`
+**And** the handler constructs `SchedulerCommand::Enqueue` with `Vec<Message>` and sends it to the same scheduler channel used by gRPC (shared command layer)
+**And** the response frame contains per-message results: `ok:u8 | msg_id:[u8;16]` or `ok:u8 | err_code:u16 | err_msg`
+**And** message payloads flow as `Bytes` slices from the read buffer through to the scheduler with zero intermediate copies
+
+**And** when a client sends a Consume request (op 0x02) with `queue_len:u16 | queue:utf8 | initial_credits:u32`
+**Then** the server registers a consumer via `SchedulerCommand::RegisterConsumer` and begins pushing messages as stream frames (flags bit 2 set)
+**And** each pushed frame contains `msg_count:u16` followed by messages with `msg_id:[u8;16] | headers | payload_len:u32 | payload:raw_bytes`
+**And** the server tracks available credits per consumer and stops pushing when credits reach 0
+**And** the client sends Flow frames (op 0x20) with `credits:u32` to grant additional permits
+**And** the server resumes pushing when credits are granted
+**And** the consumer is unregistered when the TCP connection closes
+
+**And** when a client sends Ack (op 0x03) or Nack (op 0x04) batch requests
+**Then** the frame payload is parsed as: `item_count:u16 | items...` where each item is `queue_len:u16 | queue:utf8 | msg_id:[u8;16]` (nack adds `err_len:u16 | err_msg:utf8`)
+**And** each item dispatches `SchedulerCommand::Ack` or `SchedulerCommand::Nack` to the scheduler
+**And** the batch response contains per-item results
+
+**And** all operations use the same correlation-ID scheme: client assigns `corr_id:u32`, server echoes it in the response
+**And** responses are sent in request order (in-order guarantee, no out-of-order reassembly needed)
+**And** integration tests verify: enqueue batch of 100 messages, consume with credit flow control, ack batch, nack with error message
+**And** an integration test verifies end-to-end lifecycle over FIBP: enqueue → consume → ack, confirming message delivery and removal
+
+### Story 36.3: FIBP Admin & Security
+
+As an operator,
+I want admin operations, TLS, and API key authentication over FIBP,
+So that the custom protocol has feature parity with gRPC for production deployments.
+
+**Acceptance Criteria:**
+
+**Given** the FIBP listener and data operations from Stories 36.1-36.2
+**When** admin operations are sent over FIBP
+**Then** CreateQueue (op 0x10), DeleteQueue (op 0x11), GetQueueStats (op 0x12), ListQueues (op 0x13), PauseQueue (op 0x14), ResumeQueue (op 0x15), and Redrive (op 0x16) are supported
+**And** admin request/response payloads use protobuf encoding (reusing existing proto message types) for schema evolution on the control plane
+**And** each admin operation dispatches the corresponding `SchedulerCommand` to the shared scheduler
+
+**And** when TLS is configured (`tls` section in broker config)
+**Then** the FIBP listener wraps the TCP acceptor with `tokio_rustls::TlsAcceptor` using the same TLS configuration as gRPC (same cert/key/CA files)
+**And** mTLS is enforced when client CA is configured (same behavior as gRPC)
+
+**And** when API key auth is configured (`auth` section in broker config)
+**Then** the first frame after handshake must be an Auth request (op 0x30) containing the API key
+**And** the server validates the API key using the same `AuthLayer` logic as gRPC (SHA-256 hash comparison, per-queue ACL check)
+**And** unauthenticated requests after a failed or missing Auth frame receive an error response with appropriate error code
+**And** per-queue ACL checks are enforced on every data operation (same permission model as gRPC)
+
+**And** integration tests verify: TLS connection with valid cert, TLS rejection with expired cert, API key auth success, API key auth failure, ACL enforcement (unauthorized queue access rejected)
+**And** `docs/configuration.md` is updated noting that FIBP shares TLS and auth configuration with gRPC
+
+### Story 36.4: Rust SDK FIBP Transport
+
+As a developer,
+I want the Rust SDK to support FIBP as an opt-in transport alongside gRPC,
+So that performance-sensitive applications can use the custom protocol without changing application code.
+
+**Acceptance Criteria:**
+
+**Given** the FIBP server from Stories 36.1-36.3 is running
+**When** a developer configures the SDK with FIBP transport
+**Then** `ClientConfig` gains a `transport: Transport` field with variants `Transport::Grpc` (default) and `Transport::Fibp`
+**And** `FilaClient::connect()` with `Transport::Fibp` establishes a raw TCP connection (or TLS-wrapped TCP), performs the FIBP handshake, and optionally sends the Auth frame
+**And** `enqueue()` sends messages over FIBP using the batch frame format from Story 36.2
+**And** `consume()` opens a FIBP consume stream with credit-based flow control, returning the same `ConsumerStream` type as gRPC
+**And** `ack()` and `nack()` send batch frames over FIBP
+**And** the SDK's `AccumulatorMode` (Auto/Linger/Disabled) works identically over both transports
+**And** admin operations (`create_queue`, `delete_queue`, `queue_stats`, `list_queues`) work over FIBP
+**And** the public API surface is identical regardless of transport — only `ClientConfig` changes
+**And** if the FIBP connection drops, the SDK does NOT auto-fallback to gRPC (explicit transport choice, no silent downgrade)
+**And** existing gRPC integration tests are duplicated as FIBP integration tests (same assertions, different transport)
+**And** `docs/sdk-examples.md` is updated with FIBP connection examples
+**And** `docs/configuration.md` documents the SDK `transport` option
+
+### Story 36.5: Benchmark Checkpoint — FIBP vs gRPC
+
+As a developer,
+I want verified benchmark numbers comparing FIBP and gRPC transport performance,
+So that the throughput gain from the custom protocol is quantified and the value of the investment is proven.
+
+**Acceptance Criteria:**
+
+**Given** the FIBP server and Rust SDK FIBP transport from Stories 36.1-36.4 are complete
+**When** the full benchmark suite is executed over both transports
+**Then** the following scenarios are measured **over gRPC** and **over FIBP** and actual numbers pasted into the checkpoint document:
+- Single-producer enqueue (1KB, RocksDB)
+- Single-producer enqueue (1KB, InMemoryEngine)
+- 4-producer enqueue (1KB, RocksDB)
+- 4-producer enqueue (1KB, InMemoryEngine)
+- Lifecycle enqueue+consume+ack (1KB, RocksDB)
+- Lifecycle enqueue+consume+ack (1KB, InMemoryEngine)
+- Batch enqueue with SDK accumulator (1KB, RocksDB)
+**And** a server-side flamegraph is captured during single-producer FIBP enqueue (InMemoryEngine) showing where CPU time is spent without HTTP/2
+**And** the document includes a comparison table: gRPC vs FIBP with percentage improvement per scenario
+**And** the document includes a comparison against Epic 35 baseline showing total cumulative improvement (Phase 1 + Phase 2)
+**And** the document includes a flamegraph comparison: gRPC vs FIBP showing where CPU time shifted
+**And** the document assesses whether NFR-T3 (100K msg/s single-producer) and NFR-T4 (200K msg/s 4-producer) are met
+**And** the document includes a recommendation for next steps:
+  - If FIBP meets targets: Phase 3-5 are optional optimizations
+  - If FIBP falls short: identify the new bottleneck and recommend specific Phase 3 changes
+**And** results are committed as `_bmad-output/planning-artifacts/research/epic-36-checkpoint-benchmarks.md`
+**And** no estimates or projections — only measured numbers from actual benchmark runs
