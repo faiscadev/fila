@@ -56,7 +56,7 @@ async fn main() {
     };
 
     // Create the queue via the SDK.
-    create_queue_cli(&connect_addr, queue_name);
+    create_queue_cli(&connect_addr, queue_name).await;
 
     eprintln!(
         "workload={workload} duration={duration_secs}s msg_size={msg_size}B concurrency={concurrency} addr={connect_addr}"

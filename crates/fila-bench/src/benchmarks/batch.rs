@@ -42,7 +42,7 @@ pub async fn bench_batch_enqueue_throughput(server: &BenchServer) -> Vec<BenchRe
 
     for &batch_size in batch_sizes {
         let queue = format!("bench-batch-throughput-{batch_size}");
-        create_queue_cli(server.addr(), &queue);
+        create_queue_cli(server.addr(), &queue).await;
 
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
@@ -115,7 +115,7 @@ pub async fn bench_batch_size_scaling(server: &BenchServer) -> Vec<BenchResult> 
 
     for &batch_size in batch_sizes {
         let queue = format!("bench-batch-scaling-{batch_size}");
-        create_queue_cli(server.addr(), &queue);
+        create_queue_cli(server.addr(), &queue).await;
 
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
@@ -172,7 +172,7 @@ pub async fn bench_auto_batching_latency(server: &BenchServer) -> Vec<BenchResul
 
     for &producer_count in concurrency_levels {
         let queue = format!("bench-autobatch-latency-{producer_count}");
-        create_queue_cli(server.addr(), &queue);
+        create_queue_cli(server.addr(), &queue).await;
 
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
@@ -209,15 +209,20 @@ pub async fn bench_auto_batching_latency(server: &BenchServer) -> Vec<BenchResul
         tokio::time::sleep(Duration::from_secs(WARMUP_SECS)).await;
 
         // Phase 2: Measure sequential enqueue-consume round-trip latency
-        // Drain existing messages first
+        // Drain existing messages first using a separate connection so the main
+        // client has no active consume session when measurement starts
+        // (FIBP allows only one consume session per connection).
         {
-            let mut drain = client.consume(&queue).await.expect("consume drain");
+            let drain_client = fila_sdk::FilaClient::connect(server.addr())
+                .await
+                .expect("connect drain");
+            let mut drain = drain_client.consume(&queue).await.expect("consume drain");
             let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
             loop {
                 let next = tokio::time::timeout(Duration::from_millis(200), drain.next()).await;
                 match next {
                     Ok(Some(Ok(msg))) => {
-                        let _ = client.ack(&queue, &msg.id).await;
+                        let _ = drain_client.ack(&queue, &msg.id).await;
                     }
                     _ => break,
                 }
@@ -226,6 +231,7 @@ pub async fn bench_auto_batching_latency(server: &BenchServer) -> Vec<BenchResul
                 }
             }
             drop(drain);
+            drop(drain_client);
         }
 
         // Stop background producers
@@ -302,7 +308,7 @@ pub async fn bench_batched_vs_unbatched(server: &BenchServer) -> Vec<BenchResult
     // --- Mode 1: Unbatched (single enqueue per message) ---
     {
         let queue = "bench-bvu-unbatched";
-        create_queue_cli(server.addr(), queue);
+        create_queue_cli(server.addr(), queue).await;
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
             .expect("connect");
@@ -345,7 +351,7 @@ pub async fn bench_batched_vs_unbatched(server: &BenchServer) -> Vec<BenchResult
     // --- Mode 2: Explicit batch_enqueue ---
     {
         let queue = "bench-bvu-explicit-batch";
-        create_queue_cli(server.addr(), queue);
+        create_queue_cli(server.addr(), queue).await;
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
             .expect("connect");
@@ -389,7 +395,7 @@ pub async fn bench_batched_vs_unbatched(server: &BenchServer) -> Vec<BenchResult
     // --- Mode 3: Simulated auto-batching (accumulate + flush with linger) ---
     {
         let queue = "bench-bvu-auto-batch";
-        create_queue_cli(server.addr(), queue);
+        create_queue_cli(server.addr(), queue).await;
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
             .expect("connect");
@@ -483,7 +489,7 @@ pub async fn bench_delivery_batching_throughput(server: &BenchServer) -> Vec<Ben
 
     for &consumer_count in consumer_counts {
         let queue = format!("bench-delivery-batch-{consumer_count}");
-        create_queue_cli(server.addr(), &queue);
+        create_queue_cli(server.addr(), &queue).await;
 
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
@@ -585,7 +591,7 @@ pub async fn bench_concurrent_producer_batching(server: &BenchServer) -> Vec<Ben
 
     for &producer_count in producer_counts {
         let queue = format!("bench-concurrent-batch-{producer_count}");
-        create_queue_cli(server.addr(), &queue);
+        create_queue_cli(server.addr(), &queue).await;
 
         // Warmup with a single client
         let warmup_client = fila_sdk::FilaClient::connect(server.addr())

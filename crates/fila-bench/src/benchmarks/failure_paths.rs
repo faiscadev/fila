@@ -18,14 +18,14 @@ const MESSAGES_PER_KEY: usize = 400;
 pub async fn bench_nack_storm(server: &BenchServer) -> Vec<BenchResult> {
     // --- Baseline: 100% ack ---
     let baseline_queue = "bench-nack-baseline";
-    create_queue_cli(server.addr(), baseline_queue);
+    create_queue_cli(server.addr(), baseline_queue).await;
     let baseline_throughput =
         measure_consume_throughput(server, baseline_queue, |_| Action::Ack).await;
 
     // --- Nack storm: 10% nack, 90% ack ---
     let nack_queue = "bench-nack-storm";
     let on_failure = r#"function on_failure(msg) return { action = "retry", delay_ms = 0 } end"#;
-    create_queue_with_lua_cli(server.addr(), nack_queue, None, Some(on_failure));
+    create_queue_with_lua_cli(server.addr(), nack_queue, None, Some(on_failure)).await;
     let mut nack_counter: usize = 0;
     let nack_throughput = measure_consume_throughput(server, nack_queue, |_| {
         nack_counter += 1;
@@ -72,7 +72,7 @@ pub async fn bench_nack_storm(server: &BenchServer) -> Vec<BenchResult> {
 pub async fn bench_dlq_routing_overhead(server: &BenchServer) -> Vec<BenchResult> {
     // --- Baseline: 100% ack, no on_failure hook ---
     let baseline_queue = "bench-dlq-baseline";
-    create_queue_cli(server.addr(), baseline_queue);
+    create_queue_cli(server.addr(), baseline_queue).await;
     let baseline_throughput =
         measure_consume_throughput(server, baseline_queue, |_| Action::Ack).await;
 
@@ -80,10 +80,10 @@ pub async fn bench_dlq_routing_overhead(server: &BenchServer) -> Vec<BenchResult
     let dlq_queue = "bench-dlq-overhead";
     // DLQ queue must exist first (fila auto-creates <name>.dlq but we need to be safe)
     let dlq_target = "bench-dlq-overhead.dlq";
-    create_queue_cli(server.addr(), dlq_target);
+    create_queue_cli(server.addr(), dlq_target).await;
 
     let on_failure = r#"function on_failure(msg) if msg.attempts >= 2 then return { action = "dlq" } end return { action = "retry", delay_ms = 0 } end"#;
-    create_queue_with_lua_cli(server.addr(), dlq_queue, None, Some(on_failure));
+    create_queue_with_lua_cli(server.addr(), dlq_queue, None, Some(on_failure)).await;
 
     // Track which message IDs should be "poison" (always nacked).
     // We use a simple counter: every 20th message is poison (5%).
@@ -137,7 +137,7 @@ pub async fn bench_poison_pill_isolation(server: &BenchServer) -> Vec<BenchResul
     let queue = "bench-poison-pill";
     let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["fk"] or "default" return { fairness_key = key, weight = 1, throttle_keys = {} } end"#;
     let on_failure = r#"function on_failure(msg) return { action = "retry", delay_ms = 0 } end"#;
-    create_queue_with_lua_cli(server.addr(), queue, Some(on_enqueue), Some(on_failure));
+    create_queue_with_lua_cli(server.addr(), queue, Some(on_enqueue), Some(on_failure)).await;
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await

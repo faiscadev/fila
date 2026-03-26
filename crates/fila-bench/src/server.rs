@@ -133,53 +133,40 @@ impl Drop for BenchServer {
 }
 
 /// Create a queue via the SDK's FIBP transport.
-pub fn create_queue_cli(addr: &str, name: &str) {
-    // Use a blocking runtime to call the async SDK.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build tokio runtime for create_queue");
-    rt.block_on(async {
-        let transport = fila_sdk::FibpTransport::connect(addr, None)
-            .await
-            .expect("connect to fila-server for create_queue");
-        match transport.create_queue(name, Default::default()).await {
-            Ok(_) => {}
-            Err(e) => {
-                let msg = format!("{e}");
-                if !msg.contains("already exists") {
-                    panic!("failed to create queue '{name}': {e}");
-                }
+pub async fn create_queue_cli(addr: &str, name: &str) {
+    let transport = fila_sdk::FibpTransport::connect(addr, None)
+        .await
+        .expect("connect to fila-server for create_queue");
+    match transport.create_queue(name, Default::default()).await {
+        Ok(_) => {}
+        Err(e) => {
+            let msg = format!("{e}");
+            if !msg.contains("already exists") {
+                panic!("failed to create queue '{name}': {e}");
             }
         }
-    });
+    }
 }
 
 /// Create a queue with Lua scripts via the SDK's FIBP transport.
-pub fn create_queue_with_lua_cli(
+pub async fn create_queue_with_lua_cli(
     addr: &str,
     name: &str,
     on_enqueue: Option<&str>,
     on_failure: Option<&str>,
 ) {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build tokio runtime for create_queue_with_lua");
-    rt.block_on(async {
-        let transport = fila_sdk::FibpTransport::connect(addr, None)
-            .await
-            .expect("connect to fila-server for create_queue");
-        let config = fila_sdk::proto::QueueConfig {
-            on_enqueue_script: on_enqueue.unwrap_or_default().to_string(),
-            on_failure_script: on_failure.unwrap_or_default().to_string(),
-            visibility_timeout_ms: 0,
-        };
-        transport
-            .create_queue(name, Some(config))
-            .await
-            .unwrap_or_else(|e| panic!("failed to create queue '{name}' with Lua: {e}"));
-    });
+    let transport = fila_sdk::FibpTransport::connect(addr, None)
+        .await
+        .expect("connect to fila-server for create_queue");
+    let config = fila_sdk::proto::QueueConfig {
+        on_enqueue_script: on_enqueue.unwrap_or_default().to_string(),
+        on_failure_script: on_failure.unwrap_or_default().to_string(),
+        visibility_timeout_ms: 0,
+    };
+    transport
+        .create_queue(name, Some(config))
+        .await
+        .unwrap_or_else(|e| panic!("failed to create queue '{name}' with Lua: {e}"));
 }
 
 fn free_port() -> u16 {
