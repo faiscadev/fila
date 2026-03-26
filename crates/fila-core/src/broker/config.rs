@@ -10,7 +10,9 @@ pub struct BrokerConfig {
     pub telemetry: TelemetryConfig,
     pub cluster: ClusterConfig,
     pub storage: StorageConfig,
-    pub grpc: GrpcConfig,
+    /// FIBP (Fila Binary Protocol) transport configuration.
+    /// Always enabled — FIBP is the sole transport protocol.
+    pub fibp: FibpConfig,
     /// TLS configuration. `None` (the default) disables TLS entirely.
     /// Presence of this section in `fila.toml` enables TLS.
     pub tls: Option<TlsParams>,
@@ -20,10 +22,6 @@ pub struct BrokerConfig {
     /// Web GUI configuration. `None` (the default) disables the web GUI.
     /// Presence of this section in `fila.toml` enables the read-only management dashboard.
     pub gui: Option<GuiConfig>,
-    /// FIBP (Fila Binary Protocol) configuration. `None` (the default) disables
-    /// the custom binary TCP transport. Presence of a `[fibp]` section in
-    /// `fila.toml` enables it alongside gRPC.
-    pub fibp: Option<FibpConfig>,
 }
 
 /// Web management GUI configuration. Presence in `BrokerConfig.gui` (i.e. a `[gui]` section
@@ -40,11 +38,11 @@ fn default_gui_listen_addr() -> String {
 }
 
 /// FIBP (Fila Binary Protocol) transport configuration.
-/// Presence in `BrokerConfig.fibp` (i.e. a `[fibp]` section in `fila.toml`)
-/// enables the custom binary TCP transport; absence disables it entirely.
+/// Always enabled — FIBP is the sole transport protocol for Fila.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct FibpConfig {
-    /// TCP listen address for the FIBP transport (default: "0.0.0.0:5557").
+    /// TCP listen address for the FIBP transport (default: "0.0.0.0:5555").
     #[serde(default = "default_fibp_listen_addr")]
     pub listen_addr: String,
     /// Maximum frame size in bytes (default: 16MB = 16_777_216).
@@ -59,8 +57,19 @@ pub struct FibpConfig {
     pub keepalive_timeout_secs: u64,
 }
 
+impl Default for FibpConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: default_fibp_listen_addr(),
+            max_frame_size: default_fibp_max_frame_size(),
+            keepalive_interval_secs: default_fibp_keepalive_interval_secs(),
+            keepalive_timeout_secs: default_fibp_keepalive_timeout_secs(),
+        }
+    }
+}
+
 fn default_fibp_listen_addr() -> String {
-    "0.0.0.0:5557".to_string()
+    "0.0.0.0:5555".to_string()
 }
 
 fn default_fibp_max_frame_size() -> u32 {
@@ -126,7 +135,7 @@ pub struct TlsParams {
 /// Authentication configuration. Presence in `BrokerConfig.auth` (i.e. an `[auth]` section
 /// in `fila.toml`) enables API key authentication; absence disables it entirely.
 ///
-/// When enabled, every gRPC RPC must include `authorization: Bearer <key>` metadata.
+/// When enabled, every request must include a valid API key.
 /// `bootstrap_apikey` is required: it is a permanent operator key accepted without a storage
 /// lookup, enabling operators to provision the first real API key. It can also be set (or
 /// overridden) via the `FILA_BOOTSTRAP_APIKEY` environment variable.
@@ -141,10 +150,13 @@ pub struct AuthConfig {
     pub bootstrap_apikey: String,
 }
 
-/// Server configuration (gRPC listen address).
-#[derive(Debug, Clone, Deserialize)]
+/// Server configuration (legacy section, kept for backward-compatible TOML parsing).
+/// The listen address is now in `FibpConfig.listen_addr`.
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
+    /// Legacy field — ignored. Use `fibp.listen_addr` instead.
+    #[serde(default)]
     pub listen_addr: String,
 }
 
@@ -260,28 +272,6 @@ pub struct RocksDbConfig {
     pub bloom_filter_bits: i32,
 }
 
-/// gRPC transport tuning parameters.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
-pub struct GrpcConfig {
-    /// Initial HTTP/2 stream window size in bytes (default: 8MB).
-    /// Larger windows reduce WINDOW_UPDATE frame overhead for high-throughput streams.
-    pub initial_stream_window_size: u32,
-    /// Initial HTTP/2 connection window size in bytes (default: 16MB).
-    /// Should be >= initial_stream_window_size * expected concurrent streams.
-    pub initial_connection_window_size: u32,
-    /// Maximum HTTP/2 frame size in bytes (default: 65536 = 64KB).
-    /// Larger frames reduce per-frame overhead for large batch payloads.
-    /// Valid range: 16384 (16KB) to 16777215 (16MB).
-    pub http2_max_frame_size: u32,
-    /// Enable TCP_NODELAY (default: true).
-    pub tcp_nodelay: bool,
-    /// HTTP/2 keepalive interval in seconds (default: 15).
-    pub keepalive_interval_secs: u64,
-    /// HTTP/2 keepalive timeout in seconds (default: 10).
-    pub keepalive_timeout_secs: u64,
-}
-
 impl Default for RocksDbConfig {
     fn default() -> Self {
         Self {
@@ -300,19 +290,6 @@ impl Default for RocksDbConfig {
     }
 }
 
-impl Default for GrpcConfig {
-    fn default() -> Self {
-        Self {
-            initial_stream_window_size: 8 * 1024 * 1024,
-            initial_connection_window_size: 16 * 1024 * 1024,
-            http2_max_frame_size: 64 * 1024,
-            tcp_nodelay: true,
-            keepalive_interval_secs: 15,
-            keepalive_timeout_secs: 10,
-        }
-    }
-}
-
 impl Default for LuaConfig {
     fn default() -> Self {
         Self {
@@ -320,14 +297,6 @@ impl Default for LuaConfig {
             default_memory_limit_bytes: 1_048_576, // 1 MB
             circuit_breaker_threshold: 3,
             circuit_breaker_cooldown_ms: 10_000,
-        }
-    }
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            listen_addr: "0.0.0.0:5555".to_string(),
         }
     }
 }
@@ -367,7 +336,7 @@ mod tests {
     #[test]
     fn default_config_values() {
         let config = BrokerConfig::default();
-        assert_eq!(config.server.listen_addr, "0.0.0.0:5555");
+        assert_eq!(config.fibp.listen_addr, "0.0.0.0:5555");
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
         assert_eq!(config.scheduler.idle_timeout_ms, 100);
         assert_eq!(config.scheduler.quantum, 1000);
@@ -383,7 +352,7 @@ mod tests {
     #[test]
     fn toml_parsing_with_overrides() {
         let toml_str = r#"
-            [server]
+            [fibp]
             listen_addr = "127.0.0.1:9999"
 
             [scheduler]
@@ -401,7 +370,7 @@ mod tests {
             circuit_breaker_cooldown_ms = 30000
         "#;
         let config: BrokerConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.server.listen_addr, "127.0.0.1:9999");
+        assert_eq!(config.fibp.listen_addr, "127.0.0.1:9999");
         assert_eq!(config.scheduler.command_channel_capacity, 500);
         assert_eq!(config.scheduler.idle_timeout_ms, 50);
         assert_eq!(config.scheduler.quantum, 500);
@@ -417,7 +386,7 @@ mod tests {
     #[test]
     fn toml_parsing_empty_uses_defaults() {
         let config: BrokerConfig = toml::from_str("").unwrap();
-        assert_eq!(config.server.listen_addr, "0.0.0.0:5555");
+        assert_eq!(config.fibp.listen_addr, "0.0.0.0:5555");
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
         assert_eq!(config.scheduler.idle_timeout_ms, 100);
     }
@@ -425,11 +394,11 @@ mod tests {
     #[test]
     fn toml_parsing_partial_config() {
         let toml_str = r#"
-            [server]
+            [fibp]
             listen_addr = "0.0.0.0:8080"
         "#;
         let config: BrokerConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.server.listen_addr, "0.0.0.0:8080");
+        assert_eq!(config.fibp.listen_addr, "0.0.0.0:8080");
         // Scheduler defaults preserved
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
     }
@@ -614,56 +583,12 @@ mod tests {
     }
 
     #[test]
-    fn grpc_defaults() {
-        let config = BrokerConfig::default();
-        assert_eq!(config.grpc.initial_stream_window_size, 8 * 1024 * 1024);
-        assert_eq!(config.grpc.initial_connection_window_size, 16 * 1024 * 1024);
-        assert_eq!(config.grpc.http2_max_frame_size, 64 * 1024);
-        assert!(config.grpc.tcp_nodelay);
-        assert_eq!(config.grpc.keepalive_interval_secs, 15);
-        assert_eq!(config.grpc.keepalive_timeout_secs, 10);
-    }
-
-    #[test]
-    fn grpc_toml_parsing() {
-        let toml_str = r#"
-            [grpc]
-            initial_stream_window_size = 4194304
-            initial_connection_window_size = 8388608
-            tcp_nodelay = false
-            keepalive_interval_secs = 30
-            keepalive_timeout_secs = 20
-        "#;
-        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.grpc.initial_stream_window_size, 4 * 1024 * 1024);
-        assert_eq!(config.grpc.initial_connection_window_size, 8 * 1024 * 1024);
-        assert!(!config.grpc.tcp_nodelay);
-        assert_eq!(config.grpc.keepalive_interval_secs, 30);
-        assert_eq!(config.grpc.keepalive_timeout_secs, 20);
-    }
-
-    #[test]
-    fn grpc_absent_section_uses_defaults() {
-        let config: BrokerConfig = toml::from_str("").unwrap();
-        assert!(config.grpc.tcp_nodelay);
-        assert_eq!(config.grpc.keepalive_interval_secs, 15);
-    }
-
-    #[test]
-    fn fibp_absent_means_disabled() {
-        let config: BrokerConfig = toml::from_str("").unwrap();
-        assert!(config.fibp.is_none());
-    }
-
-    #[test]
     fn fibp_defaults() {
-        let toml_str = "[fibp]\n";
-        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
-        let fibp = config.fibp.unwrap();
-        assert_eq!(fibp.listen_addr, "0.0.0.0:5557");
-        assert_eq!(fibp.max_frame_size, 16_777_216);
-        assert_eq!(fibp.keepalive_interval_secs, 15);
-        assert_eq!(fibp.keepalive_timeout_secs, 10);
+        let config = BrokerConfig::default();
+        assert_eq!(config.fibp.listen_addr, "0.0.0.0:5555");
+        assert_eq!(config.fibp.max_frame_size, 16_777_216);
+        assert_eq!(config.fibp.keepalive_interval_secs, 15);
+        assert_eq!(config.fibp.keepalive_timeout_secs, 10);
     }
 
     #[test]
@@ -676,10 +601,15 @@ mod tests {
             keepalive_timeout_secs = 20
         "#;
         let config: BrokerConfig = toml::from_str(toml_str).unwrap();
-        let fibp = config.fibp.unwrap();
-        assert_eq!(fibp.listen_addr, "127.0.0.1:9000");
-        assert_eq!(fibp.max_frame_size, 8_388_608);
-        assert_eq!(fibp.keepalive_interval_secs, 30);
-        assert_eq!(fibp.keepalive_timeout_secs, 20);
+        assert_eq!(config.fibp.listen_addr, "127.0.0.1:9000");
+        assert_eq!(config.fibp.max_frame_size, 8_388_608);
+        assert_eq!(config.fibp.keepalive_interval_secs, 30);
+        assert_eq!(config.fibp.keepalive_timeout_secs, 20);
+    }
+
+    #[test]
+    fn fibp_absent_section_uses_defaults() {
+        let config: BrokerConfig = toml::from_str("").unwrap();
+        assert_eq!(config.fibp.listen_addr, "0.0.0.0:5555");
     }
 }

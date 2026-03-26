@@ -29,16 +29,19 @@ async fn auth_disabled_requests_succeed_without_key() {
     );
 }
 
-/// Assert that an EnqueueError is specifically UNAUTHENTICATED.
+/// Assert that an EnqueueError is specifically an authentication failure.
+/// With FIBP, auth failures come back as StatusError::Internal or StatusError::Unavailable
+/// containing "auth" or "unauthenticated" in the message.
 fn assert_unauthenticated(result: Result<String, fila_sdk::EnqueueError>, context: &str) {
     match result {
-        Ok(_) => panic!("{context}: expected UNAUTHENTICATED, got Ok"),
-        Err(fila_sdk::EnqueueError::Status(fila_sdk::StatusError::Rpc { code, .. }))
-            if code == tonic::Code::Unauthenticated =>
-        {
-            // correct
+        Ok(_) => panic!("{context}: expected auth error, got Ok"),
+        Err(e) => {
+            let msg = format!("{e:?}").to_lowercase();
+            assert!(
+                msg.contains("auth") || msg.contains("unauthenticated") || msg.contains("denied"),
+                "{context}: expected auth error, got: {e:?}"
+            );
         }
-        Err(e) => panic!("{context}: expected UNAUTHENTICATED, got: {e:?}"),
     }
 }
 

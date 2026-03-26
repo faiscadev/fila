@@ -1,32 +1,9 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
-use fila_proto::fila_service_client::FilaServiceClient;
-use fila_proto::{
-    AckMessage, AckRequest, ConsumeRequest, EnqueueMessage as ProtoEnqueueMessage, EnqueueRequest,
-    NackMessage, NackRequest, StreamEnqueueRequest, StreamEnqueueResponse,
-};
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio_stream::{Stream, StreamExt};
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
-
-use crate::error::{
-    ack_status_error, consume_status_error, enqueue_status_error, nack_status_error, status_error,
-    AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError,
-};
+use crate::error::{AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError};
 use crate::fibp_transport::FibpTransport;
-
-/// The transport protocol to use when connecting to a Fila broker.
-#[derive(Debug, Clone, Default)]
-pub enum Transport {
-    /// gRPC over HTTP/2 (default).
-    #[default]
-    Grpc,
-    /// FIBP custom binary protocol over TCP.
-    Fibp,
-}
+use tokio_stream::Stream;
 
 /// A consumed message received from the broker.
 #[derive(Debug, Clone)]
@@ -43,17 +20,17 @@ pub struct ConsumeMessage {
 ///
 /// The default is [`Auto`](AccumulatorMode::Auto) — Nagle-style adaptive
 /// accumulation that requires zero configuration. It sends immediately when
-/// idle and buffers while an RPC is in flight, flushing the buffer when the
-/// RPC completes. Size tunes itself to the actual throughput/latency ratio.
+/// idle and buffers while a request is in flight, flushing the buffer when the
+/// request completes. Size tunes itself to the actual throughput/latency ratio.
 #[derive(Debug, Clone)]
 pub enum AccumulatorMode {
     /// Nagle-style adaptive accumulation (default).
     ///
-    /// When no RPC is in flight, sends immediately (zero added latency).
-    /// When an RPC is in flight, buffers incoming messages and flushes
-    /// them as a single `Enqueue` when the in-flight RPC completes.
+    /// When no request is in flight, sends immediately (zero added latency).
+    /// When a request is in flight, buffers incoming messages and flushes
+    /// them as a single `Enqueue` when the in-flight request completes.
     /// Size adapts automatically: higher arrival rate or higher
-    /// server latency → bigger flushes.
+    /// server latency -> bigger flushes.
     Auto {
         /// Safety cap on flush size. Default: 100.
         max_batch_size: usize,
@@ -61,7 +38,7 @@ pub enum AccumulatorMode {
     /// Timer-based accumulation with explicit settings.
     ///
     /// Buffers messages and flushes when either `batch_size` messages
-    /// accumulate or `linger_ms` milliseconds elapse — whichever first.
+    /// accumulate or `linger_ms` milliseconds elapse -- whichever first.
     /// Default: `linger_ms=5`, `batch_size=100` (matching Kafka's `linger.ms`).
     Linger {
         /// Time threshold in milliseconds before a partial flush is triggered.
@@ -70,7 +47,7 @@ pub enum AccumulatorMode {
         /// Maximum messages per flush. Default: 100.
         batch_size: usize,
     },
-    /// No accumulation. Each `enqueue()` is a separate single-message RPC.
+    /// No accumulation. Each `enqueue()` is a separate single-message request.
     Disabled,
 }
 
@@ -118,8 +95,6 @@ pub struct ConnectOptions {
     /// Accumulator mode for `enqueue()` calls.
     /// Default: [`AccumulatorMode::Auto`].
     pub accumulator: AccumulatorMode,
-    /// Transport protocol. Default: [`Transport::Grpc`].
-    pub transport: Transport,
 }
 
 impl ConnectOptions {
@@ -165,24 +140,6 @@ impl ConnectOptions {
         self.accumulator = mode;
         self
     }
-
-    /// Use the FIBP binary protocol instead of gRPC.
-    pub fn with_fibp(mut self) -> Self {
-        self.transport = Transport::Fibp;
-        self
-    }
-
-    /// Set the transport protocol explicitly.
-    pub fn with_transport(mut self, transport: Transport) -> Self {
-        self.transport = transport;
-        self
-    }
-}
-
-/// An item sent to the background accumulator task.
-struct AccumulatorItem {
-    message: EnqueueMessage,
-    result_tx: oneshot::Sender<Result<String, EnqueueError>>,
 }
 
 /// Idiomatic Rust client for the Fila message broker.
@@ -190,15 +147,10 @@ struct AccumulatorItem {
 /// Wraps the hot-path operations: enqueue, consume, ack, nack.
 /// The client is `Clone`, `Send`, and `Sync` — it can be shared across tasks.
 ///
-/// By default uses gRPC over HTTP/2. Pass [`ConnectOptions::with_fibp()`] to
-/// use the FIBP binary protocol instead.
+/// Uses the FIBP binary protocol over TCP.
 #[derive(Debug, Clone)]
 pub struct FilaClient {
-    inner: Option<FilaServiceClient<Channel>>,
-    fibp: Option<FibpTransport>,
-    api_key: Option<String>,
-    connect_options: Option<ConnectOptions>,
-    accumulator_tx: Option<mpsc::Sender<AccumulatorItem>>,
+    fibp: FibpTransport,
 }
 
 impl FilaClient {
@@ -209,8 +161,6 @@ impl FilaClient {
 
     /// Connect to a Fila broker with custom options.
     pub async fn connect_with_options(options: ConnectOptions) -> Result<Self, ConnectError> {
-        let stored_options = options.clone();
-
         let has_cert = options.tls_client_cert_pem.is_some();
         let has_key = options.tls_client_key_pem.is_some();
         if has_cert != has_key {
@@ -220,80 +170,7 @@ impl FilaClient {
             ));
         }
 
-        match options.transport {
-            Transport::Fibp => {
-                return Self::connect_fibp(stored_options).await;
-            }
-            Transport::Grpc => {}
-        }
-
-        let mut endpoint = Channel::from_shared(options.addr)
-            .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
-
-        if let Some(timeout) = options.timeout {
-            endpoint = endpoint.timeout(timeout);
-        }
-
         let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some() || has_cert;
-        if tls_enabled {
-            let mut tls = ClientTlsConfig::new();
-            if let Some(ca_pem) = options.tls_ca_cert_pem {
-                tls = tls.ca_certificate(Certificate::from_pem(ca_pem));
-            }
-            if let (Some(cert_pem), Some(key_pem)) =
-                (options.tls_client_cert_pem, options.tls_client_key_pem)
-            {
-                tls = tls.identity(Identity::from_pem(cert_pem, key_pem));
-            }
-            endpoint = endpoint
-                .tls_config(tls)
-                .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
-        }
-
-        let channel = endpoint.connect().await?;
-        let inner = FilaServiceClient::new(channel);
-        let api_key = stored_options.api_key.clone();
-
-        let accumulator_tx = match &stored_options.accumulator {
-            AccumulatorMode::Auto { max_batch_size } => {
-                let max_batch_size = *max_batch_size;
-                let (tx, rx) = mpsc::channel::<AccumulatorItem>(max_batch_size * 2);
-                let client = inner.clone();
-                let key = api_key.clone();
-                tokio::spawn(run_auto_accumulator(rx, client, key, max_batch_size));
-                Some(tx)
-            }
-            AccumulatorMode::Linger {
-                linger_ms,
-                batch_size,
-            } => {
-                let (tx, rx) = mpsc::channel::<AccumulatorItem>(*batch_size * 2);
-                let client = inner.clone();
-                let key = api_key.clone();
-                let batch_size = *batch_size;
-                let linger_ms = *linger_ms;
-                tokio::spawn(run_linger_accumulator(
-                    rx, client, key, batch_size, linger_ms,
-                ));
-                Some(tx)
-            }
-            AccumulatorMode::Disabled => None,
-        };
-
-        Ok(Self {
-            inner: Some(inner),
-            fibp: None,
-            api_key,
-            connect_options: Some(stored_options),
-            accumulator_tx,
-        })
-    }
-
-    /// Connect via the FIBP binary protocol.
-    async fn connect_fibp(options: ConnectOptions) -> Result<Self, ConnectError> {
-        let tls_enabled = options.tls
-            || options.tls_ca_cert_pem.is_some()
-            || options.tls_client_cert_pem.is_some();
 
         // For FIBP, the address is a raw TCP address (not a URL).
         // Strip any http:// or https:// prefix if present.
@@ -316,71 +193,18 @@ impl FilaClient {
             FibpTransport::connect(addr, options.api_key.clone()).await?
         };
 
-        Ok(Self {
-            inner: None,
-            fibp: Some(fibp),
-            api_key: options.api_key.clone(),
-            connect_options: Some(options),
-            accumulator_tx: None,
-        })
-    }
-
-    /// Return a reference to the gRPC client, panicking if FIBP is active.
-    fn grpc(&self) -> &FilaServiceClient<Channel> {
-        self.inner
-            .as_ref()
-            .expect("grpc() called on FIBP transport")
-    }
-
-    /// Build a tonic `Request<T>` with the API key authorization header attached.
-    fn request<T>(&self, body: T) -> tonic::Request<T> {
-        let mut req = tonic::Request::new(body);
-        if let Some(ref key) = self.api_key {
-            if let Ok(val) =
-                tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
-            {
-                req.metadata_mut().insert("authorization", val);
-            }
-        }
-        req
+        Ok(Self { fibp })
     }
 
     /// Enqueue a single message to a queue.
     ///
     /// Returns the broker-assigned message ID (UUIDv7).
-    ///
-    /// When accumulation is enabled (default, gRPC only), the message is
-    /// buffered and flushed when the accumulator decides to send. Over FIBP,
-    /// messages are sent directly.
     pub async fn enqueue(
         &self,
         queue: &str,
         headers: HashMap<String, String>,
         payload: impl Into<Vec<u8>>,
     ) -> Result<String, EnqueueError> {
-        if let Some(ref tx) = self.accumulator_tx {
-            let (result_tx, result_rx) = oneshot::channel();
-            let item = AccumulatorItem {
-                message: EnqueueMessage {
-                    queue: queue.to_string(),
-                    headers,
-                    payload: payload.into(),
-                },
-                result_tx,
-            };
-            tx.send(item).await.map_err(|_| {
-                EnqueueError::Status(StatusError::Internal(
-                    "accumulator task has shut down".to_string(),
-                ))
-            })?;
-            return result_rx.await.map_err(|_| {
-                EnqueueError::Status(StatusError::Internal(
-                    "accumulator dropped result channel".to_string(),
-                ))
-            })?;
-        }
-
-        // No accumulator — send directly.
         let results = self
             .enqueue_many(vec![EnqueueMessage {
                 queue: queue.to_string(),
@@ -397,7 +221,7 @@ impl FilaClient {
             ))))
     }
 
-    /// Enqueue multiple messages in a single RPC call.
+    /// Enqueue multiple messages in a single request.
     ///
     /// Each message is independently validated and processed. A failed message
     /// does not affect the others. Returns one `Result` per input message, in
@@ -406,51 +230,7 @@ impl FilaClient {
         &self,
         messages: Vec<EnqueueMessage>,
     ) -> Vec<Result<String, EnqueueError>> {
-        // Route through FIBP when active.
-        if let Some(ref fibp) = self.fibp {
-            return fibp.enqueue_many(messages).await;
-        }
-
-        let proto_messages: Vec<ProtoEnqueueMessage> = messages
-            .into_iter()
-            .map(|m| ProtoEnqueueMessage {
-                queue: m.queue,
-                headers: m.headers,
-                payload: bytes::Bytes::from(m.payload),
-            })
-            .collect();
-
-        let msg_count = proto_messages.len();
-        let result = self
-            .grpc()
-            .clone()
-            .enqueue(self.request(EnqueueRequest {
-                messages: proto_messages,
-            }))
-            .await;
-
-        match result {
-            Ok(response) => response
-                .into_inner()
-                .results
-                .into_iter()
-                .map(parse_enqueue_result)
-                .collect(),
-            Err(status) => {
-                // RPC-level failure — broadcast the exact error to all items.
-                let code = status.code();
-                let message = status.message().to_string();
-                let count = msg_count;
-                (0..count)
-                    .map(|_| {
-                        Err(enqueue_status_error(tonic::Status::new(
-                            code,
-                            message.clone(),
-                        )))
-                    })
-                    .collect()
-            }
-        }
+        self.fibp.enqueue_many(messages).await
     }
 
     /// Open a streaming consumer on a queue.
@@ -458,632 +238,18 @@ impl FilaClient {
         &self,
         queue: &str,
     ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        // Route through FIBP when active.
-        if let Some(ref fibp) = self.fibp {
-            let rx = fibp.consume(queue).await?;
-            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-            return Ok(stream);
-        }
-
-        let consume_req = ConsumeRequest {
-            queue: queue.to_string(),
-        };
-
-        let result = self
-            .grpc()
-            .clone()
-            .consume(self.request(consume_req.clone()))
-            .await;
-
-        // If the server returns UNAVAILABLE with a leader hint, transparently
-        // reconnect to the hinted leader and retry once.
-        let response = match result {
-            Ok(resp) => resp,
-            Err(status)
-                if status.code() == tonic::Code::Unavailable
-                    && extract_leader_hint(&status).is_some() =>
-            {
-                let leader_addr = extract_leader_hint(&status).unwrap();
-                let leader_url =
-                    if leader_addr.starts_with("http://") || leader_addr.starts_with("https://") {
-                        leader_addr
-                    } else {
-                        let scheme = self
-                            .connect_options
-                            .as_ref()
-                            .map(|o| {
-                                if o.tls || o.tls_ca_cert_pem.is_some() {
-                                    "https"
-                                } else {
-                                    "http"
-                                }
-                            })
-                            .unwrap_or("http");
-                        format!("{scheme}://{leader_addr}")
-                    };
-                let leader_opts = match self.connect_options {
-                    Some(ref opts) => ConnectOptions {
-                        addr: leader_url,
-                        timeout: opts.timeout,
-                        tls: opts.tls,
-                        tls_ca_cert_pem: opts.tls_ca_cert_pem.clone(),
-                        tls_client_cert_pem: opts.tls_client_cert_pem.clone(),
-                        tls_client_key_pem: opts.tls_client_key_pem.clone(),
-                        api_key: opts.api_key.clone(),
-                        accumulator: AccumulatorMode::Disabled,
-                        transport: Transport::Grpc,
-                    },
-                    None => ConnectOptions::new(leader_url),
-                };
-                match Self::connect_with_options(leader_opts).await {
-                    Ok(leader_client) => leader_client
-                        .grpc()
-                        .clone()
-                        .consume(leader_client.request(consume_req))
-                        .await
-                        .map_err(consume_status_error)?,
-                    Err(_) => {
-                        return Err(consume_status_error(status));
-                    }
-                }
-            }
-            Err(status) => return Err(consume_status_error(status)),
-        };
-
-        let (expand_tx, expand_rx) =
-            tokio::sync::mpsc::channel::<Result<ConsumeMessage, StatusError>>(64);
-
-        let mut inner_stream = response.into_inner();
-        tokio::spawn(async move {
-            loop {
-                let result = tokio::select! {
-                    r = inner_stream.next() => r,
-                    _ = expand_tx.closed() => return,
-                };
-                match result {
-                    Some(Ok(consume_response)) => {
-                        for msg in consume_response.messages {
-                            let metadata = msg.metadata.unwrap_or_default();
-                            let cm = ConsumeMessage {
-                                id: msg.id,
-                                headers: msg.headers,
-                                payload: msg.payload.to_vec(),
-                                fairness_key: metadata.fairness_key,
-                                attempt_count: metadata.attempt_count,
-                                queue: metadata.queue_id,
-                            };
-                            if expand_tx.send(Ok(cm)).await.is_err() {
-                                return;
-                            }
-                        }
-                    }
-                    Some(Err(status)) => {
-                        let _ = expand_tx.send(Err(status_error(status))).await;
-                        return;
-                    }
-                    None => return,
-                }
-            }
-        });
-
-        let stream = tokio_stream::wrappers::ReceiverStream::new(expand_rx);
+        let rx = self.fibp.consume(queue).await?;
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(stream)
     }
 
     /// Acknowledge a successfully processed message.
     pub async fn ack(&self, queue: &str, message_id: &str) -> Result<(), AckError> {
-        if let Some(ref fibp) = self.fibp {
-            return fibp.ack(queue, message_id).await;
-        }
-
-        let response = self
-            .grpc()
-            .clone()
-            .ack(self.request(AckRequest {
-                messages: vec![AckMessage {
-                    queue: queue.to_string(),
-                    message_id: message_id.to_string(),
-                }],
-            }))
-            .await
-            .map_err(ack_status_error)?;
-
-        let results = response.into_inner().results;
-        if let Some(result) = results.into_iter().next() {
-            match result.result {
-                Some(fila_proto::ack_result::Result::Success(_)) => Ok(()),
-                Some(fila_proto::ack_result::Result::Error(err)) => {
-                    match fila_proto::AckErrorCode::try_from(err.code) {
-                        Ok(fila_proto::AckErrorCode::MessageNotFound) => {
-                            Err(AckError::MessageNotFound(err.message))
-                        }
-                        Ok(fila_proto::AckErrorCode::PermissionDenied) => {
-                            Err(AckError::PermissionDenied(err.message))
-                        }
-                        _ => Err(AckError::Status(StatusError::Internal(err.message))),
-                    }
-                }
-                None => Err(AckError::Status(StatusError::Internal(
-                    "no result in ack response".to_string(),
-                ))),
-            }
-        } else {
-            Err(AckError::Status(StatusError::Internal(
-                "empty ack response".to_string(),
-            )))
-        }
+        self.fibp.ack(queue, message_id).await
     }
 
     /// Negatively acknowledge a message that failed processing.
     pub async fn nack(&self, queue: &str, message_id: &str, error: &str) -> Result<(), NackError> {
-        if let Some(ref fibp) = self.fibp {
-            return fibp.nack(queue, message_id, error).await;
-        }
-
-        let response = self
-            .grpc()
-            .clone()
-            .nack(self.request(NackRequest {
-                messages: vec![NackMessage {
-                    queue: queue.to_string(),
-                    message_id: message_id.to_string(),
-                    error: error.to_string(),
-                }],
-            }))
-            .await
-            .map_err(nack_status_error)?;
-
-        let results = response.into_inner().results;
-        if let Some(result) = results.into_iter().next() {
-            match result.result {
-                Some(fila_proto::nack_result::Result::Success(_)) => Ok(()),
-                Some(fila_proto::nack_result::Result::Error(err)) => {
-                    match fila_proto::NackErrorCode::try_from(err.code) {
-                        Ok(fila_proto::NackErrorCode::MessageNotFound) => {
-                            Err(NackError::MessageNotFound(err.message))
-                        }
-                        Ok(fila_proto::NackErrorCode::PermissionDenied) => {
-                            Err(NackError::PermissionDenied(err.message))
-                        }
-                        _ => Err(NackError::Status(StatusError::Internal(err.message))),
-                    }
-                }
-                None => Err(NackError::Status(StatusError::Internal(
-                    "no result in nack response".to_string(),
-                ))),
-            }
-        } else {
-            Err(NackError::Status(StatusError::Internal(
-                "empty nack response".to_string(),
-            )))
-        }
-    }
-}
-
-/// Extract the leader's client address from gRPC error metadata.
-fn extract_leader_hint(status: &tonic::Status) -> Option<String> {
-    status
-        .metadata()
-        .get("x-fila-leader-addr")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-}
-
-/// Parse a single EnqueueResult proto into a Rust Result.
-fn parse_enqueue_result(result: fila_proto::EnqueueResult) -> Result<String, EnqueueError> {
-    match result.result {
-        Some(fila_proto::enqueue_result::Result::MessageId(id)) => Ok(id),
-        Some(fila_proto::enqueue_result::Result::Error(err)) => {
-            match fila_proto::EnqueueErrorCode::try_from(err.code) {
-                Ok(fila_proto::EnqueueErrorCode::QueueNotFound) => {
-                    Err(EnqueueError::QueueNotFound(err.message))
-                }
-                Ok(fila_proto::EnqueueErrorCode::PermissionDenied) => {
-                    Err(EnqueueError::PermissionDenied(err.message))
-                }
-                _ => Err(EnqueueError::Status(StatusError::Internal(err.message))),
-            }
-        }
-        None => Err(EnqueueError::Status(StatusError::Internal(
-            "no result from server".to_string(),
-        ))),
-    }
-}
-
-// --- Streaming enqueue infrastructure ---
-
-type PendingMap = HashMap<u64, Vec<oneshot::Sender<Result<String, EnqueueError>>>>;
-
-struct ActiveStream {
-    sender: mpsc::Sender<StreamEnqueueRequest>,
-    pending: Arc<Mutex<PendingMap>>,
-    _reader_handle: tokio::task::JoinHandle<()>,
-}
-
-struct StreamManager {
-    client: FilaServiceClient<Channel>,
-    api_key: Option<String>,
-    seq: AtomicU64,
-    active: Option<ActiveStream>,
-    fallback_to_unary: bool,
-}
-
-impl StreamManager {
-    fn new(client: FilaServiceClient<Channel>, api_key: Option<String>) -> Self {
-        Self {
-            client,
-            api_key,
-            seq: AtomicU64::new(1),
-            active: None,
-            fallback_to_unary: false,
-        }
-    }
-
-    async fn open_stream(&mut self) -> Result<(), tonic::Status> {
-        let (req_tx, req_rx) = mpsc::channel::<StreamEnqueueRequest>(256);
-        let req_stream = tokio_stream::wrappers::ReceiverStream::new(req_rx);
-
-        let mut request = tonic::Request::new(req_stream);
-        attach_api_key(&mut request, &self.api_key);
-
-        let response = self.client.clone().stream_enqueue(request).await;
-
-        match response {
-            Ok(resp) => {
-                let mut resp_stream = resp.into_inner();
-                let pending: Arc<Mutex<PendingMap>> = Arc::new(Mutex::new(HashMap::new()));
-                let pending_clone = Arc::clone(&pending);
-
-                let reader_handle = tokio::spawn(async move {
-                    while let Some(result) = resp_stream.next().await {
-                        match result {
-                            Ok(resp) => {
-                                resolve_stream_response(&pending_clone, resp).await;
-                            }
-                            Err(status) => {
-                                error_all_pending(
-                                    &pending_clone,
-                                    &format!("stream error: {status}"),
-                                )
-                                .await;
-                                return;
-                            }
-                        }
-                    }
-                    error_all_pending(&pending_clone, "stream closed by server").await;
-                });
-
-                self.active = Some(ActiveStream {
-                    sender: req_tx,
-                    pending,
-                    _reader_handle: reader_handle,
-                });
-                Ok(())
-            }
-            Err(status) if status.code() == tonic::Code::Unimplemented => {
-                self.fallback_to_unary = true;
-                Err(status)
-            }
-            Err(status) => Err(status),
-        }
-    }
-
-    async fn ensure_stream(&mut self) -> bool {
-        if self.fallback_to_unary {
-            return false;
-        }
-        if self.active.is_some() {
-            return true;
-        }
-        self.open_stream().await.is_ok()
-    }
-
-    /// Send a batch of messages through the stream as a single
-    /// `StreamEnqueueRequest` containing all messages. This amortizes HTTP/2
-    /// frame overhead across the entire batch.
-    async fn send_batch(&mut self, items: Vec<AccumulatorItem>) -> Vec<AccumulatorItem> {
-        let active = match self.active.as_ref() {
-            Some(a) => a,
-            None => return items,
-        };
-
-        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-
-        // Build a single request with all messages.
-        let messages: Vec<ProtoEnqueueMessage> = items
-            .iter()
-            .map(|item| ProtoEnqueueMessage {
-                queue: item.message.queue.clone(),
-                headers: item.message.headers.clone(),
-                payload: bytes::Bytes::from(item.message.payload.clone()),
-            })
-            .collect();
-
-        let req = StreamEnqueueRequest {
-            messages,
-            sequence_number: seq,
-        };
-
-        // Register all senders under this single sequence number.
-        let senders: Vec<oneshot::Sender<Result<String, EnqueueError>>> =
-            items.into_iter().map(|item| item.result_tx).collect();
-
-        {
-            let mut pending = active.pending.lock().await;
-            pending.insert(seq, senders);
-        }
-
-        // Send the single consolidated request.
-        match active.sender.try_send(req) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(req)) => {
-                if active.sender.send(req).await.is_err() {
-                    let mut pending = active.pending.lock().await;
-                    if let Some(txs) = pending.remove(&seq) {
-                        for tx in txs {
-                            let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
-                                "stream broke during send".to_string(),
-                            ))));
-                        }
-                    }
-                    drop(pending);
-                    self.active = None;
-                }
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                let mut pending = active.pending.lock().await;
-                if let Some(txs) = pending.remove(&seq) {
-                    for tx in txs {
-                        let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
-                            "stream broke during send".to_string(),
-                        ))));
-                    }
-                }
-                drop(pending);
-                self.active = None;
-            }
-        }
-
-        Vec::new()
-    }
-}
-
-/// Resolve a stream response. Each response carries results for all messages
-/// that were sent in the corresponding `StreamEnqueueRequest`.
-async fn resolve_stream_response(pending: &Mutex<PendingMap>, response: StreamEnqueueResponse) {
-    let seq = response.sequence_number;
-
-    let mut map = pending.lock().await;
-    if let Some(senders) = map.remove(&seq) {
-        let results: Vec<_> = response.results.into_iter().collect();
-        for (i, tx) in senders.into_iter().enumerate() {
-            let result = if let Some(proto_result) = results.get(i).cloned() {
-                parse_enqueue_result(proto_result)
-            } else {
-                Err(EnqueueError::Status(StatusError::Internal(
-                    "missing result in stream response".to_string(),
-                )))
-            };
-            let _ = tx.send(result);
-        }
-    }
-}
-
-async fn error_all_pending(pending: &Mutex<PendingMap>, error_msg: &str) {
-    let mut map = pending.lock().await;
-    let entries: Vec<_> = map.drain().collect();
-    for (_seq, senders) in entries {
-        for tx in senders {
-            let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
-                error_msg.to_string(),
-            ))));
-        }
-    }
-}
-
-// --- Accumulator implementations ---
-
-async fn run_auto_accumulator(
-    mut rx: mpsc::Receiver<AccumulatorItem>,
-    client: FilaServiceClient<Channel>,
-    api_key: Option<String>,
-    max_batch_size: usize,
-) {
-    let mut stream_mgr = StreamManager::new(client.clone(), api_key.clone());
-
-    loop {
-        let first = match rx.recv().await {
-            Some(item) => item,
-            None => return,
-        };
-
-        let mut batch = Vec::with_capacity(max_batch_size);
-        batch.push(first);
-        while batch.len() < max_batch_size {
-            match rx.try_recv() {
-                Ok(item) => batch.push(item),
-                Err(_) => break,
-            }
-        }
-
-        if stream_mgr.ensure_stream().await {
-            let unsent = stream_mgr.send_batch(batch).await;
-            if !unsent.is_empty() {
-                for item in unsent {
-                    let _ = item
-                        .result_tx
-                        .send(Err(EnqueueError::Status(StatusError::Internal(
-                            "stream broke during send".to_string(),
-                        ))));
-                }
-            }
-        } else {
-            let c = client.clone();
-            let k = api_key.clone();
-            tokio::spawn(async move {
-                flush_items(batch, &c, &k).await;
-            });
-        }
-    }
-}
-
-async fn run_linger_accumulator(
-    mut rx: mpsc::Receiver<AccumulatorItem>,
-    client: FilaServiceClient<Channel>,
-    api_key: Option<String>,
-    batch_size: usize,
-    linger_ms: u64,
-) {
-    let mut stream_mgr = StreamManager::new(client.clone(), api_key.clone());
-    let mut buffer: Vec<AccumulatorItem> = Vec::with_capacity(batch_size);
-
-    loop {
-        if buffer.is_empty() {
-            match rx.recv().await {
-                Some(item) => {
-                    buffer.push(item);
-                    if buffer.len() >= batch_size {
-                        flush_with_stream(&mut stream_mgr, &mut buffer, &client, &api_key).await;
-                    }
-                }
-                None => return,
-            }
-        } else {
-            let deadline = tokio::time::Instant::now() + Duration::from_millis(linger_ms);
-            let sleep = tokio::time::sleep_until(deadline);
-            tokio::pin!(sleep);
-
-            loop {
-                tokio::select! {
-                    biased;
-                    msg = rx.recv() => match msg {
-                        Some(item) => {
-                            buffer.push(item);
-                            if buffer.len() >= batch_size {
-                                flush_with_stream(
-                                    &mut stream_mgr,
-                                    &mut buffer,
-                                    &client,
-                                    &api_key,
-                                )
-                                .await;
-                                break;
-                            }
-                        }
-                        None => {
-                            flush_with_stream(
-                                &mut stream_mgr,
-                                &mut buffer,
-                                &client,
-                                &api_key,
-                            )
-                            .await;
-                            return;
-                        }
-                    },
-                    _ = &mut sleep => {
-                        flush_with_stream(
-                            &mut stream_mgr,
-                            &mut buffer,
-                            &client,
-                            &api_key,
-                        )
-                        .await;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-async fn flush_with_stream(
-    stream_mgr: &mut StreamManager,
-    buffer: &mut Vec<AccumulatorItem>,
-    client: &FilaServiceClient<Channel>,
-    api_key: &Option<String>,
-) {
-    let items: Vec<AccumulatorItem> = std::mem::take(buffer);
-    if items.is_empty() {
-        return;
-    }
-
-    if stream_mgr.ensure_stream().await {
-        let unsent = stream_mgr.send_batch(items).await;
-        if !unsent.is_empty() {
-            for item in unsent {
-                let _ = item
-                    .result_tx
-                    .send(Err(EnqueueError::Status(StatusError::Internal(
-                        "stream broke during send".to_string(),
-                    ))));
-            }
-        }
-    } else {
-        flush_items(items, client, api_key).await;
-    }
-}
-
-/// Flush items via the unified Enqueue RPC and fan results back to callers.
-async fn flush_items(
-    items: Vec<AccumulatorItem>,
-    client: &FilaServiceClient<Channel>,
-    api_key: &Option<String>,
-) {
-    if items.is_empty() {
-        return;
-    }
-
-    let proto_messages: Vec<ProtoEnqueueMessage> = items
-        .iter()
-        .map(|item| ProtoEnqueueMessage {
-            queue: item.message.queue.clone(),
-            headers: item.message.headers.clone(),
-            payload: bytes::Bytes::from(item.message.payload.clone()),
-        })
-        .collect();
-
-    let mut req = tonic::Request::new(EnqueueRequest {
-        messages: proto_messages,
-    });
-    attach_api_key(&mut req, api_key);
-
-    let result = client.clone().enqueue(req).await;
-
-    match result {
-        Ok(response) => {
-            let results = response.into_inner().results;
-            let mut result_iter = results.into_iter();
-            for item in items {
-                let mapped = match result_iter.next() {
-                    Some(result) => parse_enqueue_result(result),
-                    None => Err(EnqueueError::Status(StatusError::Internal(
-                        "server returned fewer results than messages sent".to_string(),
-                    ))),
-                };
-                let _ = item.result_tx.send(mapped);
-            }
-        }
-        Err(status) => {
-            let code = status.code();
-            let message = status.message().to_string();
-            for item in items {
-                let _ = item
-                    .result_tx
-                    .send(Err(enqueue_status_error(tonic::Status::new(
-                        code,
-                        message.clone(),
-                    ))));
-            }
-        }
-    }
-}
-
-fn attach_api_key<T>(req: &mut tonic::Request<T>, api_key: &Option<String>) {
-    if let Some(ref key) = api_key {
-        if let Ok(val) = tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
-        {
-            req.metadata_mut().insert("authorization", val);
-        }
+        self.fibp.nack(queue, message_id, error).await
     }
 }

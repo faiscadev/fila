@@ -1,26 +1,8 @@
 syntax = "proto3";
 package fila.v1;
 
-// Admin RPCs for operators and the CLI.
-service FilaAdmin {
-  rpc CreateQueue(CreateQueueRequest) returns (CreateQueueResponse);
-  rpc DeleteQueue(DeleteQueueRequest) returns (DeleteQueueResponse);
-  rpc SetConfig(SetConfigRequest) returns (SetConfigResponse);
-  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
-  rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
-  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
-  rpc Redrive(RedriveRequest) returns (RedriveResponse);
-  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
-
-  // API key management. CreateApiKey bypasses auth (bootstrap); others require a valid key.
-  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
-  rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
-  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
-
-  // Per-key ACL management.
-  rpc SetAcl(SetAclRequest) returns (SetAclResponse);
-  rpc GetAcl(GetAclRequest) returns (GetAclResponse);
-}
+// Admin message types used by FIBP admin operations (protobuf-encoded payloads).
+// The gRPC service definitions have been removed — FIBP is the sole transport.
 
 message CreateQueueRequest {
   string name = 1;

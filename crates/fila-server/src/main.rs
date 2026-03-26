@@ -1,37 +1,10 @@
-mod admin_service;
-mod auth;
-mod error;
 mod gui;
-mod service;
-mod trace_context;
 
 use std::path::Path;
 use std::sync::Arc;
 
-use std::time::Duration;
-
-use fila_core::{Broker, BrokerConfig, InMemoryEngine, RocksDbEngine, TlsParams};
-use fila_proto::fila_admin_server::FilaAdminServer;
-use fila_proto::fila_service_server::FilaServiceServer;
-use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
+use fila_core::{Broker, BrokerConfig, InMemoryEngine, RocksDbEngine};
 use tracing::info;
-
-use admin_service::AdminService;
-use service::HotPathService;
-
-/// Build a `ServerTlsConfig` from `TlsParams`.
-/// `ca_file` present → mTLS (verify client certs); absent → server-TLS only.
-async fn load_server_tls(tls: &TlsParams) -> Result<ServerTlsConfig, Box<dyn std::error::Error>> {
-    let cert_pem = tokio::fs::read(&tls.cert_file).await?;
-    let key_pem = tokio::fs::read(&tls.key_file).await?;
-    let identity = Identity::from_pem(cert_pem, key_pem);
-    let mut server_tls = ServerTlsConfig::new().identity(identity);
-    if let Some(ref ca_file) = tls.ca_file {
-        let ca_pem = tokio::fs::read(ca_file).await?;
-        server_tls = server_tls.client_ca_root(Certificate::from_pem(ca_pem));
-    }
-    Ok(server_tls)
-}
 
 fn load_config() -> BrokerConfig {
     let paths = ["fila.toml", "/etc/fila/fila.toml"];
@@ -69,8 +42,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Must happen after config is loaded but before anything else.
     let telemetry_guard = fila_core::telemetry::init_telemetry(&config.telemetry);
 
-    let listen_addr = config.server.listen_addr.clone();
-
     // FILA_BOOTSTRAP_APIKEY overrides (or sets) the bootstrap key from config.
     // Setting the env var also implicitly enables auth when no [auth] section exists.
     if let Ok(key) = std::env::var("FILA_BOOTSTRAP_APIKEY") {
@@ -86,9 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Clone configs before `config` is moved into Broker::new.
     let gui_config = config.gui.clone();
-    let grpc_config = config.grpc.clone();
     let fibp_config = config.fibp.clone();
-    let delivery_batch_max = config.scheduler.delivery_batch_max_messages;
 
     let use_memory = std::env::var("FILA_STORAGE")
         .map(|v| v.eq_ignore_ascii_case("memory"))
@@ -97,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = std::env::var("FILA_DATA_DIR").unwrap_or_else(|_| "data".to_string());
 
     // Build the storage engine based on FILA_STORAGE env var.
-    // "memory" → in-memory (for profiling/benchmarking), anything else → RocksDB.
+    // "memory" -> in-memory (for profiling/benchmarking), anything else -> RocksDB.
     let (storage, rocksdb): (
         Arc<dyn fila_core::StorageEngine>,
         Option<Arc<RocksDbEngine>>,
@@ -114,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Conditionally start cluster manager (Raft consensus).
-    // Requires RocksDB for Raft key-value store — not available with in-memory backend.
+    // Requires RocksDB for Raft key-value store -- not available with in-memory backend.
     let cluster_config = config.cluster.clone();
     let tls_params = config.tls.clone();
     let (meta_event_tx, meta_event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -129,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&storage),
                 Some(meta_event_tx),
                 tls_params.as_ref(),
-                &config.server.listen_addr,
+                &config.fibp.listen_addr,
             )
             .await?,
         )
@@ -137,12 +106,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let cluster_handle = cluster_manager.as_ref().map(|cm| cm.handle());
-
     let broker = Arc::new(Broker::new(config, Arc::clone(&storage))?);
 
-    // Wire cluster ↔ broker integration:
-    // 1. Give the cluster gRPC service access to the Broker so forwarded
+    // Wire cluster <-> broker integration:
+    // 1. Give the cluster service access to the Broker so forwarded
     //    writes can be applied to the leader's local scheduler.
     // 2. Start meta event handler for queue group lifecycle.
     // 3. Start leader change watcher for failover (recover queue / drop consumers).
@@ -182,80 +149,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // Optionally start the FIBP (binary protocol) TCP listener.
-    // FIBP shares TLS configuration with gRPC.
-    let fibp_listener = if let Some(ref fibp) = fibp_config {
-        let listener =
-            fila_core::fibp::FibpListener::start(fibp, Arc::clone(&broker), tls_params.as_ref())
-                .await?;
-        // Write the FIBP address to a port file so test harnesses can discover it.
-        if let Ok(fibp_port_file) = std::env::var("FILA_FIBP_PORT_FILE") {
-            std::fs::write(&fibp_port_file, listener.local_addr().to_string()).unwrap_or_else(
-                |e| tracing::warn!(%e, path = %fibp_port_file, "failed to write FIBP port file"),
-            );
-        }
-        Some(listener)
-    } else {
-        None
-    };
+    // Start the FIBP (binary protocol) TCP listener — the sole transport.
+    let fibp_listener = fila_core::fibp::FibpListener::start(
+        &fibp_config,
+        Arc::clone(&broker),
+        tls_params.as_ref(),
+    )
+    .await?;
 
-    let admin_service = AdminService::new(Arc::clone(&broker), cluster_handle.clone());
-    let hot_path_service =
-        HotPathService::new(Arc::clone(&broker), cluster_handle, delivery_batch_max);
+    info!(addr = %fibp_listener.local_addr(), tls = tls_params.is_some(), "fila server started (FIBP)");
 
-    let requested_addr: std::net::SocketAddr = listen_addr.parse()?;
-    let listener = tokio::net::TcpListener::bind(requested_addr).await?;
-    let actual_addr = listener.local_addr()?;
-    info!(addr = %actual_addr, tls = tls_params.is_some(), "starting gRPC server");
-
-    // Write actual address to a file so test harnesses can discover the port
-    // when using OS-assigned port 0. The file is written next to the config.
+    // Write the FIBP address to a port file so test harnesses can discover it.
     if let Ok(port_file) = std::env::var("FILA_PORT_FILE") {
-        std::fs::write(&port_file, actual_addr.to_string())
+        std::fs::write(&port_file, fibp_listener.local_addr().to_string())
             .unwrap_or_else(|e| tracing::warn!(%e, path = %port_file, "failed to write port file"));
     }
-
-    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
-
-    let mut server_builder = Server::builder()
-        .initial_stream_window_size(grpc_config.initial_stream_window_size)
-        .initial_connection_window_size(grpc_config.initial_connection_window_size)
-        .max_frame_size(grpc_config.http2_max_frame_size)
-        .tcp_nodelay(grpc_config.tcp_nodelay)
-        .http2_keepalive_interval(Some(Duration::from_secs(
-            grpc_config.keepalive_interval_secs,
-        )))
-        .http2_keepalive_timeout(Some(Duration::from_secs(
-            grpc_config.keepalive_timeout_secs,
-        )));
-    if let Some(ref tls) = tls_params {
-        let server_tls = load_server_tls(tls).await?;
-        server_builder = server_builder.tls_config(server_tls)?;
+    // Also support the legacy FIBP-specific port file env var.
+    if let Ok(fibp_port_file) = std::env::var("FILA_FIBP_PORT_FILE") {
+        std::fs::write(&fibp_port_file, fibp_listener.local_addr().to_string()).unwrap_or_else(
+            |e| tracing::warn!(%e, path = %fibp_port_file, "failed to write FIBP port file"),
+        );
     }
 
-    // Layer order: last `.layer()` becomes outermost (first to receive requests).
-    // AuthLayer must be inner so auth runs within the trace context span.
-    let serve_result = server_builder
-        .layer(auth::AuthLayer::new(Arc::clone(&broker)))
-        .layer(trace_context::TraceContextLayer)
-        .add_service(FilaAdminServer::new(admin_service))
-        .add_service(FilaServiceServer::new(hot_path_service))
-        .serve_with_incoming_shutdown(incoming, shutdown_signal())
-        .await;
+    // Wait for shutdown signal.
+    shutdown_signal().await;
 
-    info!("gRPC server stopped, shutting down broker");
+    info!("received shutdown signal, shutting down");
 
-    // Shut down FIBP listener if running.
-    if let Some(listener) = fibp_listener {
-        listener.shutdown();
-    }
+    // Shut down FIBP listener.
+    fibp_listener.shutdown();
 
     // Abort GUI server if running (releases its Arc<Broker> reference).
     if let Some(handle) = gui_handle {
         handle.abort();
     }
 
-    // Graceful broker shutdown — Drop impl will handle it since Arc may have refs
+    // Graceful broker shutdown
     drop(broker);
 
     // Shut down leader change watcher and Raft before exiting.
@@ -263,8 +192,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(cm) = cluster_manager {
         cm.shutdown().await;
     }
-
-    serve_result?;
 
     // Flush OTel pipeline (spans + metrics) before exit
     if let Some(guard) = telemetry_guard {
@@ -291,6 +218,4 @@ async fn shutdown_signal() {
     {
         ctrl_c.await.expect("failed to install CTRL+C handler");
     }
-
-    info!("received shutdown signal");
 }

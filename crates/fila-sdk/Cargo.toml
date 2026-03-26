@@ -7,12 +7,11 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Idiomatic Rust client SDK for Fila message broker"
 homepage.workspace = true
-keywords = ["message-broker", "queue", "grpc", "client"]
+keywords = ["message-broker", "queue", "client"]
 categories = ["network-programming", "api-bindings"]
 
 [dependencies]
 fila-proto.workspace = true
-tonic = { workspace = true, features = ["tls-native-roots"] }
 tokio = { workspace = true, features = ["sync", "rt", "time", "net", "io-util"] }
 tokio-stream.workspace = true
 tokio-util = { workspace = true }

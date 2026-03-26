@@ -174,7 +174,7 @@ async fn run_benchmarks() {
         subsystem::bench_drr(&mut subsystem_results);
 
         eprintln!("[S4] gRPC round-trip overhead...");
-        subsystem::bench_grpc_overhead(&server, &mut subsystem_results).await;
+        subsystem::bench_fibp_overhead(&server, &mut subsystem_results).await;
 
         eprintln!("[S5] Lua execution throughput...");
         subsystem::bench_lua(&mut subsystem_results);

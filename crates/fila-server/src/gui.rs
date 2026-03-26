@@ -1,10 +1,10 @@
 //! Web management GUI — optional HTTP server serving a read-only dashboard.
 //!
 //! When `[gui]` is present in `fila.toml`, an axum HTTP server starts alongside
-//! the gRPC server, serving a single-page dashboard and JSON API endpoints.
+//! the FIBP server, serving a single-page dashboard and JSON API endpoints.
 //!
 //! The GUI is read-only: no create/delete/config operations. It queries the
-//! broker's scheduler via the same command channel used by the gRPC admin service.
+//! broker's scheduler via the same command channel used by the FIBP admin handler.
 
 use std::sync::Arc;
 
