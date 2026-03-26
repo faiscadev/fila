@@ -1,33 +1,40 @@
-epic: "Epic 35: Phase 1 — gRPC Streaming & Batch Tuning"
+epic: "Epic 36: Phase 2 — Custom Binary Protocol (FIBP)"
 baseBranch: main
-startedAt: "2026-03-25"
+startedAt: "2026-03-26"
 stories:
-  - id: "35.1"
-    title: "Benchmark Baseline — Measure Post-Plateau State"
-    status: in-progress
-    currentPhase: "pr-complete"
-    branch: "feat/35.1-benchmark-baseline"
-    pr: 130
+  - id: "36.1"
+    title: "FIBP Protocol Foundation"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
     dependsOn: []
-  - id: "35.2"
-    title: "SDK Streaming Batch Consolidation"
-    status: in-progress
-    currentPhase: "setup"
-    branch: ""
-    pr: null
-    dependsOn: ["35.1"]
-  - id: "35.3"
-    title: "gRPC Transport Tuning"
+  - id: "36.2"
+    title: "FIBP Data Operations"
     status: pending
     currentPhase: ""
     branch: ""
     pr: null
-    dependsOn: ["35.1"]
-  - id: "35.4"
-    title: "Benchmark Checkpoint & Phase 2 Go/No-Go"
+    dependsOn: ["36.1"]
+  - id: "36.3"
+    title: "FIBP Admin & Security"
     status: pending
     currentPhase: ""
     branch: ""
     pr: null
-    dependsOn: ["35.2", "35.3"]
+    dependsOn: ["36.2"]
+  - id: "36.4"
+    title: "Rust SDK FIBP Transport"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["36.3"]
+  - id: "36.5"
+    title: "Benchmark Checkpoint — FIBP vs gRPC"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["36.4"]
 skippedIssues: []
