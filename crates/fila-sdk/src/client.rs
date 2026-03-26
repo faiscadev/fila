@@ -51,14 +51,26 @@ pub enum AccumulatorMode {
     ///
     /// Buffers messages and flushes when either `batch_size` messages
     /// accumulate or `linger_ms` milliseconds elapse — whichever first.
+    /// Default: `linger_ms=5`, `batch_size=100` (matching Kafka's `linger.ms`).
     Linger {
         /// Time threshold in milliseconds before a partial flush is triggered.
+        /// Default: 5 (matching Kafka's `linger.ms=5`).
         linger_ms: u64,
-        /// Maximum messages per flush.
+        /// Maximum messages per flush. Default: 100.
         batch_size: usize,
     },
     /// No accumulation. Each `enqueue()` is a separate single-message RPC.
     Disabled,
+}
+
+impl AccumulatorMode {
+    /// Create a Linger accumulator with default settings (5ms, batch size 100).
+    pub fn linger() -> Self {
+        Self::Linger {
+            linger_ms: 5,
+            batch_size: 100,
+        }
+    }
 }
 
 impl Default for AccumulatorMode {
@@ -577,7 +589,7 @@ fn parse_enqueue_result(result: fila_proto::EnqueueResult) -> Result<String, Enq
 
 // --- Streaming enqueue infrastructure ---
 
-type PendingMap = HashMap<u64, oneshot::Sender<Result<String, EnqueueError>>>;
+type PendingMap = HashMap<u64, Vec<oneshot::Sender<Result<String, EnqueueError>>>>;
 
 struct ActiveStream {
     sender: mpsc::Sender<StreamEnqueueRequest>,
@@ -663,110 +675,106 @@ impl StreamManager {
         self.open_stream().await.is_ok()
     }
 
-    /// Send a batch of messages through the stream. Each item is sent as a
-    /// stream write with one message (batch-within-stream is a future story).
+    /// Send a batch of messages through the stream as a single
+    /// `StreamEnqueueRequest` containing all messages. This amortizes HTTP/2
+    /// frame overhead across the entire batch.
     async fn send_batch(&mut self, items: Vec<AccumulatorItem>) -> Vec<AccumulatorItem> {
         let active = match self.active.as_ref() {
             Some(a) => a,
             None => return items,
         };
 
-        let mut prepared: Vec<(StreamEnqueueRequest, u64)> = Vec::with_capacity(items.len());
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+
+        // Build a single request with all messages.
+        let messages: Vec<ProtoEnqueueMessage> = items
+            .iter()
+            .map(|item| ProtoEnqueueMessage {
+                queue: item.message.queue.clone(),
+                headers: item.message.headers.clone(),
+                payload: bytes::Bytes::from(item.message.payload.clone()),
+            })
+            .collect();
+
+        let req = StreamEnqueueRequest {
+            messages,
+            sequence_number: seq,
+        };
+
+        // Register all senders under this single sequence number.
+        let senders: Vec<oneshot::Sender<Result<String, EnqueueError>>> =
+            items.into_iter().map(|item| item.result_tx).collect();
+
         {
             let mut pending = active.pending.lock().await;
-            for item in &items {
-                let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-                prepared.push((
-                    StreamEnqueueRequest {
-                        messages: vec![ProtoEnqueueMessage {
-                            queue: item.message.queue.clone(),
-                            headers: item.message.headers.clone(),
-                            payload: bytes::Bytes::from(item.message.payload.clone()),
-                        }],
-                        sequence_number: seq,
-                    },
-                    seq,
-                ));
-            }
-            let items_vec: Vec<AccumulatorItem> = items.into_iter().collect();
-            for (i, item) in items_vec.into_iter().enumerate() {
-                let seq = prepared[i].1;
-                pending.insert(seq, item.result_tx);
-            }
+            pending.insert(seq, senders);
         }
 
-        let mut unsent_seqs: Vec<u64> = Vec::new();
-        let mut failed = false;
-        for (req, seq) in prepared {
-            if failed {
-                unsent_seqs.push(seq);
-                continue;
+        // Send the single consolidated request.
+        match active.sender.try_send(req) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(req)) => {
+                if active.sender.send(req).await.is_err() {
+                    let mut pending = active.pending.lock().await;
+                    if let Some(txs) = pending.remove(&seq) {
+                        for tx in txs {
+                            let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
+                                "stream broke during send".to_string(),
+                            ))));
+                        }
+                    }
+                    drop(pending);
+                    self.active = None;
+                }
             }
-            match active.sender.try_send(req) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(req)) => {
-                    if active.sender.send(req).await.is_err() {
-                        unsent_seqs.push(seq);
-                        failed = true;
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                let mut pending = active.pending.lock().await;
+                if let Some(txs) = pending.remove(&seq) {
+                    for tx in txs {
+                        let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
+                            "stream broke during send".to_string(),
+                        ))));
                     }
                 }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    unsent_seqs.push(seq);
-                    failed = true;
-                }
+                drop(pending);
+                self.active = None;
             }
-        }
-
-        if !unsent_seqs.is_empty() {
-            let mut pending = active.pending.lock().await;
-            for seq in unsent_seqs {
-                if let Some(tx) = pending.remove(&seq) {
-                    let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
-                        "stream broke during send".to_string(),
-                    ))));
-                }
-            }
-            drop(pending);
-            self.active = None;
         }
 
         Vec::new()
     }
 }
 
-/// Resolve a stream response. Each response carries results for a single
-/// stream write (currently one message per write, so one result per response).
-async fn resolve_stream_response(
-    pending: &Mutex<HashMap<u64, oneshot::Sender<Result<String, EnqueueError>>>>,
-    response: StreamEnqueueResponse,
-) {
+/// Resolve a stream response. Each response carries results for all messages
+/// that were sent in the corresponding `StreamEnqueueRequest`.
+async fn resolve_stream_response(pending: &Mutex<PendingMap>, response: StreamEnqueueResponse) {
     let seq = response.sequence_number;
 
-    // Take the first result (one message per stream write for now).
-    let result = if let Some(first_result) = response.results.into_iter().next() {
-        parse_enqueue_result(first_result)
-    } else {
-        Err(EnqueueError::Status(StatusError::Internal(
-            "empty results in stream response".to_string(),
-        )))
-    };
-
     let mut map = pending.lock().await;
-    if let Some(tx) = map.remove(&seq) {
-        let _ = tx.send(result);
+    if let Some(senders) = map.remove(&seq) {
+        let results: Vec<_> = response.results.into_iter().collect();
+        for (i, tx) in senders.into_iter().enumerate() {
+            let result = if let Some(proto_result) = results.get(i).cloned() {
+                parse_enqueue_result(proto_result)
+            } else {
+                Err(EnqueueError::Status(StatusError::Internal(
+                    "missing result in stream response".to_string(),
+                )))
+            };
+            let _ = tx.send(result);
+        }
     }
 }
 
-async fn error_all_pending(
-    pending: &Mutex<HashMap<u64, oneshot::Sender<Result<String, EnqueueError>>>>,
-    error_msg: &str,
-) {
+async fn error_all_pending(pending: &Mutex<PendingMap>, error_msg: &str) {
     let mut map = pending.lock().await;
     let entries: Vec<_> = map.drain().collect();
-    for (_seq, tx) in entries {
-        let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
-            error_msg.to_string(),
-        ))));
+    for (_seq, senders) in entries {
+        for tx in senders {
+            let _ = tx.send(Err(EnqueueError::Status(StatusError::Internal(
+                error_msg.to_string(),
+            ))));
+        }
     }
 }
 
