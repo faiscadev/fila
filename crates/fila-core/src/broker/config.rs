@@ -20,6 +20,10 @@ pub struct BrokerConfig {
     /// Web GUI configuration. `None` (the default) disables the web GUI.
     /// Presence of this section in `fila.toml` enables the read-only management dashboard.
     pub gui: Option<GuiConfig>,
+    /// FIBP (Fila Binary Protocol) configuration. `None` (the default) disables
+    /// the custom binary TCP transport. Presence of a `[fibp]` section in
+    /// `fila.toml` enables it alongside gRPC.
+    pub fibp: Option<FibpConfig>,
 }
 
 /// Web management GUI configuration. Presence in `BrokerConfig.gui` (i.e. a `[gui]` section
@@ -33,6 +37,42 @@ pub struct GuiConfig {
 
 fn default_gui_listen_addr() -> String {
     "0.0.0.0:8080".to_string()
+}
+
+/// FIBP (Fila Binary Protocol) transport configuration.
+/// Presence in `BrokerConfig.fibp` (i.e. a `[fibp]` section in `fila.toml`)
+/// enables the custom binary TCP transport; absence disables it entirely.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FibpConfig {
+    /// TCP listen address for the FIBP transport (default: "0.0.0.0:5557").
+    #[serde(default = "default_fibp_listen_addr")]
+    pub listen_addr: String,
+    /// Maximum frame size in bytes (default: 16MB = 16_777_216).
+    /// Frames exceeding this limit are rejected with a protocol error.
+    #[serde(default = "default_fibp_max_frame_size")]
+    pub max_frame_size: u32,
+    /// Interval between keepalive heartbeats in seconds (default: 15).
+    #[serde(default = "default_fibp_keepalive_interval_secs")]
+    pub keepalive_interval_secs: u64,
+    /// Timeout for keepalive response before closing the connection in seconds (default: 10).
+    #[serde(default = "default_fibp_keepalive_timeout_secs")]
+    pub keepalive_timeout_secs: u64,
+}
+
+fn default_fibp_listen_addr() -> String {
+    "0.0.0.0:5557".to_string()
+}
+
+fn default_fibp_max_frame_size() -> u32 {
+    16_777_216
+}
+
+fn default_fibp_keepalive_interval_secs() -> u64 {
+    15
+}
+
+fn default_fibp_keepalive_timeout_secs() -> u64 {
+    10
 }
 
 /// Cluster configuration for Raft-based horizontal scaling.
@@ -607,5 +647,39 @@ mod tests {
         let config: BrokerConfig = toml::from_str("").unwrap();
         assert!(config.grpc.tcp_nodelay);
         assert_eq!(config.grpc.keepalive_interval_secs, 15);
+    }
+
+    #[test]
+    fn fibp_absent_means_disabled() {
+        let config: BrokerConfig = toml::from_str("").unwrap();
+        assert!(config.fibp.is_none());
+    }
+
+    #[test]
+    fn fibp_defaults() {
+        let toml_str = "[fibp]\n";
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        let fibp = config.fibp.unwrap();
+        assert_eq!(fibp.listen_addr, "0.0.0.0:5557");
+        assert_eq!(fibp.max_frame_size, 16_777_216);
+        assert_eq!(fibp.keepalive_interval_secs, 15);
+        assert_eq!(fibp.keepalive_timeout_secs, 10);
+    }
+
+    #[test]
+    fn fibp_toml_parsing() {
+        let toml_str = r#"
+            [fibp]
+            listen_addr = "127.0.0.1:9000"
+            max_frame_size = 8388608
+            keepalive_interval_secs = 30
+            keepalive_timeout_secs = 20
+        "#;
+        let config: BrokerConfig = toml::from_str(toml_str).unwrap();
+        let fibp = config.fibp.unwrap();
+        assert_eq!(fibp.listen_addr, "127.0.0.1:9000");
+        assert_eq!(fibp.max_frame_size, 8_388_608);
+        assert_eq!(fibp.keepalive_interval_secs, 30);
+        assert_eq!(fibp.keepalive_timeout_secs, 20);
     }
 }

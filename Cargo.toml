@@ -50,6 +50,7 @@ sha2 = "0.10"
 lasso = { version = "0.6", features = ["multi-threaded"] }
 
 tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["codec"] }
 tower = "0.5"
 axum = "0.8"
 http = "1"

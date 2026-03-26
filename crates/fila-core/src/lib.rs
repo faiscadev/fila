@@ -1,6 +1,7 @@
 pub mod broker;
 pub mod cluster;
 pub mod error;
+pub mod fibp;
 pub mod lua;
 pub mod message;
 pub mod queue;
@@ -8,8 +9,8 @@ pub mod storage;
 pub mod telemetry;
 
 pub use broker::{
-    AuthConfig, Broker, BrokerConfig, GrpcConfig, GuiConfig, QueueSummary, ReadyMessage,
-    RocksDbConfig, SchedulerCommand, StorageConfig, TlsParams,
+    AuthConfig, Broker, BrokerConfig, FibpConfig, GrpcConfig, GuiConfig, QueueSummary,
+    ReadyMessage, RocksDbConfig, SchedulerCommand, StorageConfig, TlsParams,
 };
 pub use error::{
     AckError, BrokerError, BrokerResult, ConfigError, CreateQueueError, DeleteQueueError,

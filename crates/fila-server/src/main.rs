@@ -87,6 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Clone configs before `config` is moved into Broker::new.
     let gui_config = config.gui.clone();
     let grpc_config = config.grpc.clone();
+    let fibp_config = config.fibp.clone();
     let delivery_batch_max = config.scheduler.delivery_batch_max_messages;
 
     let use_memory = std::env::var("FILA_STORAGE")
@@ -181,6 +182,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // Optionally start the FIBP (binary protocol) TCP listener.
+    let fibp_listener = if let Some(ref fibp) = fibp_config {
+        let listener = fila_core::fibp::FibpListener::start(fibp).await?;
+        // Write the FIBP address to a port file so test harnesses can discover it.
+        if let Ok(fibp_port_file) = std::env::var("FILA_FIBP_PORT_FILE") {
+            std::fs::write(&fibp_port_file, listener.local_addr().to_string()).unwrap_or_else(
+                |e| tracing::warn!(%e, path = %fibp_port_file, "failed to write FIBP port file"),
+            );
+        }
+        Some(listener)
+    } else {
+        None
+    };
+
     let admin_service = AdminService::new(Arc::clone(&broker), cluster_handle.clone());
     let hot_path_service =
         HotPathService::new(Arc::clone(&broker), cluster_handle, delivery_batch_max);
@@ -226,6 +241,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
     info!("gRPC server stopped, shutting down broker");
+
+    // Shut down FIBP listener if running.
+    if let Some(listener) = fibp_listener {
+        listener.shutdown();
+    }
 
     // Abort GUI server if running (releases its Arc<Broker> reference).
     if let Some(handle) = gui_handle {
