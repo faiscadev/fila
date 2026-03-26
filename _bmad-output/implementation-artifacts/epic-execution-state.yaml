@@ -5,14 +5,14 @@ stories:
   - id: "35.1"
     title: "Benchmark Baseline — Measure Post-Plateau State"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-complete"
     branch: "feat/35.1-benchmark-baseline"
-    pr: null
+    pr: 130
     dependsOn: []
   - id: "35.2"
     title: "SDK Streaming Batch Consolidation"
-    status: pending
-    currentPhase: ""
+    status: in-progress
+    currentPhase: "setup"
     branch: ""
     pr: null
     dependsOn: ["35.1"]
