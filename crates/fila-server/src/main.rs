@@ -97,18 +97,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build the storage engine based on FILA_STORAGE env var.
     // "memory" → in-memory (for profiling/benchmarking), anything else → RocksDB.
-    let (storage, rocksdb): (Arc<dyn fila_core::StorageEngine>, Option<Arc<RocksDbEngine>>) =
-        if use_memory {
-            info!("using in-memory storage engine (FILA_STORAGE=memory)");
-            (Arc::new(InMemoryEngine::new()), None)
-        } else {
-            let db = Arc::new(RocksDbEngine::open_with_config(
-                &data_dir,
-                &config.storage.rocksdb,
-            )?);
-            let storage = Arc::clone(&db) as Arc<dyn fila_core::StorageEngine>;
-            (storage, Some(db))
-        };
+    let (storage, rocksdb): (
+        Arc<dyn fila_core::StorageEngine>,
+        Option<Arc<RocksDbEngine>>,
+    ) = if use_memory {
+        info!("using in-memory storage engine (FILA_STORAGE=memory)");
+        (Arc::new(InMemoryEngine::new()), None)
+    } else {
+        let db = Arc::new(RocksDbEngine::open_with_config(
+            &data_dir,
+            &config.storage.rocksdb,
+        )?);
+        let storage = Arc::clone(&db) as Arc<dyn fila_core::StorageEngine>;
+        (storage, Some(db))
+    };
 
     // Conditionally start cluster manager (Raft consensus).
     // Requires RocksDB for Raft key-value store — not available with in-memory backend.
