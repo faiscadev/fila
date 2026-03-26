@@ -224,10 +224,16 @@ pub struct RocksDbConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct GrpcConfig {
-    /// Initial HTTP/2 stream window size in bytes (default: 2MB).
+    /// Initial HTTP/2 stream window size in bytes (default: 8MB).
+    /// Larger windows reduce WINDOW_UPDATE frame overhead for high-throughput streams.
     pub initial_stream_window_size: u32,
-    /// Initial HTTP/2 connection window size in bytes (default: 4MB).
+    /// Initial HTTP/2 connection window size in bytes (default: 16MB).
+    /// Should be >= initial_stream_window_size * expected concurrent streams.
     pub initial_connection_window_size: u32,
+    /// Maximum HTTP/2 frame size in bytes (default: 65536 = 64KB).
+    /// Larger frames reduce per-frame overhead for large batch payloads.
+    /// Valid range: 16384 (16KB) to 16777215 (16MB).
+    pub http2_max_frame_size: u32,
     /// Enable TCP_NODELAY (default: true).
     pub tcp_nodelay: bool,
     /// HTTP/2 keepalive interval in seconds (default: 15).
@@ -257,8 +263,9 @@ impl Default for RocksDbConfig {
 impl Default for GrpcConfig {
     fn default() -> Self {
         Self {
-            initial_stream_window_size: 2 * 1024 * 1024,
-            initial_connection_window_size: 4 * 1024 * 1024,
+            initial_stream_window_size: 8 * 1024 * 1024,
+            initial_connection_window_size: 16 * 1024 * 1024,
+            http2_max_frame_size: 64 * 1024,
             tcp_nodelay: true,
             keepalive_interval_secs: 15,
             keepalive_timeout_secs: 10,
@@ -306,8 +313,8 @@ impl Default for SchedulerConfig {
             command_channel_capacity: 10_000,
             idle_timeout_ms: 100,
             quantum: 1000,
-            write_coalesce_max_batch: 100,
-            delivery_batch_max_messages: 10,
+            write_coalesce_max_batch: 256,
+            delivery_batch_max_messages: 100,
             shard_count: 1,
         }
     }
@@ -324,8 +331,8 @@ mod tests {
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
         assert_eq!(config.scheduler.idle_timeout_ms, 100);
         assert_eq!(config.scheduler.quantum, 1000);
-        assert_eq!(config.scheduler.write_coalesce_max_batch, 100);
-        assert_eq!(config.scheduler.delivery_batch_max_messages, 10);
+        assert_eq!(config.scheduler.write_coalesce_max_batch, 256);
+        assert_eq!(config.scheduler.delivery_batch_max_messages, 100);
         assert_eq!(config.scheduler.shard_count, 1);
         assert_eq!(config.lua.default_timeout_ms, 10);
         assert_eq!(config.lua.default_memory_limit_bytes, 1_048_576);
@@ -569,8 +576,9 @@ mod tests {
     #[test]
     fn grpc_defaults() {
         let config = BrokerConfig::default();
-        assert_eq!(config.grpc.initial_stream_window_size, 2 * 1024 * 1024);
-        assert_eq!(config.grpc.initial_connection_window_size, 4 * 1024 * 1024);
+        assert_eq!(config.grpc.initial_stream_window_size, 8 * 1024 * 1024);
+        assert_eq!(config.grpc.initial_connection_window_size, 16 * 1024 * 1024);
+        assert_eq!(config.grpc.http2_max_frame_size, 64 * 1024);
         assert!(config.grpc.tcp_nodelay);
         assert_eq!(config.grpc.keepalive_interval_secs, 15);
         assert_eq!(config.grpc.keepalive_timeout_secs, 10);
