@@ -23,4 +23,4 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: taiki-e/install-action@34ac9396e2ddcdd0baa9d56f88b84e09f95c0c77 # cargo-nextest
       - run: cargo build --workspace
-      - run: cargo nextest run -p fila-e2e --test-threads 1 --slow-timeout 60s --fail-fast
+      - run: cargo nextest run -p fila-e2e --test-threads 1 --fail-fast
