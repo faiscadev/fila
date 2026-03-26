@@ -747,10 +747,7 @@ impl StreamManager {
 
 /// Resolve a stream response. Each response carries results for all messages
 /// that were sent in the corresponding `StreamEnqueueRequest`.
-async fn resolve_stream_response(
-    pending: &Mutex<PendingMap>,
-    response: StreamEnqueueResponse,
-) {
+async fn resolve_stream_response(pending: &Mutex<PendingMap>, response: StreamEnqueueResponse) {
     let seq = response.sequence_number;
 
     let mut map = pending.lock().await;
@@ -769,10 +766,7 @@ async fn resolve_stream_response(
     }
 }
 
-async fn error_all_pending(
-    pending: &Mutex<PendingMap>,
-    error_msg: &str,
-) {
+async fn error_all_pending(pending: &Mutex<PendingMap>, error_msg: &str) {
     let mut map = pending.lock().await;
     let entries: Vec<_> = map.drain().collect();
     for (_seq, senders) in entries {
