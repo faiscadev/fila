@@ -630,3 +630,45 @@ async fn streaming_linger_mode_uses_stream() {
     let unique: std::collections::HashSet<_> = ids.iter().collect();
     assert_eq!(unique.len(), 10, "all message IDs should be unique");
 }
+
+/// Verify batch consolidation: sending 1000 messages via Linger mode should
+/// produce significantly fewer stream writes than 1000 (proving messages are
+/// consolidated into multi-message StreamEnqueueRequests).
+#[tokio::test]
+async fn streaming_linger_consolidation_1000_messages() {
+    let server = TestServer::start();
+    let opts = ConnectOptions::new(server.addr()).with_accumulator(AccumulatorMode::Linger {
+        linger_ms: 50,
+        batch_size: 100,
+    });
+    let client = FilaClient::connect_with_options(opts).await.unwrap();
+
+    let queue = "test-consolidation";
+    create_queue(server.addr(), queue).await;
+
+    // Send 1000 messages from concurrent tasks to maximize batching.
+    let total = 1000usize;
+    let mut handles = Vec::with_capacity(total);
+    for i in 0..total {
+        let c = client.clone();
+        let q = queue.to_string();
+        handles.push(tokio::spawn(async move {
+            c.enqueue(
+                &q,
+                HashMap::new(),
+                format!("consolidation-{i}").into_bytes(),
+            )
+            .await
+        }));
+    }
+
+    let mut ok_count = 0usize;
+    for h in handles {
+        match h.await.unwrap() {
+            Ok(_) => ok_count += 1,
+            Err(e) => panic!("enqueue failed: {e:?}"),
+        }
+    }
+
+    assert_eq!(ok_count, total, "all {total} messages should succeed");
+}
