@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use prost::Message as ProstMessage;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::broker::auth::CallerKey;
@@ -84,14 +85,25 @@ pub async fn dispatch_enqueue(
             {
                 Ok(write_result) => {
                     if write_result.handled_locally {
+                        // The Raft write succeeded — the message is durably committed.
+                        // Apply to the local scheduler for in-memory state consistency
+                        // (depth, DRR, pending index).  If the scheduler apply fails
+                        // we log a warning but still return success to the client:
+                        // returning an error here would cause the client to retry,
+                        // producing a duplicate message that IS already committed.
                         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                         if let Err(e) = broker.send_command(SchedulerCommand::Enqueue {
                             messages: vec![message],
                             reply: reply_tx,
                         }) {
-                            results.push(wire::EnqueueResultItem::Err {
-                                code: wire::enqueue_err::STORAGE,
-                                message: e.to_string(),
+                            warn!(
+                                msg_id = %msg_id,
+                                error = %e,
+                                "raft write succeeded but local scheduler apply failed (send); \
+                                 returning success to prevent duplicate on client retry"
+                            );
+                            results.push(wire::EnqueueResultItem::Ok {
+                                msg_id: msg_id.to_string(),
                             });
                             continue;
                         }
@@ -102,20 +114,22 @@ pub async fn dispatch_enqueue(
                                         Ok(mid) => wire::EnqueueResultItem::Ok {
                                             msg_id: mid.to_string(),
                                         },
-                                        Err(err) => match err {
-                                            EnqueueError::QueueNotFound(msg) => {
-                                                wire::EnqueueResultItem::Err {
-                                                    code: wire::enqueue_err::QUEUE_NOT_FOUND,
-                                                    message: msg,
-                                                }
+                                        Err(err) => {
+                                            // Raft write succeeded; the scheduler apply
+                                            // error means local state is temporarily
+                                            // inconsistent but the message is committed.
+                                            // Log and return success.
+                                            warn!(
+                                                msg_id = %msg_id,
+                                                error = ?err,
+                                                "raft write succeeded but local scheduler \
+                                                 apply returned an error; returning success \
+                                                 to prevent duplicate on client retry"
+                                            );
+                                            wire::EnqueueResultItem::Ok {
+                                                msg_id: msg_id.to_string(),
                                             }
-                                            EnqueueError::Storage(e) => {
-                                                wire::EnqueueResultItem::Err {
-                                                    code: wire::enqueue_err::STORAGE,
-                                                    message: e.to_string(),
-                                                }
-                                            }
-                                        },
+                                        }
                                     });
                                 }
                             }
