@@ -1039,7 +1039,10 @@ mod fila {
     use fila_sdk::{AccumulatorMode, ConnectOptions, FilaClient};
     use tokio_stream::StreamExt;
 
-    const ADDR: &str = "http://localhost:5555";
+    // Bare host:port — passed directly to FibpTransport::connect which expects a
+    // raw TCP address. FilaClient::connect also accepts this form (it only strips
+    // an "http://" prefix when present; no prefix → connects via TCP directly).
+    const ADDR: &str = "localhost:5555";
     /// Number of concurrent producers for throughput scenarios.
     /// Concurrent producers are needed to trigger auto-batching: the Nagle-style
     /// batcher sends immediately when idle, so a single serial producer never
