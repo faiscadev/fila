@@ -23,9 +23,11 @@ use crate::broker::auth::{CallerKey, Permission};
 use crate::broker::Broker;
 
 use super::codec::{
-    FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_AUTH, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE,
-    OP_ENQUEUE, OP_FLOW, OP_GOAWAY, OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_PAUSE_QUEUE,
-    OP_QUEUE_STATS, OP_REDRIVE, OP_RESUME_QUEUE,
+    FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_AUTH, OP_AUTH_CREATE_KEY, OP_AUTH_GET_ACL,
+    OP_AUTH_LIST_KEYS, OP_AUTH_REVOKE_KEY, OP_AUTH_SET_ACL, OP_CONFIG_GET, OP_CONFIG_LIST,
+    OP_CONFIG_SET, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE, OP_ENQUEUE, OP_FLOW, OP_GOAWAY,
+    OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_PAUSE_QUEUE, OP_QUEUE_STATS, OP_REDRIVE,
+    OP_RESUME_QUEUE,
 };
 use super::dispatch;
 use super::error::FibpError;
@@ -273,6 +275,13 @@ impl FibpConnection {
                 self.write_frame(err_frame).await
             }
             OP_REDRIVE => self.handle_admin(frame, Permission::Admin).await,
+            // Config operations — protobuf-encoded payloads.
+            OP_CONFIG_SET | OP_CONFIG_GET | OP_CONFIG_LIST => {
+                self.handle_admin(frame, Permission::Admin).await
+            }
+            // Auth CRUD operations — protobuf-encoded payloads.
+            OP_AUTH_CREATE_KEY | OP_AUTH_REVOKE_KEY | OP_AUTH_LIST_KEYS | OP_AUTH_SET_ACL
+            | OP_AUTH_GET_ACL => self.handle_admin(frame, Permission::Admin).await,
             op => {
                 let err_frame = Frame::error(
                     frame.correlation_id,
@@ -362,7 +371,10 @@ impl FibpConnection {
     async fn handle_enqueue(&mut self, frame: Frame) -> Result<(), FibpError> {
         let req = wire::decode_enqueue_request(frame.payload)?;
         // ACL: produce permission on the target queue.
-        self.check_permission(Permission::Produce, &req.queue)?;
+        if let Err(e) = self.check_permission(Permission::Produce, &req.queue) {
+            let err_frame = Frame::error(frame.correlation_id, &e.to_string());
+            return self.write_frame(err_frame).await;
+        }
         let results = dispatch::dispatch_enqueue(&self.broker, req).await?;
         let payload = wire::encode_enqueue_response(&results);
         let resp = Frame::new(0, OP_ENQUEUE, frame.correlation_id, payload);
@@ -385,7 +397,10 @@ impl FibpConnection {
         }
 
         // ACL: consume permission on the target queue.
-        self.check_permission(Permission::Consume, &req.queue)?;
+        if let Err(e) = self.check_permission(Permission::Consume, &req.queue) {
+            let err_frame = Frame::error(frame.correlation_id, &e.to_string());
+            return self.write_frame(err_frame).await;
+        }
 
         let (consumer_id, ready_rx) = dispatch::register_consumer(&self.broker, &req.queue)?;
 
@@ -434,7 +449,10 @@ impl FibpConnection {
         let items = wire::decode_ack_request(frame.payload)?;
         // ACL: consume permission on each queue (ack is part of consume lifecycle).
         for item in &items {
-            self.check_permission(Permission::Consume, &item.queue)?;
+            if let Err(e) = self.check_permission(Permission::Consume, &item.queue) {
+                let err_frame = Frame::error(frame.correlation_id, &e.to_string());
+                return self.write_frame(err_frame).await;
+            }
         }
         let results = dispatch::dispatch_ack(&self.broker, items).await?;
         let payload = wire::encode_ack_nack_response(&results);
@@ -446,7 +464,10 @@ impl FibpConnection {
         let items = wire::decode_nack_request(frame.payload)?;
         // ACL: consume permission on each queue (nack is part of consume lifecycle).
         for item in &items {
-            self.check_permission(Permission::Consume, &item.queue)?;
+            if let Err(e) = self.check_permission(Permission::Consume, &item.queue) {
+                let err_frame = Frame::error(frame.correlation_id, &e.to_string());
+                return self.write_frame(err_frame).await;
+            }
         }
         let results = dispatch::dispatch_nack(&self.broker, items).await?;
         let payload = wire::encode_ack_nack_response(&results);
@@ -467,17 +488,54 @@ impl FibpConnection {
     // ----- Admin operation handler -------------------------------------------
 
     /// Handle an admin operation frame. The payload is protobuf-encoded.
-    /// The `perm` parameter indicates the required permission type.
+    ///
+    /// Permission model:
+    /// - Auth CRUD ops: permission checks are inside the dispatch functions.
+    /// - Queue-scoped ops (create/delete/stats/redrive): check is deferred
+    ///   to the dispatch handler, which validates queue-level admin scope.
+    /// - Global ops (config set/get/list, list-queues): require admin:* or superadmin.
     async fn handle_admin(&mut self, frame: Frame, _perm: Permission) -> Result<(), FibpError> {
-        // All admin ops require admin:* or superadmin.
-        self.check_admin_permission()?;
+        // Only global (non-queue-scoped) admin ops need the global admin check
+        // here. Queue-scoped ops check admin scope per-queue inside their
+        // dispatch functions, and auth CRUD ops have their own permission model.
+        let needs_global_admin = matches!(
+            frame.op,
+            OP_CONFIG_SET | OP_CONFIG_GET | OP_CONFIG_LIST | OP_LIST_QUEUES
+        );
+
+        if needs_global_admin {
+            if let Err(e) = self.check_admin_permission() {
+                let err_frame = Frame::error(frame.correlation_id, &e.to_string());
+                return self.write_frame(err_frame).await;
+            }
+        }
 
         let result = match frame.op {
-            OP_CREATE_QUEUE => dispatch::dispatch_create_queue(&self.broker, frame.payload).await,
-            OP_DELETE_QUEUE => dispatch::dispatch_delete_queue(&self.broker, frame.payload).await,
-            OP_QUEUE_STATS => dispatch::dispatch_queue_stats(&self.broker, frame.payload).await,
+            OP_CREATE_QUEUE => {
+                dispatch::dispatch_create_queue(&self.broker, &self.caller, frame.payload).await
+            }
+            OP_DELETE_QUEUE => {
+                dispatch::dispatch_delete_queue(&self.broker, &self.caller, frame.payload).await
+            }
+            OP_QUEUE_STATS => {
+                dispatch::dispatch_queue_stats(&self.broker, &self.caller, frame.payload).await
+            }
             OP_LIST_QUEUES => dispatch::dispatch_list_queues(&self.broker, frame.payload).await,
-            OP_REDRIVE => dispatch::dispatch_redrive(&self.broker, frame.payload).await,
+            OP_REDRIVE => {
+                dispatch::dispatch_redrive(&self.broker, &self.caller, frame.payload).await
+            }
+            OP_CONFIG_SET => dispatch::dispatch_config_set(&self.broker, frame.payload).await,
+            OP_CONFIG_GET => dispatch::dispatch_config_get(&self.broker, frame.payload).await,
+            OP_CONFIG_LIST => dispatch::dispatch_config_list(&self.broker, frame.payload).await,
+            OP_AUTH_CREATE_KEY => {
+                dispatch::dispatch_auth_create_key(&self.broker, &self.caller, frame.payload)
+            }
+            OP_AUTH_REVOKE_KEY => dispatch::dispatch_auth_revoke_key(&self.broker, frame.payload),
+            OP_AUTH_LIST_KEYS => dispatch::dispatch_auth_list_keys(&self.broker, frame.payload),
+            OP_AUTH_SET_ACL => {
+                dispatch::dispatch_auth_set_acl(&self.broker, &self.caller, frame.payload)
+            }
+            OP_AUTH_GET_ACL => dispatch::dispatch_auth_get_acl(&self.broker, frame.payload),
             _ => Err(FibpError::NotImplemented { op: frame.op }),
         };
 

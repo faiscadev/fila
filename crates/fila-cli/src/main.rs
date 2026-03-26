@@ -250,6 +250,7 @@ fn format_error(err: StatusError, context: &str) -> String {
         StatusError::Unavailable(msg) => format!("Error: broker unavailable: {msg}"),
         StatusError::Internal(msg) => format!("Error: {msg}"),
         StatusError::Protocol(msg) => format!("Error: protocol error: {msg}"),
+        StatusError::PermissionDenied(msg) => format!("Error: {msg}"),
     }
 }
 
@@ -399,70 +400,208 @@ async fn cmd_queue_inspect(transport: &FibpTransport, name: String) {
     }
 }
 
-async fn cmd_config_set(_transport: &FibpTransport, key: String, value: String) {
-    // Config set/get/list are admin operations available via FIBP admin handler.
-    // For now, use create_queue's admin frame pattern. The FIBP transport
-    // exposes admin operations directly.
-    // TODO: The FibpTransport needs set_config/get_config/list_config methods.
-    // For now we'll show a clear error since these admin ops may not be on
-    // the FibpTransport yet.
-    eprintln!("Error: config set not yet implemented via FIBP CLI");
-    eprintln!("  key={key} value={value}");
-    process::exit(1);
-}
-
-async fn cmd_config_get(_transport: &FibpTransport, key: String) {
-    eprintln!("Error: config get not yet implemented via FIBP CLI");
-    eprintln!("  key={key}");
-    process::exit(1);
-}
-
-async fn cmd_config_list(_transport: &FibpTransport, prefix: String) {
-    eprintln!("Error: config list not yet implemented via FIBP CLI");
-    if !prefix.is_empty() {
-        eprintln!("  prefix={prefix}");
+async fn cmd_config_set(transport: &FibpTransport, key: String, value: String) {
+    match transport.set_config(&key, &value).await {
+        Ok(()) => println!("Set {key} = {value}"),
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("config key \"{key}\"")));
+            process::exit(1);
+        }
     }
-    process::exit(1);
 }
 
-async fn cmd_redrive(_transport: &FibpTransport, dlq_name: String, count: u64) {
-    eprintln!("Error: redrive not yet implemented via FIBP CLI");
-    eprintln!("  dlq={dlq_name} count={count}");
-    process::exit(1);
+async fn cmd_config_get(transport: &FibpTransport, key: String) {
+    match transport.get_config(&key).await {
+        Ok(value) => {
+            if value.is_empty() {
+                println!("(not set)");
+            } else {
+                println!("{key} = {value}");
+            }
+        }
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("config key \"{key}\"")));
+            process::exit(1);
+        }
+    }
+}
+
+async fn cmd_config_list(transport: &FibpTransport, prefix: String) {
+    match transport.list_config(&prefix).await {
+        Ok(resp) => {
+            if resp.entries.is_empty() {
+                println!("No config entries found.");
+                return;
+            }
+            let key_width = resp
+                .entries
+                .iter()
+                .map(|e| e.key.len())
+                .max()
+                .unwrap_or(3)
+                .max(3);
+            println!("{:<key_width$}  VALUE", "KEY");
+            for entry in &resp.entries {
+                println!("{:<key_width$}  {}", entry.key, entry.value);
+            }
+        }
+        Err(err) => {
+            eprintln!("{}", format_error(err, "config"));
+            process::exit(1);
+        }
+    }
+}
+
+async fn cmd_redrive(transport: &FibpTransport, dlq_name: String, count: u64) {
+    match transport.redrive(&dlq_name, count).await {
+        Ok(redriven) => {
+            println!(
+                "Redrove {redriven} message{} from \"{dlq_name}\"",
+                if redriven == 1 { "" } else { "s" }
+            );
+        }
+        Err(err) => {
+            eprintln!(
+                "{}",
+                format_error(err, &format!("redrive from \"{dlq_name}\""))
+            );
+            process::exit(1);
+        }
+    }
 }
 
 async fn cmd_auth_create(
-    _transport: &FibpTransport,
+    transport: &FibpTransport,
     name: String,
     expires_at: Option<u64>,
     is_superadmin: bool,
 ) {
-    eprintln!("Error: auth create not yet implemented via FIBP CLI");
-    eprintln!("  name={name} expires_at={expires_at:?} superadmin={is_superadmin}");
-    process::exit(1);
+    match transport
+        .create_api_key(&name, expires_at, is_superadmin)
+        .await
+    {
+        Ok(resp) => {
+            println!("Key ID: {}", resp.key_id);
+            println!("Token:  {}", resp.key);
+            if resp.is_superadmin {
+                println!("Superadmin: yes");
+            }
+        }
+        Err(err) => {
+            eprintln!("{}", format_error(err, "auth create"));
+            process::exit(1);
+        }
+    }
 }
 
-async fn cmd_auth_acl_set(_transport: &FibpTransport, key_id: String, permissions: Vec<String>) {
-    eprintln!("Error: auth acl set not yet implemented via FIBP CLI");
-    eprintln!("  key_id={key_id} permissions={permissions:?}");
-    process::exit(1);
+async fn cmd_auth_acl_set(transport: &FibpTransport, key_id: String, permissions: Vec<String>) {
+    let mut acl_permissions = Vec::with_capacity(permissions.len());
+    for perm_str in &permissions {
+        let parts: Vec<&str> = perm_str.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            eprintln!("Error: invalid permission format \"{perm_str}\" — expected kind:pattern");
+            process::exit(1);
+        }
+        let kind = parts[0];
+        let pattern = parts[1];
+        match kind {
+            "produce" | "consume" | "admin" => {}
+            other => {
+                eprintln!("Error: invalid permission kind \"{other}\" — expected produce, consume, or admin");
+                process::exit(1);
+            }
+        }
+        acl_permissions.push(fila_sdk::proto::AclPermission {
+            kind: kind.to_string(),
+            pattern: pattern.to_string(),
+        });
+    }
+
+    match transport.set_acl(&key_id, acl_permissions).await {
+        Ok(()) => println!("ACL updated for key {key_id}"),
+        Err(err) => {
+            eprintln!(
+                "{}",
+                format_error(err, &format!("acl set for \"{key_id}\""))
+            );
+            process::exit(1);
+        }
+    }
 }
 
-async fn cmd_auth_acl_get(_transport: &FibpTransport, key_id: String) {
-    eprintln!("Error: auth acl get not yet implemented via FIBP CLI");
-    eprintln!("  key_id={key_id}");
-    process::exit(1);
+async fn cmd_auth_acl_get(transport: &FibpTransport, key_id: String) {
+    match transport.get_acl(&key_id).await {
+        Ok(resp) => {
+            println!("Key ID: {}", resp.key_id);
+            if resp.is_superadmin {
+                println!("Superadmin: yes (bypasses all ACL checks)");
+            }
+            if resp.permissions.is_empty() {
+                println!("Permissions: (none)");
+            } else {
+                println!("Permissions:");
+                for p in &resp.permissions {
+                    println!("  {}:{}", p.kind, p.pattern);
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "{}",
+                format_error(err, &format!("acl get for \"{key_id}\""))
+            );
+            process::exit(1);
+        }
+    }
 }
 
-async fn cmd_auth_revoke(_transport: &FibpTransport, key_id: String) {
-    eprintln!("Error: auth revoke not yet implemented via FIBP CLI");
-    eprintln!("  key_id={key_id}");
-    process::exit(1);
+async fn cmd_auth_revoke(transport: &FibpTransport, key_id: String) {
+    match transport.revoke_api_key(&key_id).await {
+        Ok(()) => println!("Revoked key {key_id}"),
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("revoke key \"{key_id}\"")));
+            process::exit(1);
+        }
+    }
 }
 
-async fn cmd_auth_list(_transport: &FibpTransport) {
-    eprintln!("Error: auth list not yet implemented via FIBP CLI");
-    process::exit(1);
+async fn cmd_auth_list(transport: &FibpTransport) {
+    match transport.list_api_keys().await {
+        Ok(resp) => {
+            let keys = resp.keys;
+            if keys.is_empty() {
+                println!("No API keys found.");
+                return;
+            }
+            let id_width = keys
+                .iter()
+                .map(|k| k.key_id.len())
+                .max()
+                .unwrap_or(6)
+                .max(6);
+            let name_width = keys.iter().map(|k| k.name.len()).max().unwrap_or(4).max(4);
+            println!(
+                "{:<id_width$}  {:<name_width$}  {:>12}  {:>12}  SUPER",
+                "KEY_ID", "NAME", "CREATED", "EXPIRES"
+            );
+            for k in &keys {
+                let expires = if k.expires_at_ms == 0 {
+                    "never".to_string()
+                } else {
+                    k.expires_at_ms.to_string()
+                };
+                let superadmin = if k.is_superadmin { "yes" } else { "no" };
+                println!(
+                    "{:<id_width$}  {:<name_width$}  {:>12}  {:>12}  {superadmin}",
+                    k.key_id, k.name, k.created_at_ms, expires
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("{}", format_error(err, "auth list"));
+            process::exit(1);
+        }
+    }
 }
 
 #[tokio::main]

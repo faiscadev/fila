@@ -15,6 +15,9 @@ pub enum StatusError {
 
     #[error("protocol error: {0}")]
     Protocol(String),
+
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
 }
 
 // --- Per-operation error types ---

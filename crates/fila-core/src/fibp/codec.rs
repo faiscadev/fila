@@ -41,6 +41,13 @@ pub const OP_RESUME_QUEUE: u8 = 0x15;
 /// Redrive messages from a dead-letter queue.
 pub const OP_REDRIVE: u8 = 0x16;
 
+/// Set a runtime config value.
+pub const OP_CONFIG_SET: u8 = 0x17;
+/// Get a runtime config value.
+pub const OP_CONFIG_GET: u8 = 0x18;
+/// List runtime config entries.
+pub const OP_CONFIG_LIST: u8 = 0x19;
+
 /// Flow-control window update.
 pub const OP_FLOW: u8 = 0x20;
 /// Keepalive heartbeat (ping/pong).
@@ -48,6 +55,17 @@ pub const OP_HEARTBEAT: u8 = 0x21;
 
 /// Authentication frame.
 pub const OP_AUTH: u8 = 0x30;
+
+/// Create a new API key.
+pub const OP_AUTH_CREATE_KEY: u8 = 0x31;
+/// Revoke an API key.
+pub const OP_AUTH_REVOKE_KEY: u8 = 0x32;
+/// List all API keys.
+pub const OP_AUTH_LIST_KEYS: u8 = 0x33;
+/// Set ACL permissions for an API key.
+pub const OP_AUTH_SET_ACL: u8 = 0x34;
+/// Get ACL permissions for an API key.
+pub const OP_AUTH_GET_ACL: u8 = 0x35;
 
 /// Error response.
 pub const OP_ERROR: u8 = 0xFE;

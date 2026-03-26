@@ -60,19 +60,24 @@ async fn auth_enabled_request_without_key_is_rejected() {
 }
 
 /// AC 3: auth enabled, invalid key → UNAUTHENTICATED.
+///
+/// With FIBP, authentication happens during connect (OP_AUTH frame), so an
+/// invalid key causes connect itself to fail.
 #[tokio::test]
 async fn auth_enabled_invalid_key_is_rejected() {
     let (_server, addr) = start_auth_server();
 
-    let client = fila_sdk::FilaClient::connect_with_options(
+    let result = fila_sdk::FilaClient::connect_with_options(
         fila_sdk::ConnectOptions::new(&addr).with_api_key("invalid-key-that-does-not-exist"),
     )
-    .await
-    .expect("connect");
+    .await;
 
-    let result = client.enqueue("any-queue", Default::default(), b"x").await;
-
-    assert_unauthenticated(result, "invalid key");
+    let err = result.expect_err("connect with invalid key should fail");
+    let msg = format!("{err:?}").to_lowercase();
+    assert!(
+        msg.contains("auth") || msg.contains("invalid"),
+        "expected auth error, got: {err:?}"
+    );
 }
 
 /// AC 4: auth enabled, valid key → request succeeds.
