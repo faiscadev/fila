@@ -149,11 +149,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // Build a ClusterHandle for FIBP so admin responses include Raft metadata.
+    let cluster_handle = cluster_manager.as_ref().map(|cm| cm.handle());
+
     // Start the FIBP (binary protocol) TCP listener — the sole transport.
     let fibp_listener = fila_core::fibp::FibpListener::start(
         &fibp_config,
         Arc::clone(&broker),
         tls_params.as_ref(),
+        cluster_handle,
     )
     .await?;
 

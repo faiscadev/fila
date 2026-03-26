@@ -184,6 +184,33 @@ impl ClusterHandle {
         self.multi_raft.get_client_addr(leader_id).await
     }
 
+    /// Get the leader node ID for a queue's Raft group.
+    /// Returns 0 if the queue group doesn't exist or no leader is elected.
+    pub async fn queue_leader_id(&self, queue_id: &str) -> u64 {
+        let raft = match self.multi_raft.get_raft(queue_id).await {
+            Some(r) => r,
+            None => return 0,
+        };
+        raft.current_leader().await.unwrap_or(0)
+    }
+
+    /// Get the number of voter members in a queue's Raft group.
+    /// Returns 0 if the queue group doesn't exist.
+    pub async fn queue_replication_count(&self, queue_id: &str) -> u32 {
+        let raft = match self.multi_raft.get_raft(queue_id).await {
+            Some(r) => r,
+            None => return 0,
+        };
+        let metrics = raft.metrics().borrow().clone();
+        metrics.membership_config.membership().voter_ids().count() as u32
+    }
+
+    /// Get the total number of nodes in the cluster (meta Raft voters).
+    pub fn cluster_node_count(&self) -> u32 {
+        let metrics = self.meta_raft.metrics().borrow().clone();
+        metrics.membership_config.membership().voter_ids().count() as u32
+    }
+
     /// Get the current meta Raft membership as member IDs and addresses.
     pub fn meta_members(&self) -> (Vec<u64>, std::collections::HashMap<u64, String>) {
         let metrics = self.meta_raft.metrics().borrow().clone();

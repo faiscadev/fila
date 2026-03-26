@@ -23,6 +23,7 @@ use super::connection::FibpConnection;
 use super::{dispatch, error::FibpError, wire};
 use crate::broker::config::{FibpConfig, TlsParams};
 use crate::broker::Broker;
+use crate::cluster::ClusterHandle;
 
 /// TCP listener for the FIBP transport.
 ///
@@ -47,6 +48,7 @@ impl FibpListener {
         config: &FibpConfig,
         broker: Arc<Broker>,
         tls_params: Option<&TlsParams>,
+        cluster: Option<Arc<ClusterHandle>>,
     ) -> Result<Self, FibpError> {
         let listener = TcpListener::bind(&config.listen_addr).await?;
         let local_addr = listener.local_addr()?;
@@ -71,6 +73,7 @@ impl FibpListener {
             shutdown_rx,
             broker,
             tls_acceptor,
+            cluster,
         ));
 
         Ok(Self {
@@ -168,6 +171,7 @@ async fn accept_loop(
     mut shutdown_rx: watch::Receiver<bool>,
     broker: Arc<Broker>,
     tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
+    cluster: Option<Arc<ClusterHandle>>,
 ) {
     loop {
         tokio::select! {
@@ -177,6 +181,7 @@ async fn accept_loop(
                         debug!(peer = %peer, "accepted FIBP connection");
                         let broker = Arc::clone(&broker);
                         let tls = tls_acceptor.clone();
+                        let cluster = cluster.clone();
                         tokio::spawn(async move {
                             let tcp_stream = if let Some(acceptor) = tls {
                                 match acceptor.accept(stream).await {
@@ -197,7 +202,7 @@ async fn accept_loop(
                                         debug!(peer = %peer, "FIBP TLS handshake complete");
                                         // Create a duplex channel and bridge the TLS stream
                                         // to TcpStream-compatible I/O.
-                                        handle_tls_connection(tls_stream, max_frame_size, broker, peer).await;
+                                        handle_tls_connection(tls_stream, max_frame_size, broker, cluster, peer).await;
                                         return;
                                     }
                                     Err(e) => {
@@ -208,7 +213,7 @@ async fn accept_loop(
                             } else {
                                 stream
                             };
-                            match FibpConnection::accept(tcp_stream, max_frame_size, broker).await {
+                            match FibpConnection::accept(tcp_stream, max_frame_size, broker, cluster).await {
                                 Ok(conn) => conn.run().await,
                                 Err(e) => {
                                     warn!(peer = %peer, error = %e, "FIBP handshake failed");
@@ -239,6 +244,7 @@ async fn handle_tls_connection(
     mut stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     max_frame_size: u32,
     broker: Arc<Broker>,
+    cluster: Option<Arc<ClusterHandle>>,
     peer: std::net::SocketAddr,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -310,7 +316,7 @@ async fn handle_tls_connection(
                     match frame_result {
                         Some(Ok(f)) => {
                             match dispatch_tls_frame(
-                                &mut framed, &broker, &mut is_authenticated,
+                                &mut framed, &broker, &cluster, &mut is_authenticated,
                                 &mut caller, &mut consume_state, &mut push_frame_rx,
                                 f, peer, max_frame_size,
                             ).await {
@@ -357,6 +363,7 @@ async fn handle_tls_connection(
             match dispatch_tls_frame(
                 &mut framed,
                 &broker,
+                &cluster,
                 &mut is_authenticated,
                 &mut caller,
                 &mut consume_state,
@@ -417,6 +424,7 @@ where
 async fn dispatch_tls_frame<S>(
     framed: &mut tokio_util::codec::Framed<S, super::codec::FibpCodec>,
     broker: &Arc<Broker>,
+    cluster: &Option<Arc<ClusterHandle>>,
     authenticated: &mut bool,
     caller: &mut Option<crate::broker::auth::CallerKey>,
     consume_state: &mut Option<TlsConsumeState>,
@@ -599,16 +607,34 @@ where
             let no_caller = None;
             let result = match op {
                 _ if op == OP_CREATE_QUEUE => {
-                    dispatch::dispatch_create_queue(broker, &no_caller, frame.payload).await
+                    dispatch::dispatch_create_queue(
+                        broker,
+                        cluster.as_ref(),
+                        &no_caller,
+                        frame.payload,
+                    )
+                    .await
                 }
                 _ if op == OP_DELETE_QUEUE => {
-                    dispatch::dispatch_delete_queue(broker, &no_caller, frame.payload).await
+                    dispatch::dispatch_delete_queue(
+                        broker,
+                        cluster.as_ref(),
+                        &no_caller,
+                        frame.payload,
+                    )
+                    .await
                 }
                 _ if op == OP_QUEUE_STATS => {
-                    dispatch::dispatch_queue_stats(broker, &no_caller, frame.payload).await
+                    dispatch::dispatch_queue_stats(
+                        broker,
+                        cluster.as_ref(),
+                        &no_caller,
+                        frame.payload,
+                    )
+                    .await
                 }
                 _ if op == OP_LIST_QUEUES => {
-                    dispatch::dispatch_list_queues(broker, frame.payload).await
+                    dispatch::dispatch_list_queues(broker, cluster.as_ref(), frame.payload).await
                 }
                 _ if op == OP_REDRIVE => {
                     dispatch::dispatch_redrive(broker, &no_caller, frame.payload).await

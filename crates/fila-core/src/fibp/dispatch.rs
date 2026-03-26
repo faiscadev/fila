@@ -1,9 +1,11 @@
 //! FIBP command dispatcher — translates decoded wire payloads into
 //! `SchedulerCommand` variants and returns wire-encodable results.
 //!
-//! The dispatcher holds an `Arc<Broker>` for sending commands.  It does
-//! **not** depend on gRPC types or the cluster layer — FIBP connections
-//! are local-only (no Raft forwarding) for now.
+//! The dispatcher holds an `Arc<Broker>` for sending commands.  When a
+//! `ClusterHandle` is available (cluster mode), admin operations that
+//! mutate cluster state (create/delete queue) are routed through the
+//! meta Raft for consensus, and read operations (stats, list queues)
+//! are enriched with cluster metadata (leader node ID, replication count).
 //!
 //! Data operations use custom binary wire encoding (see `wire` module).
 //! Admin operations use protobuf encoding (reusing proto message types
@@ -18,6 +20,7 @@ use uuid::Uuid;
 use crate::broker::auth::CallerKey;
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::Broker;
+use crate::cluster::{ClusterHandle, ClusterRequest, ClusterResponse, ClusterWriteError};
 use crate::error::{AckError, ConfigError, EnqueueError, NackError};
 use crate::message::Message;
 
@@ -238,9 +241,89 @@ fn check_queue_admin(
     Ok(())
 }
 
+/// Convert a `ClusterWriteError` to a `FibpError`.
+fn cluster_write_err_to_fibp(e: ClusterWriteError) -> FibpError {
+    match e {
+        ClusterWriteError::QueueGroupNotFound => FibpError::InvalidPayload {
+            reason: "queue raft group not found".into(),
+        },
+        ClusterWriteError::NodeNotReady => FibpError::InvalidPayload {
+            reason: "node not ready for this queue".into(),
+        },
+        ClusterWriteError::NoLeader => FibpError::InvalidPayload {
+            reason: "no leader available".into(),
+        },
+        ClusterWriteError::Raft(msg) => FibpError::InvalidPayload {
+            reason: format!("raft error: {msg}"),
+        },
+        ClusterWriteError::Forward(msg) => FibpError::InvalidPayload {
+            reason: format!("forward error: {msg}"),
+        },
+    }
+}
+
+/// Count current queue leaderships per node across all queue Raft groups.
+async fn count_leaderships(
+    cluster: &ClusterHandle,
+    candidates: &[u64],
+) -> std::collections::HashMap<u64, usize> {
+    let groups = cluster.multi_raft.snapshot_groups().await;
+
+    let mut counts: std::collections::HashMap<u64, usize> =
+        candidates.iter().map(|&id| (id, 0)).collect();
+
+    for (_queue_id, raft) in &groups {
+        if let Some(leader) = raft.current_leader().await {
+            if let Some(count) = counts.get_mut(&leader) {
+                *count += 1;
+            }
+        }
+    }
+
+    counts
+}
+
+/// Select which nodes should participate in a new queue's Raft group,
+/// and which node should be the preferred leader.
+///
+/// When the cluster has more nodes than `replication_factor`, only the
+/// N least-loaded nodes are selected. The preferred leader is the node
+/// with the fewest leaderships among the selected members.
+async fn select_members_and_leader(
+    all_members: &[u64],
+    cluster: &ClusterHandle,
+) -> (Vec<u64>, u64) {
+    let rf = cluster.replication_factor;
+    let counts = count_leaderships(cluster, all_members).await;
+
+    let selected: Vec<u64> = if all_members.len() > rf && rf > 0 {
+        let mut sorted: Vec<u64> = all_members.to_vec();
+        sorted.sort_by_key(|&id| {
+            let count = counts.get(&id).copied().unwrap_or(0);
+            (count, id)
+        });
+        sorted.truncate(rf);
+        sorted
+    } else {
+        all_members.to_vec()
+    };
+
+    let preferred = selected
+        .iter()
+        .copied()
+        .min_by_key(|&id| {
+            let count = counts.get(&id).copied().unwrap_or(0);
+            (count, id)
+        })
+        .unwrap_or_else(|| selected.first().copied().unwrap_or(1));
+
+    (selected, preferred)
+}
+
 /// Dispatch a CreateQueue request. Payload is a protobuf `CreateQueueRequest`.
 pub async fn dispatch_create_queue(
     broker: &Arc<Broker>,
+    cluster: Option<&Arc<ClusterHandle>>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
@@ -284,29 +367,61 @@ pub async fn dispatch_create_queue(
         lua_memory_limit_bytes: None,
     };
 
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    broker
-        .send_command(SchedulerCommand::CreateQueue {
-            name: req.name,
-            config,
-            reply: reply_tx,
-        })
-        .map_err(FibpError::BrokerUnavailable)?;
+    if let Some(ch) = cluster {
+        // Cluster mode: submit CreateQueueGroup to meta Raft so all nodes
+        // create the queue and its per-queue Raft group.
+        let (all_members, _) = ch.meta_members();
+        let (members, preferred_leader) = select_members_and_leader(&all_members, ch).await;
 
-    let queue_id = reply_rx
-        .await
-        .map_err(|_| FibpError::ReplyDropped)?
-        .map_err(|e| FibpError::InvalidPayload {
-            reason: e.to_string(),
-        })?;
+        let resp = ch
+            .write_to_meta(ClusterRequest::CreateQueueGroup {
+                queue_id: req.name.clone(),
+                members,
+                config,
+                preferred_leader,
+            })
+            .await
+            .map_err(cluster_write_err_to_fibp)?;
 
-    let resp = fila_proto::CreateQueueResponse { queue_id };
-    Ok(Bytes::from(resp.encode_to_vec()))
+        match resp {
+            ClusterResponse::CreateQueueGroup { queue_id } => {
+                let resp = fila_proto::CreateQueueResponse { queue_id };
+                Ok(Bytes::from(resp.encode_to_vec()))
+            }
+            ClusterResponse::Error { message } => {
+                Err(FibpError::InvalidPayload { reason: message })
+            }
+            _ => Err(FibpError::InvalidPayload {
+                reason: "unexpected cluster response".into(),
+            }),
+        }
+    } else {
+        // Single-node mode: direct to scheduler.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::CreateQueue {
+                name: req.name,
+                config,
+                reply: reply_tx,
+            })
+            .map_err(FibpError::BrokerUnavailable)?;
+
+        let queue_id = reply_rx
+            .await
+            .map_err(|_| FibpError::ReplyDropped)?
+            .map_err(|e| FibpError::InvalidPayload {
+                reason: e.to_string(),
+            })?;
+
+        let resp = fila_proto::CreateQueueResponse { queue_id };
+        Ok(Bytes::from(resp.encode_to_vec()))
+    }
 }
 
 /// Dispatch a DeleteQueue request. Payload is a protobuf `DeleteQueueRequest`.
 pub async fn dispatch_delete_queue(
     broker: &Arc<Broker>,
+    cluster: Option<&Arc<ClusterHandle>>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
@@ -321,28 +436,53 @@ pub async fn dispatch_delete_queue(
     // Check queue-scoped admin permission.
     check_queue_admin(broker, caller, &req.queue)?;
 
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    broker
-        .send_command(SchedulerCommand::DeleteQueue {
-            queue_id: req.queue,
-            reply: reply_tx,
-        })
-        .map_err(FibpError::BrokerUnavailable)?;
+    if let Some(ch) = cluster {
+        // Cluster mode: submit DeleteQueueGroup to meta Raft.
+        let resp = ch
+            .write_to_meta(ClusterRequest::DeleteQueueGroup {
+                queue_id: req.queue,
+            })
+            .await
+            .map_err(cluster_write_err_to_fibp)?;
 
-    reply_rx
-        .await
-        .map_err(|_| FibpError::ReplyDropped)?
-        .map_err(|e| FibpError::InvalidPayload {
-            reason: e.to_string(),
-        })?;
+        match resp {
+            ClusterResponse::DeleteQueueGroup => {
+                let resp = fila_proto::DeleteQueueResponse {};
+                Ok(Bytes::from(resp.encode_to_vec()))
+            }
+            ClusterResponse::Error { message } => {
+                Err(FibpError::InvalidPayload { reason: message })
+            }
+            _ => Err(FibpError::InvalidPayload {
+                reason: "unexpected cluster response".into(),
+            }),
+        }
+    } else {
+        // Single-node mode: direct to scheduler.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(SchedulerCommand::DeleteQueue {
+                queue_id: req.queue,
+                reply: reply_tx,
+            })
+            .map_err(FibpError::BrokerUnavailable)?;
 
-    let resp = fila_proto::DeleteQueueResponse {};
-    Ok(Bytes::from(resp.encode_to_vec()))
+        reply_rx
+            .await
+            .map_err(|_| FibpError::ReplyDropped)?
+            .map_err(|e| FibpError::InvalidPayload {
+                reason: e.to_string(),
+            })?;
+
+        let resp = fila_proto::DeleteQueueResponse {};
+        Ok(Bytes::from(resp.encode_to_vec()))
+    }
 }
 
 /// Dispatch a GetStats request. Payload is a protobuf `GetStatsRequest`.
 pub async fn dispatch_queue_stats(
     broker: &Arc<Broker>,
+    cluster: Option<&Arc<ClusterHandle>>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
@@ -360,7 +500,7 @@ pub async fn dispatch_queue_stats(
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     broker
         .send_command(SchedulerCommand::GetStats {
-            queue_id: req.queue,
+            queue_id: req.queue.clone(),
             reply: reply_tx,
         })
         .map_err(FibpError::BrokerUnavailable)?;
@@ -394,6 +534,16 @@ pub async fn dispatch_queue_stats(
         })
         .collect();
 
+    // Enrich with cluster metadata when running in cluster mode.
+    let (leader_node_id, replication_count) = match cluster {
+        Some(ch) => {
+            let leader = ch.queue_leader_id(&req.queue).await;
+            let replicas = ch.queue_replication_count(&req.queue).await;
+            (leader, replicas)
+        }
+        None => (0, 0),
+    };
+
     let resp = fila_proto::GetStatsResponse {
         depth: stats.depth,
         in_flight: stats.in_flight,
@@ -402,8 +552,8 @@ pub async fn dispatch_queue_stats(
         quantum: stats.quantum,
         per_key_stats,
         per_throttle_stats,
-        leader_node_id: 0,
-        replication_count: 0,
+        leader_node_id,
+        replication_count,
     };
     Ok(Bytes::from(resp.encode_to_vec()))
 }
@@ -411,6 +561,7 @@ pub async fn dispatch_queue_stats(
 /// Dispatch a ListQueues request. Payload is a protobuf `ListQueuesRequest`.
 pub async fn dispatch_list_queues(
     broker: &Arc<Broker>,
+    cluster: Option<&Arc<ClusterHandle>>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
     // Decode for forward compatibility even though the message is currently empty.
@@ -428,20 +579,29 @@ pub async fn dispatch_list_queues(
             reason: e.to_string(),
         })?;
 
-    let queues = summaries
-        .into_iter()
-        .map(|s| fila_proto::QueueInfo {
+    let mut queues = Vec::with_capacity(summaries.len());
+    for s in summaries {
+        let leader_node_id = match cluster {
+            Some(ch) => ch.queue_leader_id(&s.name).await,
+            None => 0,
+        };
+        queues.push(fila_proto::QueueInfo {
             name: s.name,
             depth: s.depth,
             in_flight: s.in_flight,
             active_consumers: s.active_consumers,
-            leader_node_id: 0,
-        })
-        .collect();
+            leader_node_id,
+        });
+    }
+
+    let cluster_node_count = match cluster {
+        Some(ch) => ch.cluster_node_count(),
+        None => 0,
+    };
 
     let resp = fila_proto::ListQueuesResponse {
         queues,
-        cluster_node_count: 0,
+        cluster_node_count,
     };
     Ok(Bytes::from(resp.encode_to_vec()))
 }

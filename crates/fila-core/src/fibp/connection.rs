@@ -21,6 +21,7 @@ use tracing::{debug, warn};
 
 use crate::broker::auth::{CallerKey, Permission};
 use crate::broker::Broker;
+use crate::cluster::ClusterHandle;
 
 use super::codec::{
     FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_AUTH, OP_AUTH_CREATE_KEY, OP_AUTH_GET_ACL,
@@ -45,6 +46,9 @@ pub struct FibpConnection {
     framed: Framed<TcpStream, FibpCodec>,
     peer_addr: std::net::SocketAddr,
     broker: Arc<Broker>,
+    /// Optional cluster handle for enriching responses with Raft metadata.
+    /// `None` in single-node mode.
+    cluster: Option<Arc<ClusterHandle>>,
     /// Active consume session state. Only one consume stream per connection.
     consume_state: Option<ConsumeState>,
     /// Channel for the push task to send encoded frames that the main loop
@@ -88,6 +92,7 @@ impl FibpConnection {
         mut stream: TcpStream,
         max_frame_size: u32,
         broker: Arc<Broker>,
+        cluster: Option<Arc<ClusterHandle>>,
     ) -> Result<Self, FibpError> {
         let peer_addr = stream.peer_addr()?;
         debug!(peer = %peer_addr, "fibp handshake starting");
@@ -139,6 +144,7 @@ impl FibpConnection {
             framed,
             peer_addr,
             broker,
+            cluster,
             consume_state: None,
             push_frame_rx: None,
             authenticated,
@@ -512,15 +518,36 @@ impl FibpConnection {
 
         let result = match frame.op {
             OP_CREATE_QUEUE => {
-                dispatch::dispatch_create_queue(&self.broker, &self.caller, frame.payload).await
+                dispatch::dispatch_create_queue(
+                    &self.broker,
+                    self.cluster.as_ref(),
+                    &self.caller,
+                    frame.payload,
+                )
+                .await
             }
             OP_DELETE_QUEUE => {
-                dispatch::dispatch_delete_queue(&self.broker, &self.caller, frame.payload).await
+                dispatch::dispatch_delete_queue(
+                    &self.broker,
+                    self.cluster.as_ref(),
+                    &self.caller,
+                    frame.payload,
+                )
+                .await
             }
             OP_QUEUE_STATS => {
-                dispatch::dispatch_queue_stats(&self.broker, &self.caller, frame.payload).await
+                dispatch::dispatch_queue_stats(
+                    &self.broker,
+                    self.cluster.as_ref(),
+                    &self.caller,
+                    frame.payload,
+                )
+                .await
             }
-            OP_LIST_QUEUES => dispatch::dispatch_list_queues(&self.broker, frame.payload).await,
+            OP_LIST_QUEUES => {
+                dispatch::dispatch_list_queues(&self.broker, self.cluster.as_ref(), frame.payload)
+                    .await
+            }
             OP_REDRIVE => {
                 dispatch::dispatch_redrive(&self.broker, &self.caller, frame.payload).await
             }
@@ -733,7 +760,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            FibpConnection::accept(stream, 16_777_216, broker)
+            FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap();
         });
@@ -750,7 +777,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let err = FibpConnection::accept(stream, 16_777_216, broker)
+            let err = FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap_err();
             assert!(
@@ -775,7 +802,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let err = FibpConnection::accept(stream, 16_777_216, broker)
+            let err = FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap_err();
             assert!(
@@ -800,7 +827,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+            let conn = FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap();
             conn.run().await;
@@ -841,7 +868,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+            let conn = FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap();
             conn.run().await;
@@ -887,7 +914,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+            let conn = FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap();
             conn.run().await;
@@ -947,7 +974,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+            let conn = FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap();
             conn.run().await;
@@ -994,7 +1021,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+            let conn = FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap();
             conn.run().await;
@@ -1057,7 +1084,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+            let conn = FibpConnection::accept(stream, 16_777_216, broker, None)
                 .await
                 .unwrap();
             conn.run().await;
