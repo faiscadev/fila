@@ -115,14 +115,19 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
         }
 
         // Phase 2: Drain all queued messages so we start measurement clean.
+        // Use a separate client so the main `client` has no active consume session
+        // when Phase 3 opens its own consume stream (FIBP allows one session per connection).
         {
-            let mut drain = client.consume(&queue).await.expect("consume drain");
+            let drain_client = fila_sdk::FilaClient::connect(server.addr())
+                .await
+                .expect("connect drain");
+            let mut drain = drain_client.consume(&queue).await.expect("consume drain");
             let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
                 let next = tokio::time::timeout(Duration::from_millis(200), drain.next()).await;
                 match next {
                     Ok(Some(Ok(msg))) => {
-                        let _ = client.ack(&queue, &msg.id).await;
+                        let _ = drain_client.ack(&queue, &msg.id).await;
                     }
                     _ => break,
                 }
@@ -131,6 +136,7 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
                 }
             }
             drop(drain);
+            drop(drain_client);
         }
 
         // Phase 3: Measure sequential enqueue-consume round-trip latency.
