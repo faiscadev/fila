@@ -95,7 +95,7 @@ fn start_mtls_server(
     std::fs::write(&ca_path, ca_pem).expect("write ca");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\nca_file = \"{ca}\"\n",
+        "[fibp]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\nca_file = \"{ca}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
         ca = ca_path.to_str().unwrap(),
@@ -258,7 +258,7 @@ async fn tls_expired_cert_rejected() {
     std::fs::write(&key_path, &server_key_pem).expect("write key");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
+        "[fibp]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
     );

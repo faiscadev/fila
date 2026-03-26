@@ -49,7 +49,7 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
     std::fs::write(&key_path, &key_pem).expect("write key");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
+        "[fibp]\nlisten_addr = \"{addr}\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
     );
