@@ -328,8 +328,8 @@ development_status:
   # Epic 35: Phase 1 — gRPC Streaming & Batch Tuning
   # No architecture changes — tune gRPC settings, optimize streaming, benchmark.
   # Target: 30-50K msg/s. Research: technical-custom-transport-kafka-parity-2026-03-25.md
-  epic-35: backlog
-  35-1-benchmark-baseline-measure-post-plateau-state: backlog
+  epic-35: in-progress
+  35-1-benchmark-baseline-measure-post-plateau-state: in-progress
   35-2-sdk-streaming-batch-consolidation: backlog
   35-3-grpc-transport-tuning: backlog
   35-4-benchmark-checkpoint-phase-2-go-no-go: backlog
