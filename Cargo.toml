@@ -51,7 +51,8 @@ lasso = { version = "0.6", features = ["multi-threaded"] }
 
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["codec"] }
-tokio-rustls = "0.26"
+tokio-rustls = { version = "0.26", features = ["ring"] }
+rustls = { version = "0.23", features = ["ring"], default-features = false }
 rustls-pemfile = "2"
 tower = "0.5"
 axum = "0.8"

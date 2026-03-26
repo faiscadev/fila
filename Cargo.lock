@@ -1384,6 +1384,7 @@ dependencies = [
  "axum",
  "fila-core",
  "opentelemetry",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",

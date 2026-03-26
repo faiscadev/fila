@@ -36,6 +36,10 @@ fn load_config() -> BrokerConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install the ring crypto provider for rustls. Required when more than one
+    // provider feature is enabled in the dependency tree (rustls 0.23+).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let mut config = load_config();
 
     // Initialize telemetry (logging + optional OTel export).
