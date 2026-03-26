@@ -119,6 +119,25 @@ FIBP supports all admin operations (create/delete queue, list queues, queue stat
 | `keepalive_interval_secs` | integer | `15` | Interval between keepalive heartbeat pings. |
 | `keepalive_timeout_secs` | integer | `10` | Timeout waiting for a keepalive pong before closing the connection. |
 
+### SDK transport option
+
+The Rust SDK supports connecting via either gRPC (default) or FIBP. Set the transport in `ConnectOptions`:
+
+```rust
+// gRPC (default)
+let client = FilaClient::connect("http://localhost:5555").await?;
+
+// FIBP — connect to the FIBP TCP port instead
+let opts = ConnectOptions::new("127.0.0.1:5557").with_fibp();
+let client = FilaClient::connect_with_options(opts).await?;
+```
+
+When using FIBP, note:
+- The address is a raw TCP address (not a URL with `http://`), pointing to the FIBP port (default 5557).
+- TLS and API key options work identically to gRPC — pass them on `ConnectOptions` as usual.
+- There is no automatic fallback. If the FIBP connection fails, it returns an error.
+- The accumulator (batch mode) is not used over FIBP. Messages are sent directly as FIBP frames. The FIBP wire format already supports multi-message enqueue in a single frame.
+
 ## OpenTelemetry metrics
 
 When telemetry is enabled, Fila exports the following metrics:
