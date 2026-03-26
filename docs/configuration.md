@@ -12,6 +12,7 @@ If no file is found, all defaults are used. The broker runs with zero configurat
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FILA_DATA_DIR` | `data` | Path to the RocksDB data directory |
+| `FILA_FIBP_PORT_FILE` | (none) | When set, the server writes the actual FIBP listen address to this file after binding (useful for test harnesses with port 0) |
 
 ## Full configuration
 
@@ -38,6 +39,13 @@ metrics_interval_ms = 10000              # metrics export interval (ms)
 # Uncomment to enable the web management GUI
 # [gui]
 # listen_addr = "0.0.0.0:8080"  # HTTP port for the dashboard
+
+# Uncomment to enable the FIBP (Fila Binary Protocol) TCP transport
+# [fibp]
+# listen_addr = "0.0.0.0:5557"       # TCP listen address
+# max_frame_size = 16777216           # max frame size in bytes (16 MB)
+# keepalive_interval_secs = 15        # heartbeat ping interval
+# keepalive_timeout_secs = 10         # timeout waiting for pong
 ```
 
 ## Section reference
@@ -95,6 +103,17 @@ Web management GUI. Disabled by default. When enabled, serves a read-only dashbo
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `listen_addr` | string | `"0.0.0.0:8080"` | Address and port for the web dashboard HTTP server |
+
+### `[fibp]`
+
+FIBP (Fila Binary Protocol) transport. Disabled by default. When enabled, runs a custom binary TCP protocol alongside gRPC for high-throughput workloads. The protocol uses length-prefixed frames with a 6-byte header (flags, op code, correlation ID).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `listen_addr` | string | `"0.0.0.0:5557"` | TCP address for the FIBP transport |
+| `max_frame_size` | integer | `16777216` (16 MB) | Maximum frame size in bytes. Frames exceeding this limit are rejected. |
+| `keepalive_interval_secs` | integer | `15` | Interval between keepalive heartbeat pings. |
+| `keepalive_timeout_secs` | integer | `10` | Timeout waiting for a keepalive pong before closing the connection. |
 
 ## OpenTelemetry metrics
 
