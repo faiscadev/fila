@@ -351,7 +351,7 @@ development_status:
   epic-37: in-progress
   37-1-remove-grpc-fibp-only-server-rust-sdk: done
   37-2-go-sdk-fibp: review
-  37-3-python-sdk-fibp: backlog
+  37-3-python-sdk-fibp: review
   37-4-javascript-sdk-fibp: backlog
   37-5-ruby-sdk-fibp: backlog
   37-6-java-sdk-fibp: backlog
