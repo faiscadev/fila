@@ -3,7 +3,7 @@
 This page presents Fila's benchmark results: self-benchmarks measuring single-node performance, and competitive comparisons against Kafka, RabbitMQ, and NATS.
 
 <!-- bench:header-start -->
-> Results from commit `eed6eef` on 2026-03-25. Run benchmarks on your own hardware for results relevant to your environment. See [Reproducing results](#reproducing-results) for instructions.
+> Results from commit `fd48ee5` on 2026-03-26. Run benchmarks on your own hardware for results relevant to your environment. See [Reproducing results](#reproducing-results) for instructions.
 <!-- bench:header-end -->
 
 ## Self-benchmarks
@@ -15,8 +15,8 @@ Self-benchmarks measure Fila's single-node performance across throughput, latenc
 <!-- bench:throughput-start -->
 | Metric | Value | Unit |
 |--------|------:|------|
-| Enqueue throughput (1KB payload) | 3,127 | msg/s |
-| Enqueue throughput (1KB payload) | 3.05 | MB/s |
+| Enqueue throughput (1KB payload) | 3,832 | msg/s |
+| Enqueue throughput (1KB payload) | 3.74 | MB/s |
 <!-- bench:throughput-end -->
 
 Single producer, sustained over a 3-second measurement window after 1-second warmup.
@@ -38,9 +38,9 @@ Compares throughput with DRR fair scheduling enabled vs plain FIFO delivery.
 <!-- bench:fair-scheduling-overhead-start -->
 | Mode | Throughput (msg/s) |
 |------|-------------------:|
-| FIFO baseline | 1,115 |
-| Fair scheduling (DRR) | 1,083 |
-| **Overhead** | **3.2%** |
+| FIFO baseline | 1,226 |
+| Fair scheduling (DRR) | 1,171 |
+| **Overhead** | **4.5%** |
 <!-- bench:fair-scheduling-overhead-end -->
 
 The DRR scheduler adds minimal overhead compared to FIFO delivery (< 5% target).
@@ -68,9 +68,9 @@ Measures per-message overhead of executing an `on_enqueue` Lua hook.
 <!-- bench:lua-overhead-start -->
 | Metric | Value | Unit |
 |--------|------:|------|
-| Throughput without Lua | 927 | msg/s |
-| Throughput with `on_enqueue` hook | 902 | msg/s |
-| Per-message overhead | 23.5 | us |
+| Throughput without Lua | 1,019 | msg/s |
+| Throughput with `on_enqueue` hook | 959 | msg/s |
+| Per-message overhead | 28.0 | us |
 <!-- bench:lua-overhead-end -->
 
 The Lua hook adds < 6 us per-message overhead, well within the < 50 us NFR target.
@@ -82,9 +82,9 @@ Scheduling throughput as the number of distinct fairness keys increases.
 <!-- bench:cardinality-scaling-start -->
 | Key count | Throughput (msg/s) |
 |----------:|-------------------:|
-| 10 | 1,288 |
-| 1,000 | 778 |
-| 10,000 | 508 |
+| 10 | 1,422 |
+| 1,000 | 820 |
+| 10,000 | 513 |
 <!-- bench:cardinality-scaling-end -->
 
 ### Consumer concurrency scaling
@@ -94,9 +94,9 @@ Aggregate consume throughput with increasing concurrent consumer streams.
 <!-- bench:consumer-scaling-start -->
 | Consumers | Throughput (msg/s) |
 |----------:|-------------------:|
-| 1 | 117 |
-| 10 | 1,113 |
-| 100 | 1,721 |
+| 1 | 113 |
+| 10 | 1,106 |
+| 100 | 1,744 |
 <!-- bench:consumer-scaling-end -->
 
 ### Memory footprint
@@ -104,8 +104,8 @@ Aggregate consume throughput with increasing concurrent consumer streams.
 <!-- bench:memory-start -->
 | Metric | Value |
 |--------|------:|
-| RSS idle | 406 MB |
-| RSS under load (10K messages) | 304 MB |
+| RSS idle | 365 MB |
+| RSS under load (10K messages) | 365 MB |
 <!-- bench:memory-end -->
 
 Memory usage is dominated by the RocksDB buffer pool, not message count.
@@ -446,5 +446,5 @@ The `bench-regression` GitHub Actions workflow runs on every push to `main` and 
 ## Traceability
 
 <!-- bench:traceability-start -->
-Results in this document are from commit `eed6eef` (2026-03-25). Run `cargo bench -p fila-bench --bench system` to generate results for the current version. The JSON output includes the commit hash and timestamp for traceability.
+Results in this document are from commit `fd48ee5` (2026-03-26). Run `cargo bench -p fila-bench --bench system` to generate results for the current version. The JSON output includes the commit hash and timestamp for traceability.
 <!-- bench:traceability-end -->
