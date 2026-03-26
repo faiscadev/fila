@@ -3,15 +3,15 @@
 //! A custom binary TCP transport designed for high-throughput message
 //! operations. Runs alongside gRPC when the `[fibp]` config section is present.
 //!
-//! The FIBP module is transport-only: it does **not** depend on the scheduler
-//! or storage engine directly. Command dispatch is injected via the
-//! `FibpListener::start()` interface (currently a no-op placeholder until
-//! Story 36.2 wires data operations).
+//! The FIBP module dispatches data operations (enqueue, consume, ack, nack)
+//! to the scheduler via `Arc<Broker>`, injected through `FibpListener::start()`.
 
 mod codec;
 mod connection;
+mod dispatch;
 mod error;
 mod listener;
+pub mod wire;
 
 pub use codec::{
     FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_AUTH, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE,

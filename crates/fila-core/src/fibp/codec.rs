@@ -123,6 +123,11 @@ impl FibpCodec {
     pub fn new(max_frame_size: u32) -> Self {
         Self { max_frame_size }
     }
+
+    /// Return the configured maximum frame size.
+    pub fn max_frame_size(&self) -> u32 {
+        self.max_frame_size
+    }
 }
 
 impl Decoder for FibpCodec {

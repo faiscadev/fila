@@ -15,5 +15,6 @@ fila-sdk = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+bytes = { workspace = true }
 tempfile = "3"
 rcgen = { workspace = true }

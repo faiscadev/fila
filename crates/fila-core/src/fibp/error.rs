@@ -17,7 +17,19 @@ pub enum FibpError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// The operation requested is not yet implemented (placeholder for Story 36.2).
+    /// The operation requested is not yet implemented.
     #[error("operation not implemented: 0x{op:02X}")]
     NotImplemented { op: u8 },
+
+    /// A frame payload could not be decoded (malformed wire data).
+    #[error("invalid payload: {reason}")]
+    InvalidPayload { reason: String },
+
+    /// The scheduler command channel is unavailable.
+    #[error("broker unavailable: {0}")]
+    BrokerUnavailable(#[from] crate::error::BrokerError),
+
+    /// The scheduler reply channel was dropped before a response arrived.
+    #[error("scheduler reply dropped")]
+    ReplyDropped,
 }
