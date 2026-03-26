@@ -15,7 +15,7 @@ const COMPACTION_TRIGGER_MESSAGES: u64 = 10_000;
 /// plus the delta between compaction p99 and idle p99.
 pub async fn bench_compaction_impact(server: &BenchServer) -> Vec<BenchResult> {
     let queue = "bench-compaction";
-    create_queue_cli(server.addr(), queue);
+    create_queue_cli(server.addr(), queue).await;
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await

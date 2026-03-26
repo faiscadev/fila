@@ -22,13 +22,13 @@ pub async fn bench_lua_latency(server: &BenchServer) -> Vec<BenchResult> {
 
     // Baseline: no Lua (same headers as Lua version for controlled comparison)
     let no_lua_queue = "bench-lua-baseline";
-    create_queue_cli(server.addr(), no_lua_queue);
+    create_queue_cli(server.addr(), no_lua_queue).await;
     let baseline_throughput = measure_throughput(server, no_lua_queue, headers.clone()).await;
 
     // With Lua on_enqueue
     let lua_queue = "bench-lua-overhead";
     let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" local w = tonumber(msg.headers["weight"]) or 1 return { fairness_key = key, weight = w, throttle_keys = {} } end"#;
-    create_queue_with_lua_cli(server.addr(), lua_queue, Some(on_enqueue), None);
+    create_queue_with_lua_cli(server.addr(), lua_queue, Some(on_enqueue), None).await;
     let lua_throughput = measure_throughput(server, lua_queue, headers).await;
 
     // Per-message overhead

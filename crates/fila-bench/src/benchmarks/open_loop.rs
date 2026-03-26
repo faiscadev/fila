@@ -19,7 +19,7 @@ const SATURATION_PROBE_SECS: u64 = 5;
 /// Run a short closed-loop burst and return the observed messages-per-second.
 async fn saturation_probe(server: &BenchServer, queue: &str) -> f64 {
     let probe_queue = format!("{queue}-satprobe");
-    create_queue_cli(server.addr(), &probe_queue);
+    create_queue_cli(server.addr(), &probe_queue).await;
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await
@@ -261,7 +261,7 @@ async fn open_loop_produce_consume(
 /// each percentage. Each level runs for at least 30 seconds.
 pub async fn bench_latency_under_load(server: &BenchServer) -> Vec<BenchResult> {
     let queue = "bench-openloop-latency-load";
-    create_queue_cli(server.addr(), queue);
+    create_queue_cli(server.addr(), queue).await;
 
     let max_rate = saturation_probe(server, queue).await;
     let duration = Duration::from_secs(bench_duration_secs());
@@ -278,7 +278,7 @@ pub async fn bench_latency_under_load(server: &BenchServer) -> Vec<BenchResult> 
         );
 
         let level_queue = format!("{queue}-{label}");
-        create_queue_cli(server.addr(), &level_queue);
+        create_queue_cli(server.addr(), &level_queue).await;
 
         let (histogram, count) = open_loop_run(server, &level_queue, target, duration).await;
 
@@ -324,7 +324,7 @@ pub async fn bench_consumer_processing_time(server: &BenchServer) -> Vec<BenchRe
     // We pick a rate based on the fastest case (0ms delay), then use the same
     // rate for all levels to make comparisons meaningful.
     let probe_queue = "bench-openloop-proctime-probe";
-    create_queue_cli(server.addr(), probe_queue);
+    create_queue_cli(server.addr(), probe_queue).await;
     let max_rate = saturation_probe(server, probe_queue).await;
     // Use 50% of max so the server isn't saturated even with 100ms delays.
     let target_rate = max_rate * 0.50;
@@ -334,7 +334,7 @@ pub async fn bench_consumer_processing_time(server: &BenchServer) -> Vec<BenchRe
 
     for &(delay, label) in delays {
         let queue = format!("bench-openloop-proctime-{label}");
-        create_queue_cli(server.addr(), &queue);
+        create_queue_cli(server.addr(), &queue).await;
 
         eprintln!("    Processing delay {label}: target {target_rate:.0} msg/s");
 
@@ -389,7 +389,7 @@ pub async fn bench_consumer_processing_time(server: &BenchServer) -> Vec<BenchRe
 /// The saturation inflection point is identifiable from the results.
 pub async fn bench_backpressure_ramp(server: &BenchServer) -> Vec<BenchResult> {
     let probe_queue = "bench-openloop-ramp-probe";
-    create_queue_cli(server.addr(), probe_queue);
+    create_queue_cli(server.addr(), probe_queue).await;
     let max_rate = saturation_probe(server, probe_queue).await;
 
     let step_duration = Duration::from_secs(10);
@@ -402,7 +402,7 @@ pub async fn bench_backpressure_ramp(server: &BenchServer) -> Vec<BenchResult> {
         let label = format!("{pct}pct");
 
         let queue = format!("bench-openloop-ramp-{label}");
-        create_queue_cli(server.addr(), &queue);
+        create_queue_cli(server.addr(), &queue).await;
 
         eprintln!("    Ramp step {pct}%: target {target:.0} msg/s");
 
@@ -459,7 +459,7 @@ pub async fn bench_queue_depth_latency(server: &BenchServer) -> Vec<BenchResult>
 
     // Use a moderate rate for latency measurement.
     let probe_queue = "bench-openloop-depth-probe";
-    create_queue_cli(server.addr(), probe_queue);
+    create_queue_cli(server.addr(), probe_queue).await;
     let max_rate = saturation_probe(server, probe_queue).await;
     let target_rate = max_rate * 0.50;
 
@@ -468,7 +468,7 @@ pub async fn bench_queue_depth_latency(server: &BenchServer) -> Vec<BenchResult>
 
     for &(depth, label) in depths {
         let queue = format!("bench-openloop-depth-{label}");
-        create_queue_cli(server.addr(), &queue);
+        create_queue_cli(server.addr(), &queue).await;
 
         // Pre-load messages to reach target depth.
         if depth > 0 {

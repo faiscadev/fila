@@ -11,7 +11,7 @@ const MEASURE_SECS: u64 = 3;
 /// Measure single-producer enqueue throughput with 1KB payloads.
 pub async fn bench_enqueue_throughput(server: &BenchServer) -> Vec<BenchResult> {
     let queue = "bench-throughput";
-    create_queue_cli(server.addr(), queue);
+    create_queue_cli(server.addr(), queue).await;
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await

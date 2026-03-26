@@ -322,7 +322,7 @@ pub async fn bench_fibp_overhead(
     results: &mut Vec<BenchResult>,
 ) {
     let queue = "bench-fibp-overhead";
-    crate::server::create_queue_cli(server.addr(), queue);
+    crate::server::create_queue_cli(server.addr(), queue).await;
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await
