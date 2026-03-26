@@ -343,5 +343,5 @@ development_status:
   36-2-fibp-data-operations: review
   36-3-fibp-admin-and-security: review
   36-4-rust-sdk-fibp-transport: review
-  36-5-benchmark-checkpoint-fibp-vs-grpc: backlog
+  36-5-benchmark-checkpoint-fibp-vs-grpc: review
   epic-36-retrospective: optional
