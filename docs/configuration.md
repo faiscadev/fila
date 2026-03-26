@@ -75,6 +75,19 @@ Telemetry export is optional. When `otlp_endpoint` is omitted, the broker uses p
 | `service_name` | string | `"fila"` | Service name reported in OTel traces and metrics. |
 | `metrics_interval_ms` | integer | `10000` | How often metrics are exported to the OTLP endpoint. |
 
+### `[grpc]`
+
+HTTP/2 transport tuning. These defaults are tuned for high-throughput workloads.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `initial_stream_window_size` | integer | `8388608` (8 MB) | Initial HTTP/2 stream flow-control window. Larger values reduce WINDOW_UPDATE overhead. |
+| `initial_connection_window_size` | integer | `16777216` (16 MB) | Initial HTTP/2 connection flow-control window. Should be >= stream window * expected concurrent streams. |
+| `http2_max_frame_size` | integer | `65536` (64 KB) | Maximum HTTP/2 DATA frame size. Larger frames reduce per-frame overhead for batch payloads. Valid: 16384-16777215. |
+| `tcp_nodelay` | boolean | `true` | Disable Nagle's algorithm for lower latency. |
+| `keepalive_interval_secs` | integer | `15` | HTTP/2 PING interval for connection health. |
+| `keepalive_timeout_secs` | integer | `10` | Timeout waiting for keepalive PING response. |
+
 ### `[gui]`
 
 Web management GUI. Disabled by default. When enabled, serves a read-only dashboard on a separate HTTP port.
