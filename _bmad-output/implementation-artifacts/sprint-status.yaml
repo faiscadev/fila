@@ -332,7 +332,7 @@ development_status:
   35-1-benchmark-baseline-measure-post-plateau-state: review
   35-2-sdk-streaming-batch-consolidation: review
   35-3-grpc-transport-tuning: review
-  35-4-benchmark-checkpoint-phase-2-go-no-go: in-progress
+  35-4-benchmark-checkpoint-phase-2-go-no-go: review
   epic-35-retrospective: optional
 
   # Epic 36: Phase 2 — Custom Binary Protocol (FIBP) (conditional on Epic 35 results)
