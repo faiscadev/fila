@@ -9,87 +9,12 @@ use tokio::net::TcpStream;
 /// FIBP magic bytes: "FIBP" + major 1 + minor 0.
 const MAGIC: &[u8; 6] = b"FIBP\x01\x00";
 
-/// Start a fila-server with FIBP enabled, returning (TestServer, fibp_addr).
+/// Start a fila-server, returning (TestServer, fibp_addr).
+/// FIBP is the sole transport, so the server address IS the FIBP address.
 fn start_fibp_server() -> (helpers::TestServer, String) {
-    let data_dir = tempfile::tempdir().expect("temp dir");
-    let port_file = data_dir.path().join("port");
-    let fibp_port_file = data_dir.path().join("fibp_port");
-
-    let config_content = concat!(
-        "[server]\n",
-        "listen_addr = \"127.0.0.1:0\"\n",
-        "\n",
-        "[telemetry]\n",
-        "otlp_endpoint = \"\"\n",
-        "\n",
-        "[fibp]\n",
-        "listen_addr = \"127.0.0.1:0\"\n",
-    );
-    let config_path = data_dir.path().join("fila.toml");
-    std::fs::write(&config_path, config_content).expect("write config");
-
-    let binary = workspace_binary("fila-server");
-    assert!(
-        binary.exists(),
-        "fila-server binary not found at {binary:?}. Run `cargo build` first."
-    );
-
-    let mut child = std::process::Command::new(&binary)
-        .env(
-            "FILA_DATA_DIR",
-            data_dir.path().join("data").to_str().unwrap(),
-        )
-        .env("FILA_PORT_FILE", port_file.to_str().unwrap())
-        .env("FILA_FIBP_PORT_FILE", fibp_port_file.to_str().unwrap())
-        .current_dir(data_dir.path())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("start fila-server");
-
-    // Drain stdout/stderr.
-    use std::io::BufRead;
-    let stdout = child.stdout.take().expect("stdout");
-    std::thread::spawn(move || for _ in std::io::BufReader::new(stdout).lines() {});
-    let stderr = child.stderr.take().expect("stderr");
-    std::thread::spawn(move || for _ in std::io::BufReader::new(stderr).lines() {});
-
-    // Wait for the gRPC port file.
-    let start = std::time::Instant::now();
-    let grpc_addr = loop {
-        if start.elapsed() > Duration::from_secs(10) {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    panic!("fila-server exited with {status} before writing port file")
-                }
-                _ => panic!("fila-server did not write port file within 10s"),
-            }
-        }
-        if let Ok(contents) = std::fs::read_to_string(&port_file) {
-            let contents = contents.trim();
-            if !contents.is_empty() {
-                break contents.to_string();
-            }
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-
-    // Wait for the FIBP port file.
-    let fibp_addr = loop {
-        if start.elapsed() > Duration::from_secs(10) {
-            panic!("fila-server did not write FIBP port file within 10s");
-        }
-        if let Ok(contents) = std::fs::read_to_string(&fibp_port_file) {
-            let contents = contents.trim();
-            if !contents.is_empty() {
-                break contents.to_string();
-            }
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-
-    let server = helpers::TestServer::from_parts(child, format!("http://{grpc_addr}"), data_dir);
-    (server, fibp_addr)
+    let server = helpers::TestServer::start();
+    let addr = server.addr().to_string();
+    (server, addr)
 }
 
 fn workspace_binary(name: &str) -> std::path::PathBuf {
@@ -334,7 +259,7 @@ async fn e2e_fibp_handshake_and_heartbeat() {
 async fn e2e_fibp_enqueue_batch_100() {
     let (server, fibp_addr) = start_fibp_server();
 
-    // Create the queue via gRPC.
+    // Create the queue via CLI.
     helpers::create_queue_cli(server.addr(), "fibp-batch-queue");
 
     let mut stream = TcpStream::connect(&fibp_addr).await.unwrap();
@@ -384,7 +309,7 @@ async fn e2e_fibp_enqueue_batch_100() {
 async fn e2e_fibp_enqueue_consume_ack() {
     let (server, fibp_addr) = start_fibp_server();
 
-    // Create the queue via gRPC.
+    // Create the queue via CLI.
     helpers::create_queue_cli(server.addr(), "fibp-lifecycle-queue");
 
     let mut stream = TcpStream::connect(&fibp_addr).await.unwrap();
@@ -544,23 +469,19 @@ async fn e2e_fibp_nack_with_error() {
 // Auth + Admin tests
 // ---------------------------------------------------------------------------
 
-/// Start a fila-server with FIBP and auth enabled.
+/// Start a fila-server with auth enabled.
 fn start_fibp_auth_server() -> (helpers::TestServer, String, String) {
     let data_dir = tempfile::tempdir().expect("temp dir");
     let port_file = data_dir.path().join("port");
-    let fibp_port_file = data_dir.path().join("fibp_port");
     let bootstrap_key = "e2e-bootstrap-key-12345";
 
     let config_content = format!(
         concat!(
-            "[server]\n",
+            "[fibp]\n",
             "listen_addr = \"127.0.0.1:0\"\n",
             "\n",
             "[telemetry]\n",
             "otlp_endpoint = \"\"\n",
-            "\n",
-            "[fibp]\n",
-            "listen_addr = \"127.0.0.1:0\"\n",
             "\n",
             "[auth]\n",
             "bootstrap_apikey = \"{}\"\n",
@@ -582,7 +503,6 @@ fn start_fibp_auth_server() -> (helpers::TestServer, String, String) {
             data_dir.path().join("data").to_str().unwrap(),
         )
         .env("FILA_PORT_FILE", port_file.to_str().unwrap())
-        .env("FILA_FIBP_PORT_FILE", fibp_port_file.to_str().unwrap())
         .current_dir(data_dir.path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -596,7 +516,7 @@ fn start_fibp_auth_server() -> (helpers::TestServer, String, String) {
     std::thread::spawn(move || for _ in std::io::BufReader::new(stderr).lines() {});
 
     let start = std::time::Instant::now();
-    let grpc_addr = loop {
+    let addr = loop {
         if start.elapsed() > Duration::from_secs(10) {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -614,21 +534,8 @@ fn start_fibp_auth_server() -> (helpers::TestServer, String, String) {
         std::thread::sleep(Duration::from_millis(20));
     };
 
-    let fibp_addr = loop {
-        if start.elapsed() > Duration::from_secs(10) {
-            panic!("fila-server did not write FIBP port file within 10s");
-        }
-        if let Ok(contents) = std::fs::read_to_string(&fibp_port_file) {
-            let contents = contents.trim();
-            if !contents.is_empty() {
-                break contents.to_string();
-            }
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-
-    let server = helpers::TestServer::from_parts(child, format!("http://{grpc_addr}"), data_dir);
-    (server, fibp_addr, bootstrap_key.to_string())
+    let server = helpers::TestServer::from_parts(child, addr.clone(), data_dir);
+    (server, addr, bootstrap_key.to_string())
 }
 
 /// E2E: auth success over FIBP — send OP_AUTH with valid key, get success response.

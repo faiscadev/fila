@@ -15,8 +15,6 @@ name = "fila"
 path = "src/main.rs"
 
 [dependencies]
-fila-proto.workspace = true
+fila-sdk.workspace = true
 clap.workspace = true
 tokio.workspace = true
-tonic = { workspace = true, features = ["tls-native-roots"] }
-tonic-prost.workspace = true

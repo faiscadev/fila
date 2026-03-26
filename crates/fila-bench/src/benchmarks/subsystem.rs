@@ -311,17 +311,17 @@ pub fn bench_drr(results: &mut Vec<BenchResult>) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. gRPC overhead: round-trip latency for a lightweight RPC
+// 4. FIBP overhead: round-trip latency for a lightweight request
 // ---------------------------------------------------------------------------
 
-/// Measure gRPC round-trip overhead by calling a lightweight RPC
+/// Measure FIBP round-trip overhead by calling a lightweight operation
 /// (Enqueue with minimal payload) and recording per-call latency.
-/// Isolates tonic + HTTP/2 framing overhead from message processing.
-pub async fn bench_grpc_overhead(
+/// Isolates FIBP framing overhead from message processing.
+pub async fn bench_fibp_overhead(
     server: &crate::server::BenchServer,
     results: &mut Vec<BenchResult>,
 ) {
-    let queue = "bench-grpc-overhead";
+    let queue = "bench-fibp-overhead";
     crate::server::create_queue_cli(server.addr(), queue);
 
     let client = fila_sdk::FilaClient::connect(server.addr())
@@ -358,7 +358,7 @@ pub async fn bench_grpc_overhead(
 
     if let Some(pcts) = hist.percentiles() {
         results.push(BenchResult {
-            name: "subsystem_grpc_overhead_p50".to_string(),
+            name: "subsystem_fibp_overhead_p50".to_string(),
             value: pcts.p50,
             unit: "us".to_string(),
             metadata: [
@@ -369,13 +369,13 @@ pub async fn bench_grpc_overhead(
             .collect(),
         });
         results.push(BenchResult {
-            name: "subsystem_grpc_overhead_p99".to_string(),
+            name: "subsystem_fibp_overhead_p99".to_string(),
             value: pcts.p99,
             unit: "us".to_string(),
             metadata: HashMap::new(),
         });
         results.push(BenchResult {
-            name: "subsystem_grpc_overhead_p99_9".to_string(),
+            name: "subsystem_fibp_overhead_p99_9".to_string(),
             value: pcts.p99_9,
             unit: "us".to_string(),
             metadata: HashMap::new(),
@@ -383,7 +383,7 @@ pub async fn bench_grpc_overhead(
     }
 
     results.push(BenchResult {
-        name: "subsystem_grpc_overhead_ops".to_string(),
+        name: "subsystem_fibp_overhead_ops".to_string(),
         value: meter.msg_per_sec(),
         unit: "ops/s".to_string(),
         metadata: HashMap::new(),

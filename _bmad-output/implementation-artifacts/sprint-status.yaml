@@ -349,7 +349,7 @@ development_status:
   # Epic 37: FIBP-Only Transport — Remove gRPC, All SDKs on FIBP
   # Remove gRPC entirely, make FIBP the sole transport. Update all SDKs, benchmarks, docs.
   epic-37: in-progress
-  37-1-remove-grpc-fibp-only-server-rust-sdk: in-progress
+  37-1-remove-grpc-fibp-only-server-rust-sdk: review
   37-2-go-sdk-fibp: backlog
   37-3-python-sdk-fibp: backlog
   37-4-javascript-sdk-fibp: backlog

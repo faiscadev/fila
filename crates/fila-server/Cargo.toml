@@ -5,28 +5,19 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "gRPC server binary for Fila"
+description = "Server binary for Fila message broker"
 publish = false
 
 [dependencies]
-fila-proto.workspace = true
 fila-core.workspace = true
-tonic.workspace = true
-tonic-prost.workspace = true
 tokio.workspace = true
-tokio-stream = "0.1"
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 opentelemetry.workspace = true
 toml.workspace = true
-uuid.workspace = true
-tower.workspace = true
-axum.workspace = true
-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-pin-project-lite.workspace = true
-futures-core = "0.3"
+axum.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

@@ -594,20 +594,25 @@ where
                     return write_frame_generic(framed, err).await;
                 }
             }
+            // Permission already checked above — pass None so dispatch
+            // functions skip their per-queue admin check.
+            let no_caller = None;
             let result = match op {
                 _ if op == OP_CREATE_QUEUE => {
-                    dispatch::dispatch_create_queue(broker, frame.payload).await
+                    dispatch::dispatch_create_queue(broker, &no_caller, frame.payload).await
                 }
                 _ if op == OP_DELETE_QUEUE => {
-                    dispatch::dispatch_delete_queue(broker, frame.payload).await
+                    dispatch::dispatch_delete_queue(broker, &no_caller, frame.payload).await
                 }
                 _ if op == OP_QUEUE_STATS => {
-                    dispatch::dispatch_queue_stats(broker, frame.payload).await
+                    dispatch::dispatch_queue_stats(broker, &no_caller, frame.payload).await
                 }
                 _ if op == OP_LIST_QUEUES => {
                     dispatch::dispatch_list_queues(broker, frame.payload).await
                 }
-                _ if op == OP_REDRIVE => dispatch::dispatch_redrive(broker, frame.payload).await,
+                _ if op == OP_REDRIVE => {
+                    dispatch::dispatch_redrive(broker, &no_caller, frame.payload).await
+                }
                 _ => unreachable!(),
             };
             match result {

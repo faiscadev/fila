@@ -3,14 +3,8 @@ package fila.v1;
 
 import "fila/v1/messages.proto";
 
-// Hot-path RPCs for producers and consumers.
-service FilaService {
-  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
-  rpc StreamEnqueue(stream StreamEnqueueRequest) returns (stream StreamEnqueueResponse);
-  rpc Consume(ConsumeRequest) returns (stream ConsumeResponse);
-  rpc Ack(AckRequest) returns (AckResponse);
-  rpc Nack(NackRequest) returns (NackResponse);
-}
+// Message types used by FIBP admin operations (protobuf-encoded payloads).
+// The gRPC service definitions have been removed — FIBP is the sole transport.
 
 // Individual message to enqueue.
 message EnqueueMessage {

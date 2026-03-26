@@ -26,9 +26,10 @@ use crate::client::{ConsumeMessage, EnqueueMessage};
 use crate::error::{AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError};
 use crate::fibp_codec::{
     self, ack_nack_err, enqueue_err, AckNackResultItem, EnqueueResultItem, EnqueueWireMessage,
-    FibpCodec, Frame, FLAG_STREAM, MAGIC, OP_ACK, OP_AUTH, OP_CONSUME, OP_CREATE_QUEUE,
-    OP_DELETE_QUEUE, OP_ENQUEUE, OP_ERROR, OP_FLOW, OP_GOAWAY, OP_LIST_QUEUES, OP_NACK,
-    OP_QUEUE_STATS,
+    FibpCodec, Frame, FLAG_STREAM, MAGIC, OP_ACK, OP_AUTH, OP_AUTH_CREATE_KEY, OP_AUTH_GET_ACL,
+    OP_AUTH_LIST_KEYS, OP_AUTH_REVOKE_KEY, OP_AUTH_SET_ACL, OP_CONFIG_GET, OP_CONFIG_LIST,
+    OP_CONFIG_SET, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE, OP_ENQUEUE, OP_ERROR, OP_FLOW,
+    OP_GOAWAY, OP_LIST_QUEUES, OP_NACK, OP_QUEUE_STATS, OP_REDRIVE,
 };
 
 /// Maximum frame size for the SDK client (16 MB, matching server default).
@@ -267,6 +268,9 @@ impl FibpTransport {
 
         if response.op == OP_ERROR {
             let msg = String::from_utf8_lossy(&response.payload).to_string();
+            if msg.contains("permission denied") {
+                return Err(StatusError::PermissionDenied(msg));
+            }
             return Err(StatusError::Internal(msg));
         }
 
@@ -366,9 +370,15 @@ impl FibpTransport {
                 },
                 Err(e) => {
                     for (original_idx, _) in &msgs {
-                        results[*original_idx] = Some(Err(EnqueueError::Status(
-                            StatusError::Internal(format!("FIBP enqueue failed: {e}")),
-                        )));
+                        let err = match &e {
+                            StatusError::PermissionDenied(msg) => {
+                                EnqueueError::PermissionDenied(msg.clone())
+                            }
+                            other => EnqueueError::Status(StatusError::Internal(format!(
+                                "FIBP enqueue failed: {other}"
+                            ))),
+                        };
+                        results[*original_idx] = Some(Err(err));
                     }
                 }
             }
@@ -443,7 +453,10 @@ impl FibpTransport {
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_ACK, corr_id, payload);
 
-        let response = self.request(frame).await.map_err(AckError::Status)?;
+        let response = self.request(frame).await.map_err(|e| match e {
+            StatusError::PermissionDenied(msg) => AckError::PermissionDenied(msg),
+            other => AckError::Status(other),
+        })?;
 
         let results =
             fibp_codec::decode_ack_nack_response(response.payload).map_err(AckError::Status)?;
@@ -466,7 +479,10 @@ impl FibpTransport {
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_NACK, corr_id, payload);
 
-        let response = self.request(frame).await.map_err(NackError::Status)?;
+        let response = self.request(frame).await.map_err(|e| match e {
+            StatusError::PermissionDenied(msg) => NackError::PermissionDenied(msg),
+            other => NackError::Status(other),
+        })?;
 
         let results =
             fibp_codec::decode_ack_nack_response(response.payload).map_err(NackError::Status)?;
@@ -549,6 +565,159 @@ impl FibpTransport {
         fila_proto::ListQueuesResponse::decode(response.payload).map_err(|e| {
             StatusError::Internal(format!("failed to decode list queues response: {e}"))
         })
+    }
+
+    /// Redrive messages from a DLQ via FIBP.
+    pub async fn redrive(&self, dlq_queue: &str, count: u64) -> Result<u64, StatusError> {
+        let req = fila_proto::RedriveRequest {
+            dlq_queue: dlq_queue.to_string(),
+            count,
+        };
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_REDRIVE, corr_id, payload);
+
+        let response = self.request(frame).await?;
+        let resp = fila_proto::RedriveResponse::decode(response.payload).map_err(|e| {
+            StatusError::Internal(format!("failed to decode redrive response: {e}"))
+        })?;
+        Ok(resp.redriven)
+    }
+
+    // -----------------------------------------------------------------------
+    // Config operations
+    // -----------------------------------------------------------------------
+
+    /// Set a runtime config value via FIBP.
+    pub async fn set_config(&self, key: &str, value: &str) -> Result<(), StatusError> {
+        let req = fila_proto::SetConfigRequest {
+            key: key.to_string(),
+            value: value.to_string(),
+        };
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_CONFIG_SET, corr_id, payload);
+
+        self.request(frame).await?;
+        Ok(())
+    }
+
+    /// Get a runtime config value via FIBP.
+    pub async fn get_config(&self, key: &str) -> Result<String, StatusError> {
+        let req = fila_proto::GetConfigRequest {
+            key: key.to_string(),
+        };
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_CONFIG_GET, corr_id, payload);
+
+        let response = self.request(frame).await?;
+        let resp = fila_proto::GetConfigResponse::decode(response.payload).map_err(|e| {
+            StatusError::Internal(format!("failed to decode get config response: {e}"))
+        })?;
+        Ok(resp.value)
+    }
+
+    /// List runtime config entries via FIBP.
+    pub async fn list_config(
+        &self,
+        prefix: &str,
+    ) -> Result<fila_proto::ListConfigResponse, StatusError> {
+        let req = fila_proto::ListConfigRequest {
+            prefix: prefix.to_string(),
+        };
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_CONFIG_LIST, corr_id, payload);
+
+        let response = self.request(frame).await?;
+        fila_proto::ListConfigResponse::decode(response.payload).map_err(|e| {
+            StatusError::Internal(format!("failed to decode list config response: {e}"))
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Auth CRUD operations
+    // -----------------------------------------------------------------------
+
+    /// Create a new API key via FIBP.
+    pub async fn create_api_key(
+        &self,
+        name: &str,
+        expires_at_ms: Option<u64>,
+        is_superadmin: bool,
+    ) -> Result<fila_proto::CreateApiKeyResponse, StatusError> {
+        let req = fila_proto::CreateApiKeyRequest {
+            name: name.to_string(),
+            expires_at_ms: expires_at_ms.unwrap_or(0),
+            is_superadmin,
+        };
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_AUTH_CREATE_KEY, corr_id, payload);
+
+        let response = self.request(frame).await?;
+        fila_proto::CreateApiKeyResponse::decode(response.payload).map_err(|e| {
+            StatusError::Internal(format!("failed to decode create api key response: {e}"))
+        })
+    }
+
+    /// Revoke an API key via FIBP.
+    pub async fn revoke_api_key(&self, key_id: &str) -> Result<(), StatusError> {
+        let req = fila_proto::RevokeApiKeyRequest {
+            key_id: key_id.to_string(),
+        };
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_AUTH_REVOKE_KEY, corr_id, payload);
+
+        self.request(frame).await?;
+        Ok(())
+    }
+
+    /// List all API keys via FIBP.
+    pub async fn list_api_keys(&self) -> Result<fila_proto::ListApiKeysResponse, StatusError> {
+        let req = fila_proto::ListApiKeysRequest {};
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_AUTH_LIST_KEYS, corr_id, payload);
+
+        let response = self.request(frame).await?;
+        fila_proto::ListApiKeysResponse::decode(response.payload).map_err(|e| {
+            StatusError::Internal(format!("failed to decode list api keys response: {e}"))
+        })
+    }
+
+    /// Set ACL permissions for an API key via FIBP.
+    pub async fn set_acl(
+        &self,
+        key_id: &str,
+        permissions: Vec<fila_proto::AclPermission>,
+    ) -> Result<(), StatusError> {
+        let req = fila_proto::SetAclRequest {
+            key_id: key_id.to_string(),
+            permissions,
+        };
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_AUTH_SET_ACL, corr_id, payload);
+
+        self.request(frame).await?;
+        Ok(())
+    }
+
+    /// Get ACL permissions for an API key via FIBP.
+    pub async fn get_acl(&self, key_id: &str) -> Result<fila_proto::GetAclResponse, StatusError> {
+        let req = fila_proto::GetAclRequest {
+            key_id: key_id.to_string(),
+        };
+        let payload = Bytes::from(req.encode_to_vec());
+        let corr_id = self.next_id();
+        let frame = Frame::new(0, OP_AUTH_GET_ACL, corr_id, payload);
+
+        let response = self.request(frame).await?;
+        fila_proto::GetAclResponse::decode(response.payload)
+            .map_err(|e| StatusError::Internal(format!("failed to decode get acl response: {e}")))
     }
 }
 

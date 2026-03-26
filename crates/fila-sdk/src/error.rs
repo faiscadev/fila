@@ -1,6 +1,4 @@
-use tonic::Code;
-
-/// Common gRPC status errors shared across all operations.
+/// Common status errors shared across all operations.
 ///
 /// Analogous to `StorageError` in fila-core — the "infra" error that every
 /// per-operation type embeds via `#[from]`.
@@ -15,8 +13,11 @@ pub enum StatusError {
     #[error("internal server error: {0}")]
     Internal(String),
 
-    #[error("unexpected gRPC error ({code:?}): {message}")]
-    Rpc { code: Code, message: String },
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
 }
 
 // --- Per-operation error types ---
@@ -24,10 +25,19 @@ pub enum StatusError {
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
     #[error("connection failed: {0}")]
-    Transport(#[from] tonic::transport::Error),
+    Io(#[from] std::io::Error),
 
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    #[error("handshake failed: {0}")]
+    Handshake(String),
+
+    #[error("authentication failed: {0}")]
+    Auth(String),
+
+    #[error("TLS error: {0}")]
+    Tls(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -73,51 +83,4 @@ pub enum NackError {
 
     #[error(transparent)]
     Status(#[from] StatusError),
-}
-
-// --- Mapping helpers ---
-
-pub(crate) fn status_error(status: tonic::Status) -> StatusError {
-    let message = status.message().to_string();
-    match status.code() {
-        Code::InvalidArgument => StatusError::InvalidArgument(message),
-        Code::Unavailable => StatusError::Unavailable(message),
-        Code::Internal => StatusError::Internal(message),
-        code => StatusError::Rpc { code, message },
-    }
-}
-
-pub(crate) fn enqueue_status_error(status: tonic::Status) -> EnqueueError {
-    let message = status.message().to_string();
-    match status.code() {
-        Code::NotFound => EnqueueError::QueueNotFound(message),
-        Code::PermissionDenied => EnqueueError::PermissionDenied(message),
-        _ => EnqueueError::Status(status_error(status)),
-    }
-}
-
-pub(crate) fn consume_status_error(status: tonic::Status) -> ConsumeError {
-    let message = status.message().to_string();
-    match status.code() {
-        Code::NotFound => ConsumeError::QueueNotFound(message),
-        _ => ConsumeError::Status(status_error(status)),
-    }
-}
-
-pub(crate) fn ack_status_error(status: tonic::Status) -> AckError {
-    let message = status.message().to_string();
-    match status.code() {
-        Code::NotFound => AckError::MessageNotFound(message),
-        Code::PermissionDenied => AckError::PermissionDenied(message),
-        _ => AckError::Status(status_error(status)),
-    }
-}
-
-pub(crate) fn nack_status_error(status: tonic::Status) -> NackError {
-    let message = status.message().to_string();
-    match status.code() {
-        Code::NotFound => NackError::MessageNotFound(message),
-        Code::PermissionDenied => NackError::PermissionDenied(message),
-        _ => NackError::Status(status_error(status)),
-    }
 }

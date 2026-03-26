@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use std::io::BufReader;
-use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -59,7 +58,7 @@ impl TestCluster {
         }
     }
 
-    /// Get the HTTP address of node `i` (e.g., "http://127.0.0.1:12345").
+    /// Get the address of node `i` (e.g., "127.0.0.1:12345").
     pub fn addr(&self, i: usize) -> &str {
         &self.nodes[i].as_ref().expect("node not running").addr
     }
@@ -167,7 +166,7 @@ fn write_cluster_config(
     };
 
     let config = format!(
-        r#"[server]
+        r#"[fibp]
 listen_addr = "{addr}"
 
 [telemetry]
@@ -227,7 +226,7 @@ fn spawn_and_wait(data_dir: tempfile::TempDir, client_port: u16) -> ClusterNode 
 
     ClusterNode {
         child,
-        addr: format!("http://{addr_str}"),
+        addr: addr_str.to_string(),
         data_dir,
     }
 }

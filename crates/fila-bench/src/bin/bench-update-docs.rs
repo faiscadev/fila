@@ -133,7 +133,7 @@ fn main() {
                 &render_subsystem_protobuf(&bench_map),
             );
             doc = replace_section(&doc, "subsystem-drr", &render_subsystem_drr(&bench_map));
-            doc = replace_section(&doc, "subsystem-grpc", &render_subsystem_grpc(&bench_map));
+            doc = replace_section(&doc, "subsystem-grpc", &render_subsystem_fibp(&bench_map));
             doc = replace_section(&doc, "subsystem-lua", &render_subsystem_lua(&bench_map));
         }
     }
@@ -625,11 +625,11 @@ fn render_subsystem_drr(m: &HashMap<&str, &BenchResult>) -> String {
     rows
 }
 
-fn render_subsystem_grpc(m: &HashMap<&str, &BenchResult>) -> String {
-    let p50 = get_val(m, "grpc_roundtrip_p50");
-    let p99 = get_val(m, "grpc_roundtrip_p99");
-    let p999 = get_val(m, "grpc_roundtrip_p99_9");
-    let ops = get_val(m, "grpc_roundtrip_ops");
+fn render_subsystem_fibp(m: &HashMap<&str, &BenchResult>) -> String {
+    let p50 = get_val(m, "fibp_roundtrip_p50");
+    let p99 = get_val(m, "fibp_roundtrip_p99");
+    let p999 = get_val(m, "fibp_roundtrip_p99_9");
+    let ops = get_val(m, "fibp_roundtrip_ops");
     format!(
         "\
 | Metric | Value | Unit |

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use fila_bench::server::{create_queue_cli, BenchServer};
-use fila_sdk::{AccumulatorMode, ConnectOptions, FilaClient, Transport};
+use fila_sdk::{AccumulatorMode, ConnectOptions, FilaClient};
 use tokio_stream::StreamExt;
 
 /// Profiling workload driver for flamegraph generation.
@@ -15,9 +15,7 @@ use tokio_stream::StreamExt;
 ///   PROFILE_DURATION   - seconds to run (default: 30)
 ///   PROFILE_MSG_SIZE   - message payload size in bytes (default: 1024)
 ///   PROFILE_CONCURRENCY- number of concurrent producers/consumers (default: 1)
-///   PROFILE_TRANSPORT  - "grpc" (default) or "fibp"
 ///   PROFILE_SERVER_ADDR- if set, connect to an external server instead of starting one
-///   PROFILE_FIBP_ADDR  - if set (with PROFILE_SERVER_ADDR), use this FIBP address for external server
 #[tokio::main]
 async fn main() {
     let workload = std::env::var("PROFILE_WORKLOAD").unwrap_or_else(|_| "enqueue-only".to_string());
@@ -33,8 +31,6 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
-    let transport = std::env::var("PROFILE_TRANSPORT").unwrap_or_else(|_| "grpc".to_string());
-    let use_fibp = transport.eq_ignore_ascii_case("fibp");
 
     let duration = Duration::from_secs(duration_secs);
     let payload = vec![0x42u8; msg_size];
@@ -42,66 +38,44 @@ async fn main() {
 
     // Start embedded server or connect to external.
     let _server;
-    let (grpc_addr, connect_addr) = match std::env::var("PROFILE_SERVER_ADDR") {
-        Ok(a) => {
-            let fibp_a = std::env::var("PROFILE_FIBP_ADDR").ok();
-            let ca = if use_fibp {
-                fibp_a.unwrap_or_else(|| {
-                    panic!("PROFILE_FIBP_ADDR required when using external server with FIBP transport")
-                })
-            } else {
-                a.clone()
-            };
-            (a, ca)
-        }
+    let connect_addr = match std::env::var("PROFILE_SERVER_ADDR") {
+        Ok(a) => a,
         Err(_) => {
-            if use_fibp {
-                let s = if std::env::var("FILA_STORAGE")
-                    .map(|v| v.eq_ignore_ascii_case("memory"))
-                    .unwrap_or(false)
-                {
-                    BenchServer::start_with_fibp_in_memory()
-                } else {
-                    BenchServer::start_with_fibp()
-                };
-                let grpc = s.addr().to_string();
-                let fibp = s.fibp_addr().to_string();
-                _server = s;
-                (grpc, fibp)
+            let s = if std::env::var("FILA_STORAGE")
+                .map(|v| v.eq_ignore_ascii_case("memory"))
+                .unwrap_or(false)
+            {
+                BenchServer::start_in_memory()
             } else {
-                let s = BenchServer::start();
-                let a = s.addr().to_string();
-                _server = s;
-                (a.clone(), a)
-            }
+                BenchServer::start()
+            };
+            let addr = s.addr().to_string();
+            _server = s;
+            addr
         }
     };
 
-    // Create the queue via gRPC (admin operations always use gRPC).
-    create_queue_cli(&grpc_addr, queue_name);
+    // Create the queue via the SDK.
+    create_queue_cli(&connect_addr, queue_name);
 
     eprintln!(
-        "workload={workload} transport={transport} duration={duration_secs}s msg_size={msg_size}B concurrency={concurrency} addr={connect_addr}"
+        "workload={workload} duration={duration_secs}s msg_size={msg_size}B concurrency={concurrency} addr={connect_addr}"
     );
 
     let start = Instant::now();
 
     match workload.as_str() {
         "enqueue-only" => {
-            run_enqueue_only(&connect_addr, use_fibp, queue_name, &payload, concurrency, duration)
-                .await
+            run_enqueue_only(&connect_addr, queue_name, &payload, concurrency, duration).await
         }
         "consume-only" => {
-            run_consume_only(&connect_addr, use_fibp, queue_name, &payload, concurrency, duration)
-                .await
+            run_consume_only(&connect_addr, queue_name, &payload, concurrency, duration).await
         }
         "lifecycle" => {
-            run_lifecycle(&connect_addr, use_fibp, queue_name, &payload, concurrency, duration)
-                .await
+            run_lifecycle(&connect_addr, queue_name, &payload, concurrency, duration).await
         }
         "batch-enqueue" => {
-            run_batch_enqueue(&connect_addr, use_fibp, queue_name, &payload, concurrency, duration)
-                .await
+            run_batch_enqueue(&connect_addr, queue_name, &payload, concurrency, duration).await
         }
         other => {
             eprintln!("unknown workload: {other}");
@@ -114,23 +88,17 @@ async fn main() {
     eprintln!("workload complete in {:.1}s", elapsed.as_secs_f64());
 }
 
-async fn connect(addr: &str, use_fibp: bool) -> FilaClient {
-    let mut opts = ConnectOptions::new(addr)
+async fn connect(addr: &str) -> FilaClient {
+    let opts = ConnectOptions::new(addr)
         .with_timeout(Duration::from_secs(30))
         .with_accumulator(AccumulatorMode::Disabled);
-    if use_fibp {
-        opts = opts.with_transport(Transport::Fibp);
-    }
     FilaClient::connect_with_options(opts)
         .await
         .expect("connect to fila-server")
 }
 
-async fn connect_with_batching(addr: &str, use_fibp: bool) -> FilaClient {
-    let mut opts = ConnectOptions::new(addr).with_timeout(Duration::from_secs(30));
-    if use_fibp {
-        opts = opts.with_transport(Transport::Fibp);
-    }
+async fn connect_with_batching(addr: &str) -> FilaClient {
+    let opts = ConnectOptions::new(addr).with_timeout(Duration::from_secs(30));
     FilaClient::connect_with_options(opts)
         .await
         .expect("connect to fila-server")
@@ -138,7 +106,6 @@ async fn connect_with_batching(addr: &str, use_fibp: bool) -> FilaClient {
 
 async fn run_enqueue_only(
     addr: &str,
-    use_fibp: bool,
     queue: &str,
     payload: &[u8],
     concurrency: usize,
@@ -146,7 +113,7 @@ async fn run_enqueue_only(
 ) {
     let mut handles = Vec::new();
     for _ in 0..concurrency {
-        let client = connect(addr, use_fibp).await;
+        let client = connect(addr).await;
         let q = queue.to_string();
         let p = payload.to_vec();
         let d = duration;
@@ -172,7 +139,6 @@ async fn run_enqueue_only(
 
 async fn run_consume_only(
     addr: &str,
-    use_fibp: bool,
     queue: &str,
     payload: &[u8],
     concurrency: usize,
@@ -180,7 +146,7 @@ async fn run_consume_only(
 ) {
     // Pre-fill the queue with messages.
     let prefill_count = 10_000;
-    let client = connect(addr, use_fibp).await;
+    let client = connect(addr).await;
     for _ in 0..prefill_count {
         client
             .enqueue(queue, HashMap::new(), payload.to_vec())
@@ -191,7 +157,7 @@ async fn run_consume_only(
 
     let mut handles = Vec::new();
     for _ in 0..concurrency {
-        let c = connect(addr, use_fibp).await;
+        let c = connect(addr).await;
         let q = queue.to_string();
         let d = duration;
         handles.push(tokio::spawn(async move {
@@ -224,7 +190,6 @@ async fn run_consume_only(
 
 async fn run_lifecycle(
     addr: &str,
-    use_fibp: bool,
     queue: &str,
     payload: &[u8],
     concurrency: usize,
@@ -235,7 +200,7 @@ async fn run_lifecycle(
 
     // Producers.
     for _ in 0..concurrency {
-        let client = connect(addr, use_fibp).await;
+        let client = connect(addr).await;
         let q = queue.to_string();
         let p = payload.to_vec();
         let d = duration;
@@ -255,7 +220,7 @@ async fn run_lifecycle(
 
     // Consumers.
     for _ in 0..concurrency {
-        let c = connect(addr, use_fibp).await;
+        let c = connect(addr).await;
         let q = queue.to_string();
         let d = duration;
         handles.push(tokio::spawn(async move {
@@ -295,7 +260,6 @@ async fn run_lifecycle(
 
 async fn run_batch_enqueue(
     addr: &str,
-    use_fibp: bool,
     queue: &str,
     payload: &[u8],
     concurrency: usize,
@@ -303,7 +267,7 @@ async fn run_batch_enqueue(
 ) {
     let mut handles = Vec::new();
     for _ in 0..concurrency {
-        let client = connect_with_batching(addr, use_fibp).await;
+        let client = connect_with_batching(addr).await;
         let q = queue.to_string();
         let p = payload.to_vec();
         let d = duration;

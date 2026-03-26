@@ -15,9 +15,10 @@ use bytes::Bytes;
 use prost::Message as ProstMessage;
 use uuid::Uuid;
 
+use crate::broker::auth::CallerKey;
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
 use crate::broker::Broker;
-use crate::error::{AckError, EnqueueError, NackError};
+use crate::error::{AckError, ConfigError, EnqueueError, NackError};
 use crate::message::Message;
 
 use super::error::FibpError;
@@ -217,9 +218,30 @@ pub async fn dispatch_nack(
 // Admin operations — protobuf-encoded payloads
 // ---------------------------------------------------------------------------
 
+/// Check that `caller` has admin permission covering the given queue.
+/// When auth is disabled, `caller` is `None` and the check passes.
+fn check_queue_admin(
+    broker: &Arc<Broker>,
+    caller: &Option<CallerKey>,
+    queue: &str,
+) -> Result<(), FibpError> {
+    if let Some(ref caller) = caller {
+        let permitted = broker
+            .caller_has_queue_admin(caller, queue)
+            .map_err(FibpError::Storage)?;
+        if !permitted {
+            return Err(FibpError::PermissionDenied {
+                reason: format!("key does not have admin permission on queue \"{queue}\""),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Dispatch a CreateQueue request. Payload is a protobuf `CreateQueueRequest`.
 pub async fn dispatch_create_queue(
     broker: &Arc<Broker>,
+    caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
     let req = fila_proto::CreateQueueRequest::decode(payload)?;
@@ -229,6 +251,9 @@ pub async fn dispatch_create_queue(
             reason: "queue name must not be empty".into(),
         });
     }
+
+    // Check queue-scoped admin permission.
+    check_queue_admin(broker, caller, &req.name)?;
 
     let proto_config = req.config.unwrap_or_default();
     let visibility_timeout_ms = match proto_config.visibility_timeout_ms {
@@ -282,6 +307,7 @@ pub async fn dispatch_create_queue(
 /// Dispatch a DeleteQueue request. Payload is a protobuf `DeleteQueueRequest`.
 pub async fn dispatch_delete_queue(
     broker: &Arc<Broker>,
+    caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
     let req = fila_proto::DeleteQueueRequest::decode(payload)?;
@@ -291,6 +317,9 @@ pub async fn dispatch_delete_queue(
             reason: "queue name must not be empty".into(),
         });
     }
+
+    // Check queue-scoped admin permission.
+    check_queue_admin(broker, caller, &req.queue)?;
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     broker
@@ -314,6 +343,7 @@ pub async fn dispatch_delete_queue(
 /// Dispatch a GetStats request. Payload is a protobuf `GetStatsRequest`.
 pub async fn dispatch_queue_stats(
     broker: &Arc<Broker>,
+    caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
     let req = fila_proto::GetStatsRequest::decode(payload)?;
@@ -323,6 +353,9 @@ pub async fn dispatch_queue_stats(
             reason: "queue name must not be empty".into(),
         });
     }
+
+    // Check queue-scoped admin permission.
+    check_queue_admin(broker, caller, &req.queue)?;
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     broker
@@ -414,7 +447,11 @@ pub async fn dispatch_list_queues(
 }
 
 /// Dispatch a Redrive request. Payload is a protobuf `RedriveRequest`.
-pub async fn dispatch_redrive(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
+pub async fn dispatch_redrive(
+    broker: &Arc<Broker>,
+    caller: &Option<CallerKey>,
+    payload: Bytes,
+) -> Result<Bytes, FibpError> {
     let req = fila_proto::RedriveRequest::decode(payload)?;
 
     if req.dlq_queue.is_empty() {
@@ -422,6 +459,9 @@ pub async fn dispatch_redrive(broker: &Arc<Broker>, payload: Bytes) -> Result<By
             reason: "dlq_queue name must not be empty".into(),
         });
     }
+
+    // Check queue-scoped admin permission.
+    check_queue_admin(broker, caller, &req.dlq_queue)?;
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     broker
@@ -441,4 +481,296 @@ pub async fn dispatch_redrive(broker: &Arc<Broker>, payload: Bytes) -> Result<By
 
     let resp = fila_proto::RedriveResponse { redriven };
     Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+// ---------------------------------------------------------------------------
+// Config operations — protobuf-encoded payloads
+// ---------------------------------------------------------------------------
+
+/// Dispatch a SetConfig request. Payload is a protobuf `SetConfigRequest`.
+pub async fn dispatch_config_set(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
+    let req = fila_proto::SetConfigRequest::decode(payload)?;
+
+    if req.key.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "config key must not be empty".into(),
+        });
+    }
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(SchedulerCommand::SetConfig {
+            key: req.key,
+            value: req.value,
+            reply: reply_tx,
+        })
+        .map_err(FibpError::BrokerUnavailable)?;
+
+    reply_rx
+        .await
+        .map_err(|_| FibpError::ReplyDropped)?
+        .map_err(|e| match e {
+            ConfigError::InvalidValue(msg) => FibpError::InvalidPayload { reason: msg },
+            ConfigError::Storage(s) => FibpError::Storage(s),
+        })?;
+
+    let resp = fila_proto::SetConfigResponse {};
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a GetConfig request. Payload is a protobuf `GetConfigRequest`.
+pub async fn dispatch_config_get(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
+    let req = fila_proto::GetConfigRequest::decode(payload)?;
+
+    if req.key.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "config key must not be empty".into(),
+        });
+    }
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(SchedulerCommand::GetConfig {
+            key: req.key,
+            reply: reply_tx,
+        })
+        .map_err(FibpError::BrokerUnavailable)?;
+
+    let value = reply_rx
+        .await
+        .map_err(|_| FibpError::ReplyDropped)?
+        .map_err(|e| match e {
+            ConfigError::InvalidValue(msg) => FibpError::InvalidPayload { reason: msg },
+            ConfigError::Storage(s) => FibpError::Storage(s),
+        })?;
+
+    let resp = fila_proto::GetConfigResponse {
+        value: value.unwrap_or_default(),
+    };
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a ListConfig request. Payload is a protobuf `ListConfigRequest`.
+pub async fn dispatch_config_list(
+    broker: &Arc<Broker>,
+    payload: Bytes,
+) -> Result<Bytes, FibpError> {
+    let req = fila_proto::ListConfigRequest::decode(payload)?;
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(SchedulerCommand::ListConfig {
+            prefix: req.prefix,
+            reply: reply_tx,
+        })
+        .map_err(FibpError::BrokerUnavailable)?;
+
+    let entries = reply_rx
+        .await
+        .map_err(|_| FibpError::ReplyDropped)?
+        .map_err(|e| match e {
+            ConfigError::InvalidValue(msg) => FibpError::InvalidPayload { reason: msg },
+            ConfigError::Storage(s) => FibpError::Storage(s),
+        })?;
+
+    let proto_entries = entries
+        .iter()
+        .map(|(k, v)| fila_proto::ConfigEntry {
+            key: k.clone(),
+            value: v.clone(),
+        })
+        .collect();
+
+    let resp = fila_proto::ListConfigResponse {
+        entries: proto_entries,
+        total_count: entries.len() as u32,
+    };
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+// ---------------------------------------------------------------------------
+// Auth CRUD operations — protobuf-encoded payloads
+// ---------------------------------------------------------------------------
+
+/// Dispatch a CreateApiKey request. Payload is a protobuf `CreateApiKeyRequest`.
+pub fn dispatch_auth_create_key(
+    broker: &Arc<Broker>,
+    caller: &Option<CallerKey>,
+    payload: Bytes,
+) -> Result<Bytes, FibpError> {
+    let req = fila_proto::CreateApiKeyRequest::decode(payload)?;
+
+    if req.name.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "api key name must not be empty".into(),
+        });
+    }
+
+    // Only superadmin or admin:* can create keys.
+    if let Some(ref caller) = caller {
+        let is_admin = broker.has_any_admin(caller).map_err(FibpError::Storage)?;
+        if !is_admin {
+            return Err(FibpError::PermissionDenied {
+                reason: "key does not have admin permission".into(),
+            });
+        }
+
+        // Only superadmin keys can create other superadmin keys.
+        if req.is_superadmin {
+            let is_superadmin = broker.is_superadmin(caller).map_err(FibpError::Storage)?;
+            if !is_superadmin {
+                return Err(FibpError::PermissionDenied {
+                    reason: "only superadmin keys can create superadmin keys".into(),
+                });
+            }
+        }
+    }
+
+    let expires_at_ms = if req.expires_at_ms == 0 {
+        None
+    } else {
+        Some(req.expires_at_ms)
+    };
+
+    let (key_id, token) = broker
+        .create_api_key(&req.name, expires_at_ms, req.is_superadmin)
+        .map_err(FibpError::Storage)?;
+
+    let resp = fila_proto::CreateApiKeyResponse {
+        key_id,
+        key: token,
+        is_superadmin: req.is_superadmin,
+    };
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a RevokeApiKey request. Payload is a protobuf `RevokeApiKeyRequest`.
+pub fn dispatch_auth_revoke_key(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
+    let req = fila_proto::RevokeApiKeyRequest::decode(payload)?;
+
+    if req.key_id.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "key_id must not be empty".into(),
+        });
+    }
+
+    let found = broker
+        .revoke_api_key(&req.key_id)
+        .map_err(FibpError::Storage)?;
+
+    if !found {
+        return Err(FibpError::InvalidPayload {
+            reason: format!("api key not found: {}", req.key_id),
+        });
+    }
+
+    let resp = fila_proto::RevokeApiKeyResponse {};
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a ListApiKeys request. Payload is a protobuf `ListApiKeysRequest`.
+pub fn dispatch_auth_list_keys(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
+    let _req = fila_proto::ListApiKeysRequest::decode(payload)?;
+
+    let entries = broker.list_api_keys().map_err(FibpError::Storage)?;
+
+    let keys = entries
+        .into_iter()
+        .map(|e| fila_proto::ApiKeyInfo {
+            key_id: e.key_id,
+            name: e.name,
+            created_at_ms: e.created_at_ms,
+            expires_at_ms: e.expires_at_ms.unwrap_or(0),
+            is_superadmin: e.is_superadmin,
+        })
+        .collect();
+
+    let resp = fila_proto::ListApiKeysResponse { keys };
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a SetAcl request. Payload is a protobuf `SetAclRequest`.
+pub fn dispatch_auth_set_acl(
+    broker: &Arc<Broker>,
+    caller: &Option<CallerKey>,
+    payload: Bytes,
+) -> Result<Bytes, FibpError> {
+    let req = fila_proto::SetAclRequest::decode(payload)?;
+
+    if req.key_id.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "key_id must not be empty".into(),
+        });
+    }
+
+    // Validate permission kinds.
+    let mut permissions = Vec::with_capacity(req.permissions.len());
+    for p in &req.permissions {
+        match p.kind.as_str() {
+            "produce" | "consume" | "admin" => {}
+            other => {
+                return Err(FibpError::InvalidPayload {
+                    reason: format!("invalid permission kind: {other}"),
+                });
+            }
+        }
+        permissions.push((p.kind.clone(), p.pattern.clone()));
+    }
+
+    // Scope check: the caller must be able to grant all requested permissions.
+    if let Some(ref caller) = caller {
+        let can_grant = broker
+            .caller_can_grant_all(caller, &permissions)
+            .map_err(FibpError::Storage)?;
+        if !can_grant {
+            return Err(FibpError::PermissionDenied {
+                reason: "cannot grant permissions outside your admin scope".into(),
+            });
+        }
+    }
+
+    let found = broker
+        .set_acl(&req.key_id, permissions)
+        .map_err(FibpError::Storage)?;
+
+    if !found {
+        return Err(FibpError::InvalidPayload {
+            reason: format!("api key not found: {}", req.key_id),
+        });
+    }
+
+    let resp = fila_proto::SetAclResponse {};
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a GetAcl request. Payload is a protobuf `GetAclRequest`.
+pub fn dispatch_auth_get_acl(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
+    let req = fila_proto::GetAclRequest::decode(payload)?;
+
+    if req.key_id.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "key_id must not be empty".into(),
+        });
+    }
+
+    let entry = broker.get_acl(&req.key_id).map_err(FibpError::Storage)?;
+
+    match entry {
+        Some(e) => {
+            let permissions = e
+                .permissions
+                .into_iter()
+                .map(|(kind, pattern)| fila_proto::AclPermission { kind, pattern })
+                .collect();
+            let resp = fila_proto::GetAclResponse {
+                key_id: e.key_id,
+                permissions,
+                is_superadmin: e.is_superadmin,
+            };
+            Ok(Bytes::from(resp.encode_to_vec()))
+        }
+        None => Err(FibpError::InvalidPayload {
+            reason: format!("api key not found: {}", req.key_id),
+        }),
+    }
 }

@@ -19,7 +19,7 @@ use crate::storage::StorageEngine;
 
 pub use command::{QueueSummary, ReadyMessage, SchedulerCommand};
 pub use config::{
-    AuthConfig, BrokerConfig, FibpConfig, GrpcConfig, GuiConfig, RocksDbConfig, StorageConfig,
+    AuthConfig, BrokerConfig, FibpConfig, GuiConfig, RocksDbConfig, ServerConfig, StorageConfig,
     TlsParams,
 };
 
@@ -64,7 +64,7 @@ impl Broker {
     /// When `shard_count` is 1 (default), a single scheduler thread is spawned.
     /// For `shard_count > 1`, N scheduler threads are spawned, each processing
     /// a subset of queues determined by consistent hashing.
-    #[tracing::instrument(skip_all, fields(listen_addr = %config.server.listen_addr))]
+    #[tracing::instrument(skip_all, fields(listen_addr = %config.fibp.listen_addr))]
     pub fn new(config: BrokerConfig, storage: Arc<dyn StorageEngine>) -> BrokerResult<Self> {
         let shard_count = config.scheduler.shard_count.max(1);
         let scheduler_config = config.scheduler.clone();

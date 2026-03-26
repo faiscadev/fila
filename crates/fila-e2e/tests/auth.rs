@@ -29,16 +29,19 @@ async fn auth_disabled_requests_succeed_without_key() {
     );
 }
 
-/// Assert that an EnqueueError is specifically UNAUTHENTICATED.
+/// Assert that an EnqueueError is specifically an authentication failure.
+/// With FIBP, auth failures come back as StatusError::Internal or StatusError::Unavailable
+/// containing "auth" or "unauthenticated" in the message.
 fn assert_unauthenticated(result: Result<String, fila_sdk::EnqueueError>, context: &str) {
     match result {
-        Ok(_) => panic!("{context}: expected UNAUTHENTICATED, got Ok"),
-        Err(fila_sdk::EnqueueError::Status(fila_sdk::StatusError::Rpc { code, .. }))
-            if code == tonic::Code::Unauthenticated =>
-        {
-            // correct
+        Ok(_) => panic!("{context}: expected auth error, got Ok"),
+        Err(e) => {
+            let msg = format!("{e:?}").to_lowercase();
+            assert!(
+                msg.contains("auth") || msg.contains("unauthenticated") || msg.contains("denied"),
+                "{context}: expected auth error, got: {e:?}"
+            );
         }
-        Err(e) => panic!("{context}: expected UNAUTHENTICATED, got: {e:?}"),
     }
 }
 
@@ -57,19 +60,24 @@ async fn auth_enabled_request_without_key_is_rejected() {
 }
 
 /// AC 3: auth enabled, invalid key → UNAUTHENTICATED.
+///
+/// With FIBP, authentication happens during connect (OP_AUTH frame), so an
+/// invalid key causes connect itself to fail.
 #[tokio::test]
 async fn auth_enabled_invalid_key_is_rejected() {
     let (_server, addr) = start_auth_server();
 
-    let client = fila_sdk::FilaClient::connect_with_options(
+    let result = fila_sdk::FilaClient::connect_with_options(
         fila_sdk::ConnectOptions::new(&addr).with_api_key("invalid-key-that-does-not-exist"),
     )
-    .await
-    .expect("connect");
+    .await;
 
-    let result = client.enqueue("any-queue", Default::default(), b"x").await;
-
-    assert_unauthenticated(result, "invalid key");
+    let err = result.expect_err("connect with invalid key should fail");
+    let msg = format!("{err:?}").to_lowercase();
+    assert!(
+        msg.contains("auth") || msg.contains("invalid"),
+        "expected auth error, got: {err:?}"
+    );
 }
 
 /// AC 4: auth enabled, valid key → request succeeds.

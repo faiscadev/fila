@@ -2,20 +2,13 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
-use fila_proto::fila_admin_client::FilaAdminClient;
-use fila_proto::{
-    AclPermission, CreateApiKeyRequest, CreateQueueRequest, DeleteQueueRequest, GetAclRequest,
-    GetConfigRequest, GetStatsRequest, ListApiKeysRequest, ListConfigRequest, ListQueuesRequest,
-    QueueConfig, RedriveRequest, RevokeApiKeyRequest, SetAclRequest, SetConfigRequest,
-};
-use tonic::service::interceptor::InterceptedService;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
+use fila_sdk::{FibpTransport, StatusError};
 
 #[derive(Parser)]
 #[command(name = "fila", about = "Fila message broker CLI")]
 struct Cli {
-    /// Broker address (use https:// when TLS is enabled)
-    #[arg(long, default_value = "http://localhost:5555", global = true)]
+    /// Broker address (host:port)
+    #[arg(long, default_value = "localhost:5555", global = true)]
     addr: String,
 
     /// Enable TLS using the system trust store.
@@ -37,7 +30,7 @@ struct Cli {
     #[arg(long, global = true, requires = "tls_cert")]
     tls_key: Option<PathBuf>,
 
-    /// API key for authenticating with the broker (sent as `authorization: Bearer <key>`).
+    /// API key for authenticating with the broker.
     #[arg(long, global = true)]
     api_key: Option<String>,
 
@@ -167,7 +160,7 @@ enum AclCommands {
     /// Set ACL permissions for an API key (replaces existing permissions)
     ///
     /// Each permission is `<kind>:<pattern>` where kind is one of:
-    /// produce, consume, admin — and pattern is a queue name or wildcard
+    /// produce, consume, admin -- and pattern is a queue name or wildcard
     /// (e.g. `*`, `orders.*`).
     Set {
         /// Key ID to configure
@@ -185,170 +178,119 @@ enum AclCommands {
     },
 }
 
-/// Interceptor that attaches an API key as `authorization: Bearer <key>`.
-#[derive(Clone)]
-struct ApiKeyInterceptor(Option<String>);
+async fn connect(cli: &Cli) -> FibpTransport {
+    let tls_enabled = cli.tls || cli.tls_ca_cert.is_some() || cli.tls_cert.is_some();
 
-impl tonic::service::Interceptor for ApiKeyInterceptor {
-    fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
-        if let Some(ref key) = self.0 {
-            let val = tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
-                .map_err(|_| {
-                    tonic::Status::invalid_argument(
-                        "api key contains characters invalid for http headers",
-                    )
-                })?;
-            req.metadata_mut().insert("authorization", val);
-        }
-        Ok(req)
-    }
-}
+    // Strip any http:// or https:// prefix if present.
+    let addr = cli
+        .addr
+        .strip_prefix("http://")
+        .or_else(|| cli.addr.strip_prefix("https://"))
+        .unwrap_or(&cli.addr);
 
-type AdminClient = FilaAdminClient<InterceptedService<Channel, ApiKeyInterceptor>>;
-
-async fn connect(
-    addr: &str,
-    tls: bool,
-    tls_ca_cert: Option<&PathBuf>,
-    tls_cert: Option<&PathBuf>,
-    tls_key: Option<&PathBuf>,
-    api_key: Option<String>,
-) -> AdminClient {
-    let tls_enabled = tls || tls_ca_cert.is_some() || tls_cert.is_some();
-    let channel = if tls_enabled {
-        let mut tls_config = ClientTlsConfig::new();
-        if let Some(ca_path) = tls_ca_cert {
-            let ca_pem = match std::fs::read(ca_path) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("Error: cannot read CA cert {}: {e}", ca_path.display());
-                    process::exit(1);
-                }
-            };
-            tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
-        }
-        if let (Some(cert_path), Some(key_path)) = (tls_cert, tls_key) {
-            let cert_pem = match std::fs::read(cert_path) {
-                Ok(b) => b,
-                Err(e) => {
+    if tls_enabled {
+        let ca_pem = cli.tls_ca_cert.as_ref().map(|path| {
+            std::fs::read(path).unwrap_or_else(|e| {
+                eprintln!("Error: cannot read CA cert {}: {e}", path.display());
+                process::exit(1);
+            })
+        });
+        let (cert_pem, key_pem) = match (&cli.tls_cert, &cli.tls_key) {
+            (Some(cert_path), Some(key_path)) => {
+                let cert = std::fs::read(cert_path).unwrap_or_else(|e| {
                     eprintln!(
                         "Error: cannot read client cert {}: {e}",
                         cert_path.display()
                     );
                     process::exit(1);
-                }
-            };
-            let key_pem = match std::fs::read(key_path) {
-                Ok(b) => b,
-                Err(e) => {
+                });
+                let key = std::fs::read(key_path).unwrap_or_else(|e| {
                     eprintln!("Error: cannot read client key {}: {e}", key_path.display());
                     process::exit(1);
-                }
-            };
-            tls_config = tls_config.identity(Identity::from_pem(cert_pem, key_pem));
-        }
-        let endpoint = match Channel::from_shared(addr.to_string()) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("Error: invalid broker address {addr}: {e}");
-                process::exit(1);
+                });
+                (Some(cert), Some(key))
             }
+            _ => (None, None),
         };
-        let endpoint = match endpoint.tls_config(tls_config) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("Error: TLS configuration failed: {e}");
-                process::exit(1);
-            }
-        };
-        match endpoint.connect().await {
-            Ok(c) => c,
+        match FibpTransport::connect_tls(
+            addr,
+            cli.api_key.clone(),
+            ca_pem.as_deref(),
+            cert_pem.as_deref(),
+            key_pem.as_deref(),
+        )
+        .await
+        {
+            Ok(t) => t,
             Err(e) => {
                 eprintln!("Error: cannot connect to broker at {addr}: {e}");
                 process::exit(1);
             }
         }
     } else {
-        match Channel::from_shared(addr.to_string()) {
-            Ok(e) => match e.connect().await {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error: cannot connect to broker at {addr}: {e}");
-                    process::exit(1);
-                }
-            },
+        match FibpTransport::connect(addr, cli.api_key.clone()).await {
+            Ok(t) => t,
             Err(e) => {
-                eprintln!("Error: invalid broker address {addr}: {e}");
+                eprintln!("Error: cannot connect to broker at {addr}: {e}");
                 process::exit(1);
             }
         }
-    };
-    FilaAdminClient::with_interceptor(channel, ApiKeyInterceptor(api_key))
+    }
 }
 
-fn format_rpc_error(status: tonic::Status, context: &str) -> String {
-    match status.code() {
-        tonic::Code::NotFound => format!("Error: {context} does not exist"),
-        tonic::Code::AlreadyExists => format!("Error: {context} already exists"),
-        tonic::Code::InvalidArgument => format!("Error: {}", status.message()),
-        tonic::Code::FailedPrecondition => format!("Error: {}", status.message()),
-        tonic::Code::ResourceExhausted => "Error: broker overloaded, try again".to_string(),
-        tonic::Code::Unavailable => {
-            "Error: broker unavailable (connection lost or server down)".to_string()
+fn format_error(err: StatusError, context: &str) -> String {
+    match err {
+        StatusError::Internal(msg) if msg.contains("not found") => {
+            format!("Error: {context} does not exist")
         }
-        _ => format!("Error: {}", status.message()),
+        StatusError::Internal(msg) if msg.contains("already exists") => {
+            format!("Error: {context} already exists")
+        }
+        StatusError::InvalidArgument(msg) => format!("Error: {msg}"),
+        StatusError::Unavailable(msg) => format!("Error: broker unavailable: {msg}"),
+        StatusError::Internal(msg) => format!("Error: {msg}"),
+        StatusError::Protocol(msg) => format!("Error: protocol error: {msg}"),
+        StatusError::PermissionDenied(msg) => format!("Error: {msg}"),
     }
 }
 
 async fn cmd_queue_create(
-    client: &mut AdminClient,
+    transport: &FibpTransport,
     name: String,
     on_enqueue: Option<String>,
     on_failure: Option<String>,
     visibility_timeout: Option<u64>,
 ) {
-    let config = QueueConfig {
+    let config = fila_sdk::proto::QueueConfig {
         on_enqueue_script: on_enqueue.unwrap_or_default(),
         on_failure_script: on_failure.unwrap_or_default(),
         visibility_timeout_ms: visibility_timeout.unwrap_or(0),
     };
 
-    match client
-        .create_queue(CreateQueueRequest {
-            name: name.clone(),
-            config: Some(config),
-        })
-        .await
-    {
+    match transport.create_queue(&name, Some(config)).await {
         Ok(_) => println!("Created queue \"{name}\""),
-        Err(status) => {
-            eprintln!("{}", format_rpc_error(status, &format!("queue \"{name}\"")));
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("queue \"{name}\"")));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_queue_delete(client: &mut AdminClient, name: String) {
-    match client
-        .delete_queue(DeleteQueueRequest {
-            queue: name.clone(),
-        })
-        .await
-    {
+async fn cmd_queue_delete(transport: &FibpTransport, name: String) {
+    match transport.delete_queue(&name).await {
         Ok(_) => println!("Deleted queue \"{name}\""),
-        Err(status) => {
-            eprintln!("{}", format_rpc_error(status, &format!("queue \"{name}\"")));
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("queue \"{name}\"")));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_queue_list(client: &mut AdminClient) {
-    match client.list_queues(ListQueuesRequest {}).await {
+async fn cmd_queue_list(transport: &FibpTransport) {
+    match transport.list_queues().await {
         Ok(resp) => {
-            let inner = resp.into_inner();
-            let queues = inner.queues;
-            let cluster_node_count = inner.cluster_node_count;
+            let queues = resp.queues;
+            let cluster_node_count = resp.cluster_node_count;
             if queues.is_empty() {
                 println!("No queues found.");
                 return;
@@ -356,7 +298,6 @@ async fn cmd_queue_list(client: &mut AdminClient) {
 
             let is_cluster = cluster_node_count > 0;
 
-            // Calculate column widths
             let name_width = queues
                 .iter()
                 .map(|q| q.name.len())
@@ -389,22 +330,16 @@ async fn cmd_queue_list(client: &mut AdminClient) {
                 }
             }
         }
-        Err(status) => {
-            eprintln!("{}", format_rpc_error(status, "queues"));
+        Err(err) => {
+            eprintln!("{}", format_error(err, "queues"));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_queue_inspect(client: &mut AdminClient, name: String) {
-    match client
-        .get_stats(GetStatsRequest {
-            queue: name.clone(),
-        })
-        .await
-    {
-        Ok(resp) => {
-            let stats = resp.into_inner();
+async fn cmd_queue_inspect(transport: &FibpTransport, name: String) {
+    match transport.queue_stats(&name).await {
+        Ok(stats) => {
             println!("Queue: {name}");
             println!("  Depth:                {}", stats.depth);
             println!("  In-flight:            {}", stats.in_flight);
@@ -458,111 +393,77 @@ async fn cmd_queue_inspect(client: &mut AdminClient, name: String) {
                 }
             }
         }
-        Err(status) => {
-            eprintln!("{}", format_rpc_error(status, &format!("queue \"{name}\"")));
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("queue \"{name}\"")));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_config_set(client: &mut AdminClient, key: String, value: String) {
-    match client
-        .set_config(SetConfigRequest {
-            key: key.clone(),
-            value: value.clone(),
-        })
-        .await
-    {
-        Ok(_) => println!("Set \"{key}\" = \"{value}\""),
-        Err(status) => {
-            eprintln!(
-                "{}",
-                format_rpc_error(status, &format!("config key \"{key}\""))
-            );
+async fn cmd_config_set(transport: &FibpTransport, key: String, value: String) {
+    match transport.set_config(&key, &value).await {
+        Ok(()) => println!("Set {key} = {value}"),
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("config key \"{key}\"")));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_config_get(client: &mut AdminClient, key: String) {
-    match client
-        .get_config(GetConfigRequest { key: key.clone() })
-        .await
-    {
-        Ok(resp) => {
-            let value = resp.into_inner().value;
+async fn cmd_config_get(transport: &FibpTransport, key: String) {
+    match transport.get_config(&key).await {
+        Ok(value) => {
             if value.is_empty() {
-                println!("{key}: (not set)");
+                println!("(not set)");
             } else {
-                println!("{key}: {value}");
+                println!("{key} = {value}");
             }
         }
-        Err(status) => {
-            eprintln!(
-                "{}",
-                format_rpc_error(status, &format!("config key \"{key}\""))
-            );
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("config key \"{key}\"")));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_config_list(client: &mut AdminClient, prefix: String) {
-    match client
-        .list_config(ListConfigRequest {
-            prefix: prefix.clone(),
-        })
-        .await
-    {
+async fn cmd_config_list(transport: &FibpTransport, prefix: String) {
+    match transport.list_config(&prefix).await {
         Ok(resp) => {
-            let entries = resp.into_inner().entries;
-            if entries.is_empty() {
-                if prefix.is_empty() {
-                    println!("No config entries found.");
-                } else {
-                    println!("No config entries matching prefix \"{prefix}\".");
-                }
+            if resp.entries.is_empty() {
+                println!("No config entries found.");
                 return;
             }
-
-            let key_width = entries
+            let key_width = resp
+                .entries
                 .iter()
                 .map(|e| e.key.len())
                 .max()
                 .unwrap_or(3)
                 .max(3);
-
             println!("{:<key_width$}  VALUE", "KEY");
-            for e in &entries {
-                println!("{:<key_width$}  {}", e.key, e.value);
+            for entry in &resp.entries {
+                println!("{:<key_width$}  {}", entry.key, entry.value);
             }
         }
-        Err(status) => {
-            eprintln!("{}", format_rpc_error(status, "config"));
+        Err(err) => {
+            eprintln!("{}", format_error(err, "config"));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_redrive(client: &mut AdminClient, dlq_name: String, count: u64) {
-    match client
-        .redrive(RedriveRequest {
-            dlq_queue: dlq_name.clone(),
-            count,
-        })
-        .await
-    {
-        Ok(resp) => {
-            let n = resp.into_inner().redriven;
+async fn cmd_redrive(transport: &FibpTransport, dlq_name: String, count: u64) {
+    match transport.redrive(&dlq_name, count).await {
+        Ok(redriven) => {
             println!(
-                "Redrive complete: {n} message{} moved from \"{dlq_name}\"",
-                if n == 1 { "" } else { "s" }
+                "Redrove {redriven} message{} from \"{dlq_name}\"",
+                if redriven == 1 { "" } else { "s" }
             );
         }
-        Err(status) => {
+        Err(err) => {
             eprintln!(
                 "{}",
-                format_rpc_error(status, &format!("queue \"{dlq_name}\""))
+                format_error(err, &format!("redrive from \"{dlq_name}\""))
             );
             process::exit(1);
         }
@@ -570,135 +471,108 @@ async fn cmd_redrive(client: &mut AdminClient, dlq_name: String, count: u64) {
 }
 
 async fn cmd_auth_create(
-    client: &mut AdminClient,
+    transport: &FibpTransport,
     name: String,
     expires_at: Option<u64>,
     is_superadmin: bool,
 ) {
-    match client
-        .create_api_key(CreateApiKeyRequest {
-            name: name.clone(),
-            expires_at_ms: expires_at.unwrap_or(0),
-            is_superadmin,
-        })
+    match transport
+        .create_api_key(&name, expires_at, is_superadmin)
         .await
     {
         Ok(resp) => {
-            let r = resp.into_inner();
-            println!("Created API key \"{name}\"");
-            println!("  Key ID     : {}", r.key_id);
-            println!("  Token      : {}", r.key);
-            if r.is_superadmin {
-                println!("  Superadmin : yes");
+            println!("Key ID: {}", resp.key_id);
+            println!("Token:  {}", resp.key);
+            if resp.is_superadmin {
+                println!("Superadmin: yes");
             }
-            println!("Store the token securely — it will not be shown again.");
         }
-        Err(status) => {
-            eprintln!("{}", format_rpc_error(status, "api key"));
+        Err(err) => {
+            eprintln!("{}", format_error(err, "auth create"));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_auth_acl_set(client: &mut AdminClient, key_id: String, permissions: Vec<String>) {
-    let parsed: Vec<AclPermission> = match permissions
-        .iter()
-        .map(|p| {
-            let (kind, pattern) = p.split_once(':').ok_or(p.as_str())?;
-            Ok(AclPermission {
-                kind: kind.to_string(),
-                pattern: pattern.to_string(),
-            })
-        })
-        .collect::<Result<Vec<_>, &str>>()
-    {
-        Ok(v) => v,
-        Err(bad) => {
-            eprintln!(
-                "Error: invalid permission format \"{bad}\" — expected <kind>:<pattern> (e.g. produce:orders)"
-            );
+async fn cmd_auth_acl_set(transport: &FibpTransport, key_id: String, permissions: Vec<String>) {
+    let mut acl_permissions = Vec::with_capacity(permissions.len());
+    for perm_str in &permissions {
+        let parts: Vec<&str> = perm_str.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            eprintln!("Error: invalid permission format \"{perm_str}\" — expected kind:pattern");
             process::exit(1);
         }
-    };
+        let kind = parts[0];
+        let pattern = parts[1];
+        match kind {
+            "produce" | "consume" | "admin" => {}
+            other => {
+                eprintln!("Error: invalid permission kind \"{other}\" — expected produce, consume, or admin");
+                process::exit(1);
+            }
+        }
+        acl_permissions.push(fila_sdk::proto::AclPermission {
+            kind: kind.to_string(),
+            pattern: pattern.to_string(),
+        });
+    }
 
-    match client
-        .set_acl(SetAclRequest {
-            key_id: key_id.clone(),
-            permissions: parsed,
-        })
-        .await
-    {
-        Ok(_) => println!("ACL updated for key {key_id}"),
-        Err(status) => {
+    match transport.set_acl(&key_id, acl_permissions).await {
+        Ok(()) => println!("ACL updated for key {key_id}"),
+        Err(err) => {
             eprintln!(
                 "{}",
-                format_rpc_error(status, &format!("api key \"{key_id}\""))
+                format_error(err, &format!("acl set for \"{key_id}\""))
             );
             process::exit(1);
         }
     }
 }
 
-async fn cmd_auth_acl_get(client: &mut AdminClient, key_id: String) {
-    match client
-        .get_acl(GetAclRequest {
-            key_id: key_id.clone(),
-        })
-        .await
-    {
+async fn cmd_auth_acl_get(transport: &FibpTransport, key_id: String) {
+    match transport.get_acl(&key_id).await {
         Ok(resp) => {
-            let r = resp.into_inner();
-            println!("Key ID : {}", r.key_id);
-            if r.is_superadmin {
-                println!("Superadmin: yes (all permissions granted)");
-            } else if r.permissions.is_empty() {
+            println!("Key ID: {}", resp.key_id);
+            if resp.is_superadmin {
+                println!("Superadmin: yes (bypasses all ACL checks)");
+            }
+            if resp.permissions.is_empty() {
                 println!("Permissions: (none)");
             } else {
                 println!("Permissions:");
-                for p in &r.permissions {
+                for p in &resp.permissions {
                     println!("  {}:{}", p.kind, p.pattern);
                 }
             }
         }
-        Err(status) => {
+        Err(err) => {
             eprintln!(
                 "{}",
-                format_rpc_error(status, &format!("api key \"{key_id}\""))
+                format_error(err, &format!("acl get for \"{key_id}\""))
             );
             process::exit(1);
         }
     }
 }
 
-async fn cmd_auth_revoke(client: &mut AdminClient, key_id: String) {
-    match client
-        .revoke_api_key(RevokeApiKeyRequest {
-            key_id: key_id.clone(),
-        })
-        .await
-    {
-        Ok(_) => {
-            println!("Revoked API key {key_id}");
-        }
-        Err(status) => {
-            eprintln!(
-                "{}",
-                format_rpc_error(status, &format!("api key \"{key_id}\""))
-            );
+async fn cmd_auth_revoke(transport: &FibpTransport, key_id: String) {
+    match transport.revoke_api_key(&key_id).await {
+        Ok(()) => println!("Revoked key {key_id}"),
+        Err(err) => {
+            eprintln!("{}", format_error(err, &format!("revoke key \"{key_id}\"")));
             process::exit(1);
         }
     }
 }
 
-async fn cmd_auth_list(client: &mut AdminClient) {
-    match client.list_api_keys(ListApiKeysRequest {}).await {
+async fn cmd_auth_list(transport: &FibpTransport) {
+    match transport.list_api_keys().await {
         Ok(resp) => {
-            let keys = resp.into_inner().keys;
+            let keys = resp.keys;
             if keys.is_empty() {
                 println!("No API keys found.");
                 return;
             }
-
             let id_width = keys
                 .iter()
                 .map(|k| k.key_id.len())
@@ -706,10 +580,9 @@ async fn cmd_auth_list(client: &mut AdminClient) {
                 .unwrap_or(6)
                 .max(6);
             let name_width = keys.iter().map(|k| k.name.len()).max().unwrap_or(4).max(4);
-
             println!(
-                "{:<id_width$}  {:<name_width$}  CREATED_AT_MS  EXPIRES_AT_MS",
-                "KEY_ID", "NAME"
+                "{:<id_width$}  {:<name_width$}  {:>12}  {:>12}  SUPER",
+                "KEY_ID", "NAME", "CREATED", "EXPIRES"
             );
             for k in &keys {
                 let expires = if k.expires_at_ms == 0 {
@@ -717,14 +590,15 @@ async fn cmd_auth_list(client: &mut AdminClient) {
                 } else {
                     k.expires_at_ms.to_string()
                 };
+                let superadmin = if k.is_superadmin { "yes" } else { "no" };
                 println!(
-                    "{:<id_width$}  {:<name_width$}  {:>13}  {expires}",
-                    k.key_id, k.name, k.created_at_ms
+                    "{:<id_width$}  {:<name_width$}  {:>12}  {:>12}  {superadmin}",
+                    k.key_id, k.name, k.created_at_ms, expires
                 );
             }
         }
-        Err(status) => {
-            eprintln!("{}", format_rpc_error(status, "api keys"));
+        Err(err) => {
+            eprintln!("{}", format_error(err, "auth list"));
             process::exit(1);
         }
     }
@@ -733,15 +607,7 @@ async fn cmd_auth_list(client: &mut AdminClient) {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let mut client = connect(
-        &cli.addr,
-        cli.tls,
-        cli.tls_ca_cert.as_ref(),
-        cli.tls_cert.as_ref(),
-        cli.tls_key.as_ref(),
-        cli.api_key,
-    )
-    .await;
+    let transport = connect(&cli).await;
 
     match cli.command {
         Commands::Queue(cmd) => match cmd {
@@ -751,39 +617,32 @@ async fn main() {
                 on_failure,
                 visibility_timeout,
             } => {
-                cmd_queue_create(
-                    &mut client,
-                    name,
-                    on_enqueue,
-                    on_failure,
-                    visibility_timeout,
-                )
-                .await
+                cmd_queue_create(&transport, name, on_enqueue, on_failure, visibility_timeout).await
             }
-            QueueCommands::Delete { name } => cmd_queue_delete(&mut client, name).await,
-            QueueCommands::List => cmd_queue_list(&mut client).await,
-            QueueCommands::Inspect { name } => cmd_queue_inspect(&mut client, name).await,
+            QueueCommands::Delete { name } => cmd_queue_delete(&transport, name).await,
+            QueueCommands::List => cmd_queue_list(&transport).await,
+            QueueCommands::Inspect { name } => cmd_queue_inspect(&transport, name).await,
         },
         Commands::Config(cmd) => match cmd {
-            ConfigCommands::Set { key, value } => cmd_config_set(&mut client, key, value).await,
-            ConfigCommands::Get { key } => cmd_config_get(&mut client, key).await,
-            ConfigCommands::List { prefix } => cmd_config_list(&mut client, prefix).await,
+            ConfigCommands::Set { key, value } => cmd_config_set(&transport, key, value).await,
+            ConfigCommands::Get { key } => cmd_config_get(&transport, key).await,
+            ConfigCommands::List { prefix } => cmd_config_list(&transport, prefix).await,
         },
-        Commands::Redrive { dlq_name, count } => cmd_redrive(&mut client, dlq_name, count).await,
+        Commands::Redrive { dlq_name, count } => cmd_redrive(&transport, dlq_name, count).await,
         Commands::Auth(cmd) => match cmd {
             AuthCommands::Create {
                 name,
                 expires_at,
                 superadmin,
-            } => cmd_auth_create(&mut client, name, expires_at, superadmin).await,
-            AuthCommands::Revoke { key_id } => cmd_auth_revoke(&mut client, key_id).await,
-            AuthCommands::List => cmd_auth_list(&mut client).await,
+            } => cmd_auth_create(&transport, name, expires_at, superadmin).await,
+            AuthCommands::Revoke { key_id } => cmd_auth_revoke(&transport, key_id).await,
+            AuthCommands::List => cmd_auth_list(&transport).await,
             AuthCommands::Acl(acl_cmd) => match acl_cmd {
                 AclCommands::Set {
                     key_id,
                     permissions,
-                } => cmd_auth_acl_set(&mut client, key_id, permissions).await,
-                AclCommands::Get { key_id } => cmd_auth_acl_get(&mut client, key_id).await,
+                } => cmd_auth_acl_set(&transport, key_id, permissions).await,
+                AclCommands::Get { key_id } => cmd_auth_acl_get(&transport, key_id).await,
             },
         },
     }
