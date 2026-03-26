@@ -16,6 +16,17 @@ use crate::error::{
     ack_status_error, consume_status_error, enqueue_status_error, nack_status_error, status_error,
     AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError,
 };
+use crate::fibp_transport::FibpTransport;
+
+/// The transport protocol to use when connecting to a Fila broker.
+#[derive(Debug, Clone, Default)]
+pub enum Transport {
+    /// gRPC over HTTP/2 (default).
+    #[default]
+    Grpc,
+    /// FIBP custom binary protocol over TCP.
+    Fibp,
+}
 
 /// A consumed message received from the broker.
 #[derive(Debug, Clone)]
@@ -107,6 +118,8 @@ pub struct ConnectOptions {
     /// Accumulator mode for `enqueue()` calls.
     /// Default: [`AccumulatorMode::Auto`].
     pub accumulator: AccumulatorMode,
+    /// Transport protocol. Default: [`Transport::Grpc`].
+    pub transport: Transport,
 }
 
 impl ConnectOptions {
@@ -152,6 +165,18 @@ impl ConnectOptions {
         self.accumulator = mode;
         self
     }
+
+    /// Use the FIBP binary protocol instead of gRPC.
+    pub fn with_fibp(mut self) -> Self {
+        self.transport = Transport::Fibp;
+        self
+    }
+
+    /// Set the transport protocol explicitly.
+    pub fn with_transport(mut self, transport: Transport) -> Self {
+        self.transport = transport;
+        self
+    }
 }
 
 /// An item sent to the background accumulator task.
@@ -162,11 +187,15 @@ struct AccumulatorItem {
 
 /// Idiomatic Rust client for the Fila message broker.
 ///
-/// Wraps the hot-path gRPC operations: enqueue, consume, ack, nack.
+/// Wraps the hot-path operations: enqueue, consume, ack, nack.
 /// The client is `Clone`, `Send`, and `Sync` — it can be shared across tasks.
+///
+/// By default uses gRPC over HTTP/2. Pass [`ConnectOptions::with_fibp()`] to
+/// use the FIBP binary protocol instead.
 #[derive(Debug, Clone)]
 pub struct FilaClient {
-    inner: FilaServiceClient<Channel>,
+    inner: Option<FilaServiceClient<Channel>>,
+    fibp: Option<FibpTransport>,
     api_key: Option<String>,
     connect_options: Option<ConnectOptions>,
     accumulator_tx: Option<mpsc::Sender<AccumulatorItem>>,
@@ -181,12 +210,6 @@ impl FilaClient {
     /// Connect to a Fila broker with custom options.
     pub async fn connect_with_options(options: ConnectOptions) -> Result<Self, ConnectError> {
         let stored_options = options.clone();
-        let mut endpoint = Channel::from_shared(options.addr)
-            .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
-
-        if let Some(timeout) = options.timeout {
-            endpoint = endpoint.timeout(timeout);
-        }
 
         let has_cert = options.tls_client_cert_pem.is_some();
         let has_key = options.tls_client_key_pem.is_some();
@@ -195,6 +218,20 @@ impl FilaClient {
                 "tls_client_cert_pem and tls_client_key_pem must both be provided for mTLS"
                     .to_string(),
             ));
+        }
+
+        match options.transport {
+            Transport::Fibp => {
+                return Self::connect_fibp(stored_options).await;
+            }
+            Transport::Grpc => {}
+        }
+
+        let mut endpoint = Channel::from_shared(options.addr)
+            .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
+
+        if let Some(timeout) = options.timeout {
+            endpoint = endpoint.timeout(timeout);
         }
 
         let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some() || has_cert;
@@ -244,11 +281,55 @@ impl FilaClient {
         };
 
         Ok(Self {
-            inner,
+            inner: Some(inner),
+            fibp: None,
             api_key,
             connect_options: Some(stored_options),
             accumulator_tx,
         })
+    }
+
+    /// Connect via the FIBP binary protocol.
+    async fn connect_fibp(options: ConnectOptions) -> Result<Self, ConnectError> {
+        let tls_enabled = options.tls
+            || options.tls_ca_cert_pem.is_some()
+            || options.tls_client_cert_pem.is_some();
+
+        // For FIBP, the address is a raw TCP address (not a URL).
+        // Strip any http:// or https:// prefix if present.
+        let addr = options
+            .addr
+            .strip_prefix("http://")
+            .or_else(|| options.addr.strip_prefix("https://"))
+            .unwrap_or(&options.addr);
+
+        let fibp = if tls_enabled {
+            FibpTransport::connect_tls(
+                addr,
+                options.api_key.clone(),
+                options.tls_ca_cert_pem.as_deref(),
+                options.tls_client_cert_pem.as_deref(),
+                options.tls_client_key_pem.as_deref(),
+            )
+            .await?
+        } else {
+            FibpTransport::connect(addr, options.api_key.clone()).await?
+        };
+
+        Ok(Self {
+            inner: None,
+            fibp: Some(fibp),
+            api_key: options.api_key.clone(),
+            connect_options: Some(options),
+            accumulator_tx: None,
+        })
+    }
+
+    /// Return a reference to the gRPC client, panicking if FIBP is active.
+    fn grpc(&self) -> &FilaServiceClient<Channel> {
+        self.inner
+            .as_ref()
+            .expect("grpc() called on FIBP transport")
     }
 
     /// Build a tonic `Request<T>` with the API key authorization header attached.
@@ -268,8 +349,9 @@ impl FilaClient {
     ///
     /// Returns the broker-assigned message ID (UUIDv7).
     ///
-    /// When accumulation is enabled (default), the message is buffered and
-    /// flushed when the accumulator decides to send.
+    /// When accumulation is enabled (default, gRPC only), the message is
+    /// buffered and flushed when the accumulator decides to send. Over FIBP,
+    /// messages are sent directly.
     pub async fn enqueue(
         &self,
         queue: &str,
@@ -298,7 +380,7 @@ impl FilaClient {
             })?;
         }
 
-        // No accumulator — send directly via unified Enqueue RPC.
+        // No accumulator — send directly.
         let results = self
             .enqueue_many(vec![EnqueueMessage {
                 queue: queue.to_string(),
@@ -324,6 +406,11 @@ impl FilaClient {
         &self,
         messages: Vec<EnqueueMessage>,
     ) -> Vec<Result<String, EnqueueError>> {
+        // Route through FIBP when active.
+        if let Some(ref fibp) = self.fibp {
+            return fibp.enqueue_many(messages).await;
+        }
+
         let proto_messages: Vec<ProtoEnqueueMessage> = messages
             .into_iter()
             .map(|m| ProtoEnqueueMessage {
@@ -335,7 +422,7 @@ impl FilaClient {
 
         let msg_count = proto_messages.len();
         let result = self
-            .inner
+            .grpc()
             .clone()
             .enqueue(self.request(EnqueueRequest {
                 messages: proto_messages,
@@ -371,12 +458,19 @@ impl FilaClient {
         &self,
         queue: &str,
     ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
+        // Route through FIBP when active.
+        if let Some(ref fibp) = self.fibp {
+            let rx = fibp.consume(queue).await?;
+            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+            return Ok(stream);
+        }
+
         let consume_req = ConsumeRequest {
             queue: queue.to_string(),
         };
 
         let result = self
-            .inner
+            .grpc()
             .clone()
             .consume(self.request(consume_req.clone()))
             .await;
@@ -417,12 +511,13 @@ impl FilaClient {
                         tls_client_key_pem: opts.tls_client_key_pem.clone(),
                         api_key: opts.api_key.clone(),
                         accumulator: AccumulatorMode::Disabled,
+                        transport: Transport::Grpc,
                     },
                     None => ConnectOptions::new(leader_url),
                 };
                 match Self::connect_with_options(leader_opts).await {
                     Ok(leader_client) => leader_client
-                        .inner
+                        .grpc()
                         .clone()
                         .consume(leader_client.request(consume_req))
                         .await
@@ -477,8 +572,12 @@ impl FilaClient {
 
     /// Acknowledge a successfully processed message.
     pub async fn ack(&self, queue: &str, message_id: &str) -> Result<(), AckError> {
+        if let Some(ref fibp) = self.fibp {
+            return fibp.ack(queue, message_id).await;
+        }
+
         let response = self
-            .inner
+            .grpc()
             .clone()
             .ack(self.request(AckRequest {
                 messages: vec![AckMessage {
@@ -517,8 +616,12 @@ impl FilaClient {
 
     /// Negatively acknowledge a message that failed processing.
     pub async fn nack(&self, queue: &str, message_id: &str, error: &str) -> Result<(), NackError> {
+        if let Some(ref fibp) = self.fibp {
+            return fibp.nack(queue, message_id, error).await;
+        }
+
         let response = self
-            .inner
+            .grpc()
             .clone()
             .nack(self.request(NackRequest {
                 messages: vec![NackMessage {

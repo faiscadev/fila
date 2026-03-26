@@ -13,10 +13,15 @@ categories = ["network-programming", "api-bindings"]
 [dependencies]
 fila-proto.workspace = true
 tonic = { workspace = true, features = ["tls-native-roots"] }
-tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "rt", "time", "net", "io-util"] }
 tokio-stream.workspace = true
+tokio-util = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rustls-native-certs = "0.7"
 thiserror.workspace = true
 bytes.workspace = true
+prost.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

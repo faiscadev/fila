@@ -1379,10 +1379,15 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "fila-proto",
+ "prost",
+ "rustls-native-certs 0.7.3",
+ "rustls-pemfile",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
+ "tokio-util",
  "tonic",
 ]
 
