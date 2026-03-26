@@ -1,64 +1,33 @@
-epic: "Epic 30: Batch Pipeline — Scheduler Batching & Batch-Aware Protocol"
+epic: "Epic 35: Phase 1 — gRPC Streaming & Batch Tuning"
 baseBranch: main
-startedAt: "2026-03-24"
+startedAt: "2026-03-25"
 stories:
-  - id: "30.1"
-    title: "API Surface Unification — Proto, Server, Rust SDK"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/30.1-api-surface-unification"
-    pr: 112
+  - id: "35.1"
+    title: "Benchmark Baseline — Measure Post-Plateau State"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/35.1-benchmark-baseline"
+    pr: null
     dependsOn: []
-  - id: "30.2"
-    title: "External SDK Unification — Go, Python, JS, Ruby, Java"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/30.2-external-sdk-unification"
-    pr: 113
-    dependsOn: ["30.1"]
-  - id: "30.3"
-    title: "SchedulerCommand::Enqueue Batch Refactor & Scheduler Handler"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/30.3-scheduler-enqueue-batch-refactor"
-    pr: 114
-    dependsOn: ["30.2"]
-  - id: "30.4"
-    title: "Unified Enqueue Handler — Throughput Fix"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/30.4-unified-enqueue-handler"
-    pr: 115
-    dependsOn: ["30.3"]
-  - id: "30.5"
-    title: "Profile Checkpoint — Post-Tier 0 Analysis"
-    status: completed
-    currentPhase: "pr-complete"
-    branch: "feat/30.5-profile-checkpoint"
-    pr: null
-    dependsOn: ["30.4"]
-  - id: "30.6"
-    title: "StreamEnqueue with Batch-Within-Stream (Conditional)"
-    status: skipped
+  - id: "35.2"
+    title: "SDK Streaming Batch Consolidation"
+    status: pending
     currentPhase: ""
     branch: ""
     pr: null
-    dependsOn: ["30.5"]
-    skipReason: "NO-GO from 30.5 profiling: bottleneck is RocksDB, not gRPC transport"
-  - id: "30.7"
-    title: "SDK Adaptive Client-Side Accumulator (Conditional)"
-    status: skipped
+    dependsOn: ["35.1"]
+  - id: "35.3"
+    title: "gRPC Transport Tuning"
+    status: pending
     currentPhase: ""
     branch: ""
     pr: null
-    dependsOn: ["30.6"]
-    skipReason: "NO-GO from 30.5 profiling: AccumulatorMode::Auto already exists"
-  - id: "30.8"
-    title: "Profile Checkpoint & Competitive Benchmark Update (Conditional)"
-    status: skipped
+    dependsOn: ["35.1"]
+  - id: "35.4"
+    title: "Benchmark Checkpoint & Phase 2 Go/No-Go"
+    status: pending
     currentPhase: ""
     branch: ""
     pr: null
-    dependsOn: ["30.7"]
-    skipReason: "NO-GO from 30.5 profiling: 30.6-30.7 skipped"
+    dependsOn: ["35.2", "35.3"]
 skippedIssues: []
