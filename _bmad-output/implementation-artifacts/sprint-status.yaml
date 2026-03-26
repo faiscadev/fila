@@ -328,12 +328,12 @@ development_status:
   # Epic 35: Phase 1 — gRPC Streaming & Batch Tuning
   # No architecture changes — tune gRPC settings, optimize streaming, benchmark.
   # Target: 30-50K msg/s. Research: technical-custom-transport-kafka-parity-2026-03-25.md
-  epic-35: in-progress
-  35-1-benchmark-baseline-measure-post-plateau-state: review
-  35-2-sdk-streaming-batch-consolidation: review
-  35-3-grpc-transport-tuning: review
-  35-4-benchmark-checkpoint-phase-2-go-no-go: review
-  epic-35-retrospective: optional
+  epic-35: done
+  35-1-benchmark-baseline-measure-post-plateau-state: done
+  35-2-sdk-streaming-batch-consolidation: done
+  35-3-grpc-transport-tuning: done
+  35-4-benchmark-checkpoint-phase-2-go-no-go: done
+  epic-35-retrospective: done
 
   # Epic 36: Phase 2 — Custom Binary Protocol (FIBP) (conditional on Epic 35 results)
   # Dual-protocol: FIBP (length-prefixed binary/TCP) alongside gRPC.
