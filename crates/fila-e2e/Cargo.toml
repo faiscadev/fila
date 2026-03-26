@@ -19,3 +19,4 @@ bytes = { workspace = true }
 prost = { workspace = true }
 tempfile = "3"
 rcgen = { workspace = true }
+rustls = { workspace = true }

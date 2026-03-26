@@ -1343,6 +1343,7 @@ dependencies = [
  "fila-sdk",
  "prost",
  "rcgen",
+ "rustls",
  "tempfile",
  "tokio",
  "tokio-stream",

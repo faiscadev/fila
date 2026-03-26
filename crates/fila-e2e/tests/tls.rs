@@ -1,6 +1,15 @@
 mod helpers;
 
 use helpers::TestServer;
+use std::sync::Once;
+
+static INIT_CRYPTO: Once = Once::new();
+
+fn ensure_crypto_provider() {
+    INIT_CRYPTO.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
 
 /// Generate a self-signed cert/key pair for testing.
 ///
@@ -88,6 +97,7 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
 
 #[tokio::test]
 async fn tls_valid_cert_connects_successfully() {
+    ensure_crypto_provider();
     let (_server, addr, ca_pem) = start_tls_server();
 
     // The cert is self-signed, so using the cert itself as the CA cert lets
@@ -105,6 +115,7 @@ async fn tls_valid_cert_connects_successfully() {
 
 #[tokio::test]
 async fn tls_plaintext_client_is_rejected() {
+    ensure_crypto_provider();
     let (_server, https_addr, _ca_pem) = start_tls_server();
 
     // Connect using http:// (no TLS) — the server speaks TLS, so this must fail.
@@ -133,6 +144,7 @@ async fn tls_plaintext_client_is_rejected() {
 
 #[tokio::test]
 async fn tls_wrong_ca_cert_is_rejected() {
+    ensure_crypto_provider();
     let (_server, addr, _correct_ca_pem) = start_tls_server();
 
     // Generate an entirely different cert/key pair; its cert is a different CA.
