@@ -350,7 +350,7 @@ development_status:
   # Remove gRPC entirely, make FIBP the sole transport. Update all SDKs, benchmarks, docs.
   epic-37: in-progress
   37-1-remove-grpc-fibp-only-server-rust-sdk: done
-  37-2-go-sdk-fibp: backlog
+  37-2-go-sdk-fibp: review
   37-3-python-sdk-fibp: backlog
   37-4-javascript-sdk-fibp: backlog
   37-5-ruby-sdk-fibp: backlog
