@@ -183,8 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Optionally start the FIBP (binary protocol) TCP listener.
+    // FIBP shares TLS configuration with gRPC.
     let fibp_listener = if let Some(ref fibp) = fibp_config {
-        let listener = fila_core::fibp::FibpListener::start(fibp, Arc::clone(&broker)).await?;
+        let listener =
+            fila_core::fibp::FibpListener::start(fibp, Arc::clone(&broker), tls_params.as_ref())
+                .await?;
         // Write the FIBP address to a port file so test harnesses can discover it.
         if let Ok(fibp_port_file) = std::env::var("FILA_FIBP_PORT_FILE") {
             std::fs::write(&fibp_port_file, listener.local_addr().to_string()).unwrap_or_else(

@@ -164,6 +164,10 @@ const OP_CONSUME: u8 = 0x02;
 const OP_ACK: u8 = 0x03;
 const OP_NACK: u8 = 0x04;
 const OP_FLOW: u8 = 0x20;
+const OP_AUTH: u8 = 0x30;
+const OP_ERROR: u8 = 0xFE;
+const OP_CREATE_QUEUE: u8 = 0x10;
+const OP_LIST_QUEUES: u8 = 0x13;
 const FLAG_STREAM: u8 = 0x04;
 
 // ---------------------------------------------------------------------------
@@ -534,4 +538,190 @@ async fn e2e_fibp_nack_with_error() {
         }
     }
     assert!(redelivered, "nacked message should be re-delivered");
+}
+
+// ---------------------------------------------------------------------------
+// Auth + Admin tests
+// ---------------------------------------------------------------------------
+
+/// Start a fila-server with FIBP and auth enabled.
+fn start_fibp_auth_server() -> (helpers::TestServer, String, String) {
+    let data_dir = tempfile::tempdir().expect("temp dir");
+    let port_file = data_dir.path().join("port");
+    let fibp_port_file = data_dir.path().join("fibp_port");
+    let bootstrap_key = "e2e-bootstrap-key-12345";
+
+    let config_content = format!(
+        concat!(
+            "[server]\n",
+            "listen_addr = \"127.0.0.1:0\"\n",
+            "\n",
+            "[telemetry]\n",
+            "otlp_endpoint = \"\"\n",
+            "\n",
+            "[fibp]\n",
+            "listen_addr = \"127.0.0.1:0\"\n",
+            "\n",
+            "[auth]\n",
+            "bootstrap_apikey = \"{}\"\n",
+        ),
+        bootstrap_key,
+    );
+    let config_path = data_dir.path().join("fila.toml");
+    std::fs::write(&config_path, config_content).expect("write config");
+
+    let binary = workspace_binary("fila-server");
+    assert!(
+        binary.exists(),
+        "fila-server binary not found at {binary:?}. Run `cargo build` first."
+    );
+
+    let mut child = std::process::Command::new(&binary)
+        .env(
+            "FILA_DATA_DIR",
+            data_dir.path().join("data").to_str().unwrap(),
+        )
+        .env("FILA_PORT_FILE", port_file.to_str().unwrap())
+        .env("FILA_FIBP_PORT_FILE", fibp_port_file.to_str().unwrap())
+        .current_dir(data_dir.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("start fila-server");
+
+    use std::io::BufRead;
+    let stdout = child.stdout.take().expect("stdout");
+    std::thread::spawn(move || for _ in std::io::BufReader::new(stdout).lines() {});
+    let stderr = child.stderr.take().expect("stderr");
+    std::thread::spawn(move || for _ in std::io::BufReader::new(stderr).lines() {});
+
+    let start = std::time::Instant::now();
+    let grpc_addr = loop {
+        if start.elapsed() > Duration::from_secs(10) {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    panic!("fila-server exited with {status} before writing port file")
+                }
+                _ => panic!("fila-server did not write port file within 10s"),
+            }
+        }
+        if let Ok(contents) = std::fs::read_to_string(&port_file) {
+            let contents = contents.trim();
+            if !contents.is_empty() {
+                break contents.to_string();
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    let fibp_addr = loop {
+        if start.elapsed() > Duration::from_secs(10) {
+            panic!("fila-server did not write FIBP port file within 10s");
+        }
+        if let Ok(contents) = std::fs::read_to_string(&fibp_port_file) {
+            let contents = contents.trim();
+            if !contents.is_empty() {
+                break contents.to_string();
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    let server = helpers::TestServer::from_parts(child, format!("http://{grpc_addr}"), data_dir);
+    (server, fibp_addr, bootstrap_key.to_string())
+}
+
+/// E2E: auth success over FIBP — send OP_AUTH with valid key, get success response.
+#[tokio::test]
+async fn e2e_fibp_auth_success() {
+    let (_server, fibp_addr, bootstrap_key) = start_fibp_auth_server();
+
+    let mut stream = TcpStream::connect(&fibp_addr).await.unwrap();
+    handshake(&mut stream).await;
+
+    // Send auth frame with valid bootstrap key.
+    let auth_frame = encode_frame(0, OP_AUTH, 1, bootstrap_key.as_bytes());
+    stream.write_all(&auth_frame).await.unwrap();
+
+    let (_, op, corr_id, payload) = read_frame(&mut stream).await;
+    assert_eq!(op, OP_AUTH, "expected OP_AUTH response");
+    assert_eq!(corr_id, 1);
+    assert!(payload.is_empty(), "auth success has empty payload");
+
+    // Heartbeat should work after auth.
+    let ping = encode_frame(0, OP_HEARTBEAT, 42, b"");
+    stream.write_all(&ping).await.unwrap();
+
+    let (_, op, corr_id, _) = read_frame(&mut stream).await;
+    assert_eq!(op, OP_HEARTBEAT);
+    assert_eq!(corr_id, 42);
+}
+
+/// E2E: auth failure over FIBP — send OP_AUTH with wrong key, get error and close.
+#[tokio::test]
+async fn e2e_fibp_auth_failure() {
+    let (_server, fibp_addr, _bootstrap_key) = start_fibp_auth_server();
+
+    let mut stream = TcpStream::connect(&fibp_addr).await.unwrap();
+    handshake(&mut stream).await;
+
+    // Send auth frame with wrong key.
+    let auth_frame = encode_frame(0, OP_AUTH, 1, b"totally-wrong-key");
+    stream.write_all(&auth_frame).await.unwrap();
+
+    let (_, op, corr_id, payload) = read_frame(&mut stream).await;
+    assert_eq!(op, OP_ERROR, "expected error response");
+    assert_eq!(corr_id, 1);
+    let msg = String::from_utf8_lossy(&payload);
+    assert!(msg.contains("invalid"), "expected auth failure, got: {msg}");
+}
+
+/// E2E: create queue + list queues over FIBP admin operations.
+#[tokio::test]
+async fn e2e_fibp_admin_create_and_list_queues() {
+    let (_server, fibp_addr) = start_fibp_server();
+
+    let mut stream = TcpStream::connect(&fibp_addr).await.unwrap();
+    handshake(&mut stream).await;
+
+    // Create a queue via FIBP admin op (protobuf payload).
+    use prost::Message;
+    let create_req = fila_proto::CreateQueueRequest {
+        name: "fibp-admin-test".to_string(),
+        config: None,
+    };
+    let mut proto_buf = Vec::new();
+    create_req.encode(&mut proto_buf).unwrap();
+
+    let create_frame = encode_frame(0, OP_CREATE_QUEUE, 10, &proto_buf);
+    stream.write_all(&create_frame).await.unwrap();
+
+    let (_, op, corr_id, payload) = read_frame(&mut stream).await;
+    assert_eq!(op, OP_CREATE_QUEUE);
+    assert_eq!(corr_id, 10);
+    let create_resp = fila_proto::CreateQueueResponse::decode(&payload[..]).unwrap();
+    assert_eq!(create_resp.queue_id, "fibp-admin-test");
+
+    // List queues via FIBP admin op.
+    let list_req = fila_proto::ListQueuesRequest {};
+    let mut list_buf = Vec::new();
+    list_req.encode(&mut list_buf).unwrap();
+
+    let list_frame = encode_frame(0, OP_LIST_QUEUES, 11, &list_buf);
+    stream.write_all(&list_frame).await.unwrap();
+
+    let (_, op, corr_id, payload) = read_frame(&mut stream).await;
+    assert_eq!(op, OP_LIST_QUEUES);
+    assert_eq!(corr_id, 11);
+    let list_resp = fila_proto::ListQueuesResponse::decode(&payload[..]).unwrap();
+    let names: Vec<&str> = list_resp.queues.iter().map(|q| q.name.as_str()).collect();
+    assert!(
+        names.contains(&"fibp-admin-test"),
+        "expected fibp-admin-test in {names:?}"
+    );
+    // Also check that the auto-created DLQ is present.
+    assert!(
+        names.contains(&"fibp-admin-test.dlq"),
+        "expected DLQ in {names:?}"
+    );
 }
