@@ -42,8 +42,9 @@ async fn e2e_visibility_timeout_expiry() {
     // Wait for visibility timeout to expire (2s + buffer)
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // Second consumer should receive the message with incremented attempt count
-    let mut stream2 = client.consume("vt-test").await.unwrap();
+    // Second consumer on a new connection (FIBP allows one consume per connection).
+    let client2 = helpers::sdk_client(server.addr()).await;
+    let mut stream2 = client2.consume("vt-test").await.unwrap();
     let msg2 = tokio::time::timeout(Duration::from_secs(5), stream2.next())
         .await
         .expect("timeout — message should have been re-made available after visibility timeout")

@@ -23,7 +23,16 @@ mod helpers;
 use rcgen::{BasicConstraints, Certificate, CertificateParams, IsCa};
 use std::collections::HashMap;
 use std::io::BufRead;
+use std::sync::Once;
 use std::time::Duration;
+
+static INIT_CRYPTO: Once = Once::new();
+
+fn ensure_crypto_provider() {
+    INIT_CRYPTO.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
 
 /// Generate a CA cert, server cert signed by CA, and client cert signed by CA.
 ///
@@ -86,7 +95,7 @@ fn start_mtls_server(
     std::fs::write(&ca_path, ca_pem).expect("write ca");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\nca_file = \"{ca}\"\n",
+        "[fibp]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\nca_file = \"{ca}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
         ca = ca_path.to_str().unwrap(),
@@ -147,6 +156,7 @@ fn start_mtls_server(
 /// AC 1: mTLS with valid client certificate → connection succeeds, enqueue works.
 #[tokio::test]
 async fn mtls_valid_client_cert_succeeds() {
+    ensure_crypto_provider();
     let (ca_pem, server_cert_pem, server_key_pem, client_cert_pem, client_key_pem) =
         generate_mtls_certs();
 
@@ -184,6 +194,7 @@ async fn mtls_valid_client_cert_succeeds() {
 /// AC 2: mTLS required but no client cert → connection rejected.
 #[tokio::test]
 async fn mtls_no_client_cert_rejected() {
+    ensure_crypto_provider();
     let (ca_pem, server_cert_pem, server_key_pem, _, _) = generate_mtls_certs();
 
     let (_server, addr) = start_mtls_server(&ca_pem, &server_cert_pem, &server_key_pem);
@@ -212,6 +223,7 @@ async fn mtls_no_client_cert_rejected() {
 /// AC 4: Expired server certificate → connection rejected.
 #[tokio::test]
 async fn tls_expired_cert_rejected() {
+    ensure_crypto_provider();
     use rcgen::date_time_ymd;
 
     // Generate a CA
@@ -246,7 +258,7 @@ async fn tls_expired_cert_rejected() {
     std::fs::write(&key_path, &server_key_pem).expect("write key");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
+        "[fibp]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
     );

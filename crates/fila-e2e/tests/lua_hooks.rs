@@ -111,8 +111,10 @@ async fn e2e_lua_on_failure_retry_vs_dlq() {
             .unwrap();
     }
 
-    // Message should now be in the DLQ. Consume from the DLQ.
-    let mut dlq_stream = client.consume("lua-failure.dlq").await.unwrap();
+    // Message should now be in the DLQ. Use a separate client because FIBP
+    // supports only one consume session per connection.
+    let dlq_client = helpers::sdk_client(server.addr()).await;
+    let mut dlq_stream = dlq_client.consume("lua-failure.dlq").await.unwrap();
     let dlq_msg = tokio::time::timeout(Duration::from_secs(5), dlq_stream.next())
         .await
         .expect("timeout waiting for DLQ message")
@@ -123,5 +125,8 @@ async fn e2e_lua_on_failure_retry_vs_dlq() {
     assert_eq!(dlq_msg.payload, b"fail-me");
 
     // Clean up
-    client.ack("lua-failure.dlq", &dlq_msg.id).await.unwrap();
+    dlq_client
+        .ack("lua-failure.dlq", &dlq_msg.id)
+        .await
+        .unwrap();
 }
