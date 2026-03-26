@@ -11,26 +11,37 @@ use std::time::Duration;
 pub struct BenchServer {
     child: Option<Child>,
     addr: String,
+    fibp_addr: Option<String>,
     _data_dir: tempfile::TempDir,
 }
 
 impl BenchServer {
     /// Start a new fila-server instance for benchmarking.
     pub fn start() -> Self {
-        Self::start_inner(None, false)
+        Self::start_inner(None, false, false)
     }
 
     /// Start a new fila-server instance with in-memory storage (no RocksDB).
     pub fn start_in_memory() -> Self {
-        Self::start_inner(None, true)
+        Self::start_inner(None, true, false)
     }
 
     /// Start a new fila-server instance with a specific DRR quantum.
     pub fn start_with_quantum(quantum: Option<u32>) -> Self {
-        Self::start_inner(quantum, false)
+        Self::start_inner(quantum, false, false)
     }
 
-    fn start_inner(quantum: Option<u32>, in_memory: bool) -> Self {
+    /// Start a new fila-server instance with FIBP enabled alongside gRPC.
+    pub fn start_with_fibp() -> Self {
+        Self::start_inner(None, false, true)
+    }
+
+    /// Start a new fila-server instance with FIBP and in-memory storage.
+    pub fn start_with_fibp_in_memory() -> Self {
+        Self::start_inner(None, true, true)
+    }
+
+    fn start_inner(quantum: Option<u32>, in_memory: bool, fibp: bool) -> Self {
         let port = free_port();
         let addr = format!("127.0.0.1:{port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");
@@ -39,16 +50,24 @@ impl BenchServer {
             Some(q) => format!("\n[scheduler]\nquantum = {q}\n"),
             None => String::new(),
         };
+        let fibp_section = if fibp {
+            let fibp_port = free_port();
+            format!("\n[fibp]\nlisten_addr = \"127.0.0.1:{fibp_port}\"\n")
+        } else {
+            String::new()
+        };
         let config_content = format!(
             r#"[server]
 listen_addr = "{addr}"
-{scheduler_section}
+{scheduler_section}{fibp_section}
 [telemetry]
 otlp_endpoint = ""
 "#
         );
         let config_path = data_dir.path().join("fila.toml");
         std::fs::write(&config_path, config_content).expect("write config");
+
+        let fibp_port_file = data_dir.path().join("fibp_port");
 
         let binary = server_binary();
         assert!(
@@ -63,6 +82,12 @@ otlp_endpoint = ""
         );
         if in_memory {
             cmd.env("FILA_STORAGE", "memory");
+        }
+        if fibp {
+            cmd.env(
+                "FILA_FIBP_PORT_FILE",
+                fibp_port_file.to_str().unwrap(),
+            );
         }
         let mut child = cmd
             .current_dir(data_dir.path())
@@ -97,9 +122,29 @@ otlp_endpoint = ""
             "fila-server did not become reachable at {addr} within 10s"
         );
 
+        // If FIBP is enabled, wait for the FIBP port file to be written.
+        let fibp_addr = if fibp {
+            let fibp_start = std::time::Instant::now();
+            loop {
+                if fibp_start.elapsed() > Duration::from_secs(10) {
+                    panic!("fila-server did not write FIBP port file within 10s");
+                }
+                if let Ok(contents) = std::fs::read_to_string(&fibp_port_file) {
+                    let contents = contents.trim();
+                    if !contents.is_empty() {
+                        break Some(contents.to_string());
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        } else {
+            None
+        };
+
         Self {
             child: Some(child),
             addr: format!("http://{addr}"),
+            fibp_addr,
             _data_dir: data_dir,
         }
     }
@@ -112,6 +157,14 @@ otlp_endpoint = ""
     /// The raw host:port address (without http:// prefix).
     pub fn host_port(&self) -> &str {
         self.addr.strip_prefix("http://").unwrap_or(&self.addr)
+    }
+
+    /// The FIBP address of the running server (e.g., "127.0.0.1:12345").
+    /// Panics if the server was not started with FIBP enabled.
+    pub fn fibp_addr(&self) -> &str {
+        self.fibp_addr
+            .as_deref()
+            .expect("server was not started with FIBP enabled")
     }
 
     /// The process ID of the running server.
