@@ -4,6 +4,7 @@
 //! `FibpConnection` task for each accepted connection.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -12,6 +13,7 @@ use tracing::{debug, info, warn};
 use super::connection::FibpConnection;
 use super::error::FibpError;
 use crate::broker::config::FibpConfig;
+use crate::broker::Broker;
 
 /// TCP listener for the FIBP transport.
 ///
@@ -29,7 +31,7 @@ impl FibpListener {
     /// Returns immediately after binding; the accept loop runs in a spawned
     /// tokio task. Use the returned handle to query the local address and to
     /// trigger a graceful shutdown.
-    pub async fn start(config: &FibpConfig) -> Result<Self, FibpError> {
+    pub async fn start(config: &FibpConfig, broker: Arc<Broker>) -> Result<Self, FibpError> {
         let listener = TcpListener::bind(&config.listen_addr).await?;
         let local_addr = listener.local_addr()?;
         let max_frame_size = config.max_frame_size;
@@ -38,7 +40,7 @@ impl FibpListener {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        tokio::spawn(accept_loop(listener, max_frame_size, shutdown_rx));
+        tokio::spawn(accept_loop(listener, max_frame_size, shutdown_rx, broker));
 
         Ok(Self {
             shutdown_tx,
@@ -62,6 +64,7 @@ async fn accept_loop(
     listener: TcpListener,
     max_frame_size: u32,
     mut shutdown_rx: watch::Receiver<bool>,
+    broker: Arc<Broker>,
 ) {
     loop {
         tokio::select! {
@@ -69,8 +72,9 @@ async fn accept_loop(
                 match result {
                     Ok((stream, peer)) => {
                         debug!(peer = %peer, "accepted FIBP connection");
+                        let broker = Arc::clone(&broker);
                         tokio::spawn(async move {
-                            match FibpConnection::accept(stream, max_frame_size).await {
+                            match FibpConnection::accept(stream, max_frame_size, broker).await {
                                 Ok(conn) => conn.run().await,
                                 Err(e) => {
                                     warn!(peer = %peer, error = %e, "FIBP handshake failed");
