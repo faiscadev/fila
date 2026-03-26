@@ -1058,7 +1058,7 @@ mod fila {
             ("64kb", PAYLOAD_64KB),
         ] {
             let queue = format!("bench-throughput-{size_name}");
-            create_queue_cli(addr, &queue);
+            create_queue_cli(addr, &queue).await;
 
             println!("[fila] Throughput {size_name} warmup ({THROUGHPUT_PRODUCERS} producers, auto-batching)...");
             let counts: Vec<Arc<std::sync::atomic::AtomicU64>> = (0..THROUGHPUT_PRODUCERS)
@@ -1117,7 +1117,7 @@ mod fila {
         println!("[fila] Latency benchmark (unbatched)...");
         {
             let queue = "bench-latency";
-            create_queue_cli(addr, queue);
+            create_queue_cli(addr, queue).await;
 
             let sampler = Arc::new(Mutex::new(LatencyHistogram::new()));
             let start_time = Instant::now();
@@ -1184,7 +1184,7 @@ mod fila {
         println!("[fila] Lifecycle throughput (unbatched)...");
         {
             let queue = "bench-lifecycle";
-            create_queue_cli(addr, queue);
+            create_queue_cli(addr, queue).await;
             let opts = ConnectOptions::new(addr).with_accumulator(AccumulatorMode::Disabled);
             let client = FilaClient::connect_with_options(opts)
                 .await
@@ -1224,7 +1224,7 @@ mod fila {
         );
         {
             let queue = "bench-multi-producer";
-            create_queue_cli(addr, queue);
+            create_queue_cli(addr, queue).await;
             let payload = vec![0u8; PAYLOAD_1KB];
             let addr = addr.to_string();
 
