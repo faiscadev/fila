@@ -339,7 +339,7 @@ development_status:
   # Dual-protocol: FIBP (length-prefixed binary/TCP) alongside gRPC.
   # Target: 100-150K msg/s. Conditional on 35.4 go/no-go.
   epic-36: in-progress
-  36-1-fibp-protocol-foundation: in-progress
+  36-1-fibp-protocol-foundation: review
   36-2-fibp-data-operations: backlog
   36-3-fibp-admin-and-security: backlog
   36-4-rust-sdk-fibp-transport: backlog
