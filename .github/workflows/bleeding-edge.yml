@@ -99,12 +99,14 @@ jobs:
             --notes "Bleeding-edge build from commit ${GITHUB_SHA}" \
             --prerelease
 
-          # Create the rolling 'dev-latest' pre-release
+          # Create the rolling 'dev-latest' pre-release.
+          # Note: --target is intentionally omitted. The release job checks out at
+          # GITHUB_SHA, so gh creates the tag at HEAD (= GITHUB_SHA). Using --target
+          # with a full SHA causes GitHub to create the release as a draft.
           gh release create dev-latest artifacts/* \
             --title "Latest dev build" \
             --notes "Rolling pre-release tracking the latest build from main. Currently: ${GITHUB_SHA}" \
-            --prerelease \
-            --target "${GITHUB_SHA}"
+            --prerelease
 
   docker:
     name: Docker
