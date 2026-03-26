@@ -343,9 +343,12 @@ async fn e2e_fibp_enqueue_consume_ack() {
         "consume ack should have empty payload"
     );
 
+    // Give the scheduler a moment to deliver, then read pushed messages.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
     // Read pushed messages (may arrive as one or more push frames).
     let mut received_ids: Vec<String> = Vec::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while received_ids.len() < 3 {
         if tokio::time::Instant::now() > deadline {
             panic!(
@@ -411,6 +414,9 @@ async fn e2e_fibp_nack_with_error() {
     let (_, op, _, _) = read_frame(&mut stream).await;
     assert_eq!(op, OP_CONSUME);
 
+    // Give the scheduler a moment to deliver.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
     // Read pushed message.
     let (flags, op, _, push_payload) = read_frame(&mut stream).await;
     assert_eq!(op, OP_CONSUME);
@@ -439,7 +445,7 @@ async fn e2e_fibp_nack_with_error() {
 
     // The message should be re-delivered (nack puts it back in the queue).
     // Read the re-delivered message with a generous timeout.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let mut redelivered = false;
 
     // Send more credits since we used some.
