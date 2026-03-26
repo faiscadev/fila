@@ -108,6 +108,10 @@ Web management GUI. Disabled by default. When enabled, serves a read-only dashbo
 
 FIBP (Fila Binary Protocol) transport. Disabled by default. When enabled, runs a custom binary TCP protocol alongside gRPC for high-throughput workloads. The protocol uses length-prefixed frames with a 6-byte header (flags, op code, correlation ID).
 
+FIBP shares TLS and authentication configuration with gRPC. When `[tls]` is configured, FIBP connections are TLS-wrapped using the same cert/key/CA. When `[auth]` is configured, FIBP clients must send an `OP_AUTH` frame (containing the API key) as the first frame after handshake. Per-queue ACL checks apply to all data and admin operations.
+
+FIBP supports all admin operations (create/delete queue, list queues, queue stats, redrive) using protobuf-encoded payloads for schema evolution.
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `listen_addr` | string | `"0.0.0.0:5557"` | TCP address for the FIBP transport |

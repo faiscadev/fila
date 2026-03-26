@@ -32,4 +32,24 @@ pub enum FibpError {
     /// The scheduler reply channel was dropped before a response arrived.
     #[error("scheduler reply dropped")]
     ReplyDropped,
+
+    /// Authentication required but not provided or invalid.
+    #[error("authentication failed: {reason}")]
+    AuthFailed { reason: String },
+
+    /// The caller does not have permission for the requested operation.
+    #[error("permission denied: {reason}")]
+    PermissionDenied { reason: String },
+
+    /// Protobuf decode error on an admin payload.
+    #[error("protobuf decode error: {0}")]
+    ProtobufDecode(#[from] prost::DecodeError),
+
+    /// TLS configuration error.
+    #[error("tls error: {reason}")]
+    TlsConfig { reason: String },
+
+    /// A storage error during auth validation.
+    #[error("storage error: {0}")]
+    Storage(#[from] crate::error::StorageError),
 }

@@ -3,10 +3,16 @@
 //!
 //! The dispatcher holds an `Arc<Broker>` for sending commands.  It does
 //! **not** depend on gRPC types or the cluster layer — FIBP connections
-//! are anonymous (no auth) and local-only (no Raft forwarding) for now.
+//! are local-only (no Raft forwarding) for now.
+//!
+//! Data operations use custom binary wire encoding (see `wire` module).
+//! Admin operations use protobuf encoding (reusing proto message types
+//! from `fila_proto`) for schema evolution flexibility.
 
 use std::sync::Arc;
 
+use bytes::Bytes;
+use prost::Message as ProstMessage;
 use uuid::Uuid;
 
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
@@ -205,4 +211,234 @@ pub async fn dispatch_nack(
     }
 
     Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Admin operations — protobuf-encoded payloads
+// ---------------------------------------------------------------------------
+
+/// Dispatch a CreateQueue request. Payload is a protobuf `CreateQueueRequest`.
+pub async fn dispatch_create_queue(
+    broker: &Arc<Broker>,
+    payload: Bytes,
+) -> Result<Bytes, FibpError> {
+    let req = fila_proto::CreateQueueRequest::decode(payload)?;
+
+    if req.name.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "queue name must not be empty".into(),
+        });
+    }
+
+    let proto_config = req.config.unwrap_or_default();
+    let visibility_timeout_ms = match proto_config.visibility_timeout_ms {
+        0 => crate::queue::QueueConfig::DEFAULT_VISIBILITY_TIMEOUT_MS,
+        v if v < 1_000 => {
+            return Err(FibpError::InvalidPayload {
+                reason: "visibility_timeout_ms must be at least 1000 (1 second)".into(),
+            });
+        }
+        v => v,
+    };
+
+    let config = crate::queue::QueueConfig {
+        name: req.name.clone(),
+        on_enqueue_script: if proto_config.on_enqueue_script.is_empty() {
+            None
+        } else {
+            Some(proto_config.on_enqueue_script)
+        },
+        on_failure_script: if proto_config.on_failure_script.is_empty() {
+            None
+        } else {
+            Some(proto_config.on_failure_script)
+        },
+        visibility_timeout_ms,
+        dlq_queue_id: None,
+        lua_timeout_ms: None,
+        lua_memory_limit_bytes: None,
+    };
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(SchedulerCommand::CreateQueue {
+            name: req.name,
+            config,
+            reply: reply_tx,
+        })
+        .map_err(FibpError::BrokerUnavailable)?;
+
+    let queue_id = reply_rx
+        .await
+        .map_err(|_| FibpError::ReplyDropped)?
+        .map_err(|e| FibpError::InvalidPayload {
+            reason: e.to_string(),
+        })?;
+
+    let resp = fila_proto::CreateQueueResponse { queue_id };
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a DeleteQueue request. Payload is a protobuf `DeleteQueueRequest`.
+pub async fn dispatch_delete_queue(
+    broker: &Arc<Broker>,
+    payload: Bytes,
+) -> Result<Bytes, FibpError> {
+    let req = fila_proto::DeleteQueueRequest::decode(payload)?;
+
+    if req.queue.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "queue name must not be empty".into(),
+        });
+    }
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(SchedulerCommand::DeleteQueue {
+            queue_id: req.queue,
+            reply: reply_tx,
+        })
+        .map_err(FibpError::BrokerUnavailable)?;
+
+    reply_rx
+        .await
+        .map_err(|_| FibpError::ReplyDropped)?
+        .map_err(|e| FibpError::InvalidPayload {
+            reason: e.to_string(),
+        })?;
+
+    let resp = fila_proto::DeleteQueueResponse {};
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a GetStats request. Payload is a protobuf `GetStatsRequest`.
+pub async fn dispatch_queue_stats(
+    broker: &Arc<Broker>,
+    payload: Bytes,
+) -> Result<Bytes, FibpError> {
+    let req = fila_proto::GetStatsRequest::decode(payload)?;
+
+    if req.queue.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "queue name must not be empty".into(),
+        });
+    }
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(SchedulerCommand::GetStats {
+            queue_id: req.queue,
+            reply: reply_tx,
+        })
+        .map_err(FibpError::BrokerUnavailable)?;
+
+    let stats = reply_rx
+        .await
+        .map_err(|_| FibpError::ReplyDropped)?
+        .map_err(|e| FibpError::InvalidPayload {
+            reason: e.to_string(),
+        })?;
+
+    let per_key_stats = stats
+        .per_key_stats
+        .into_iter()
+        .map(|s| fila_proto::PerFairnessKeyStats {
+            key: s.key,
+            pending_count: s.pending_count,
+            current_deficit: s.current_deficit,
+            weight: s.weight,
+        })
+        .collect();
+
+    let per_throttle_stats = stats
+        .per_throttle_stats
+        .into_iter()
+        .map(|s| fila_proto::PerThrottleKeyStats {
+            key: s.key,
+            tokens: s.tokens,
+            rate_per_second: s.rate_per_second,
+            burst: s.burst,
+        })
+        .collect();
+
+    let resp = fila_proto::GetStatsResponse {
+        depth: stats.depth,
+        in_flight: stats.in_flight,
+        active_fairness_keys: stats.active_fairness_keys,
+        active_consumers: stats.active_consumers,
+        quantum: stats.quantum,
+        per_key_stats,
+        per_throttle_stats,
+        leader_node_id: 0,
+        replication_count: 0,
+    };
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a ListQueues request. Payload is a protobuf `ListQueuesRequest`.
+pub async fn dispatch_list_queues(
+    broker: &Arc<Broker>,
+    payload: Bytes,
+) -> Result<Bytes, FibpError> {
+    // Decode for forward compatibility even though the message is currently empty.
+    let _req = fila_proto::ListQueuesRequest::decode(payload)?;
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(SchedulerCommand::ListQueues { reply: reply_tx })
+        .map_err(FibpError::BrokerUnavailable)?;
+
+    let summaries = reply_rx
+        .await
+        .map_err(|_| FibpError::ReplyDropped)?
+        .map_err(|e| FibpError::InvalidPayload {
+            reason: e.to_string(),
+        })?;
+
+    let queues = summaries
+        .into_iter()
+        .map(|s| fila_proto::QueueInfo {
+            name: s.name,
+            depth: s.depth,
+            in_flight: s.in_flight,
+            active_consumers: s.active_consumers,
+            leader_node_id: 0,
+        })
+        .collect();
+
+    let resp = fila_proto::ListQueuesResponse {
+        queues,
+        cluster_node_count: 0,
+    };
+    Ok(Bytes::from(resp.encode_to_vec()))
+}
+
+/// Dispatch a Redrive request. Payload is a protobuf `RedriveRequest`.
+pub async fn dispatch_redrive(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
+    let req = fila_proto::RedriveRequest::decode(payload)?;
+
+    if req.dlq_queue.is_empty() {
+        return Err(FibpError::InvalidPayload {
+            reason: "dlq_queue name must not be empty".into(),
+        });
+    }
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(SchedulerCommand::Redrive {
+            dlq_queue_id: req.dlq_queue,
+            count: req.count,
+            reply: reply_tx,
+        })
+        .map_err(FibpError::BrokerUnavailable)?;
+
+    let redriven = reply_rx
+        .await
+        .map_err(|_| FibpError::ReplyDropped)?
+        .map_err(|e| FibpError::InvalidPayload {
+            reason: e.to_string(),
+        })?;
+
+    let resp = fila_proto::RedriveResponse { redriven };
+    Ok(Bytes::from(resp.encode_to_vec()))
 }

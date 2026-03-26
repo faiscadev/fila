@@ -2,6 +2,11 @@
 //!
 //! `FibpConnection` wraps a TCP stream, performs the protocol handshake, and
 //! dispatches incoming frames to the scheduler via `Arc<Broker>`.
+//!
+//! When auth is enabled, the first frame after handshake MUST be `OP_AUTH`.
+//! The auth payload is the raw API key (UTF-8). If auth fails, an error
+//! frame is sent and the connection is closed. Subsequent operations are
+//! checked against per-queue ACLs using the authenticated caller identity.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -14,11 +19,13 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{Encoder, Framed};
 use tracing::{debug, warn};
 
+use crate::broker::auth::{CallerKey, Permission};
 use crate::broker::Broker;
 
 use super::codec::{
-    FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_CONSUME, OP_ENQUEUE, OP_FLOW, OP_GOAWAY,
-    OP_HEARTBEAT, OP_NACK,
+    FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_AUTH, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE,
+    OP_ENQUEUE, OP_FLOW, OP_GOAWAY, OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_PAUSE_QUEUE,
+    OP_QUEUE_STATS, OP_REDRIVE, OP_RESUME_QUEUE,
 };
 use super::dispatch;
 use super::error::FibpError;
@@ -41,6 +48,11 @@ pub struct FibpConnection {
     /// Channel for the push task to send encoded frames that the main loop
     /// writes to the TCP stream. This avoids splitting the TcpStream.
     push_frame_rx: Option<tokio::sync::mpsc::Receiver<BytesMut>>,
+    /// Whether authentication has been completed. Always `true` when auth is
+    /// disabled on the broker (all operations are allowed).
+    authenticated: bool,
+    /// The authenticated caller identity. `None` when auth is disabled.
+    caller: Option<CallerKey>,
 }
 
 impl std::fmt::Debug for FibpConnection {
@@ -48,6 +60,7 @@ impl std::fmt::Debug for FibpConnection {
         f.debug_struct("FibpConnection")
             .field("peer_addr", &self.peer_addr)
             .field("consume_active", &self.consume_state.is_some())
+            .field("authenticated", &self.authenticated)
             .finish_non_exhaustive()
     }
 }
@@ -116,13 +129,18 @@ impl FibpConnection {
         let codec = FibpCodec::new(max_frame_size);
         let framed = Framed::new(stream, codec);
 
-        debug!(peer = %peer_addr, "fibp handshake complete");
+        // When auth is disabled, the connection is pre-authenticated.
+        let authenticated = !broker.auth_enabled;
+
+        debug!(peer = %peer_addr, auth_required = broker.auth_enabled, "fibp handshake complete");
         Ok(Self {
             framed,
             peer_addr,
             broker,
             consume_state: None,
             push_frame_rx: None,
+            authenticated,
+            caller: None,
         })
     }
 
@@ -205,39 +223,146 @@ impl FibpConnection {
 
     /// Dispatch a single incoming frame.
     async fn dispatch(&mut self, frame: Frame) -> Result<(), FibpError> {
+        // OP_AUTH is always allowed (it's how the client authenticates).
+        // Heartbeat and GoAway are control frames, always allowed.
+        // All other ops require authentication when auth is enabled.
         match frame.op {
+            OP_AUTH => return self.handle_auth(frame).await,
             OP_HEARTBEAT => {
-                // Echo back the heartbeat with the same correlation id.
                 let pong = Frame::new(0, OP_HEARTBEAT, frame.correlation_id, Bytes::new());
-                self.write_frame(pong).await
+                return self.write_frame(pong).await;
             }
             OP_GOAWAY => {
                 debug!(peer = %self.peer_addr, "received goaway from peer");
-                Err(FibpError::Io(std::io::Error::new(
+                return Err(FibpError::Io(std::io::Error::new(
                     std::io::ErrorKind::ConnectionReset,
                     "peer sent goaway",
-                )))
+                )));
             }
+            _ => {}
+        }
+
+        // Enforce authentication: if not authenticated, reject with error.
+        if !self.authenticated {
+            let err_frame = Frame::error(
+                frame.correlation_id,
+                "authentication required: send OP_AUTH frame first",
+            );
+            self.write_frame(err_frame).await?;
+            return Err(FibpError::AuthFailed {
+                reason: "unauthenticated operation attempt".into(),
+            });
+        }
+
+        match frame.op {
             OP_ENQUEUE => self.handle_enqueue(frame).await,
             OP_CONSUME => self.handle_consume(frame).await,
             OP_ACK => self.handle_ack(frame).await,
             OP_NACK => self.handle_nack(frame).await,
             OP_FLOW => self.handle_flow(frame),
-            op => {
-                // Admin operations are not yet implemented over FIBP.
+            // Admin operations — protobuf-encoded payloads.
+            OP_CREATE_QUEUE => self.handle_admin(frame, Permission::Admin).await,
+            OP_DELETE_QUEUE => self.handle_admin(frame, Permission::Admin).await,
+            OP_QUEUE_STATS => self.handle_admin(frame, Permission::Admin).await,
+            OP_LIST_QUEUES => self.handle_admin(frame, Permission::Admin).await,
+            OP_PAUSE_QUEUE | OP_RESUME_QUEUE => {
                 let err_frame = Frame::error(
                     frame.correlation_id,
-                    &format!("operation 0x{op:02X} not implemented"),
+                    &format!("operation 0x{:02X} not implemented", frame.op),
+                );
+                self.write_frame(err_frame).await
+            }
+            OP_REDRIVE => self.handle_admin(frame, Permission::Admin).await,
+            op => {
+                let err_frame = Frame::error(
+                    frame.correlation_id,
+                    &format!("unknown operation 0x{op:02X}"),
                 );
                 self.write_frame(err_frame).await
             }
         }
     }
 
+    // ----- Auth handler ------------------------------------------------------
+
+    async fn handle_auth(&mut self, frame: Frame) -> Result<(), FibpError> {
+        if self.authenticated {
+            let resp = Frame::new(0, OP_AUTH, frame.correlation_id, Bytes::new());
+            return self.write_frame(resp).await;
+        }
+
+        // Payload is the raw API key as UTF-8 bytes.
+        let token =
+            String::from_utf8(frame.payload.to_vec()).map_err(|_| FibpError::InvalidPayload {
+                reason: "auth payload must be valid utf-8".into(),
+            })?;
+
+        match self.broker.validate_api_key(&token)? {
+            Some(caller) => {
+                debug!(peer = %self.peer_addr, "fibp auth success");
+                self.caller = Some(caller);
+                self.authenticated = true;
+                let resp = Frame::new(0, OP_AUTH, frame.correlation_id, Bytes::new());
+                self.write_frame(resp).await
+            }
+            None => {
+                let err_frame = Frame::error(frame.correlation_id, "invalid or missing api key");
+                self.write_frame(err_frame).await?;
+                Err(FibpError::AuthFailed {
+                    reason: "invalid api key".into(),
+                })
+            }
+        }
+    }
+
+    // ----- ACL helpers -------------------------------------------------------
+
+    /// Check permission for a queue-scoped data operation.
+    fn check_permission(&self, perm: Permission, queue: &str) -> Result<(), FibpError> {
+        if let Some(ref caller) = self.caller {
+            let permitted = self
+                .broker
+                .check_permission(caller, perm, queue)
+                .map_err(FibpError::Storage)?;
+            if !permitted {
+                return Err(FibpError::PermissionDenied {
+                    reason: format!(
+                        "key does not have {} permission on queue \"{queue}\"",
+                        match perm {
+                            Permission::Produce => "produce",
+                            Permission::Consume => "consume",
+                            Permission::Admin => "admin",
+                        }
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check that the caller has admin permission (global `admin:*` or
+    /// superadmin). Used for admin operations.
+    fn check_admin_permission(&self) -> Result<(), FibpError> {
+        if let Some(ref caller) = self.caller {
+            let permitted = self
+                .broker
+                .check_permission(caller, Permission::Admin, "*")
+                .map_err(FibpError::Storage)?;
+            if !permitted {
+                return Err(FibpError::PermissionDenied {
+                    reason: "key does not have admin permission".into(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     // ----- Data operation handlers -------------------------------------------
 
     async fn handle_enqueue(&mut self, frame: Frame) -> Result<(), FibpError> {
         let req = wire::decode_enqueue_request(frame.payload)?;
+        // ACL: produce permission on the target queue.
+        self.check_permission(Permission::Produce, &req.queue)?;
         let results = dispatch::dispatch_enqueue(&self.broker, req).await?;
         let payload = wire::encode_enqueue_response(&results);
         let resp = Frame::new(0, OP_ENQUEUE, frame.correlation_id, payload);
@@ -258,6 +383,9 @@ impl FibpConnection {
             let err_frame = Frame::error(frame.correlation_id, "queue name must not be empty");
             return self.write_frame(err_frame).await;
         }
+
+        // ACL: consume permission on the target queue.
+        self.check_permission(Permission::Consume, &req.queue)?;
 
         let (consumer_id, ready_rx) = dispatch::register_consumer(&self.broker, &req.queue)?;
 
@@ -304,6 +432,10 @@ impl FibpConnection {
 
     async fn handle_ack(&mut self, frame: Frame) -> Result<(), FibpError> {
         let items = wire::decode_ack_request(frame.payload)?;
+        // ACL: consume permission on each queue (ack is part of consume lifecycle).
+        for item in &items {
+            self.check_permission(Permission::Consume, &item.queue)?;
+        }
         let results = dispatch::dispatch_ack(&self.broker, items).await?;
         let payload = wire::encode_ack_nack_response(&results);
         let resp = Frame::new(0, OP_ACK, frame.correlation_id, payload);
@@ -312,6 +444,10 @@ impl FibpConnection {
 
     async fn handle_nack(&mut self, frame: Frame) -> Result<(), FibpError> {
         let items = wire::decode_nack_request(frame.payload)?;
+        // ACL: consume permission on each queue (nack is part of consume lifecycle).
+        for item in &items {
+            self.check_permission(Permission::Consume, &item.queue)?;
+        }
         let results = dispatch::dispatch_nack(&self.broker, items).await?;
         let payload = wire::encode_ack_nack_response(&results);
         let resp = Frame::new(0, OP_NACK, frame.correlation_id, payload);
@@ -326,6 +462,35 @@ impl FibpConnection {
         }
         // Flow frames do not produce a response.
         Ok(())
+    }
+
+    // ----- Admin operation handler -------------------------------------------
+
+    /// Handle an admin operation frame. The payload is protobuf-encoded.
+    /// The `perm` parameter indicates the required permission type.
+    async fn handle_admin(&mut self, frame: Frame, _perm: Permission) -> Result<(), FibpError> {
+        // All admin ops require admin:* or superadmin.
+        self.check_admin_permission()?;
+
+        let result = match frame.op {
+            OP_CREATE_QUEUE => dispatch::dispatch_create_queue(&self.broker, frame.payload).await,
+            OP_DELETE_QUEUE => dispatch::dispatch_delete_queue(&self.broker, frame.payload).await,
+            OP_QUEUE_STATS => dispatch::dispatch_queue_stats(&self.broker, frame.payload).await,
+            OP_LIST_QUEUES => dispatch::dispatch_list_queues(&self.broker, frame.payload).await,
+            OP_REDRIVE => dispatch::dispatch_redrive(&self.broker, frame.payload).await,
+            _ => Err(FibpError::NotImplemented { op: frame.op }),
+        };
+
+        match result {
+            Ok(payload) => {
+                let resp = Frame::new(0, frame.op, frame.correlation_id, payload);
+                self.write_frame(resp).await
+            }
+            Err(e) => {
+                let err_frame = Frame::error(frame.correlation_id, &e.to_string());
+                self.write_frame(err_frame).await
+            }
+        }
     }
 
     // ----- Helpers -----------------------------------------------------------
@@ -366,7 +531,7 @@ impl FibpConnection {
 ///
 /// Respects credit-based flow control: only sends when `credits > 0`.
 /// Blocks on `credits_notify` when credits are exhausted.
-async fn consume_push_loop(
+pub(super) async fn consume_push_loop(
     push_tx: tokio::sync::mpsc::Sender<BytesMut>,
     max_frame_size: u32,
     mut ready_rx: tokio::sync::mpsc::Receiver<crate::broker::command::ReadyMessage>,
@@ -476,6 +641,18 @@ mod tests {
     /// Helper: start a broker backed by in-memory storage for tests.
     fn test_broker() -> Arc<Broker> {
         let config = crate::BrokerConfig::default();
+        let storage = Arc::new(crate::InMemoryEngine::new());
+        Arc::new(Broker::new(config, storage).unwrap())
+    }
+
+    /// Helper: start a broker with auth enabled.
+    fn test_broker_with_auth(bootstrap_key: &str) -> Arc<Broker> {
+        let config = crate::BrokerConfig {
+            auth: Some(crate::AuthConfig {
+                bootstrap_apikey: bootstrap_key.to_string(),
+            }),
+            ..Default::default()
+        };
         let storage = Arc::new(crate::InMemoryEngine::new());
         Arc::new(Broker::new(config, storage).unwrap())
     }
@@ -599,7 +776,160 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn not_implemented_response() {
+    async fn auth_required_when_enabled() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let broker = test_broker_with_auth("test-key-123");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+                .await
+                .unwrap();
+            conn.run().await;
+        });
+
+        let client_stream = handshake_client(addr).await;
+        let mut codec = FibpCodec::new(16_777_216);
+
+        // Try to send an enqueue without auth — should get error.
+        let req = Frame::new(0, OP_ENQUEUE, 1, Bytes::from_static(b"test"));
+        let mut send_buf = BytesMut::new();
+        codec.encode(req, &mut send_buf).unwrap();
+
+        let (mut read_half, mut write_half) = client_stream.into_split();
+        write_half.write_all(&send_buf).await.unwrap();
+
+        let mut recv_buf = BytesMut::new();
+        loop {
+            let mut tmp = [0u8; 1024];
+            let n = read_half.read(&mut tmp).await.unwrap();
+            recv_buf.extend_from_slice(&tmp[..n]);
+            if let Some(frame) = codec.decode(&mut recv_buf).unwrap() {
+                assert_eq!(frame.op, OP_ERROR, "expected error frame");
+                let msg = String::from_utf8_lossy(&frame.payload);
+                assert!(
+                    msg.contains("authentication required"),
+                    "expected auth error, got: {msg}"
+                );
+                break;
+            }
+        }
+
+        drop(write_half);
+        drop(read_half);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_success_allows_operations() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let broker = test_broker_with_auth("test-key-456");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+                .await
+                .unwrap();
+            conn.run().await;
+        });
+
+        let client_stream = handshake_client(addr).await;
+        let mut codec = FibpCodec::new(16_777_216);
+
+        // Send auth frame with correct key.
+        let auth = Frame::new(0, OP_AUTH, 1, Bytes::from_static(b"test-key-456"));
+        let mut send_buf = BytesMut::new();
+        codec.encode(auth, &mut send_buf).unwrap();
+
+        let (mut read_half, mut write_half) = client_stream.into_split();
+        write_half.write_all(&send_buf).await.unwrap();
+
+        // Read auth success response.
+        let mut recv_buf = BytesMut::new();
+        loop {
+            let mut tmp = [0u8; 1024];
+            let n = read_half.read(&mut tmp).await.unwrap();
+            recv_buf.extend_from_slice(&tmp[..n]);
+            if let Some(frame) = codec.decode(&mut recv_buf).unwrap() {
+                assert_eq!(frame.op, OP_AUTH, "expected auth response");
+                assert!(frame.payload.is_empty(), "auth success has empty payload");
+                break;
+            }
+        }
+
+        // Now heartbeat should work (proves the connection is still alive post-auth).
+        let ping = Frame::new(0, OP_HEARTBEAT, 99, Bytes::new());
+        send_buf.clear();
+        codec.encode(ping, &mut send_buf).unwrap();
+        write_half.write_all(&send_buf).await.unwrap();
+
+        loop {
+            let mut tmp = [0u8; 1024];
+            let n = read_half.read(&mut tmp).await.unwrap();
+            recv_buf.extend_from_slice(&tmp[..n]);
+            if let Some(frame) = codec.decode(&mut recv_buf).unwrap() {
+                assert_eq!(frame.op, OP_HEARTBEAT);
+                assert_eq!(frame.correlation_id, 99);
+                break;
+            }
+        }
+
+        drop(write_half);
+        drop(read_half);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_failure_closes_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let broker = test_broker_with_auth("correct-key");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+                .await
+                .unwrap();
+            conn.run().await;
+        });
+
+        let client_stream = handshake_client(addr).await;
+        let mut codec = FibpCodec::new(16_777_216);
+
+        // Send auth frame with wrong key.
+        let auth = Frame::new(0, OP_AUTH, 1, Bytes::from_static(b"wrong-key"));
+        let mut send_buf = BytesMut::new();
+        codec.encode(auth, &mut send_buf).unwrap();
+
+        let (mut read_half, mut write_half) = client_stream.into_split();
+        write_half.write_all(&send_buf).await.unwrap();
+
+        // Read error frame.
+        let mut recv_buf = BytesMut::new();
+        loop {
+            let mut tmp = [0u8; 1024];
+            let n = read_half.read(&mut tmp).await.unwrap();
+            if n == 0 {
+                break; // Connection closed
+            }
+            recv_buf.extend_from_slice(&tmp[..n]);
+            if let Some(frame) = codec.decode(&mut recv_buf).unwrap() {
+                assert_eq!(frame.op, OP_ERROR, "expected error frame");
+                let msg = String::from_utf8_lossy(&frame.payload);
+                assert!(msg.contains("invalid"), "expected auth failure, got: {msg}");
+                break;
+            }
+        }
+
+        drop(write_half);
+        drop(read_half);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn admin_create_queue_over_fibp() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let broker = test_broker();
@@ -615,24 +945,94 @@ mod tests {
         let client_stream = handshake_client(addr).await;
         let mut codec = FibpCodec::new(16_777_216);
 
-        // Send a create-queue frame (admin op, not implemented over FIBP).
-        let req = Frame::new(0, 0x10, 7, Bytes::from_static(b"test"));
+        // Send a CreateQueue admin frame with protobuf payload.
+        use prost::Message as ProstMsg;
+        let create_req = fila_proto::CreateQueueRequest {
+            name: "fibp-admin-queue".to_string(),
+            config: None,
+        };
+        let payload = Bytes::from(create_req.encode_to_vec());
+        let frame = Frame::new(0, OP_CREATE_QUEUE, 10, payload);
         let mut send_buf = BytesMut::new();
-        codec.encode(req, &mut send_buf).unwrap();
+        codec.encode(frame, &mut send_buf).unwrap();
+
+        let (mut read_half, mut write_half) = client_stream.into_split();
+        write_half.write_all(&send_buf).await.unwrap();
+
+        // Read the response.
+        let mut recv_buf = BytesMut::new();
+        loop {
+            let mut tmp = [0u8; 1024];
+            let n = read_half.read(&mut tmp).await.unwrap();
+            recv_buf.extend_from_slice(&tmp[..n]);
+            if let Some(frame) = codec.decode(&mut recv_buf).unwrap() {
+                assert_eq!(frame.op, OP_CREATE_QUEUE);
+                assert_eq!(frame.correlation_id, 10);
+                // Decode protobuf response.
+                let resp = fila_proto::CreateQueueResponse::decode(frame.payload).unwrap();
+                assert_eq!(resp.queue_id, "fibp-admin-queue");
+                break;
+            }
+        }
+
+        drop(write_half);
+        drop(read_half);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn admin_list_queues_over_fibp() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let broker = test_broker();
+
+        // Pre-create a queue via the scheduler.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(crate::SchedulerCommand::CreateQueue {
+                name: "list-test".to_string(),
+                config: crate::QueueConfig::new("list-test".to_string()),
+                reply: tx,
+            })
+            .unwrap();
+        rx.await.unwrap().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let conn = FibpConnection::accept(stream, 16_777_216, broker)
+                .await
+                .unwrap();
+            conn.run().await;
+        });
+
+        let client_stream = handshake_client(addr).await;
+        let mut codec = FibpCodec::new(16_777_216);
+
+        // Send ListQueues.
+        use prost::Message as ProstMsg;
+        let list_req = fila_proto::ListQueuesRequest {};
+        let payload = Bytes::from(list_req.encode_to_vec());
+        let frame = Frame::new(0, OP_LIST_QUEUES, 11, payload);
+        let mut send_buf = BytesMut::new();
+        codec.encode(frame, &mut send_buf).unwrap();
 
         let (mut read_half, mut write_half) = client_stream.into_split();
         write_half.write_all(&send_buf).await.unwrap();
 
         let mut recv_buf = BytesMut::new();
         loop {
-            let mut tmp = [0u8; 256];
+            let mut tmp = [0u8; 4096];
             let n = read_half.read(&mut tmp).await.unwrap();
             recv_buf.extend_from_slice(&tmp[..n]);
             if let Some(frame) = codec.decode(&mut recv_buf).unwrap() {
-                assert_eq!(frame.op, OP_ERROR);
-                assert_eq!(frame.correlation_id, 7);
-                let msg = String::from_utf8_lossy(&frame.payload);
-                assert!(msg.contains("not implemented"), "got: {msg}");
+                assert_eq!(frame.op, OP_LIST_QUEUES);
+                assert_eq!(frame.correlation_id, 11);
+                let resp = fila_proto::ListQueuesResponse::decode(frame.payload).unwrap();
+                let names: Vec<&str> = resp.queues.iter().map(|q| q.name.as_str()).collect();
+                assert!(
+                    names.contains(&"list-test"),
+                    "expected list-test in {names:?}"
+                );
                 break;
             }
         }
