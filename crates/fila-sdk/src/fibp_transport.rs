@@ -11,15 +11,18 @@
 //! to a separate mpsc channel.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
 use prost::Message as ProstMessage;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{Encoder, Framed};
 
 use crate::client::{ConsumeMessage, EnqueueMessage};
@@ -34,6 +37,28 @@ use crate::fibp_codec::{
 
 /// Maximum frame size for the SDK client (16 MB, matching server default).
 const MAX_FRAME_SIZE: u32 = 16_777_216;
+
+/// A consume stream returned by [`FibpTransport::consume`].
+///
+/// Wraps the mpsc receiver and optionally owns a leader transport created
+/// during a cluster leader-hint redirect. The leader transport's TCP
+/// connection is kept alive as long as this stream is live, and is dropped
+/// (closing the connection) when this stream is dropped.
+pub struct ConsumeStream {
+    inner: ReceiverStream<Result<ConsumeMessage, StatusError>>,
+    /// Keeps the leader transport alive for the duration of the consume
+    /// session when a cluster redirect was performed. `None` for direct
+    /// (non-redirected) consumes.
+    _leader_transport: Option<FibpTransport>,
+}
+
+impl Stream for ConsumeStream {
+    type Item = Result<ConsumeMessage, StatusError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
 
 /// Initial credits granted to the server when opening a consume stream.
 const INITIAL_CREDITS: u32 = 64;
@@ -86,10 +111,6 @@ struct FibpTransportInner {
     /// TCP connection is closed immediately when the transport is dropped,
     /// rather than waiting for the writer channel close to propagate.
     io_task: tokio::task::JoinHandle<()>,
-    /// When consume redirects to a leader node, the leader transport is kept
-    /// alive here so its IO loop and TCP connection persist for the duration
-    /// of the consume session.
-    leader_transport: Mutex<Option<FibpTransport>>,
 }
 
 impl Drop for FibpTransportInner {
@@ -292,7 +313,6 @@ impl FibpTransport {
                 next_correlation_id: AtomicU32::new(1),
                 consume_queue,
                 io_task,
-                leader_transport: Mutex::new(None),
                 connect_config,
             }),
         };
@@ -465,10 +485,11 @@ impl FibpTransport {
     /// requested queue, the server returns a `leader_hint:<addr>` error.
     /// This method transparently opens a new connection to the leader and
     /// returns a consume stream from that connection.
-    pub async fn consume(
-        &self,
-        queue: &str,
-    ) -> Result<mpsc::Receiver<Result<ConsumeMessage, StatusError>>, ConsumeError> {
+    ///
+    /// The returned [`ConsumeStream`] owns any leader transport created
+    /// during a redirect. Dropping the stream closes the push receiver and,
+    /// for redirected sessions, tears down the leader TCP connection.
+    pub async fn consume(&self, queue: &str) -> Result<ConsumeStream, ConsumeError> {
         // Set up push channel BEFORE sending the request — the server starts
         // pushing messages immediately after processing OP_CONSUME, and those
         // frames would be dropped if consume_push_tx isn't ready.
@@ -481,7 +502,10 @@ impl FibpTransport {
         match self.request(frame).await {
             Ok(_response) => {
                 // Successfully opened consume on this node.
-                Ok(push_rx)
+                Ok(ConsumeStream {
+                    inner: ReceiverStream::new(push_rx),
+                    _leader_transport: None,
+                })
             }
             Err(StatusError::Internal(ref msg)) if msg.starts_with("leader_hint:") => {
                 // Not the leader — tear down the push channel we pre-set on self.
@@ -523,23 +547,42 @@ impl FibpTransport {
                         other => ConsumeError::Status(other),
                     })?;
 
-                // Keep the leader transport alive for the duration of the
-                // consume session. Without this, the leader transport would
-                // be dropped at the end of this block, aborting its IO loop
-                // and closing the TCP connection to the leader.
-                {
-                    let mut lt = self.inner.leader_transport.lock().await;
-                    *lt = Some(leader_transport);
-                }
-
-                Ok(leader_push_rx)
+                // Bundle the leader transport into the stream so it stays alive
+                // exactly as long as the consume session. When the stream is
+                // dropped the leader transport is dropped too, closing the TCP
+                // connection immediately rather than leaking it until the
+                // enclosing client transport is dropped.
+                Ok(ConsumeStream {
+                    inner: ReceiverStream::new(leader_push_rx),
+                    _leader_transport: Some(leader_transport),
+                })
             }
             Err(StatusError::Internal(ref msg))
                 if msg.contains("not found") || msg.contains("queue") =>
             {
+                // Tear down the pre-set push channel on error.
+                {
+                    let mut cpt = self.inner.consume_push_tx.lock().await;
+                    *cpt = None;
+                }
+                {
+                    let mut cq = self.inner.consume_queue.lock().await;
+                    *cq = None;
+                }
                 Err(ConsumeError::QueueNotFound(msg.clone()))
             }
-            Err(other) => Err(ConsumeError::Status(other)),
+            Err(other) => {
+                // Tear down the pre-set push channel on error.
+                {
+                    let mut cpt = self.inner.consume_push_tx.lock().await;
+                    *cpt = None;
+                }
+                {
+                    let mut cq = self.inner.consume_queue.lock().await;
+                    *cq = None;
+                }
+                Err(ConsumeError::Status(other))
+            }
         }
     }
 

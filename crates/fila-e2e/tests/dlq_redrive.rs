@@ -59,9 +59,35 @@ async fn e2e_dlq_redrive() {
     drop(stream);
     drop(client1);
 
-    // Wait for the server to detect TCP close, deregister the consumer,
-    // and for the scheduler to finish routing to DLQ.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Poll until the source queue has no active consumers (server detected the
+    // TCP close and deregistered client1) and the DLQ has at least one message
+    // (scheduler finished routing the nacked message to DLQ). Polling is
+    // deterministic; a fixed sleep would be timing-dependent.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        // First confirm client1's consumer is gone from the source queue.
+        let src_inspect =
+            helpers::cli_run(server.addr(), &["queue", "inspect", "redrive-src"]);
+        if !src_inspect.stdout.contains("Active consumers:     0") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for source queue consumer to deregister"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        // Then confirm the message arrived in the DLQ.
+        let dlq_inspect =
+            helpers::cli_run(server.addr(), &["queue", "inspect", "redrive-src.dlq"]);
+        if dlq_inspect.success && dlq_inspect.stdout.contains("Depth:                1") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for message to be routed to DLQ"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     // --- Redrive via CLI ---
     let redrive = helpers::cli_run(server.addr(), &["redrive", "redrive-src.dlq"]);
