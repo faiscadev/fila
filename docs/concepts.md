@@ -183,7 +183,7 @@ Redrive moves pending (non-leased) messages from the DLQ back to the original so
 
 ## Runtime configuration
 
-The broker maintains a key-value configuration store that persists across restarts. Values are accessible from Lua scripts via `fila.get(key)` and managed through the CLI or gRPC API.
+The broker maintains a key-value configuration store that persists across restarts. Values are accessible from Lua scripts via `fila.get(key)` and managed through the CLI or API.
 
 ```sh
 fila config set feature:new_flow enabled

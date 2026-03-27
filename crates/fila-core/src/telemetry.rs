@@ -30,7 +30,7 @@ impl TelemetryGuard {
 
 /// Initialize telemetry: structured logging + optional OTel export.
 ///
-/// When `config.otlp_endpoint` is set, an OTLP gRPC exporter is configured
+/// When `config.otlp_endpoint` is set, an OTLP exporter is configured
 /// for both traces and metrics. When absent, only the tracing-subscriber
 /// fmt layer is installed (plain logging, no export).
 ///
@@ -136,7 +136,7 @@ fn init_otel_pipeline(
 
     opentelemetry::global::set_meter_provider(meter_provider.clone());
 
-    // Set W3C TraceContext propagator for gRPC metadata extraction/injection
+    // Set W3C TraceContext propagator for trace context extraction/injection
     opentelemetry::global::set_text_map_propagator(
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );

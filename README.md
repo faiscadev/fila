@@ -48,12 +48,8 @@ Once the broker is running on `localhost:5555`:
 # Create a queue
 fila queue create orders
 
-# Enqueue a message (via any gRPC client — grpcurl shown here)
-grpcurl -plaintext -d '{
-  "queue": "orders",
-  "headers": {"tenant": "acme"},
-  "payload": "aGVsbG8="
-}' localhost:5555 fila.v1.FilaService/Enqueue
+# Enqueue a message
+fila enqueue orders --header tenant=acme --payload hello
 
 # Check queue stats
 fila queue inspect orders
@@ -75,14 +71,12 @@ Enqueue messages from two tenants — one sends 100x more than the other:
 ```sh
 # Noisy tenant: 100 messages
 for i in $(seq 1 100); do
-  grpcurl -plaintext -d "{\"queue\":\"fair-demo\",\"headers\":{\"tenant\":\"noisy\"},\"payload\":\"$(echo -n msg-$i | base64)\"}" \
-    localhost:5555 fila.v1.FilaService/Enqueue
+  fila enqueue fair-demo --header tenant=noisy --payload "msg-$i"
 done
 
 # Quiet tenant: 5 messages
 for i in $(seq 1 5); do
-  grpcurl -plaintext -d "{\"queue\":\"fair-demo\",\"headers\":{\"tenant\":\"quiet\"},\"payload\":\"$(echo -n msg-$i | base64)\"}" \
-    localhost:5555 fila.v1.FilaService/Enqueue
+  fila enqueue fair-demo --header tenant=quiet --payload "msg-$i"
 done
 ```
 
@@ -162,15 +156,15 @@ See [docs/configuration.md](docs/configuration.md) for all options.
 
 ## API
 
-Fila exposes two gRPC services on the same port:
+Fila exposes two service groups on port 5555 via FIBP (Fila Binary Protocol):
 
-**Hot path** (`fila.v1.FilaService`) — for producers and consumers:
+**Hot path** — for producers and consumers:
 - `Enqueue` — add a message to a queue
 - `Consume` — server-streaming delivery of messages
 - `Ack` — acknowledge successful processing
 - `Nack` — reject a message (triggers `on_failure` hook)
 
-**Admin** (`fila.v1.FilaAdmin`) — for operators and the CLI:
+**Admin** — for operators and the CLI:
 - `CreateQueue`, `DeleteQueue`, `ListQueues`
 - `SetConfig`, `GetConfig`, `ListConfig`
 - `GetStats` — queue depth, in-flight, per-key fairness stats
@@ -180,7 +174,7 @@ See [docs/api-reference.md](docs/api-reference.md) for the full reference, and [
 
 ## Architecture
 
-Fila uses a single-threaded scheduler core with multi-threaded I/O (inspired by Redis). The scheduler loop processes commands from a channel, making scheduling decisions without locks. gRPC handlers and consumer delivery run on tokio's thread pool and communicate with the scheduler through bounded channels.
+Fila uses a single-threaded scheduler core with multi-threaded I/O (inspired by Redis). The scheduler loop processes commands from a channel, making scheduling decisions without locks. FIBP connection handlers and consumer delivery run on tokio's thread pool and communicate with the scheduler through bounded channels.
 
 Data is persisted in RocksDB with crash recovery on startup — no messages are lost.
 
@@ -189,7 +183,7 @@ Data is persisted in RocksDB with crash recovery on startup — no messages are 
 ### Prerequisites
 
 - Rust 1.75+ (stable)
-- `protoc` (protobuf compiler)
+- `protoc` (protobuf compiler, for cluster message code generation)
 - System libraries for RocksDB (usually installed automatically; on some systems you may need `libclang` and `cmake`)
 
 ```sh

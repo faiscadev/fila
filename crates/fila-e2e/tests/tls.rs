@@ -121,7 +121,7 @@ async fn tls_plaintext_client_is_rejected() {
     // Connect using http:// (no TLS) — the server speaks TLS, so this must fail.
     let plaintext_addr = https_addr.replace("https://", "http://");
 
-    // tonic's connect() is lazy by default. We need to actually attempt an RPC
+    // The SDK connect() is lazy by default. We need to actually attempt an RPC
     // to trigger the TLS handshake failure.
     let connect_result = fila_sdk::FilaClient::connect(&plaintext_addr).await;
 

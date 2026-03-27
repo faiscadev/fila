@@ -41,8 +41,8 @@ enum RouteKey {
 }
 
 /// The broker owns the scheduler threads and routes commands through
-/// the `ShardRouter`. IO threads (gRPC handlers) send commands through
-/// `send_command()`, which routes each command to the correct shard
+/// the `ShardRouter`. IO threads (FIBP connection handlers) send commands
+/// through `send_command()`, which routes each command to the correct shard
 /// based on queue name.
 ///
 /// When `shard_count` is 1 (the default), behavior is identical to the
@@ -155,7 +155,7 @@ impl Broker {
         match cmd {
             SchedulerCommand::Enqueue { messages, .. } => {
                 // Route by the first message's queue. In practice, batches target
-                // one queue. Multi-queue batches are split at the gRPC layer.
+                // one queue. Multi-queue batches are split at the FIBP layer.
                 RouteKey::Queue(
                     messages
                         .first()

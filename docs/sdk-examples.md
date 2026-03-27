@@ -54,46 +54,10 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 ```
 
-### Rust with FIBP transport
-
-FIBP (Fila Binary Protocol) is a high-throughput binary transport that runs alongside gRPC on a separate TCP port. Use `with_fibp()` on `ConnectOptions` to connect via FIBP instead of gRPC:
+### Rust with API key authentication
 
 ```rust
-use std::collections::HashMap;
-use std::time::Duration;
-
-use fila_sdk::{ConnectOptions, FilaClient};
-use tokio_stream::StreamExt;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Connect via FIBP (address is the FIBP TCP port, not the gRPC port)
-    let opts = ConnectOptions::new("127.0.0.1:5557").with_fibp();
-    let client = FilaClient::connect_with_options(opts).await?;
-
-    // The API is identical to gRPC — same methods, same types
-    let mut headers = HashMap::new();
-    headers.insert("tenant".to_string(), "acme".to_string());
-    let id = client.enqueue("demo", headers, b"hello".to_vec()).await?;
-    println!("enqueued: {id}");
-
-    let mut stream = client.consume("demo").await?;
-    let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
-        .await??
-        .expect("stream error");
-
-    println!("received: {} ({})", msg.id, String::from_utf8_lossy(&msg.payload));
-    client.ack("demo", &msg.id).await?;
-
-    Ok(())
-}
-```
-
-With API key authentication:
-
-```rust
-let opts = ConnectOptions::new("127.0.0.1:5557")
-    .with_fibp()
+let opts = ConnectOptions::new("127.0.0.1:5555")
     .with_api_key("my-secret-key");
 let client = FilaClient::connect_with_options(opts).await?;
 ```

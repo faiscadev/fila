@@ -278,7 +278,7 @@ async fn admin_operations_require_admin_permission() {
         "create queue with produce-only key should fail; stdout={} stderr={}",
         out.stdout, out.stderr
     );
-    // The CLI wraps the gRPC PERMISSION_DENIED status as "Error: key does not have admin permission".
+    // The CLI wraps the PERMISSION_DENIED status as "Error: key does not have admin permission".
     assert!(
         out.stderr.contains("admin permission"),
         "expected admin permission error, got: {}",

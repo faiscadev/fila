@@ -39,7 +39,7 @@ impl FibpListener {
     /// Bind on the configured address and begin accepting FIBP connections.
     ///
     /// When `tls_params` is `Some`, all connections are TLS-wrapped using
-    /// the same cert/key/CA as the gRPC transport.
+    /// the configured cert/key/CA.
     ///
     /// Returns immediately after binding; the accept loop runs in a spawned
     /// tokio task. Use the returned handle to query the local address and to

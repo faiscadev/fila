@@ -1,6 +1,6 @@
 # API Reference
 
-Fila exposes two gRPC services on the same port (default `5555`). Proto definitions are in [`proto/fila/v1/`](../proto/fila/v1/).
+Fila exposes two service groups on the same port (default `5555`) via FIBP (Fila Binary Protocol). Protobuf message definitions are in [`proto/fila/v1/`](../proto/fila/v1/).
 
 ## Hot-path service (`fila.v1.FilaService`)
 
@@ -88,7 +88,7 @@ rpc Consume(ConsumeRequest) returns (stream ConsumeResponse)
 The stream stays open until the client disconnects. Messages are delivered as they become available — the stream blocks when no messages are ready.
 
 **Errors:**
-| gRPC Status | Condition |
+| Error Status | Condition |
 |-------------|-----------|
 | `NOT_FOUND` | Queue does not exist |
 
@@ -204,7 +204,7 @@ rpc CreateQueue(CreateQueueRequest) returns (CreateQueueResponse)
 | `queue_id` | string | Queue identifier |
 
 **Errors:**
-| gRPC Status | Condition |
+| Error Status | Condition |
 |-------------|-----------|
 | `ALREADY_EXISTS` | Queue with that name already exists |
 
@@ -222,7 +222,7 @@ rpc DeleteQueue(DeleteQueueRequest) returns (DeleteQueueResponse)
 | `queue` | string | Queue name |
 
 **Errors:**
-| gRPC Status | Condition |
+| Error Status | Condition |
 |-------------|-----------|
 | `NOT_FOUND` | Queue does not exist |
 
@@ -280,7 +280,7 @@ rpc GetConfig(GetConfigRequest) returns (GetConfigResponse)
 | `value` | string | Configuration value |
 
 **Errors:**
-| gRPC Status | Condition |
+| Error Status | Condition |
 |-------------|-----------|
 | `NOT_FOUND` | Key does not exist |
 
@@ -350,7 +350,7 @@ rpc GetStats(GetStatsRequest) returns (GetStatsResponse)
 | `burst` | double | Maximum bucket capacity |
 
 **Errors:**
-| gRPC Status | Condition |
+| Error Status | Condition |
 |-------------|-----------|
 | `NOT_FOUND` | Queue does not exist |
 
@@ -376,7 +376,7 @@ rpc Redrive(RedriveRequest) returns (RedriveResponse)
 Only pending (non-leased) messages are redriven. Leased messages in the DLQ are skipped to avoid interfering with active consumers.
 
 **Errors:**
-| gRPC Status | Condition |
+| Error Status | Condition |
 |-------------|-----------|
 | `NOT_FOUND` | DLQ does not exist |
 

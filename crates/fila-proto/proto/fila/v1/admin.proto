@@ -2,7 +2,6 @@ syntax = "proto3";
 package fila.v1;
 
 // Admin message types used by FIBP admin operations (protobuf-encoded payloads).
-// The gRPC service definitions have been removed — FIBP is the sole transport.
 
 message CreateQueueRequest {
   string name = 1;

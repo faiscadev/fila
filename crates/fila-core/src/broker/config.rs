@@ -178,7 +178,7 @@ pub struct SchedulerConfig {
     /// Maximum number of messages to batch in a single `ConsumeResponse`
     /// frame on the delivery stream. When multiple messages are immediately
     /// available for a consumer, the server collects up to this many and
-    /// sends them in one gRPC frame to amortize HTTP/2 framing overhead.
+    /// sends them in one FIBP frame to amortize framing overhead.
     /// Default: 10.
     pub delivery_batch_max_messages: usize,
     /// Number of scheduler threads (default: 1 for backward compatibility).
@@ -210,7 +210,7 @@ pub struct LuaConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct TelemetryConfig {
-    /// OTLP gRPC endpoint (e.g., "http://localhost:4317").
+    /// OTLP endpoint (e.g., "http://localhost:4317").
     /// When absent, no metrics or traces are exported.
     pub otlp_endpoint: Option<String>,
     /// OTel service name reported in traces and metrics.

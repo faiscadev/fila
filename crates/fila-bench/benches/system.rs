@@ -173,7 +173,7 @@ async fn run_benchmarks() {
         eprintln!("[S3] DRR scheduler throughput...");
         subsystem::bench_drr(&mut subsystem_results);
 
-        eprintln!("[S4] gRPC round-trip overhead...");
+        eprintln!("[S4] FIBP round-trip overhead...");
         subsystem::bench_fibp_overhead(&server, &mut subsystem_results).await;
 
         eprintln!("[S5] Lua execution throughput...");

@@ -8,9 +8,9 @@ spec:
   type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: grpc
+      targetPort: fibp
       protocol: TCP
-      name: grpc
+      name: fibp
     {{- if .Values.cluster.enabled }}
     - port: {{ .Values.cluster.port }}
       targetPort: cluster
@@ -33,8 +33,8 @@ spec:
   clusterIP: None
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: grpc
-      name: grpc
+      targetPort: fibp
+      name: fibp
     - port: {{ .Values.cluster.port }}
       targetPort: cluster
       name: cluster

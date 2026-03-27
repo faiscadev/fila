@@ -53,8 +53,8 @@ make flamegraph
 
 | Workload | Description |
 |----------|-------------|
-| `enqueue-only` | Pure enqueue throughput. Measures the write path: gRPC receive, storage write, DRR scheduling. |
-| `consume-only` | Pre-fills the queue, then profiles consume + ack. Measures the read path: DRR delivery, gRPC streaming, ack processing. |
+| `enqueue-only` | Pure enqueue throughput. Measures the write path: FIBP receive, storage write, DRR scheduling. |
+| `consume-only` | Pre-fills the queue, then profiles consume + ack. Measures the read path: DRR delivery, FIBP streaming, ack processing. |
 | `lifecycle` | Concurrent producers and consumers. Realistic mixed workload. |
 | `batch-enqueue` | Enqueue with multi-message batching enabled. Profiles the accumulator and unified Enqueue RPC path with multiple messages per request. |
 
@@ -100,13 +100,13 @@ If frames under `rocksdb::` dominate the flamegraph, the storage layer is the bo
 
 Possible actions: tune RocksDB block cache size, adjust write buffer settings, check if compaction is keeping up.
 
-**Wide tonic/hyper stacks**
+**Wide FIBP/codec stacks**
 
-If frames under `tonic::` or `hyper::` are wide, gRPC serialization or HTTP/2 framing is significant. Look for:
+If frames under `fibp::` or `codec::` are wide, FIBP framing or serialization is significant. Look for:
 
 - `prost::Message::encode` / `decode` — protobuf serialization overhead
-- `h2::` — HTTP/2 frame processing
-- `tonic::transport::` — connection management
+- `fibp::codec::` — frame encode/decode processing
+- `fibp::connection::` — connection management
 
 Possible actions: enable batching to amortize per-message overhead, check if message payloads are unnecessarily large.
 
