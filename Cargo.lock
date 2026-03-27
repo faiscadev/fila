@@ -1293,6 +1293,7 @@ name = "fila-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "fila-fibp",
  "fila-sdk",
  "tokio",
 ]
@@ -1304,6 +1305,7 @@ dependencies = [
  "bytes",
  "criterion",
  "crossbeam-channel",
+ "fila-fibp",
  "fila-proto",
  "lasso",
  "mlua",
@@ -1339,14 +1341,22 @@ name = "fila-e2e"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "fila-proto",
+ "fila-fibp",
  "fila-sdk",
- "prost",
  "rcgen",
  "rustls",
  "tempfile",
  "tokio",
  "tokio-stream",
+]
+
+[[package]]
+name = "fila-fibp"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "thiserror 1.0.69",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1366,8 +1376,7 @@ name = "fila-sdk"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "fila-proto",
- "prost",
+ "fila-fibp",
  "rustls-native-certs",
  "rustls-pemfile",
  "tempfile",

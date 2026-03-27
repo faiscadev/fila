@@ -23,16 +23,17 @@ use crate::broker::auth::{CallerKey, Permission};
 use crate::broker::Broker;
 use crate::cluster::ClusterHandle;
 
-use super::codec::{
+use fila_fibp::codec::{
     FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_AUTH, OP_AUTH_CREATE_KEY, OP_AUTH_GET_ACL,
     OP_AUTH_LIST_KEYS, OP_AUTH_REVOKE_KEY, OP_AUTH_SET_ACL, OP_CONFIG_GET, OP_CONFIG_LIST,
     OP_CONFIG_SET, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE, OP_ENQUEUE, OP_FLOW, OP_GOAWAY,
     OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_QUEUE_STATS, OP_REDRIVE,
 };
+use fila_fibp::wire;
+use fila_fibp::MAGIC;
+
 use super::dispatch;
 use super::error::FibpError;
-use super::wire;
-use super::MAGIC;
 
 /// A single FIBP client connection.
 ///
@@ -374,7 +375,7 @@ impl FibpConnection {
             return self.write_frame(err_frame).await;
         }
         let results = dispatch::dispatch_enqueue(&self.broker, self.cluster.as_ref(), req).await?;
-        let payload = wire::encode_enqueue_response(&results);
+        let payload = wire::encode_enqueue_response(&results)?;
         let resp = Frame::new(0, OP_ENQUEUE, frame.correlation_id, payload);
         self.write_frame(resp).await
     }
@@ -469,7 +470,7 @@ impl FibpConnection {
             }
         }
         let results = dispatch::dispatch_ack(&self.broker, self.cluster.as_ref(), items).await?;
-        let payload = wire::encode_ack_nack_response(&results);
+        let payload = wire::encode_ack_nack_response(&results)?;
         let resp = Frame::new(0, OP_ACK, frame.correlation_id, payload);
         self.write_frame(resp).await
     }
@@ -484,7 +485,7 @@ impl FibpConnection {
             }
         }
         let results = dispatch::dispatch_nack(&self.broker, self.cluster.as_ref(), items).await?;
-        let payload = wire::encode_ack_nack_response(&results);
+        let payload = wire::encode_ack_nack_response(&results)?;
         let resp = Frame::new(0, OP_NACK, frame.correlation_id, payload);
         self.write_frame(resp).await
     }
@@ -675,7 +676,13 @@ pub(super) async fn consume_push_loop(
                             payload: rm.payload,
                         })
                         .collect();
-                    let payload = wire::encode_consume_push(&push_messages);
+                    let payload = match wire::encode_consume_push(&push_messages) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!(peer = %peer, error = %e, "consume push wire encode error");
+                            return;
+                        }
+                    };
                     let frame = Frame::new(FLAG_STREAM, OP_CONSUME, 0, payload);
                     let mut buf = BytesMut::new();
                     let mut enc = FibpCodec::new(max_frame_size);
@@ -710,7 +717,13 @@ pub(super) async fn consume_push_loop(
             })
             .collect();
 
-        let payload = wire::encode_consume_push(&push_messages);
+        let payload = match wire::encode_consume_push(&push_messages) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(peer = %peer, error = %e, "consume push wire encode error");
+                return;
+            }
+        };
         let frame = Frame::new(FLAG_STREAM, OP_CONSUME, 0, payload);
 
         // Encode the frame into bytes.
@@ -754,9 +767,9 @@ async fn write_frame_raw(
 
 #[cfg(test)]
 mod tests {
-    use super::super::codec::OP_ERROR;
     use super::*;
     use crate::fibp::MAGIC;
+    use fila_fibp::codec::OP_ERROR;
     use tokio::net::TcpListener;
     use tokio_util::codec::Decoder;
 
@@ -1067,13 +1080,14 @@ mod tests {
         let client_stream = handshake_client(addr).await;
         let mut codec = FibpCodec::new(16_777_216);
 
-        // Send a CreateQueue admin frame with protobuf payload.
-        use prost::Message as ProstMsg;
-        let create_req = fila_proto::CreateQueueRequest {
+        // Send a CreateQueue admin frame with binary payload.
+        let create_req = wire::CreateQueueRequest {
             name: "fibp-admin-queue".to_string(),
-            config: None,
+            on_enqueue_script: String::new(),
+            on_failure_script: String::new(),
+            visibility_timeout_ms: 0,
         };
-        let payload = Bytes::from(create_req.encode_to_vec());
+        let payload = wire::encode_create_queue_request(&create_req).unwrap();
         let frame = Frame::new(0, OP_CREATE_QUEUE, 10, payload);
         let mut send_buf = BytesMut::new();
         codec.encode(frame, &mut send_buf).unwrap();
@@ -1090,8 +1104,8 @@ mod tests {
             if let Some(frame) = codec.decode(&mut recv_buf).unwrap() {
                 assert_eq!(frame.op, OP_CREATE_QUEUE);
                 assert_eq!(frame.correlation_id, 10);
-                // Decode protobuf response.
-                let resp = fila_proto::CreateQueueResponse::decode(frame.payload).unwrap();
+                // Decode binary response.
+                let resp = wire::decode_create_queue_response(frame.payload).unwrap();
                 assert_eq!(resp.queue_id, "fibp-admin-queue");
                 break;
             }
@@ -1130,10 +1144,8 @@ mod tests {
         let client_stream = handshake_client(addr).await;
         let mut codec = FibpCodec::new(16_777_216);
 
-        // Send ListQueues.
-        use prost::Message as ProstMsg;
-        let list_req = fila_proto::ListQueuesRequest {};
-        let payload = Bytes::from(list_req.encode_to_vec());
+        // Send ListQueues with empty payload.
+        let payload = wire::encode_list_queues_request();
         let frame = Frame::new(0, OP_LIST_QUEUES, 11, payload);
         let mut send_buf = BytesMut::new();
         codec.encode(frame, &mut send_buf).unwrap();
@@ -1149,7 +1161,7 @@ mod tests {
             if let Some(frame) = codec.decode(&mut recv_buf).unwrap() {
                 assert_eq!(frame.op, OP_LIST_QUEUES);
                 assert_eq!(frame.correlation_id, 11);
-                let resp = fila_proto::ListQueuesResponse::decode(frame.payload).unwrap();
+                let resp = wire::decode_list_queues_response(frame.payload).unwrap();
                 let names: Vec<&str> = resp.queues.iter().map(|q| q.name.as_str()).collect();
                 assert!(
                     names.contains(&"list-test"),

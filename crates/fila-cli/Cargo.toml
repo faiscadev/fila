@@ -16,5 +16,6 @@ path = "src/main.rs"
 
 [dependencies]
 fila-sdk.workspace = true
+fila-fibp.workspace = true
 clap.workspace = true
 tokio.workspace = true

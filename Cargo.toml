@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/fila-proto",
+    "crates/fila-fibp",
     "crates/fila-core",
     "crates/fila-server",
     "crates/fila-cli",
@@ -60,5 +61,6 @@ http = "1"
 pin-project-lite = "0.2"
 
 fila-proto = { path = "crates/fila-proto", version = "0.1.0" }
+fila-fibp = { path = "crates/fila-fibp", version = "0.1.0" }
 fila-core = { path = "crates/fila-core", version = "0.1.0" }
 fila-sdk = { path = "crates/fila-sdk", version = "0.1.0" }

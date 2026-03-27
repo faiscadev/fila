@@ -449,36 +449,35 @@ async fn e2e_fibp_admin_create_and_list_queues() {
     let mut stream = TcpStream::connect(&fibp_addr).await.unwrap();
     handshake(&mut stream).await;
 
-    // Create a queue via FIBP admin op (protobuf payload).
-    use prost::Message;
-    let create_req = fila_proto::CreateQueueRequest {
+    // Create a queue via FIBP admin op (binary payload).
+    let create_req = fila_fibp::wire::CreateQueueRequest {
         name: "fibp-admin-test".to_string(),
-        config: None,
+        on_enqueue_script: String::new(),
+        on_failure_script: String::new(),
+        visibility_timeout_ms: 0,
     };
-    let mut proto_buf = Vec::new();
-    create_req.encode(&mut proto_buf).unwrap();
+    let create_payload = fila_fibp::wire::encode_create_queue_request(&create_req).unwrap();
 
-    let create_frame = encode_frame(0, OP_CREATE_QUEUE, 10, &proto_buf);
+    let create_frame = encode_frame(0, OP_CREATE_QUEUE, 10, &create_payload);
     stream.write_all(&create_frame).await.unwrap();
 
     let (_, op, corr_id, payload) = read_frame(&mut stream).await;
     assert_eq!(op, OP_CREATE_QUEUE);
     assert_eq!(corr_id, 10);
-    let create_resp = fila_proto::CreateQueueResponse::decode(&payload[..]).unwrap();
+    let create_resp =
+        fila_fibp::wire::decode_create_queue_response(bytes::Bytes::from(payload)).unwrap();
     assert_eq!(create_resp.queue_id, "fibp-admin-test");
 
-    // List queues via FIBP admin op.
-    let list_req = fila_proto::ListQueuesRequest {};
-    let mut list_buf = Vec::new();
-    list_req.encode(&mut list_buf).unwrap();
-
-    let list_frame = encode_frame(0, OP_LIST_QUEUES, 11, &list_buf);
+    // List queues via FIBP admin op (empty payload).
+    let list_payload = fila_fibp::wire::encode_list_queues_request();
+    let list_frame = encode_frame(0, OP_LIST_QUEUES, 11, &list_payload);
     stream.write_all(&list_frame).await.unwrap();
 
     let (_, op, corr_id, payload) = read_frame(&mut stream).await;
     assert_eq!(op, OP_LIST_QUEUES);
     assert_eq!(corr_id, 11);
-    let list_resp = fila_proto::ListQueuesResponse::decode(&payload[..]).unwrap();
+    let list_resp =
+        fila_fibp::wire::decode_list_queues_response(bytes::Bytes::from(payload)).unwrap();
     let names: Vec<&str> = list_resp.queues.iter().map(|q| q.name.as_str()).collect();
     assert!(
         names.contains(&"fibp-admin-test"),

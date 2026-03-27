@@ -1,22 +1,22 @@
-//! FIBP command dispatcher — translates decoded wire payloads into
+//! FIBP command dispatcher -- translates decoded wire payloads into
 //! `SchedulerCommand` variants and returns wire-encodable results.
 //!
-//! The dispatcher holds an `Arc<Broker>` for sending commands.  When a
+//! The dispatcher holds an `Arc<Broker>` for sending commands. When a
 //! `ClusterHandle` is available (cluster mode), admin operations that
 //! mutate cluster state (create/delete queue) are routed through the
 //! meta Raft for consensus, and read operations (stats, list queues)
 //! are enriched with cluster metadata (leader node ID, replication count).
 //!
-//! Data operations use custom binary wire encoding (see `wire` module).
-//! Admin operations use protobuf encoding (reusing proto message types
-//! from `fila_proto`) for schema evolution flexibility.
+//! All operations (data and admin) use the shared binary wire encoding
+//! from the `fila_fibp` crate.
 
 use std::sync::Arc;
 
 use bytes::Bytes;
-use prost::Message as ProstMessage;
 use tracing::warn;
 use uuid::Uuid;
+
+use fila_fibp::wire;
 
 use crate::broker::auth::CallerKey;
 use crate::broker::command::{ReadyMessage, SchedulerCommand};
@@ -26,7 +26,6 @@ use crate::error::{AckError, ConfigError, EnqueueError, NackError};
 use crate::message::Message;
 
 use super::error::FibpError;
-use super::wire;
 
 /// Dispatch FIBP enqueue requests to the scheduler and return wire results.
 ///
@@ -605,14 +604,14 @@ async fn select_members_and_leader(
     (selected, preferred)
 }
 
-/// Dispatch a CreateQueue request. Payload is a protobuf `CreateQueueRequest`.
+/// Dispatch a CreateQueue request. Payload is a binary `CreateQueueRequest`.
 pub async fn dispatch_create_queue(
     broker: &Arc<Broker>,
     cluster: Option<&Arc<ClusterHandle>>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
-    let req = fila_proto::CreateQueueRequest::decode(payload)?;
+    let req = wire::decode_create_queue_request(payload)?;
 
     if req.name.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -623,8 +622,7 @@ pub async fn dispatch_create_queue(
     // Check queue-scoped admin permission.
     check_queue_admin(broker, caller, &req.name)?;
 
-    let proto_config = req.config.unwrap_or_default();
-    let visibility_timeout_ms = match proto_config.visibility_timeout_ms {
+    let visibility_timeout_ms = match req.visibility_timeout_ms {
         0 => crate::queue::QueueConfig::DEFAULT_VISIBILITY_TIMEOUT_MS,
         v if v < 1_000 => {
             return Err(FibpError::InvalidPayload {
@@ -636,15 +634,15 @@ pub async fn dispatch_create_queue(
 
     let config = crate::queue::QueueConfig {
         name: req.name.clone(),
-        on_enqueue_script: if proto_config.on_enqueue_script.is_empty() {
+        on_enqueue_script: if req.on_enqueue_script.is_empty() {
             None
         } else {
-            Some(proto_config.on_enqueue_script)
+            Some(req.on_enqueue_script)
         },
-        on_failure_script: if proto_config.on_failure_script.is_empty() {
+        on_failure_script: if req.on_failure_script.is_empty() {
             None
         } else {
-            Some(proto_config.on_failure_script)
+            Some(req.on_failure_script)
         },
         visibility_timeout_ms,
         dlq_queue_id: None,
@@ -670,8 +668,8 @@ pub async fn dispatch_create_queue(
 
         match resp {
             ClusterResponse::CreateQueueGroup { queue_id } => {
-                let resp = fila_proto::CreateQueueResponse { queue_id };
-                Ok(Bytes::from(resp.encode_to_vec()))
+                let resp = wire::CreateQueueResponse { queue_id };
+                Ok(wire::encode_create_queue_response(&resp)?)
             }
             ClusterResponse::Error { message } => {
                 Err(FibpError::InvalidPayload { reason: message })
@@ -698,19 +696,19 @@ pub async fn dispatch_create_queue(
                 reason: e.to_string(),
             })?;
 
-        let resp = fila_proto::CreateQueueResponse { queue_id };
-        Ok(Bytes::from(resp.encode_to_vec()))
+        let resp = wire::CreateQueueResponse { queue_id };
+        Ok(wire::encode_create_queue_response(&resp)?)
     }
 }
 
-/// Dispatch a DeleteQueue request. Payload is a protobuf `DeleteQueueRequest`.
+/// Dispatch a DeleteQueue request. Payload is a binary `DeleteQueueRequest`.
 pub async fn dispatch_delete_queue(
     broker: &Arc<Broker>,
     cluster: Option<&Arc<ClusterHandle>>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
-    let req = fila_proto::DeleteQueueRequest::decode(payload)?;
+    let req = wire::decode_delete_queue_request(payload)?;
 
     if req.queue.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -731,10 +729,7 @@ pub async fn dispatch_delete_queue(
             .map_err(cluster_write_err_to_fibp)?;
 
         match resp {
-            ClusterResponse::DeleteQueueGroup => {
-                let resp = fila_proto::DeleteQueueResponse {};
-                Ok(Bytes::from(resp.encode_to_vec()))
-            }
+            ClusterResponse::DeleteQueueGroup => Ok(Bytes::new()),
             ClusterResponse::Error { message } => {
                 Err(FibpError::InvalidPayload { reason: message })
             }
@@ -759,19 +754,18 @@ pub async fn dispatch_delete_queue(
                 reason: e.to_string(),
             })?;
 
-        let resp = fila_proto::DeleteQueueResponse {};
-        Ok(Bytes::from(resp.encode_to_vec()))
+        Ok(Bytes::new())
     }
 }
 
-/// Dispatch a GetStats request. Payload is a protobuf `GetStatsRequest`.
+/// Dispatch a GetStats request. Payload is a binary `GetStatsRequest`.
 pub async fn dispatch_queue_stats(
     broker: &Arc<Broker>,
     cluster: Option<&Arc<ClusterHandle>>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
-    let req = fila_proto::GetStatsRequest::decode(payload)?;
+    let req = wire::decode_get_stats_request(payload)?;
 
     if req.queue.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -800,7 +794,7 @@ pub async fn dispatch_queue_stats(
     let per_key_stats = stats
         .per_key_stats
         .into_iter()
-        .map(|s| fila_proto::PerFairnessKeyStats {
+        .map(|s| wire::PerFairnessKeyStats {
             key: s.key,
             pending_count: s.pending_count,
             current_deficit: s.current_deficit,
@@ -811,7 +805,7 @@ pub async fn dispatch_queue_stats(
     let per_throttle_stats = stats
         .per_throttle_stats
         .into_iter()
-        .map(|s| fila_proto::PerThrottleKeyStats {
+        .map(|s| wire::PerThrottleKeyStats {
             key: s.key,
             tokens: s.tokens,
             rate_per_second: s.rate_per_second,
@@ -829,7 +823,7 @@ pub async fn dispatch_queue_stats(
         None => (0, 0),
     };
 
-    let resp = fila_proto::GetStatsResponse {
+    let resp = wire::GetStatsResponse {
         depth: stats.depth,
         in_flight: stats.in_flight,
         active_fairness_keys: stats.active_fairness_keys,
@@ -840,18 +834,15 @@ pub async fn dispatch_queue_stats(
         leader_node_id,
         replication_count,
     };
-    Ok(Bytes::from(resp.encode_to_vec()))
+    Ok(wire::encode_get_stats_response(&resp)?)
 }
 
-/// Dispatch a ListQueues request. Payload is a protobuf `ListQueuesRequest`.
+/// Dispatch a ListQueues request. Payload is binary (empty or ignored).
 pub async fn dispatch_list_queues(
     broker: &Arc<Broker>,
     cluster: Option<&Arc<ClusterHandle>>,
-    payload: Bytes,
+    _payload: Bytes,
 ) -> Result<Bytes, FibpError> {
-    // Decode for forward compatibility even though the message is currently empty.
-    let _req = fila_proto::ListQueuesRequest::decode(payload)?;
-
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     broker
         .send_command(SchedulerCommand::ListQueues { reply: reply_tx })
@@ -870,7 +861,7 @@ pub async fn dispatch_list_queues(
             Some(ch) => ch.queue_leader_id(&s.name).await,
             None => 0,
         };
-        queues.push(fila_proto::QueueInfo {
+        queues.push(wire::QueueInfo {
             name: s.name,
             depth: s.depth,
             in_flight: s.in_flight,
@@ -884,20 +875,20 @@ pub async fn dispatch_list_queues(
         None => 0,
     };
 
-    let resp = fila_proto::ListQueuesResponse {
+    let resp = wire::ListQueuesResponse {
         queues,
         cluster_node_count,
     };
-    Ok(Bytes::from(resp.encode_to_vec()))
+    Ok(wire::encode_list_queues_response(&resp)?)
 }
 
-/// Dispatch a Redrive request. Payload is a protobuf `RedriveRequest`.
+/// Dispatch a Redrive request. Payload is a binary `RedriveRequest`.
 pub async fn dispatch_redrive(
     broker: &Arc<Broker>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
-    let req = fila_proto::RedriveRequest::decode(payload)?;
+    let req = wire::decode_redrive_request(payload)?;
 
     if req.dlq_queue.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -924,17 +915,17 @@ pub async fn dispatch_redrive(
             reason: e.to_string(),
         })?;
 
-    let resp = fila_proto::RedriveResponse { redriven };
-    Ok(Bytes::from(resp.encode_to_vec()))
+    let resp = wire::RedriveResponse { redriven };
+    Ok(wire::encode_redrive_response(&resp))
 }
 
 // ---------------------------------------------------------------------------
-// Config operations — protobuf-encoded payloads
+// Config operations -- binary-encoded payloads
 // ---------------------------------------------------------------------------
 
-/// Dispatch a SetConfig request. Payload is a protobuf `SetConfigRequest`.
+/// Dispatch a SetConfig request. Payload is a binary `SetConfigRequest`.
 pub async fn dispatch_config_set(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
-    let req = fila_proto::SetConfigRequest::decode(payload)?;
+    let req = wire::decode_set_config_request(payload)?;
 
     if req.key.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -959,13 +950,12 @@ pub async fn dispatch_config_set(broker: &Arc<Broker>, payload: Bytes) -> Result
             ConfigError::Storage(s) => FibpError::Storage(s),
         })?;
 
-    let resp = fila_proto::SetConfigResponse {};
-    Ok(Bytes::from(resp.encode_to_vec()))
+    Ok(Bytes::new())
 }
 
-/// Dispatch a GetConfig request. Payload is a protobuf `GetConfigRequest`.
+/// Dispatch a GetConfig request. Payload is a binary `GetConfigRequest`.
 pub async fn dispatch_config_get(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
-    let req = fila_proto::GetConfigRequest::decode(payload)?;
+    let req = wire::decode_get_config_request(payload)?;
 
     if req.key.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -989,18 +979,18 @@ pub async fn dispatch_config_get(broker: &Arc<Broker>, payload: Bytes) -> Result
             ConfigError::Storage(s) => FibpError::Storage(s),
         })?;
 
-    let resp = fila_proto::GetConfigResponse {
+    let resp = wire::GetConfigResponse {
         value: value.unwrap_or_default(),
     };
-    Ok(Bytes::from(resp.encode_to_vec()))
+    Ok(wire::encode_get_config_response(&resp)?)
 }
 
-/// Dispatch a ListConfig request. Payload is a protobuf `ListConfigRequest`.
+/// Dispatch a ListConfig request. Payload is a binary `ListConfigRequest`.
 pub async fn dispatch_config_list(
     broker: &Arc<Broker>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
-    let req = fila_proto::ListConfigRequest::decode(payload)?;
+    let req = wire::decode_list_config_request(payload)?;
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     broker
@@ -1018,32 +1008,32 @@ pub async fn dispatch_config_list(
             ConfigError::Storage(s) => FibpError::Storage(s),
         })?;
 
-    let proto_entries = entries
+    let wire_entries = entries
         .iter()
-        .map(|(k, v)| fila_proto::ConfigEntry {
+        .map(|(k, v)| wire::ConfigEntry {
             key: k.clone(),
             value: v.clone(),
         })
         .collect();
 
-    let resp = fila_proto::ListConfigResponse {
-        entries: proto_entries,
+    let resp = wire::ListConfigResponse {
+        entries: wire_entries,
         total_count: entries.len() as u32,
     };
-    Ok(Bytes::from(resp.encode_to_vec()))
+    Ok(wire::encode_list_config_response(&resp)?)
 }
 
 // ---------------------------------------------------------------------------
-// Auth CRUD operations — protobuf-encoded payloads
+// Auth CRUD operations -- binary-encoded payloads
 // ---------------------------------------------------------------------------
 
-/// Dispatch a CreateApiKey request. Payload is a protobuf `CreateApiKeyRequest`.
+/// Dispatch a CreateApiKey request. Payload is a binary `CreateApiKeyRequest`.
 pub fn dispatch_auth_create_key(
     broker: &Arc<Broker>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
-    let req = fila_proto::CreateApiKeyRequest::decode(payload)?;
+    let req = wire::decode_create_api_key_request(payload)?;
 
     if req.name.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -1081,17 +1071,17 @@ pub fn dispatch_auth_create_key(
         .create_api_key(&req.name, expires_at_ms, req.is_superadmin)
         .map_err(FibpError::Storage)?;
 
-    let resp = fila_proto::CreateApiKeyResponse {
+    let resp = wire::CreateApiKeyResponse {
         key_id,
         key: token,
         is_superadmin: req.is_superadmin,
     };
-    Ok(Bytes::from(resp.encode_to_vec()))
+    Ok(wire::encode_create_api_key_response(&resp)?)
 }
 
-/// Dispatch a RevokeApiKey request. Payload is a protobuf `RevokeApiKeyRequest`.
+/// Dispatch a RevokeApiKey request. Payload is a binary `RevokeApiKeyRequest`.
 pub fn dispatch_auth_revoke_key(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
-    let req = fila_proto::RevokeApiKeyRequest::decode(payload)?;
+    let req = wire::decode_revoke_api_key_request(payload)?;
 
     if req.key_id.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -1109,19 +1099,16 @@ pub fn dispatch_auth_revoke_key(broker: &Arc<Broker>, payload: Bytes) -> Result<
         });
     }
 
-    let resp = fila_proto::RevokeApiKeyResponse {};
-    Ok(Bytes::from(resp.encode_to_vec()))
+    Ok(Bytes::new())
 }
 
-/// Dispatch a ListApiKeys request. Payload is a protobuf `ListApiKeysRequest`.
-pub fn dispatch_auth_list_keys(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
-    let _req = fila_proto::ListApiKeysRequest::decode(payload)?;
-
+/// Dispatch a ListApiKeys request. Payload is binary (empty or ignored).
+pub fn dispatch_auth_list_keys(broker: &Arc<Broker>, _payload: Bytes) -> Result<Bytes, FibpError> {
     let entries = broker.list_api_keys().map_err(FibpError::Storage)?;
 
     let keys = entries
         .into_iter()
-        .map(|e| fila_proto::ApiKeyInfo {
+        .map(|e| wire::ApiKeyInfo {
             key_id: e.key_id,
             name: e.name,
             created_at_ms: e.created_at_ms,
@@ -1130,17 +1117,17 @@ pub fn dispatch_auth_list_keys(broker: &Arc<Broker>, payload: Bytes) -> Result<B
         })
         .collect();
 
-    let resp = fila_proto::ListApiKeysResponse { keys };
-    Ok(Bytes::from(resp.encode_to_vec()))
+    let resp = wire::ListApiKeysResponse { keys };
+    Ok(wire::encode_list_api_keys_response(&resp)?)
 }
 
-/// Dispatch a SetAcl request. Payload is a protobuf `SetAclRequest`.
+/// Dispatch a SetAcl request. Payload is a binary `SetAclRequest`.
 pub fn dispatch_auth_set_acl(
     broker: &Arc<Broker>,
     caller: &Option<CallerKey>,
     payload: Bytes,
 ) -> Result<Bytes, FibpError> {
-    let req = fila_proto::SetAclRequest::decode(payload)?;
+    let req = wire::decode_set_acl_request(payload)?;
 
     if req.key_id.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -1184,13 +1171,12 @@ pub fn dispatch_auth_set_acl(
         });
     }
 
-    let resp = fila_proto::SetAclResponse {};
-    Ok(Bytes::from(resp.encode_to_vec()))
+    Ok(Bytes::new())
 }
 
-/// Dispatch a GetAcl request. Payload is a protobuf `GetAclRequest`.
+/// Dispatch a GetAcl request. Payload is a binary `GetAclRequest`.
 pub fn dispatch_auth_get_acl(broker: &Arc<Broker>, payload: Bytes) -> Result<Bytes, FibpError> {
-    let req = fila_proto::GetAclRequest::decode(payload)?;
+    let req = wire::decode_get_acl_request(payload)?;
 
     if req.key_id.is_empty() {
         return Err(FibpError::InvalidPayload {
@@ -1205,14 +1191,14 @@ pub fn dispatch_auth_get_acl(broker: &Arc<Broker>, payload: Bytes) -> Result<Byt
             let permissions = e
                 .permissions
                 .into_iter()
-                .map(|(kind, pattern)| fila_proto::AclPermission { kind, pattern })
+                .map(|(kind, pattern)| wire::AclPermission { kind, pattern })
                 .collect();
-            let resp = fila_proto::GetAclResponse {
+            let resp = wire::GetAclResponse {
                 key_id: e.key_id,
                 permissions,
                 is_superadmin: e.is_superadmin,
             };
-            Ok(Bytes::from(resp.encode_to_vec()))
+            Ok(wire::encode_get_acl_response(&resp)?)
         }
         None => Err(FibpError::InvalidPayload {
             reason: format!("api key not found: {}", req.key_id),

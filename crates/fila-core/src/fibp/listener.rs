@@ -14,12 +14,14 @@ use tokio::net::TcpListener;
 use tokio::sync::{watch, Notify};
 use tracing::{debug, info, warn};
 
-use super::codec::{
+use fila_fibp::codec::{
     OP_ACK, OP_AUTH, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE, OP_ENQUEUE, OP_FLOW, OP_GOAWAY,
     OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_QUEUE_STATS, OP_REDRIVE,
 };
+use fila_fibp::wire;
+
 use super::connection::FibpConnection;
-use super::{dispatch, error::FibpError, wire};
+use super::{dispatch, error::FibpError};
 use crate::broker::config::{FibpConfig, TlsParams};
 use crate::broker::Broker;
 use crate::cluster::ClusterHandle;
@@ -250,7 +252,7 @@ async fn handle_tls_connection(
     use tokio_stream::StreamExt as _;
     use tokio_util::codec::{Encoder, Framed};
 
-    use super::codec::{FibpCodec, Frame};
+    use fila_fibp::codec::{FibpCodec, Frame};
 
     // --- FIBP handshake over TLS ---
     let mut client_magic = [0u8; 6];
@@ -259,7 +261,7 @@ async fn handle_tls_connection(
         return;
     }
 
-    if client_magic[..4] != super::MAGIC[..4] {
+    if client_magic[..4] != fila_fibp::MAGIC[..4] {
         let goaway = Frame::goaway("invalid magic");
         let mut buf = BytesMut::new();
         let mut enc = FibpCodec::new(max_frame_size);
@@ -271,10 +273,10 @@ async fn handle_tls_connection(
     }
 
     let client_major = client_magic[4];
-    if client_major != super::MAGIC[4] {
+    if client_major != fila_fibp::MAGIC[4] {
         let goaway = Frame::goaway(&format!(
             "unsupported protocol version {client_major}.x (server supports {}.x)",
-            super::MAGIC[4]
+            fila_fibp::MAGIC[4]
         ));
         let mut buf = BytesMut::new();
         let mut enc = FibpCodec::new(max_frame_size);
@@ -285,7 +287,7 @@ async fn handle_tls_connection(
         return;
     }
 
-    if let Err(e) = stream.write_all(super::MAGIC).await {
+    if let Err(e) = stream.write_all(fila_fibp::MAGIC).await {
         warn!(peer = %peer, error = %e, "FIBP TLS write magic failed");
         return;
     }
@@ -396,8 +398,8 @@ struct TlsConsumeState {
 
 /// Write a frame to a generic `Framed` stream.
 async fn write_frame_generic<S>(
-    framed: &mut tokio_util::codec::Framed<S, super::codec::FibpCodec>,
-    frame: super::codec::Frame,
+    framed: &mut tokio_util::codec::Framed<S, fila_fibp::codec::FibpCodec>,
+    frame: fila_fibp::codec::Frame,
 ) -> Result<(), FibpError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
@@ -406,7 +408,7 @@ where
     use tokio_util::codec::Encoder;
 
     let mut buf = BytesMut::new();
-    let mut enc = super::codec::FibpCodec::new(u32::MAX);
+    let mut enc = fila_fibp::codec::FibpCodec::new(u32::MAX);
     enc.encode(frame, &mut buf)?;
     let stream = framed.get_mut();
     stream.write_all(&buf).await?;
@@ -421,21 +423,21 @@ where
 /// the underlying stream type.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_tls_frame<S>(
-    framed: &mut tokio_util::codec::Framed<S, super::codec::FibpCodec>,
+    framed: &mut tokio_util::codec::Framed<S, fila_fibp::codec::FibpCodec>,
     broker: &Arc<Broker>,
     cluster: &Option<Arc<ClusterHandle>>,
     authenticated: &mut bool,
     caller: &mut Option<crate::broker::auth::CallerKey>,
     consume_state: &mut Option<TlsConsumeState>,
     push_frame_rx: &mut Option<tokio::sync::mpsc::Receiver<BytesMut>>,
-    frame: super::codec::Frame,
+    frame: fila_fibp::codec::Frame,
     peer: std::net::SocketAddr,
     max_frame_size: u32,
 ) -> Result<(), FibpError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
-    use super::codec::Frame;
+    use fila_fibp::codec::Frame;
 
     match frame.op {
         OP_AUTH => {
@@ -495,7 +497,7 @@ where
                 }
             }
             let results = dispatch::dispatch_enqueue(broker, cluster.as_ref(), req).await?;
-            let payload = wire::encode_enqueue_response(&results);
+            let payload = wire::encode_enqueue_response(&results)?;
             let resp = Frame::new(0, OP_ENQUEUE, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await
         }
@@ -569,7 +571,7 @@ where
                 }
             }
             let results = dispatch::dispatch_ack(broker, cluster.as_ref(), items).await?;
-            let payload = wire::encode_ack_nack_response(&results);
+            let payload = wire::encode_ack_nack_response(&results)?;
             let resp = Frame::new(0, OP_ACK, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await
         }
@@ -587,7 +589,7 @@ where
                 }
             }
             let results = dispatch::dispatch_nack(broker, cluster.as_ref(), items).await?;
-            let payload = wire::encode_ack_nack_response(&results);
+            let payload = wire::encode_ack_nack_response(&results)?;
             let resp = Frame::new(0, OP_NACK, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await
         }

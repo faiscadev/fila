@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 fila-proto.workspace = true
+fila-fibp.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 bytes.workspace = true
