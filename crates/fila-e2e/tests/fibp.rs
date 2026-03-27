@@ -456,7 +456,7 @@ async fn e2e_fibp_admin_create_and_list_queues() {
         on_failure_script: String::new(),
         visibility_timeout_ms: 0,
     };
-    let create_payload = fila_fibp::wire::encode_create_queue_request(&create_req);
+    let create_payload = fila_fibp::wire::encode_create_queue_request(&create_req).unwrap();
 
     let create_frame = encode_frame(0, OP_CREATE_QUEUE, 10, &create_payload);
     stream.write_all(&create_frame).await.unwrap();
