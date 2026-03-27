@@ -66,8 +66,7 @@ async fn e2e_dlq_redrive() {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         // First confirm client1's consumer is gone from the source queue.
-        let src_inspect =
-            helpers::cli_run(server.addr(), &["queue", "inspect", "redrive-src"]);
+        let src_inspect = helpers::cli_run(server.addr(), &["queue", "inspect", "redrive-src"]);
         if !src_inspect.stdout.contains("Active consumers:     0") {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -77,8 +76,7 @@ async fn e2e_dlq_redrive() {
             continue;
         }
         // Then confirm the message arrived in the DLQ.
-        let dlq_inspect =
-            helpers::cli_run(server.addr(), &["queue", "inspect", "redrive-src.dlq"]);
+        let dlq_inspect = helpers::cli_run(server.addr(), &["queue", "inspect", "redrive-src.dlq"]);
         if dlq_inspect.success && dlq_inspect.stdout.contains("Depth:                1") {
             break;
         }
