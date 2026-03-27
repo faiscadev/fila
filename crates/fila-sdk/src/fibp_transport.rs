@@ -86,6 +86,10 @@ struct FibpTransportInner {
     /// TCP connection is closed immediately when the transport is dropped,
     /// rather than waiting for the writer channel close to propagate.
     io_task: tokio::task::JoinHandle<()>,
+    /// When consume redirects to a leader node, the leader transport is kept
+    /// alive here so its IO loop and TCP connection persist for the duration
+    /// of the consume session.
+    leader_transport: Mutex<Option<FibpTransport>>,
 }
 
 impl Drop for FibpTransportInner {
@@ -288,6 +292,7 @@ impl FibpTransport {
                 next_correlation_id: AtomicU32::new(1),
                 consume_queue,
                 io_task,
+                leader_transport: Mutex::new(None),
                 connect_config,
             }),
         };
@@ -479,6 +484,16 @@ impl FibpTransport {
                 Ok(push_rx)
             }
             Err(StatusError::Internal(ref msg)) if msg.starts_with("leader_hint:") => {
+                // Not the leader — tear down the push channel we pre-set on self.
+                {
+                    let mut cpt = self.inner.consume_push_tx.lock().await;
+                    *cpt = None;
+                }
+                {
+                    let mut cq = self.inner.consume_queue.lock().await;
+                    *cq = None;
+                }
+
                 // Server told us the leader address — connect there instead,
                 // reusing the same TLS and API key configuration.
                 let leader_addr = msg["leader_hint:".len()..].to_string();
@@ -507,6 +522,15 @@ impl FibpTransport {
                         }
                         other => ConsumeError::Status(other),
                     })?;
+
+                // Keep the leader transport alive for the duration of the
+                // consume session. Without this, the leader transport would
+                // be dropped at the end of this block, aborting its IO loop
+                // and closing the TCP connection to the leader.
+                {
+                    let mut lt = self.inner.leader_transport.lock().await;
+                    *lt = Some(leader_transport);
+                }
 
                 Ok(leader_push_rx)
             }
