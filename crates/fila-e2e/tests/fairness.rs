@@ -16,7 +16,6 @@ use tokio_stream::StreamExt;
 /// Setup: 2 fairness keys — "high" (weight 3) and "low" (weight 1).
 /// Enqueue 100 per key, consume only 60 → distribution should be ~75/25.
 #[tokio::test]
-#[ignore = "FIBP consume credit flow hangs after ~60 messages — needs transport fix"]
 async fn e2e_drr_weighted_fairness() {
     let server = helpers::TestServer::start_with_quantum(1);
 

@@ -10,7 +10,6 @@ use tokio_stream::StreamExt;
 /// Each consume session uses a separate client because FIBP supports only one
 /// consume stream per connection.
 #[tokio::test]
-#[ignore = "FIBP redrive does not wake pending consumers — needs scheduler fix"]
 async fn e2e_dlq_redrive() {
     let server = helpers::TestServer::start();
 

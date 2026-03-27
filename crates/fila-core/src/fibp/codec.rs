@@ -35,14 +35,14 @@ pub const OP_QUEUE_STATS: u8 = 0x12;
 /// List queues.
 pub const OP_LIST_QUEUES: u8 = 0x13;
 /// Redrive messages from a dead-letter queue.
-pub const OP_REDRIVE: u8 = 0x16;
+pub const OP_REDRIVE: u8 = 0x14;
 
 /// Set a runtime config value.
-pub const OP_CONFIG_SET: u8 = 0x17;
+pub const OP_CONFIG_SET: u8 = 0x15;
 /// Get a runtime config value.
-pub const OP_CONFIG_GET: u8 = 0x18;
+pub const OP_CONFIG_GET: u8 = 0x16;
 /// List runtime config entries.
-pub const OP_CONFIG_LIST: u8 = 0x19;
+pub const OP_CONFIG_LIST: u8 = 0x17;
 
 /// Flow-control window update.
 pub const OP_FLOW: u8 = 0x20;
