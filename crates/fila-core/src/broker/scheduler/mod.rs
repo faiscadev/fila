@@ -49,7 +49,7 @@ pub(super) struct PendingEntry {
 /// `queue_id` and `fairness_key` strings. Internal data structures (DRR, pending
 /// index, fairness_deliveries) use `Spur` (4 bytes, Copy) instead of `String`.
 /// Strings are interned at entry points (enqueue, recovery) and resolved back
-/// to `&str` at system boundaries (storage writes, gRPC responses, logging).
+/// to `&str` at system boundaries (storage writes, FIBP responses, logging).
 pub struct Scheduler {
     storage: Arc<dyn StorageEngine>,
     inbound: Receiver<SchedulerCommand>,

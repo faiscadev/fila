@@ -16,7 +16,7 @@ Key differentiators:
 
 ## API Surface
 
-Fila uses gRPC (protobuf). Two services share port 5555:
+Fila uses FIBP (Fila Binary Protocol) on port 5555. Two service groups:
 
 ### Hot-path: fila.v1.FilaService
 

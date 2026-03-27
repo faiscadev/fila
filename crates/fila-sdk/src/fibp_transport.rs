@@ -1,7 +1,7 @@
 //! FIBP client transport for the Fila SDK.
 //!
-//! Provides a TCP-based binary transport that implements the same operations
-//! as the gRPC transport but using the FIBP wire protocol. Connects via raw
+//! Provides a TCP-based binary transport implementing all Fila operations
+//! using the FIBP wire protocol. Connects via raw
 //! TCP, performs the 6-byte handshake, optionally authenticates, and then
 //! multiplexes request/response frames using correlation IDs.
 //!

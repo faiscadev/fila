@@ -34,7 +34,7 @@ spec:
                   key: bootstrap-apikey
             {{- end }}
           ports:
-            - name: grpc
+            - name: fibp
               containerPort: {{ .Values.service.port }}
               protocol: TCP
             - name: cluster

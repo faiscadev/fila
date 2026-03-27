@@ -176,7 +176,7 @@ consensus overhead (log replication, leader forwarding).
 - **Raft overhead** adds ~1-3ms per write (log replication to majority).
   This is the cost of durability and fault tolerance.
 - **Forwarding overhead** adds latency when a client connects to a non-leader
-  node. The request is transparently forwarded to the leader via gRPC.
+  node. The request is transparently forwarded to the leader via the internal cluster protocol.
 
 ## Notes
 

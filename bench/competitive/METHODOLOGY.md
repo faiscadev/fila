@@ -116,7 +116,7 @@ All benchmarks — including competitors — use native Rust client libraries:
 - **Kafka**: `rdkafka` (librdkafka bindings, the standard high-performance Kafka client)
 - **RabbitMQ**: `lapin` (async AMQP 0-9-1 client)
 - **NATS**: `async-nats` (official NATS Rust client)
-- **Fila**: `fila-sdk` (native gRPC client)
+- **Fila**: `fila-sdk` (native FIBP client)
 
 This ensures the benchmark measures broker performance, not client language overhead. All clients run in the same Rust async runtime with equivalent optimization levels.
 

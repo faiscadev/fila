@@ -45,12 +45,8 @@ Once the broker is running on `localhost:5555`:
 # Create a queue
 fila queue create orders
 
-# Enqueue a message (via gRPC — use any SDK or grpcurl)
-grpcurl -plaintext -d '{
-  "queue": "orders",
-  "headers": {"tenant": "acme"},
-  "payload": "aGVsbG8="
-}' localhost:5555 fila.v1.FilaService/Enqueue
+# Enqueue a message
+fila enqueue orders --header tenant=acme --payload hello
 
 # Check queue stats
 fila queue inspect orders

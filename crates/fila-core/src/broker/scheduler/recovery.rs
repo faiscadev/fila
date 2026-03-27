@@ -381,7 +381,7 @@ impl Scheduler {
     ///
     /// When entries are removed, the `ConsumerEntry.tx` channels are dropped,
     /// causing the converter tasks in service.rs to detect closure and end
-    /// the gRPC streams. Consumers will receive a disconnection and must
+    /// the FIBP streams. Consumers will receive a disconnection and must
     /// reconnect to the new leader.
     pub(super) fn drop_queue_consumers(&mut self, queue_id: &str) {
         let before = self.consumers.len();

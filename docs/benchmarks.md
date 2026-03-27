@@ -227,7 +227,7 @@ FILA_BENCH_SUBSYSTEM=1 cargo bench -p fila-bench --bench system
 
 ### RocksDB raw write throughput
 
-Measures raw `put_message` throughput directly against RocksDB, bypassing scheduler, gRPC, and serialization. Isolates storage engine performance.
+Measures raw `put_message` throughput directly against RocksDB, bypassing scheduler, FIBP, and serialization. Isolates storage engine performance.
 
 <!-- bench:subsystem-rocksdb-start -->
 | Payload | Throughput (ops/s) | p50 latency | p99 latency |
@@ -262,9 +262,9 @@ Measures `next_key()` + `consume_deficit()` cycle throughput at varying active k
 | 10,000 | — |
 <!-- bench:subsystem-drr-end -->
 
-### gRPC round-trip overhead
+### FIBP round-trip overhead
 
-Measures round-trip latency for a minimal (1-byte payload) Enqueue RPC. Quantifies the fixed per-call overhead of tonic + HTTP/2 framing, separate from message processing.
+Measures round-trip latency for a minimal (1-byte payload) Enqueue request. Quantifies the fixed per-call overhead of FIBP framing, separate from message processing.
 
 <!-- bench:subsystem-grpc-start -->
 | Metric | Value | Unit |
@@ -277,7 +277,7 @@ Measures round-trip latency for a minimal (1-byte payload) Enqueue RPC. Quantifi
 
 ### Lua execution throughput
 
-Measures `on_enqueue` hook execution throughput for three script complexity levels, directly against the Lua VM (no server, no gRPC).
+Measures `on_enqueue` hook execution throughput for three script complexity levels, directly against the Lua VM (no server, no FIBP).
 
 <!-- bench:subsystem-lua-start -->
 | Script | Throughput (exec/s) | p50 | p99 |

@@ -25,7 +25,7 @@ Common issues and their solutions.
 
 ## Authentication failures
 
-**Symptom:** `UNAUTHENTICATED` gRPC status
+**Symptom:** `UNAUTHENTICATED` error status
 
 **Solutions:**
 - **Missing API key:** Set `api_key` / `with_api_key()` on your client connection
@@ -35,7 +35,7 @@ Common issues and their solutions.
 
 ## Queue not found
 
-**Symptom:** `NOT_FOUND` gRPC status on enqueue or consume
+**Symptom:** `NOT_FOUND` error status on enqueue or consume
 
 **Solutions:**
 - Queue doesn't exist. Create it: `fila queue create <name>`

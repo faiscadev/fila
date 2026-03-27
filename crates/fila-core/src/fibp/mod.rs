@@ -1,7 +1,7 @@
 //! FIBP — Fila Binary Protocol.
 //!
-//! A custom binary TCP transport designed for high-throughput message
-//! operations. Runs alongside gRPC when the `[fibp]` config section is present.
+//! A binary TCP transport designed for high-throughput message
+//! operations. FIBP is Fila's sole transport protocol.
 //!
 //! The FIBP module dispatches data operations (enqueue, consume, ack, nack)
 //! to the scheduler via `Arc<Broker>`, injected through `FibpListener::start()`.

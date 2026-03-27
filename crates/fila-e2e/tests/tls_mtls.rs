@@ -172,7 +172,7 @@ async fn mtls_valid_client_cert_succeeds() {
 
     // Verify data RPCs actually work over mTLS by enqueuing to any queue.
     // The enqueue will fail with "queue not found" (no admin setup over mTLS),
-    // but a successful connection + gRPC round-trip proves mTLS works.
+    // but a successful connection + round-trip proves mTLS works.
     // A TLS handshake failure would surface as a transport error, not a queue error.
     let result = client
         .enqueue("mtls-test", HashMap::new(), b"test".to_vec())
@@ -181,7 +181,7 @@ async fn mtls_valid_client_cert_succeeds() {
         Ok(_) => {} // queue happened to exist — fine
         Err(e) => {
             let err_str = format!("{e:?}");
-            // "not found" means the gRPC call succeeded (mTLS worked) but queue doesn't exist.
+            // "not found" means the call succeeded (mTLS worked) but queue doesn't exist.
             // Any TLS/transport error would be a different message.
             assert!(
                 err_str.contains("not found") || err_str.contains("NotFound"),

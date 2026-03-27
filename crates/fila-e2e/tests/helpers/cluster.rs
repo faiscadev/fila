@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// A running 3-node fila-server cluster for e2e testing.
 ///
 /// Spawns multiple `fila-server` processes with cluster configuration.
-/// Each node has distinct client and cluster gRPC ports.
+/// Each node has distinct client and cluster ports.
 /// Node 0 bootstraps the cluster (`peers = []`); the rest join via node 0's cluster port.
 pub struct TestCluster {
     nodes: Vec<Option<ClusterNode>>,

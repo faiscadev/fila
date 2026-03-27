@@ -24,11 +24,10 @@ circuit_breaker_cooldown_ms = 10000
 # compact_on_deletion = true
 # bloom_filter_bits = 10
 
-# gRPC transport tuning (defaults are optimized for streaming — override only if needed)
-# [grpc]
-# initial_stream_window_size = 2097152   # 2MB
-# initial_connection_window_size = 4194304  # 4MB
-# tcp_nodelay = true
+# FIBP transport tuning (defaults are optimized — override only if needed)
+# [fibp]
+# listen_addr = "0.0.0.0:5555"
+# max_frame_size = 16777216
 # keepalive_interval_secs = 15
 # keepalive_timeout_secs = 10
 

@@ -18,7 +18,7 @@ If no file is found, all defaults are used. The broker runs with zero configurat
 
 ```toml
 [server]
-listen_addr = "0.0.0.0:5555"    # gRPC listen address
+listen_addr = "0.0.0.0:5555"    # FIBP listen address
 
 [scheduler]
 command_channel_capacity = 10000 # internal command channel buffer size
@@ -32,7 +32,7 @@ circuit_breaker_threshold = 3        # consecutive failures before circuit break
 circuit_breaker_cooldown_ms = 10000  # cooldown period after circuit break (ms)
 
 [telemetry]
-otlp_endpoint = "http://localhost:4317"  # OTLP gRPC endpoint (omit to disable)
+otlp_endpoint = "http://localhost:4317"  # OTLP endpoint (omit to disable)
 service_name = "fila"                     # OTel service name
 metrics_interval_ms = 10000              # metrics export interval (ms)
 
@@ -40,9 +40,9 @@ metrics_interval_ms = 10000              # metrics export interval (ms)
 # [gui]
 # listen_addr = "0.0.0.0:8080"  # HTTP port for the dashboard
 
-# Uncomment to enable the FIBP (Fila Binary Protocol) TCP transport
+# FIBP transport tuning (defaults are optimized — override only if needed)
 # [fibp]
-# listen_addr = "0.0.0.0:5557"       # TCP listen address
+# listen_addr = "0.0.0.0:5555"       # TCP listen address
 # max_frame_size = 16777216           # max frame size in bytes (16 MB)
 # keepalive_interval_secs = 15        # heartbeat ping interval
 # keepalive_timeout_secs = 10         # timeout waiting for pong
@@ -54,13 +54,13 @@ metrics_interval_ms = 10000              # metrics export interval (ms)
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `listen_addr` | string | `"0.0.0.0:5555"` | Address and port for the gRPC server |
+| `listen_addr` | string | `"0.0.0.0:5555"` | Address and port for the FIBP server |
 
 ### `[scheduler]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `command_channel_capacity` | integer | `10000` | Size of the bounded channel between gRPC handlers and the scheduler loop. Increase if you see backpressure under high load. |
+| `command_channel_capacity` | integer | `10000` | Size of the bounded channel between FIBP connection handlers and the scheduler loop. Increase if you see backpressure under high load. |
 | `idle_timeout_ms` | integer | `100` | How long the scheduler waits when there's no work before checking again. Lower values reduce latency at the cost of CPU. |
 | `quantum` | integer | `1000` | DRR quantum. Each fairness key gets `weight * quantum` deficit per scheduling round. Higher values mean more messages delivered per key per round (coarser interleaving). |
 
@@ -79,22 +79,9 @@ Telemetry export is optional. When `otlp_endpoint` is omitted, the broker uses p
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `otlp_endpoint` | string | (none) | OTLP gRPC endpoint for exporting traces and metrics. Example: `"http://localhost:4317"`. |
+| `otlp_endpoint` | string | (none) | OTLP endpoint for exporting traces and metrics. Example: `"http://localhost:4317"`. |
 | `service_name` | string | `"fila"` | Service name reported in OTel traces and metrics. |
 | `metrics_interval_ms` | integer | `10000` | How often metrics are exported to the OTLP endpoint. |
-
-### `[grpc]`
-
-HTTP/2 transport tuning. These defaults are tuned for high-throughput workloads.
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `initial_stream_window_size` | integer | `8388608` (8 MB) | Initial HTTP/2 stream flow-control window. Larger values reduce WINDOW_UPDATE overhead. |
-| `initial_connection_window_size` | integer | `16777216` (16 MB) | Initial HTTP/2 connection flow-control window. Should be >= stream window * expected concurrent streams. |
-| `http2_max_frame_size` | integer | `65536` (64 KB) | Maximum HTTP/2 DATA frame size. Larger frames reduce per-frame overhead for batch payloads. Valid: 16384-16777215. |
-| `tcp_nodelay` | boolean | `true` | Disable Nagle's algorithm for lower latency. |
-| `keepalive_interval_secs` | integer | `15` | HTTP/2 PING interval for connection health. |
-| `keepalive_timeout_secs` | integer | `10` | Timeout waiting for keepalive PING response. |
 
 ### `[gui]`
 
@@ -106,9 +93,9 @@ Web management GUI. Disabled by default. When enabled, serves a read-only dashbo
 
 ### `[fibp]`
 
-FIBP (Fila Binary Protocol) transport. Disabled by default. When enabled, runs a custom binary TCP protocol alongside gRPC for high-throughput workloads. The protocol uses length-prefixed frames with a 6-byte header (flags, op code, correlation ID).
+FIBP (Fila Binary Protocol) transport configuration. FIBP is Fila's binary TCP protocol, using length-prefixed frames with a 6-byte header (flags, op code, correlation ID).
 
-FIBP shares TLS and authentication configuration with gRPC. When `[tls]` is configured, FIBP connections are TLS-wrapped using the same cert/key/CA. When `[auth]` is configured, FIBP clients must send an `OP_AUTH` frame (containing the API key) as the first frame after handshake. Per-queue ACL checks apply to all data and admin operations.
+When `[tls]` is configured, FIBP connections are TLS-wrapped. When `[auth]` is configured, FIBP clients must send an `OP_AUTH` frame (containing the API key) as the first frame after handshake. Per-queue ACL checks apply to all data and admin operations.
 
 FIBP supports all admin operations (create/delete queue, list queues, queue stats, redrive) using protobuf-encoded payloads for schema evolution.
 
@@ -119,24 +106,24 @@ FIBP supports all admin operations (create/delete queue, list queues, queue stat
 | `keepalive_interval_secs` | integer | `15` | Interval between keepalive heartbeat pings. |
 | `keepalive_timeout_secs` | integer | `10` | Timeout waiting for a keepalive pong before closing the connection. |
 
-### SDK transport option
+### SDK connection
 
-The Rust SDK supports connecting via either gRPC (default) or FIBP. Set the transport in `ConnectOptions`:
+The Rust SDK connects via FIBP:
 
 ```rust
-// gRPC (default)
-let client = FilaClient::connect("http://localhost:5555").await?;
+let client = FilaClient::connect("127.0.0.1:5555").await?;
 
-// FIBP — connect to the FIBP TCP port instead
-let opts = ConnectOptions::new("127.0.0.1:5557").with_fibp();
+// With TLS and API key
+let opts = ConnectOptions::new("127.0.0.1:5555")
+    .with_tls()
+    .with_api_key("my-key");
 let client = FilaClient::connect_with_options(opts).await?;
 ```
 
-When using FIBP, note:
-- The address is a raw TCP address (not a URL with `http://`), pointing to the FIBP port (default 5557).
-- TLS and API key options work identically to gRPC — pass them on `ConnectOptions` as usual.
-- There is no automatic fallback. If the FIBP connection fails, it returns an error.
-- The accumulator (batch mode) is not used over FIBP. Messages are sent directly as FIBP frames. The FIBP wire format already supports multi-message enqueue in a single frame.
+Notes:
+- The address is a raw TCP address (not a URL with `http://`).
+- TLS and API key options are set on `ConnectOptions`.
+- The FIBP wire format supports multi-message enqueue in a single frame.
 
 ## OpenTelemetry metrics
 

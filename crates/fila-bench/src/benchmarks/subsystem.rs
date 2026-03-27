@@ -17,7 +17,7 @@ const MEASURE_SECS: u64 = 3;
 // ---------------------------------------------------------------------------
 
 /// Measure raw RocksDB WriteBatch put + commit throughput, bypassing
-/// scheduler/gRPC/serialization. Tests at 1KB and 64KB payloads.
+/// scheduler/FIBP/serialization. Tests at 1KB and 64KB payloads.
 pub fn bench_rocksdb_write(results: &mut Vec<BenchResult>) {
     for &(label, size) in &[("1kb", 1024usize), ("64kb", 65536usize)] {
         let dir = tempfile::tempdir().expect("create temp dir");
