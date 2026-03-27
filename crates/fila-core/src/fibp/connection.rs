@@ -651,15 +651,44 @@ pub(super) async fn consume_push_loop(
             }
         }
 
-        // Wait for credits if needed.
+        // Wait for credits, then send only what credits allow.
+        // Any excess messages stay in `overflow` for the next iteration.
         loop {
             let avail = credits.load(Ordering::Relaxed);
             if avail > 0 {
-                // Decrement credits by the batch size (or available, whichever is smaller).
                 let to_send = batch.len().min(avail as usize);
                 credits.fetch_sub(to_send as u32, Ordering::Relaxed);
-                if to_send < batch.len() {
-                    batch.truncate(to_send);
+                // Split: send `to_send`, keep the rest as overflow for next loop.
+                let overflow = batch.split_off(to_send);
+                // Put overflow back into ready_rx would lose ordering, so we'll
+                // handle them in the next iteration by prepending.
+                if !overflow.is_empty() {
+                    // Send what we can now, then immediately loop back to send
+                    // the overflow (they'll be the next `batch`).
+                    let push_messages: Vec<wire::ConsumePushMessage> = batch
+                        .into_iter()
+                        .map(|rm| wire::ConsumePushMessage {
+                            msg_id: rm.msg_id.to_string(),
+                            fairness_key: rm.fairness_key,
+                            attempt_count: rm.attempt_count,
+                            headers: rm.headers,
+                            payload: rm.payload,
+                        })
+                        .collect();
+                    let payload = wire::encode_consume_push(&push_messages);
+                    let frame = Frame::new(FLAG_STREAM, OP_CONSUME, 0, payload);
+                    let mut buf = BytesMut::new();
+                    let mut enc = FibpCodec::new(max_frame_size);
+                    if let Err(e) = enc.encode(frame, &mut buf) {
+                        warn!(peer = %peer, error = %e, "consume push encode error");
+                        return;
+                    }
+                    if push_tx.send(buf).await.is_err() {
+                        return;
+                    }
+                    // Continue with overflow as the new batch — wait for more credits.
+                    batch = overflow;
+                    continue;
                 }
                 break;
             }

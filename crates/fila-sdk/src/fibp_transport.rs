@@ -82,6 +82,16 @@ struct FibpTransportInner {
     consume_queue: Arc<Mutex<Option<String>>>,
     /// Configuration used to create this transport, preserved for leader redirects.
     connect_config: TransportConnectConfig,
+    /// Handle to the background IO loop task. Aborted on drop to ensure the
+    /// TCP connection is closed immediately when the transport is dropped,
+    /// rather than waiting for the writer channel close to propagate.
+    io_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for FibpTransportInner {
+    fn drop(&mut self) {
+        self.io_task.abort();
+    }
 }
 
 impl std::fmt::Debug for FibpTransport {
@@ -261,7 +271,7 @@ impl FibpTransport {
 
         let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>(256);
 
-        spawn_io_loop(
+        let io_task = spawn_io_loop(
             framed,
             writer_rx,
             Arc::clone(&pending),
@@ -277,6 +287,7 @@ impl FibpTransport {
                 consume_push_tx,
                 next_correlation_id: AtomicU32::new(1),
                 consume_queue,
+                io_task,
                 connect_config,
             }),
         };
@@ -453,14 +464,19 @@ impl FibpTransport {
         &self,
         queue: &str,
     ) -> Result<mpsc::Receiver<Result<ConsumeMessage, StatusError>>, ConsumeError> {
+        // Set up push channel BEFORE sending the request — the server starts
+        // pushing messages immediately after processing OP_CONSUME, and those
+        // frames would be dropped if consume_push_tx isn't ready.
+        let push_rx = self.setup_consume_channel(queue).await?;
+
         let payload = fibp_codec::encode_consume_request(queue, INITIAL_CREDITS);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONSUME, corr_id, payload);
 
         match self.request(frame).await {
             Ok(_response) => {
-                // Successfully opened consume on this node — set up push channel.
-                self.setup_consume_channel(queue).await
+                // Successfully opened consume on this node.
+                Ok(push_rx)
             }
             Err(StatusError::Internal(ref msg)) if msg.starts_with("leader_hint:") => {
                 // Server told us the leader address — connect there instead,
@@ -473,7 +489,9 @@ impl FibpTransport {
                         )))
                     })?;
 
-                // Send consume request to the leader (no recursion — single hop).
+                // Set up push channel before sending request on leader transport.
+                let leader_push_rx = leader_transport.setup_consume_channel(queue).await?;
+
                 let payload2 = fibp_codec::encode_consume_request(queue, INITIAL_CREDITS);
                 let corr_id2 = leader_transport.next_id();
                 let frame2 = Frame::new(0, OP_CONSUME, corr_id2, payload2);
@@ -490,7 +508,7 @@ impl FibpTransport {
                         other => ConsumeError::Status(other),
                     })?;
 
-                leader_transport.setup_consume_channel(queue).await
+                Ok(leader_push_rx)
             }
             Err(StatusError::Internal(ref msg))
                 if msg.contains("not found") || msg.contains("queue") =>
@@ -506,7 +524,12 @@ impl FibpTransport {
         &self,
         queue: &str,
     ) -> Result<mpsc::Receiver<Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        let (push_tx, push_rx) = mpsc::channel::<Result<ConsumeMessage, StatusError>>(64);
+        // Use a large capacity to prevent the IO loop from blocking when
+        // dispatching push frames. The IO loop also handles request/response
+        // frames (e.g. ack responses). If the push channel fills up and the
+        // IO loop blocks on send, it cannot dispatch the ack response, which
+        // the caller is waiting for — causing a deadlock.
+        let (push_tx, push_rx) = mpsc::channel::<Result<ConsumeMessage, StatusError>>(4096);
 
         {
             let mut cpt = self.inner.consume_push_tx.lock().await;
@@ -518,13 +541,18 @@ impl FibpTransport {
         }
 
         // Spawn a flow-control replenishment task.
-        let writer_tx = self.inner.writer_tx.clone();
-        let inner = Arc::clone(&self.inner);
+        // Use Weak<> so this task doesn't keep the transport alive after drop.
+        let weak_inner = Arc::downgrade(&self.inner);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
             loop {
                 interval.tick().await;
+                let Some(inner) = weak_inner.upgrade() else {
+                    break; // Transport dropped — stop sending flow frames.
+                };
                 let corr = inner.next_correlation_id.fetch_add(1, Ordering::Relaxed);
+                let writer_tx = inner.writer_tx.clone();
+                drop(inner); // Release the Arc before awaiting the send.
                 let flow_payload = fibp_codec::encode_flow(FLOW_CREDITS);
                 let flow_frame = Frame::new(0, OP_FLOW, corr, flow_payload);
                 if writer_tx
@@ -936,13 +964,18 @@ async fn dispatch_frame(
                             attempt_count: msg.attempt_count,
                             queue: queue_name.clone(),
                         };
-                        if tx.send(Ok(cm)).await.is_err() {
+                        // Use try_send to avoid blocking the IO loop. If the
+                        // consume channel is full, the message is dropped. This
+                        // prevents a deadlock where the IO loop blocks on send
+                        // while the caller is waiting for a response frame (e.g.
+                        // ack) that is queued behind the push frames.
+                        if tx.try_send(Ok(cm)).is_err() {
                             break;
                         }
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(e)).await;
+                    let _ = tx.try_send(Err(e));
                 }
             }
         }

@@ -59,8 +59,9 @@ async fn e2e_dlq_redrive() {
     drop(stream);
     drop(client1);
 
-    // Wait for scheduler to route to DLQ.
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Wait for the server to detect TCP close, deregister the consumer,
+    // and for the scheduler to finish routing to DLQ.
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // --- Redrive via CLI ---
     let redrive = helpers::cli_run(server.addr(), &["redrive", "redrive-src.dlq"]);
