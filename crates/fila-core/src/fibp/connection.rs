@@ -1087,7 +1087,7 @@ mod tests {
             on_failure_script: String::new(),
             visibility_timeout_ms: 0,
         };
-        let payload = wire::encode_create_queue_request(&create_req);
+        let payload = wire::encode_create_queue_request(&create_req).unwrap();
         let frame = Frame::new(0, OP_CREATE_QUEUE, 10, payload);
         let mut send_buf = BytesMut::new();
         codec.encode(frame, &mut send_buf).unwrap();
