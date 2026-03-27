@@ -420,7 +420,17 @@ impl FibpTransport {
                 })
                 .collect();
 
-            let payload = wire::encode_enqueue_request(&queue, &wire_msgs);
+            let payload = match wire::encode_enqueue_request(&queue, &wire_msgs) {
+                Ok(p) => p,
+                Err(e) => {
+                    for (original_idx, _) in &msgs {
+                        results[*original_idx] = Some(Err(EnqueueError::Status(
+                            StatusError::Protocol(format!("encode error: {e}")),
+                        )));
+                    }
+                    continue;
+                }
+            };
             let corr_id = self.next_id();
             let frame = Frame::new(0, OP_ENQUEUE, corr_id, payload);
 
@@ -497,7 +507,9 @@ impl FibpTransport {
         // frames would be dropped if consume_push_tx isn't ready.
         let push_rx = self.setup_consume_channel(queue).await?;
 
-        let payload = wire::encode_consume_request(queue, INITIAL_CREDITS);
+        let payload = wire::encode_consume_request(queue, INITIAL_CREDITS).map_err(|e| {
+            ConsumeError::Status(StatusError::Protocol(format!("encode error: {e}")))
+        })?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONSUME, corr_id, payload);
 
@@ -533,7 +545,10 @@ impl FibpTransport {
                 // Set up push channel before sending request on leader transport.
                 let leader_push_rx = leader_transport.setup_consume_channel(queue).await?;
 
-                let payload2 = wire::encode_consume_request(queue, INITIAL_CREDITS);
+                let payload2 =
+                    wire::encode_consume_request(queue, INITIAL_CREDITS).map_err(|e| {
+                        ConsumeError::Status(StatusError::Protocol(format!("encode error: {e}")))
+                    })?;
                 let corr_id2 = leader_transport.next_id();
                 let frame2 = Frame::new(0, OP_CONSUME, corr_id2, payload2);
 
@@ -639,7 +654,8 @@ impl FibpTransport {
 
     /// Acknowledge a message via FIBP.
     pub async fn ack(&self, queue: &str, message_id: &str) -> Result<(), AckError> {
-        let payload = wire::encode_ack_request(&[(queue, message_id)]);
+        let payload = wire::encode_ack_request(&[(queue, message_id)])
+            .map_err(|e| AckError::Status(StatusError::Protocol(format!("encode error: {e}"))))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_ACK, corr_id, payload);
 
@@ -665,7 +681,8 @@ impl FibpTransport {
 
     /// Negatively acknowledge a message via FIBP.
     pub async fn nack(&self, queue: &str, message_id: &str, error: &str) -> Result<(), NackError> {
-        let payload = wire::encode_nack_request(&[(queue, message_id, error)]);
+        let payload = wire::encode_nack_request(&[(queue, message_id, error)])
+            .map_err(|e| NackError::Status(StatusError::Protocol(format!("encode error: {e}"))))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_NACK, corr_id, payload);
 
@@ -707,7 +724,8 @@ impl FibpTransport {
             on_failure_script: on_failure_script.to_string(),
             visibility_timeout_ms,
         };
-        let payload = wire::encode_create_queue_request(&req);
+        let payload = wire::encode_create_queue_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CREATE_QUEUE, corr_id, payload);
 
@@ -722,7 +740,8 @@ impl FibpTransport {
         let req = wire::DeleteQueueRequest {
             queue: queue.to_string(),
         };
-        let payload = wire::encode_delete_queue_request(&req);
+        let payload = wire::encode_delete_queue_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_DELETE_QUEUE, corr_id, payload);
 
@@ -735,7 +754,8 @@ impl FibpTransport {
         let req = wire::GetStatsRequest {
             queue: queue.to_string(),
         };
-        let payload = wire::encode_get_stats_request(&req);
+        let payload = wire::encode_get_stats_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_QUEUE_STATS, corr_id, payload);
 
@@ -762,7 +782,8 @@ impl FibpTransport {
             dlq_queue: dlq_queue.to_string(),
             count,
         };
-        let payload = wire::encode_redrive_request(&req);
+        let payload = wire::encode_redrive_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_REDRIVE, corr_id, payload);
 
@@ -782,7 +803,8 @@ impl FibpTransport {
             key: key.to_string(),
             value: value.to_string(),
         };
-        let payload = wire::encode_set_config_request(&req);
+        let payload = wire::encode_set_config_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONFIG_SET, corr_id, payload);
 
@@ -795,7 +817,8 @@ impl FibpTransport {
         let req = wire::GetConfigRequest {
             key: key.to_string(),
         };
-        let payload = wire::encode_get_config_request(&req);
+        let payload = wire::encode_get_config_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONFIG_GET, corr_id, payload);
 
@@ -810,7 +833,8 @@ impl FibpTransport {
         let req = wire::ListConfigRequest {
             prefix: prefix.to_string(),
         };
-        let payload = wire::encode_list_config_request(&req);
+        let payload = wire::encode_list_config_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONFIG_LIST, corr_id, payload);
 
@@ -836,7 +860,8 @@ impl FibpTransport {
             expires_at_ms: expires_at_ms.unwrap_or(0),
             is_superadmin,
         };
-        let payload = wire::encode_create_api_key_request(&req);
+        let payload = wire::encode_create_api_key_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_CREATE_KEY, corr_id, payload);
 
@@ -850,7 +875,8 @@ impl FibpTransport {
         let req = wire::RevokeApiKeyRequest {
             key_id: key_id.to_string(),
         };
-        let payload = wire::encode_revoke_api_key_request(&req);
+        let payload = wire::encode_revoke_api_key_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_REVOKE_KEY, corr_id, payload);
 
@@ -879,7 +905,8 @@ impl FibpTransport {
             key_id: key_id.to_string(),
             permissions,
         };
-        let payload = wire::encode_set_acl_request(&req);
+        let payload = wire::encode_set_acl_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_SET_ACL, corr_id, payload);
 
@@ -892,7 +919,8 @@ impl FibpTransport {
         let req = wire::GetAclRequest {
             key_id: key_id.to_string(),
         };
-        let payload = wire::encode_get_acl_request(&req);
+        let payload = wire::encode_get_acl_request(&req)
+            .map_err(|e| StatusError::Protocol(format!("encode error: {e}")))?;
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_GET_ACL, corr_id, payload);
 

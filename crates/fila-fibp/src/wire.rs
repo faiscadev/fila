@@ -75,20 +75,23 @@ pub fn decode_enqueue_request(mut buf: Bytes) -> Result<EnqueueRequest, FibpCode
 }
 
 /// Encode an enqueue request payload (client-side).
-pub fn encode_enqueue_request(queue: &str, messages: &[EnqueueWireMessage]) -> Bytes {
+pub fn encode_enqueue_request(
+    queue: &str,
+    messages: &[EnqueueWireMessage],
+) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, queue);
-    buf.put_u16(messages.len() as u16);
+    write_string16(&mut buf, queue)?;
+    write_u16_count(&mut buf, messages.len())?;
     for msg in messages {
-        buf.put_u8(msg.headers.len() as u8);
+        write_u8_count(&mut buf, msg.headers.len())?;
         for (k, v) in &msg.headers {
-            write_string16(&mut buf, k);
-            write_string16(&mut buf, v);
+            write_string16(&mut buf, k)?;
+            write_string16(&mut buf, v)?;
         }
         buf.put_u32(msg.payload.len() as u32);
         buf.extend_from_slice(&msg.payload);
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// A single message for client-side wire encoding.
@@ -104,23 +107,23 @@ pub enum EnqueueResultItem {
 }
 
 /// Encode an enqueue response payload.
-pub fn encode_enqueue_response(results: &[EnqueueResultItem]) -> Bytes {
+pub fn encode_enqueue_response(results: &[EnqueueResultItem]) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    buf.put_u16(results.len() as u16);
+    write_u16_count(&mut buf, results.len())?;
     for item in results {
         match item {
             EnqueueResultItem::Ok { msg_id } => {
                 buf.put_u8(1); // success
-                write_string16(&mut buf, msg_id);
+                write_string16(&mut buf, msg_id)?;
             }
             EnqueueResultItem::Err { code, message } => {
                 buf.put_u8(0); // error
                 buf.put_u16(*code);
-                write_string16(&mut buf, message);
+                write_string16(&mut buf, message)?;
             }
         }
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode an enqueue response payload (client-side).
@@ -163,11 +166,11 @@ pub fn decode_consume_request(mut buf: Bytes) -> Result<ConsumeRequest, FibpCode
 }
 
 /// Encode a consume request payload (client-side).
-pub fn encode_consume_request(queue: &str, initial_credits: u32) -> Bytes {
+pub fn encode_consume_request(queue: &str, initial_credits: u32) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, queue);
+    write_string16(&mut buf, queue)?;
     buf.put_u32(initial_credits);
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 // ---------------------------------------------------------------------------
@@ -184,24 +187,24 @@ pub struct ConsumePushMessage {
 }
 
 /// Encode a batch of ready messages as a consume push payload.
-pub fn encode_consume_push(messages: &[ConsumePushMessage]) -> Bytes {
+pub fn encode_consume_push(messages: &[ConsumePushMessage]) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    buf.put_u16(messages.len() as u16);
+    write_u16_count(&mut buf, messages.len())?;
     for msg in messages {
-        write_string16(&mut buf, &msg.msg_id);
-        write_string16(&mut buf, &msg.fairness_key);
+        write_string16(&mut buf, &msg.msg_id)?;
+        write_string16(&mut buf, &msg.fairness_key)?;
         buf.put_u32(msg.attempt_count);
         // headers
-        buf.put_u8(msg.headers.len() as u8);
+        write_u8_count(&mut buf, msg.headers.len())?;
         for (k, v) in &msg.headers {
-            write_string16(&mut buf, k);
-            write_string16(&mut buf, v);
+            write_string16(&mut buf, k)?;
+            write_string16(&mut buf, v)?;
         }
         // payload
         buf.put_u32(msg.payload.len() as u32);
         buf.extend_from_slice(&msg.payload);
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// A consumed message from a push frame (client-side).
@@ -291,14 +294,14 @@ pub fn decode_ack_request(mut buf: Bytes) -> Result<Vec<AckItem>, FibpCodecError
 }
 
 /// Encode an ack request payload (client-side).
-pub fn encode_ack_request(items: &[(&str, &str)]) -> Bytes {
+pub fn encode_ack_request(items: &[(&str, &str)]) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    buf.put_u16(items.len() as u16);
+    write_u16_count(&mut buf, items.len())?;
     for (queue, msg_id) in items {
-        write_string16(&mut buf, queue);
-        write_string16(&mut buf, msg_id);
+        write_string16(&mut buf, queue)?;
+        write_string16(&mut buf, msg_id)?;
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// A single item in a nack request.
@@ -327,15 +330,15 @@ pub fn decode_nack_request(mut buf: Bytes) -> Result<Vec<NackItem>, FibpCodecErr
 }
 
 /// Encode a nack request payload (client-side).
-pub fn encode_nack_request(items: &[(&str, &str, &str)]) -> Bytes {
+pub fn encode_nack_request(items: &[(&str, &str, &str)]) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    buf.put_u16(items.len() as u16);
+    write_u16_count(&mut buf, items.len())?;
     for (queue, msg_id, error) in items {
-        write_string16(&mut buf, queue);
-        write_string16(&mut buf, msg_id);
-        write_string16(&mut buf, error);
+        write_string16(&mut buf, queue)?;
+        write_string16(&mut buf, msg_id)?;
+        write_string16(&mut buf, error)?;
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// A single result in the ack/nack response.
@@ -345,9 +348,9 @@ pub enum AckNackResultItem {
 }
 
 /// Encode an ack or nack response payload.
-pub fn encode_ack_nack_response(results: &[AckNackResultItem]) -> Bytes {
+pub fn encode_ack_nack_response(results: &[AckNackResultItem]) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    buf.put_u16(results.len() as u16);
+    write_u16_count(&mut buf, results.len())?;
     for item in results {
         match item {
             AckNackResultItem::Ok => {
@@ -356,11 +359,11 @@ pub fn encode_ack_nack_response(results: &[AckNackResultItem]) -> Bytes {
             AckNackResultItem::Err { code, message } => {
                 buf.put_u8(0);
                 buf.put_u16(*code);
-                write_string16(&mut buf, message);
+                write_string16(&mut buf, message)?;
             }
         }
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode an ack/nack response payload (client-side).
@@ -398,13 +401,13 @@ pub struct CreateQueueRequest {
 }
 
 /// Encode a CreateQueue request payload.
-pub fn encode_create_queue_request(req: &CreateQueueRequest) -> Bytes {
+pub fn encode_create_queue_request(req: &CreateQueueRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.name);
-    write_string16(&mut buf, &req.on_enqueue_script);
-    write_string16(&mut buf, &req.on_failure_script);
+    write_string16(&mut buf, &req.name)?;
+    write_string16(&mut buf, &req.on_enqueue_script)?;
+    write_string16(&mut buf, &req.on_failure_script)?;
     buf.put_u64(req.visibility_timeout_ms);
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a CreateQueue request payload.
@@ -428,10 +431,10 @@ pub struct CreateQueueResponse {
 }
 
 /// Encode a CreateQueue response payload.
-pub fn encode_create_queue_response(resp: &CreateQueueResponse) -> Bytes {
+pub fn encode_create_queue_response(resp: &CreateQueueResponse) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &resp.queue_id);
-    buf.freeze()
+    write_string16(&mut buf, &resp.queue_id)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a CreateQueue response payload.
@@ -451,10 +454,10 @@ pub struct DeleteQueueRequest {
 }
 
 /// Encode a DeleteQueue request payload.
-pub fn encode_delete_queue_request(req: &DeleteQueueRequest) -> Bytes {
+pub fn encode_delete_queue_request(req: &DeleteQueueRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.queue);
-    buf.freeze()
+    write_string16(&mut buf, &req.queue)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a DeleteQueue request payload.
@@ -474,10 +477,10 @@ pub struct GetStatsRequest {
 }
 
 /// Encode a GetStats request.
-pub fn encode_get_stats_request(req: &GetStatsRequest) -> Bytes {
+pub fn encode_get_stats_request(req: &GetStatsRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.queue);
-    buf.freeze()
+    write_string16(&mut buf, &req.queue)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a GetStats request.
@@ -519,30 +522,30 @@ pub struct GetStatsResponse {
 }
 
 /// Encode a GetStats response.
-pub fn encode_get_stats_response(resp: &GetStatsResponse) -> Bytes {
+pub fn encode_get_stats_response(resp: &GetStatsResponse) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
     buf.put_u64(resp.depth);
     buf.put_u64(resp.in_flight);
     buf.put_u64(resp.active_fairness_keys);
     buf.put_u32(resp.active_consumers);
     buf.put_u32(resp.quantum);
-    buf.put_u16(resp.per_key_stats.len() as u16);
+    write_u16_count(&mut buf, resp.per_key_stats.len())?;
     for s in &resp.per_key_stats {
-        write_string16(&mut buf, &s.key);
+        write_string16(&mut buf, &s.key)?;
         buf.put_u64(s.pending_count);
         buf.put_i64(s.current_deficit);
         buf.put_u32(s.weight);
     }
-    buf.put_u16(resp.per_throttle_stats.len() as u16);
+    write_u16_count(&mut buf, resp.per_throttle_stats.len())?;
     for s in &resp.per_throttle_stats {
-        write_string16(&mut buf, &s.key);
+        write_string16(&mut buf, &s.key)?;
         buf.put_f64(s.tokens);
         buf.put_f64(s.rate_per_second);
         buf.put_f64(s.burst);
     }
     buf.put_u64(resp.leader_node_id);
     buf.put_u32(resp.replication_count);
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a GetStats response.
@@ -622,18 +625,18 @@ pub fn encode_list_queues_request() -> Bytes {
 }
 
 /// Encode a ListQueues response.
-pub fn encode_list_queues_response(resp: &ListQueuesResponse) -> Bytes {
+pub fn encode_list_queues_response(resp: &ListQueuesResponse) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    buf.put_u16(resp.queues.len() as u16);
+    write_u16_count(&mut buf, resp.queues.len())?;
     for q in &resp.queues {
-        write_string16(&mut buf, &q.name);
+        write_string16(&mut buf, &q.name)?;
         buf.put_u64(q.depth);
         buf.put_u64(q.in_flight);
         buf.put_u32(q.active_consumers);
         buf.put_u64(q.leader_node_id);
     }
     buf.put_u32(resp.cluster_node_count);
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a ListQueues response.
@@ -673,11 +676,11 @@ pub struct RedriveRequest {
 }
 
 /// Encode a Redrive request.
-pub fn encode_redrive_request(req: &RedriveRequest) -> Bytes {
+pub fn encode_redrive_request(req: &RedriveRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.dlq_queue);
+    write_string16(&mut buf, &req.dlq_queue)?;
     buf.put_u64(req.count);
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a Redrive request.
@@ -718,11 +721,11 @@ pub struct SetConfigRequest {
 }
 
 /// Encode a SetConfig request.
-pub fn encode_set_config_request(req: &SetConfigRequest) -> Bytes {
+pub fn encode_set_config_request(req: &SetConfigRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.key);
-    write_string16(&mut buf, &req.value);
-    buf.freeze()
+    write_string16(&mut buf, &req.key)?;
+    write_string16(&mut buf, &req.value)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a SetConfig request.
@@ -739,10 +742,10 @@ pub struct GetConfigRequest {
 }
 
 /// Encode a GetConfig request.
-pub fn encode_get_config_request(req: &GetConfigRequest) -> Bytes {
+pub fn encode_get_config_request(req: &GetConfigRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.key);
-    buf.freeze()
+    write_string16(&mut buf, &req.key)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a GetConfig request.
@@ -758,10 +761,10 @@ pub struct GetConfigResponse {
 }
 
 /// Encode a GetConfig response.
-pub fn encode_get_config_response(resp: &GetConfigResponse) -> Bytes {
+pub fn encode_get_config_response(resp: &GetConfigResponse) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &resp.value);
-    buf.freeze()
+    write_string16(&mut buf, &resp.value)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a GetConfig response.
@@ -784,10 +787,10 @@ pub struct ListConfigRequest {
 }
 
 /// Encode a ListConfig request.
-pub fn encode_list_config_request(req: &ListConfigRequest) -> Bytes {
+pub fn encode_list_config_request(req: &ListConfigRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.prefix);
-    buf.freeze()
+    write_string16(&mut buf, &req.prefix)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a ListConfig request.
@@ -804,15 +807,15 @@ pub struct ListConfigResponse {
 }
 
 /// Encode a ListConfig response.
-pub fn encode_list_config_response(resp: &ListConfigResponse) -> Bytes {
+pub fn encode_list_config_response(resp: &ListConfigResponse) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    buf.put_u16(resp.entries.len() as u16);
+    write_u16_count(&mut buf, resp.entries.len())?;
     for entry in &resp.entries {
-        write_string16(&mut buf, &entry.key);
-        write_string16(&mut buf, &entry.value);
+        write_string16(&mut buf, &entry.key)?;
+        write_string16(&mut buf, &entry.value)?;
     }
     buf.put_u32(resp.total_count);
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a ListConfig response.
@@ -844,12 +847,12 @@ pub struct CreateApiKeyRequest {
 }
 
 /// Encode a CreateApiKey request.
-pub fn encode_create_api_key_request(req: &CreateApiKeyRequest) -> Bytes {
+pub fn encode_create_api_key_request(req: &CreateApiKeyRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.name);
+    write_string16(&mut buf, &req.name)?;
     buf.put_u64(req.expires_at_ms);
     buf.put_u8(u8::from(req.is_superadmin));
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a CreateApiKey request.
@@ -875,12 +878,14 @@ pub struct CreateApiKeyResponse {
 }
 
 /// Encode a CreateApiKey response.
-pub fn encode_create_api_key_response(resp: &CreateApiKeyResponse) -> Bytes {
+pub fn encode_create_api_key_response(
+    resp: &CreateApiKeyResponse,
+) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &resp.key_id);
-    write_string16(&mut buf, &resp.key);
+    write_string16(&mut buf, &resp.key_id)?;
+    write_string16(&mut buf, &resp.key)?;
     buf.put_u8(u8::from(resp.is_superadmin));
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a CreateApiKey response.
@@ -904,10 +909,10 @@ pub struct RevokeApiKeyRequest {
 }
 
 /// Encode a RevokeApiKey request.
-pub fn encode_revoke_api_key_request(req: &RevokeApiKeyRequest) -> Bytes {
+pub fn encode_revoke_api_key_request(req: &RevokeApiKeyRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.key_id);
-    buf.freeze()
+    write_string16(&mut buf, &req.key_id)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a RevokeApiKey request.
@@ -935,17 +940,17 @@ pub struct ListApiKeysResponse {
 }
 
 /// Encode a ListApiKeys response.
-pub fn encode_list_api_keys_response(resp: &ListApiKeysResponse) -> Bytes {
+pub fn encode_list_api_keys_response(resp: &ListApiKeysResponse) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    buf.put_u16(resp.keys.len() as u16);
+    write_u16_count(&mut buf, resp.keys.len())?;
     for k in &resp.keys {
-        write_string16(&mut buf, &k.key_id);
-        write_string16(&mut buf, &k.name);
+        write_string16(&mut buf, &k.key_id)?;
+        write_string16(&mut buf, &k.name)?;
         buf.put_u64(k.created_at_ms);
         buf.put_u64(k.expires_at_ms);
         buf.put_u8(u8::from(k.is_superadmin));
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a ListApiKeys response.
@@ -986,15 +991,15 @@ pub struct SetAclRequest {
 }
 
 /// Encode a SetAcl request.
-pub fn encode_set_acl_request(req: &SetAclRequest) -> Bytes {
+pub fn encode_set_acl_request(req: &SetAclRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.key_id);
-    buf.put_u16(req.permissions.len() as u16);
+    write_string16(&mut buf, &req.key_id)?;
+    write_u16_count(&mut buf, req.permissions.len())?;
     for p in &req.permissions {
-        write_string16(&mut buf, &p.kind);
-        write_string16(&mut buf, &p.pattern);
+        write_string16(&mut buf, &p.kind)?;
+        write_string16(&mut buf, &p.pattern)?;
     }
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a SetAcl request.
@@ -1020,10 +1025,10 @@ pub struct GetAclRequest {
 }
 
 /// Encode a GetAcl request.
-pub fn encode_get_acl_request(req: &GetAclRequest) -> Bytes {
+pub fn encode_get_acl_request(req: &GetAclRequest) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &req.key_id);
-    buf.freeze()
+    write_string16(&mut buf, &req.key_id)?;
+    Ok(buf.freeze())
 }
 
 /// Decode a GetAcl request.
@@ -1041,16 +1046,16 @@ pub struct GetAclResponse {
 }
 
 /// Encode a GetAcl response.
-pub fn encode_get_acl_response(resp: &GetAclResponse) -> Bytes {
+pub fn encode_get_acl_response(resp: &GetAclResponse) -> Result<Bytes, FibpCodecError> {
     let mut buf = BytesMut::new();
-    write_string16(&mut buf, &resp.key_id);
-    buf.put_u16(resp.permissions.len() as u16);
+    write_string16(&mut buf, &resp.key_id)?;
+    write_u16_count(&mut buf, resp.permissions.len())?;
     for p in &resp.permissions {
-        write_string16(&mut buf, &p.kind);
-        write_string16(&mut buf, &p.pattern);
+        write_string16(&mut buf, &p.kind)?;
+        write_string16(&mut buf, &p.pattern)?;
     }
     buf.put_u8(u8::from(resp.is_superadmin));
-    buf.freeze()
+    Ok(buf.freeze())
 }
 
 /// Decode a GetAcl response.
@@ -1145,9 +1150,55 @@ pub fn read_string16(buf: &mut Bytes) -> Result<String, FibpCodecError> {
     })
 }
 
-pub fn write_string16(buf: &mut BytesMut, s: &str) {
-    buf.put_u16(s.len() as u16);
+/// Write a u16-length-prefixed string.
+///
+/// Returns an error if `s` is longer than 65535 bytes (the maximum a u16
+/// length prefix can represent).
+pub fn write_string16(buf: &mut BytesMut, s: &str) -> Result<(), FibpCodecError> {
+    let len = s.len();
+    if len > u16::MAX as usize {
+        return Err(FibpCodecError::InvalidPayload {
+            reason: format!(
+                "string too long to encode: {} bytes exceeds u16::MAX (65535)",
+                len
+            ),
+        });
+    }
+    buf.put_u16(len as u16);
     buf.extend_from_slice(s.as_bytes());
+    Ok(())
+}
+
+/// Write `n` as a u16 count prefix.
+///
+/// Returns an error if `n` exceeds 65535 (the maximum a u16 can represent).
+pub fn write_u16_count(buf: &mut BytesMut, n: usize) -> Result<(), FibpCodecError> {
+    if n > u16::MAX as usize {
+        return Err(FibpCodecError::InvalidPayload {
+            reason: format!(
+                "count too large to encode as u16: {} exceeds u16::MAX (65535)",
+                n
+            ),
+        });
+    }
+    buf.put_u16(n as u16);
+    Ok(())
+}
+
+/// Write `n` as a u8 count prefix.
+///
+/// Returns an error if `n` exceeds 255 (the maximum a u8 can represent).
+pub fn write_u8_count(buf: &mut BytesMut, n: usize) -> Result<(), FibpCodecError> {
+    if n > u8::MAX as usize {
+        return Err(FibpCodecError::InvalidPayload {
+            reason: format!(
+                "count too large to encode as u8: {} exceeds u8::MAX (255)",
+                n
+            ),
+        });
+    }
+    buf.put_u8(n as u8);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,13 +1213,13 @@ mod tests {
     fn round_trip_enqueue_request() {
         let mut buf = BytesMut::new();
         let queue = "test-queue";
-        write_string16(&mut buf, queue);
+        write_string16(&mut buf, queue).unwrap();
         buf.put_u16(2); // 2 messages
 
         // Message 1: one header, small payload
         buf.put_u8(1); // header_count
-        write_string16(&mut buf, "key1");
-        write_string16(&mut buf, "val1");
+        write_string16(&mut buf, "key1").unwrap();
+        write_string16(&mut buf, "val1").unwrap();
         buf.put_u32(5);
         buf.extend_from_slice(b"hello");
 
@@ -1196,7 +1247,7 @@ mod tests {
                 message: "queue not found".to_string(),
             },
         ];
-        let encoded = encode_enqueue_response(&results);
+        let encoded = encode_enqueue_response(&results).unwrap();
         let decoded = decode_enqueue_response(encoded).unwrap();
         assert_eq!(decoded.len(), 2);
         match &decoded[0] {
@@ -1216,8 +1267,8 @@ mod tests {
     fn round_trip_ack_request() {
         let mut buf = BytesMut::new();
         buf.put_u16(1); // 1 item
-        write_string16(&mut buf, "q1");
-        write_string16(&mut buf, "msg-1");
+        write_string16(&mut buf, "q1").unwrap();
+        write_string16(&mut buf, "msg-1").unwrap();
 
         let items = decode_ack_request(buf.freeze()).unwrap();
         assert_eq!(items.len(), 1);
@@ -1229,9 +1280,9 @@ mod tests {
     fn round_trip_nack_request() {
         let mut buf = BytesMut::new();
         buf.put_u16(1);
-        write_string16(&mut buf, "q1");
-        write_string16(&mut buf, "msg-1");
-        write_string16(&mut buf, "processing failed");
+        write_string16(&mut buf, "q1").unwrap();
+        write_string16(&mut buf, "msg-1").unwrap();
+        write_string16(&mut buf, "processing failed").unwrap();
 
         let items = decode_nack_request(buf.freeze()).unwrap();
         assert_eq!(items.len(), 1);
@@ -1243,7 +1294,7 @@ mod tests {
     #[test]
     fn round_trip_consume_request() {
         let mut buf = BytesMut::new();
-        write_string16(&mut buf, "my-queue");
+        write_string16(&mut buf, "my-queue").unwrap();
         buf.put_u32(100);
 
         let req = decode_consume_request(buf.freeze()).unwrap();
@@ -1267,7 +1318,7 @@ mod tests {
             on_failure_script: String::new(),
             visibility_timeout_ms: 30_000,
         };
-        let encoded = encode_create_queue_request(&req);
+        let encoded = encode_create_queue_request(&req).unwrap();
         let decoded = decode_create_queue_request(encoded).unwrap();
         assert_eq!(decoded.name, "orders");
         assert_eq!(decoded.on_enqueue_script, "return msg");
@@ -1298,7 +1349,7 @@ mod tests {
             leader_node_id: 1,
             replication_count: 3,
         };
-        let encoded = encode_get_stats_response(&resp);
+        let encoded = encode_get_stats_response(&resp).unwrap();
         let decoded = decode_get_stats_response(encoded).unwrap();
         assert_eq!(decoded.depth, 100);
         assert_eq!(decoded.in_flight, 5);
@@ -1322,7 +1373,7 @@ mod tests {
             }],
             cluster_node_count: 3,
         };
-        let encoded = encode_list_queues_response(&resp);
+        let encoded = encode_list_queues_response(&resp).unwrap();
         let decoded = decode_list_queues_response(encoded).unwrap();
         assert_eq!(decoded.queues.len(), 1);
         assert_eq!(decoded.queues[0].name, "orders");
@@ -1336,7 +1387,7 @@ mod tests {
             expires_at_ms: 0,
             is_superadmin: true,
         };
-        let encoded = encode_create_api_key_request(&req);
+        let encoded = encode_create_api_key_request(&req).unwrap();
         let decoded = decode_create_api_key_request(encoded).unwrap();
         assert_eq!(decoded.name, "test-key");
         assert_eq!(decoded.expires_at_ms, 0);
@@ -1353,7 +1404,7 @@ mod tests {
             }],
             is_superadmin: false,
         };
-        let encoded = encode_get_acl_response(&resp);
+        let encoded = encode_get_acl_response(&resp).unwrap();
         let decoded = decode_get_acl_response(encoded).unwrap();
         assert_eq!(decoded.key_id, "k1");
         assert_eq!(decoded.permissions.len(), 1);
@@ -1364,9 +1415,37 @@ mod tests {
     #[test]
     fn decode_truncated_enqueue_request_fails() {
         let mut buf = BytesMut::new();
-        write_string16(&mut buf, "q");
+        write_string16(&mut buf, "q").unwrap();
         buf.put_u16(5);
         let err = decode_enqueue_request(buf.freeze()).unwrap_err();
+        assert!(
+            matches!(err, FibpCodecError::InvalidPayload { .. }),
+            "expected InvalidPayload, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn encode_rejects_string_over_u16_max() {
+        let mut buf = BytesMut::new();
+        let long_string = "x".repeat(u16::MAX as usize + 1);
+        let err = write_string16(&mut buf, &long_string).unwrap_err();
+        assert!(
+            matches!(err, FibpCodecError::InvalidPayload { .. }),
+            "expected InvalidPayload, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn encode_rejects_header_count_over_u8_max() {
+        let mut headers = std::collections::HashMap::new();
+        for i in 0..=255usize {
+            headers.insert(format!("k{i}"), format!("v{i}"));
+        }
+        let msg = EnqueueWireMessage {
+            headers,
+            payload: vec![],
+        };
+        let err = encode_enqueue_request("q", &[msg]).unwrap_err();
         assert!(
             matches!(err, FibpCodecError::InvalidPayload { .. }),
             "expected InvalidPayload, got: {err:?}"

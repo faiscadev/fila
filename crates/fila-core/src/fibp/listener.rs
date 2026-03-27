@@ -497,7 +497,7 @@ where
                 }
             }
             let results = dispatch::dispatch_enqueue(broker, cluster.as_ref(), req).await?;
-            let payload = wire::encode_enqueue_response(&results);
+            let payload = wire::encode_enqueue_response(&results)?;
             let resp = Frame::new(0, OP_ENQUEUE, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await
         }
@@ -571,7 +571,7 @@ where
                 }
             }
             let results = dispatch::dispatch_ack(broker, cluster.as_ref(), items).await?;
-            let payload = wire::encode_ack_nack_response(&results);
+            let payload = wire::encode_ack_nack_response(&results)?;
             let resp = Frame::new(0, OP_ACK, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await
         }
@@ -589,7 +589,7 @@ where
                 }
             }
             let results = dispatch::dispatch_nack(broker, cluster.as_ref(), items).await?;
-            let payload = wire::encode_ack_nack_response(&results);
+            let payload = wire::encode_ack_nack_response(&results)?;
             let resp = Frame::new(0, OP_NACK, frame.correlation_id, payload);
             write_frame_generic(framed, resp).await
         }

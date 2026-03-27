@@ -669,7 +669,7 @@ pub async fn dispatch_create_queue(
         match resp {
             ClusterResponse::CreateQueueGroup { queue_id } => {
                 let resp = wire::CreateQueueResponse { queue_id };
-                Ok(wire::encode_create_queue_response(&resp))
+                Ok(wire::encode_create_queue_response(&resp)?)
             }
             ClusterResponse::Error { message } => {
                 Err(FibpError::InvalidPayload { reason: message })
@@ -697,7 +697,7 @@ pub async fn dispatch_create_queue(
             })?;
 
         let resp = wire::CreateQueueResponse { queue_id };
-        Ok(wire::encode_create_queue_response(&resp))
+        Ok(wire::encode_create_queue_response(&resp)?)
     }
 }
 
@@ -834,7 +834,7 @@ pub async fn dispatch_queue_stats(
         leader_node_id,
         replication_count,
     };
-    Ok(wire::encode_get_stats_response(&resp))
+    Ok(wire::encode_get_stats_response(&resp)?)
 }
 
 /// Dispatch a ListQueues request. Payload is binary (empty or ignored).
@@ -879,7 +879,7 @@ pub async fn dispatch_list_queues(
         queues,
         cluster_node_count,
     };
-    Ok(wire::encode_list_queues_response(&resp))
+    Ok(wire::encode_list_queues_response(&resp)?)
 }
 
 /// Dispatch a Redrive request. Payload is a binary `RedriveRequest`.
@@ -982,7 +982,7 @@ pub async fn dispatch_config_get(broker: &Arc<Broker>, payload: Bytes) -> Result
     let resp = wire::GetConfigResponse {
         value: value.unwrap_or_default(),
     };
-    Ok(wire::encode_get_config_response(&resp))
+    Ok(wire::encode_get_config_response(&resp)?)
 }
 
 /// Dispatch a ListConfig request. Payload is a binary `ListConfigRequest`.
@@ -1020,7 +1020,7 @@ pub async fn dispatch_config_list(
         entries: wire_entries,
         total_count: entries.len() as u32,
     };
-    Ok(wire::encode_list_config_response(&resp))
+    Ok(wire::encode_list_config_response(&resp)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,7 +1076,7 @@ pub fn dispatch_auth_create_key(
         key: token,
         is_superadmin: req.is_superadmin,
     };
-    Ok(wire::encode_create_api_key_response(&resp))
+    Ok(wire::encode_create_api_key_response(&resp)?)
 }
 
 /// Dispatch a RevokeApiKey request. Payload is a binary `RevokeApiKeyRequest`.
@@ -1118,7 +1118,7 @@ pub fn dispatch_auth_list_keys(broker: &Arc<Broker>, _payload: Bytes) -> Result<
         .collect();
 
     let resp = wire::ListApiKeysResponse { keys };
-    Ok(wire::encode_list_api_keys_response(&resp))
+    Ok(wire::encode_list_api_keys_response(&resp)?)
 }
 
 /// Dispatch a SetAcl request. Payload is a binary `SetAclRequest`.
@@ -1198,7 +1198,7 @@ pub fn dispatch_auth_get_acl(broker: &Arc<Broker>, payload: Bytes) -> Result<Byt
                 permissions,
                 is_superadmin: e.is_superadmin,
             };
-            Ok(wire::encode_get_acl_response(&resp))
+            Ok(wire::encode_get_acl_response(&resp)?)
         }
         None => Err(FibpError::InvalidPayload {
             reason: format!("api key not found: {}", req.key_id),

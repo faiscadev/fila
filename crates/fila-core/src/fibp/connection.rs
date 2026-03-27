@@ -375,7 +375,7 @@ impl FibpConnection {
             return self.write_frame(err_frame).await;
         }
         let results = dispatch::dispatch_enqueue(&self.broker, self.cluster.as_ref(), req).await?;
-        let payload = wire::encode_enqueue_response(&results);
+        let payload = wire::encode_enqueue_response(&results)?;
         let resp = Frame::new(0, OP_ENQUEUE, frame.correlation_id, payload);
         self.write_frame(resp).await
     }
@@ -470,7 +470,7 @@ impl FibpConnection {
             }
         }
         let results = dispatch::dispatch_ack(&self.broker, self.cluster.as_ref(), items).await?;
-        let payload = wire::encode_ack_nack_response(&results);
+        let payload = wire::encode_ack_nack_response(&results)?;
         let resp = Frame::new(0, OP_ACK, frame.correlation_id, payload);
         self.write_frame(resp).await
     }
@@ -485,7 +485,7 @@ impl FibpConnection {
             }
         }
         let results = dispatch::dispatch_nack(&self.broker, self.cluster.as_ref(), items).await?;
-        let payload = wire::encode_ack_nack_response(&results);
+        let payload = wire::encode_ack_nack_response(&results)?;
         let resp = Frame::new(0, OP_NACK, frame.correlation_id, payload);
         self.write_frame(resp).await
     }
@@ -676,7 +676,13 @@ pub(super) async fn consume_push_loop(
                             payload: rm.payload,
                         })
                         .collect();
-                    let payload = wire::encode_consume_push(&push_messages);
+                    let payload = match wire::encode_consume_push(&push_messages) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!(peer = %peer, error = %e, "consume push wire encode error");
+                            return;
+                        }
+                    };
                     let frame = Frame::new(FLAG_STREAM, OP_CONSUME, 0, payload);
                     let mut buf = BytesMut::new();
                     let mut enc = FibpCodec::new(max_frame_size);
@@ -711,7 +717,13 @@ pub(super) async fn consume_push_loop(
             })
             .collect();
 
-        let payload = wire::encode_consume_push(&push_messages);
+        let payload = match wire::encode_consume_push(&push_messages) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(peer = %peer, error = %e, "consume push wire encode error");
+                return;
+            }
+        };
         let frame = Frame::new(FLAG_STREAM, OP_CONSUME, 0, payload);
 
         // Encode the frame into bytes.
