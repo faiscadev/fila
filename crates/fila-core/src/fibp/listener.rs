@@ -16,8 +16,7 @@ use tracing::{debug, info, warn};
 
 use super::codec::{
     OP_ACK, OP_AUTH, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE, OP_ENQUEUE, OP_FLOW, OP_GOAWAY,
-    OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_PAUSE_QUEUE, OP_QUEUE_STATS, OP_REDRIVE,
-    OP_RESUME_QUEUE,
+    OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_QUEUE_STATS, OP_REDRIVE,
 };
 use super::connection::FibpConnection;
 use super::{dispatch, error::FibpError, wire};
@@ -665,13 +664,6 @@ where
                     write_frame_generic(framed, err).await
                 }
             }
-        }
-        op if op == OP_PAUSE_QUEUE || op == OP_RESUME_QUEUE => {
-            let err = Frame::error(
-                frame.correlation_id,
-                &format!("operation 0x{op:02X} not implemented"),
-            );
-            write_frame_generic(framed, err).await
         }
         op => {
             let err = Frame::error(
