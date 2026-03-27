@@ -10,7 +10,7 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
-use super::error::FibpError;
+use super::error::FibpCodecError;
 use super::FRAME_HEADER_LEN;
 
 // ---------------------------------------------------------------------------
@@ -146,9 +146,9 @@ impl FibpCodec {
 
 impl Decoder for FibpCodec {
     type Item = Frame;
-    type Error = FibpError;
+    type Error = FibpCodecError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Frame>, FibpError> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Frame>, FibpCodecError> {
         // Need at least the 4-byte length prefix.
         if src.len() < 4 {
             return Ok(None);
@@ -159,7 +159,7 @@ impl Decoder for FibpCodec {
 
         // Enforce max frame size.
         if frame_len > self.max_frame_size {
-            return Err(FibpError::FrameTooLarge {
+            return Err(FibpCodecError::FrameTooLarge {
                 size: frame_len,
                 limit: self.max_frame_size,
             });
@@ -167,7 +167,7 @@ impl Decoder for FibpCodec {
 
         // The frame body must contain at least the 6-byte header.
         if (frame_len as usize) < FRAME_HEADER_LEN {
-            return Err(FibpError::Io(std::io::Error::new(
+            return Err(FibpCodecError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "frame body too short: {frame_len} bytes, need at least {FRAME_HEADER_LEN}"
@@ -205,13 +205,13 @@ impl Decoder for FibpCodec {
 }
 
 impl Encoder<Frame> for FibpCodec {
-    type Error = FibpError;
+    type Error = FibpCodecError;
 
-    fn encode(&mut self, frame: Frame, dst: &mut BytesMut) -> Result<(), FibpError> {
+    fn encode(&mut self, frame: Frame, dst: &mut BytesMut) -> Result<(), FibpCodecError> {
         let body_len = FRAME_HEADER_LEN + frame.payload.len();
 
         if body_len > self.max_frame_size as usize {
-            return Err(FibpError::FrameTooLarge {
+            return Err(FibpCodecError::FrameTooLarge {
                 size: body_len as u32,
                 limit: self.max_frame_size,
             });
@@ -312,7 +312,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                FibpError::FrameTooLarge {
+                FibpCodecError::FrameTooLarge {
                     size: 128,
                     limit: 64
                 }
@@ -328,7 +328,7 @@ mod tests {
         let mut buf = BytesMut::new();
         let err = codec.encode(frame, &mut buf).unwrap_err();
         assert!(
-            matches!(err, FibpError::FrameTooLarge { .. }),
+            matches!(err, FibpCodecError::FrameTooLarge { .. }),
             "expected FrameTooLarge, got: {err:?}"
         );
     }

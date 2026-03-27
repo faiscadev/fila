@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
-use prost::Message as ProstMessage;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -25,15 +24,17 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{Encoder, Framed};
 
-use crate::client::{ConsumeMessage, EnqueueMessage};
-use crate::error::{AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError};
-use crate::fibp_codec::{
-    self, ack_nack_err, enqueue_err, AckNackResultItem, EnqueueResultItem, EnqueueWireMessage,
-    FibpCodec, Frame, FLAG_STREAM, MAGIC, OP_ACK, OP_AUTH, OP_AUTH_CREATE_KEY, OP_AUTH_GET_ACL,
+use fila_fibp::codec::{
+    FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_AUTH, OP_AUTH_CREATE_KEY, OP_AUTH_GET_ACL,
     OP_AUTH_LIST_KEYS, OP_AUTH_REVOKE_KEY, OP_AUTH_SET_ACL, OP_CONFIG_GET, OP_CONFIG_LIST,
     OP_CONFIG_SET, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE, OP_ENQUEUE, OP_ERROR, OP_FLOW,
     OP_GOAWAY, OP_LIST_QUEUES, OP_NACK, OP_QUEUE_STATS, OP_REDRIVE,
 };
+use fila_fibp::wire;
+use fila_fibp::MAGIC;
+
+use crate::client::{ConsumeMessage, EnqueueMessage};
+use crate::error::{AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError};
 
 /// Maximum frame size for the SDK client (16 MB, matching server default).
 const MAX_FRAME_SIZE: u32 = 16_777_216;
@@ -411,26 +412,27 @@ impl FibpTransport {
             (0..total).map(|_| None).collect();
 
         for (queue, msgs) in by_queue {
-            let wire_msgs: Vec<EnqueueWireMessage> = msgs
+            let wire_msgs: Vec<wire::EnqueueWireMessage> = msgs
                 .iter()
-                .map(|(_, m)| EnqueueWireMessage {
+                .map(|(_, m)| wire::EnqueueWireMessage {
                     headers: m.headers.clone(),
                     payload: m.payload.clone(),
                 })
                 .collect();
 
-            let payload = fibp_codec::encode_enqueue_request(&queue, &wire_msgs);
+            let payload = wire::encode_enqueue_request(&queue, &wire_msgs);
             let corr_id = self.next_id();
             let frame = Frame::new(0, OP_ENQUEUE, corr_id, payload);
 
             match self.request(frame).await {
-                Ok(response) => match fibp_codec::decode_enqueue_response(response.payload) {
+                Ok(response) => match wire::decode_enqueue_response(response.payload) {
                     Ok(items) => {
                         for (j, (original_idx, _)) in msgs.iter().enumerate() {
                             let result = match items.get(j) {
-                                Some(EnqueueResultItem::Ok { msg_id }) => Ok(msg_id.clone()),
-                                Some(EnqueueResultItem::Err { code, message }) => match *code {
-                                    enqueue_err::QUEUE_NOT_FOUND => {
+                                Some(wire::EnqueueResultItem::Ok { msg_id }) => Ok(msg_id.clone()),
+                                Some(wire::EnqueueResultItem::Err { code, message }) => match *code
+                                {
+                                    wire::enqueue_err::QUEUE_NOT_FOUND => {
                                         Err(EnqueueError::QueueNotFound(message.clone()))
                                     }
                                     _ => Err(EnqueueError::Status(StatusError::Internal(
@@ -490,12 +492,12 @@ impl FibpTransport {
     /// during a redirect. Dropping the stream closes the push receiver and,
     /// for redirected sessions, tears down the leader TCP connection.
     pub async fn consume(&self, queue: &str) -> Result<ConsumeStream, ConsumeError> {
-        // Set up push channel BEFORE sending the request — the server starts
+        // Set up push channel BEFORE sending the request -- the server starts
         // pushing messages immediately after processing OP_CONSUME, and those
         // frames would be dropped if consume_push_tx isn't ready.
         let push_rx = self.setup_consume_channel(queue).await?;
 
-        let payload = fibp_codec::encode_consume_request(queue, INITIAL_CREDITS);
+        let payload = wire::encode_consume_request(queue, INITIAL_CREDITS);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONSUME, corr_id, payload);
 
@@ -508,7 +510,7 @@ impl FibpTransport {
                 })
             }
             Err(StatusError::Internal(ref msg)) if msg.starts_with("leader_hint:") => {
-                // Not the leader — tear down the push channel we pre-set on self.
+                // Not the leader -- tear down the push channel we pre-set on self.
                 {
                     let mut cpt = self.inner.consume_push_tx.lock().await;
                     *cpt = None;
@@ -518,7 +520,7 @@ impl FibpTransport {
                     *cq = None;
                 }
 
-                // Server told us the leader address — connect there instead,
+                // Server told us the leader address -- connect there instead,
                 // reusing the same TLS and API key configuration.
                 let leader_addr = msg["leader_hint:".len()..].to_string();
                 let leader_transport =
@@ -531,7 +533,7 @@ impl FibpTransport {
                 // Set up push channel before sending request on leader transport.
                 let leader_push_rx = leader_transport.setup_consume_channel(queue).await?;
 
-                let payload2 = fibp_codec::encode_consume_request(queue, INITIAL_CREDITS);
+                let payload2 = wire::encode_consume_request(queue, INITIAL_CREDITS);
                 let corr_id2 = leader_transport.next_id();
                 let frame2 = Frame::new(0, OP_CONSUME, corr_id2, payload2);
 
@@ -595,7 +597,7 @@ impl FibpTransport {
         // dispatching push frames. The IO loop also handles request/response
         // frames (e.g. ack responses). If the push channel fills up and the
         // IO loop blocks on send, it cannot dispatch the ack response, which
-        // the caller is waiting for — causing a deadlock.
+        // the caller is waiting for -- causing a deadlock.
         let (push_tx, push_rx) = mpsc::channel::<Result<ConsumeMessage, StatusError>>(4096);
 
         {
@@ -615,12 +617,12 @@ impl FibpTransport {
             loop {
                 interval.tick().await;
                 let Some(inner) = weak_inner.upgrade() else {
-                    break; // Transport dropped — stop sending flow frames.
+                    break; // Transport dropped -- stop sending flow frames.
                 };
                 let corr = inner.next_correlation_id.fetch_add(1, Ordering::Relaxed);
                 let writer_tx = inner.writer_tx.clone();
                 drop(inner); // Release the Arc before awaiting the send.
-                let flow_payload = fibp_codec::encode_flow(FLOW_CREDITS);
+                let flow_payload = wire::encode_flow(FLOW_CREDITS);
                 let flow_frame = Frame::new(0, OP_FLOW, corr, flow_payload);
                 if writer_tx
                     .send(WriterCommand::SendFrame(flow_frame))
@@ -637,7 +639,7 @@ impl FibpTransport {
 
     /// Acknowledge a message via FIBP.
     pub async fn ack(&self, queue: &str, message_id: &str) -> Result<(), AckError> {
-        let payload = fibp_codec::encode_ack_request(&[(queue, message_id)]);
+        let payload = wire::encode_ack_request(&[(queue, message_id)]);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_ACK, corr_id, payload);
 
@@ -646,13 +648,13 @@ impl FibpTransport {
             other => AckError::Status(other),
         })?;
 
-        let results =
-            fibp_codec::decode_ack_nack_response(response.payload).map_err(AckError::Status)?;
+        let results = wire::decode_ack_nack_response(response.payload)
+            .map_err(|e| AckError::Status(StatusError::Internal(e.to_string())))?;
 
         match results.into_iter().next() {
-            Some(AckNackResultItem::Ok) => Ok(()),
-            Some(AckNackResultItem::Err { code, message }) => match code {
-                ack_nack_err::MESSAGE_NOT_FOUND => Err(AckError::MessageNotFound(message)),
+            Some(wire::AckNackResultItem::Ok) => Ok(()),
+            Some(wire::AckNackResultItem::Err { code, message }) => match code {
+                wire::ack_nack_err::MESSAGE_NOT_FOUND => Err(AckError::MessageNotFound(message)),
                 _ => Err(AckError::Status(StatusError::Internal(message))),
             },
             None => Err(AckError::Status(StatusError::Internal(
@@ -663,7 +665,7 @@ impl FibpTransport {
 
     /// Negatively acknowledge a message via FIBP.
     pub async fn nack(&self, queue: &str, message_id: &str, error: &str) -> Result<(), NackError> {
-        let payload = fibp_codec::encode_nack_request(&[(queue, message_id, error)]);
+        let payload = wire::encode_nack_request(&[(queue, message_id, error)]);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_NACK, corr_id, payload);
 
@@ -672,13 +674,13 @@ impl FibpTransport {
             other => NackError::Status(other),
         })?;
 
-        let results =
-            fibp_codec::decode_ack_nack_response(response.payload).map_err(NackError::Status)?;
+        let results = wire::decode_ack_nack_response(response.payload)
+            .map_err(|e| NackError::Status(StatusError::Internal(e.to_string())))?;
 
         match results.into_iter().next() {
-            Some(AckNackResultItem::Ok) => Ok(()),
-            Some(AckNackResultItem::Err { code, message }) => match code {
-                ack_nack_err::MESSAGE_NOT_FOUND => Err(NackError::MessageNotFound(message)),
+            Some(wire::AckNackResultItem::Ok) => Ok(()),
+            Some(wire::AckNackResultItem::Err { code, message }) => match code {
+                wire::ack_nack_err::MESSAGE_NOT_FOUND => Err(NackError::MessageNotFound(message)),
                 _ => Err(NackError::Status(StatusError::Internal(message))),
             },
             None => Err(NackError::Status(StatusError::Internal(
@@ -688,36 +690,39 @@ impl FibpTransport {
     }
 
     // -----------------------------------------------------------------------
-    // Admin operations (protobuf-encoded payloads)
+    // Admin operations (binary-encoded payloads via fila_fibp)
     // -----------------------------------------------------------------------
 
     /// Create a queue via FIBP.
     pub async fn create_queue(
         &self,
         name: &str,
-        config: Option<fila_proto::QueueConfig>,
+        on_enqueue_script: &str,
+        on_failure_script: &str,
+        visibility_timeout_ms: u64,
     ) -> Result<String, StatusError> {
-        let req = fila_proto::CreateQueueRequest {
+        let req = wire::CreateQueueRequest {
             name: name.to_string(),
-            config,
+            on_enqueue_script: on_enqueue_script.to_string(),
+            on_failure_script: on_failure_script.to_string(),
+            visibility_timeout_ms,
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_create_queue_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CREATE_QUEUE, corr_id, payload);
 
         let response = self.request(frame).await?;
-        let resp = fila_proto::CreateQueueResponse::decode(response.payload).map_err(|e| {
-            StatusError::Internal(format!("failed to decode create queue response: {e}"))
-        })?;
+        let resp = wire::decode_create_queue_response(response.payload)
+            .map_err(|e| StatusError::Internal(format!("failed to decode response: {e}")))?;
         Ok(resp.queue_id)
     }
 
     /// Delete a queue via FIBP.
     pub async fn delete_queue(&self, queue: &str) -> Result<(), StatusError> {
-        let req = fila_proto::DeleteQueueRequest {
+        let req = wire::DeleteQueueRequest {
             queue: queue.to_string(),
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_delete_queue_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_DELETE_QUEUE, corr_id, payload);
 
@@ -726,49 +731,44 @@ impl FibpTransport {
     }
 
     /// Get queue statistics via FIBP.
-    pub async fn queue_stats(
-        &self,
-        queue: &str,
-    ) -> Result<fila_proto::GetStatsResponse, StatusError> {
-        let req = fila_proto::GetStatsRequest {
+    pub async fn queue_stats(&self, queue: &str) -> Result<wire::GetStatsResponse, StatusError> {
+        let req = wire::GetStatsRequest {
             queue: queue.to_string(),
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_get_stats_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_QUEUE_STATS, corr_id, payload);
 
         let response = self.request(frame).await?;
-        fila_proto::GetStatsResponse::decode(response.payload)
+        wire::decode_get_stats_response(response.payload)
             .map_err(|e| StatusError::Internal(format!("failed to decode stats response: {e}")))
     }
 
     /// List queues via FIBP.
-    pub async fn list_queues(&self) -> Result<fila_proto::ListQueuesResponse, StatusError> {
-        let req = fila_proto::ListQueuesRequest {};
-        let payload = Bytes::from(req.encode_to_vec());
+    pub async fn list_queues(&self) -> Result<wire::ListQueuesResponse, StatusError> {
+        let payload = wire::encode_list_queues_request();
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_LIST_QUEUES, corr_id, payload);
 
         let response = self.request(frame).await?;
-        fila_proto::ListQueuesResponse::decode(response.payload).map_err(|e| {
+        wire::decode_list_queues_response(response.payload).map_err(|e| {
             StatusError::Internal(format!("failed to decode list queues response: {e}"))
         })
     }
 
     /// Redrive messages from a DLQ via FIBP.
     pub async fn redrive(&self, dlq_queue: &str, count: u64) -> Result<u64, StatusError> {
-        let req = fila_proto::RedriveRequest {
+        let req = wire::RedriveRequest {
             dlq_queue: dlq_queue.to_string(),
             count,
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_redrive_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_REDRIVE, corr_id, payload);
 
         let response = self.request(frame).await?;
-        let resp = fila_proto::RedriveResponse::decode(response.payload).map_err(|e| {
-            StatusError::Internal(format!("failed to decode redrive response: {e}"))
-        })?;
+        let resp = wire::decode_redrive_response(response.payload)
+            .map_err(|e| StatusError::Internal(format!("failed to decode response: {e}")))?;
         Ok(resp.redriven)
     }
 
@@ -778,11 +778,11 @@ impl FibpTransport {
 
     /// Set a runtime config value via FIBP.
     pub async fn set_config(&self, key: &str, value: &str) -> Result<(), StatusError> {
-        let req = fila_proto::SetConfigRequest {
+        let req = wire::SetConfigRequest {
             key: key.to_string(),
             value: value.to_string(),
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_set_config_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONFIG_SET, corr_id, payload);
 
@@ -792,34 +792,30 @@ impl FibpTransport {
 
     /// Get a runtime config value via FIBP.
     pub async fn get_config(&self, key: &str) -> Result<String, StatusError> {
-        let req = fila_proto::GetConfigRequest {
+        let req = wire::GetConfigRequest {
             key: key.to_string(),
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_get_config_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONFIG_GET, corr_id, payload);
 
         let response = self.request(frame).await?;
-        let resp = fila_proto::GetConfigResponse::decode(response.payload).map_err(|e| {
-            StatusError::Internal(format!("failed to decode get config response: {e}"))
-        })?;
+        let resp = wire::decode_get_config_response(response.payload)
+            .map_err(|e| StatusError::Internal(format!("failed to decode response: {e}")))?;
         Ok(resp.value)
     }
 
     /// List runtime config entries via FIBP.
-    pub async fn list_config(
-        &self,
-        prefix: &str,
-    ) -> Result<fila_proto::ListConfigResponse, StatusError> {
-        let req = fila_proto::ListConfigRequest {
+    pub async fn list_config(&self, prefix: &str) -> Result<wire::ListConfigResponse, StatusError> {
+        let req = wire::ListConfigRequest {
             prefix: prefix.to_string(),
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_list_config_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONFIG_LIST, corr_id, payload);
 
         let response = self.request(frame).await?;
-        fila_proto::ListConfigResponse::decode(response.payload).map_err(|e| {
+        wire::decode_list_config_response(response.payload).map_err(|e| {
             StatusError::Internal(format!("failed to decode list config response: {e}"))
         })
     }
@@ -834,28 +830,27 @@ impl FibpTransport {
         name: &str,
         expires_at_ms: Option<u64>,
         is_superadmin: bool,
-    ) -> Result<fila_proto::CreateApiKeyResponse, StatusError> {
-        let req = fila_proto::CreateApiKeyRequest {
+    ) -> Result<wire::CreateApiKeyResponse, StatusError> {
+        let req = wire::CreateApiKeyRequest {
             name: name.to_string(),
             expires_at_ms: expires_at_ms.unwrap_or(0),
             is_superadmin,
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_create_api_key_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_CREATE_KEY, corr_id, payload);
 
         let response = self.request(frame).await?;
-        fila_proto::CreateApiKeyResponse::decode(response.payload).map_err(|e| {
-            StatusError::Internal(format!("failed to decode create api key response: {e}"))
-        })
+        wire::decode_create_api_key_response(response.payload)
+            .map_err(|e| StatusError::Internal(format!("failed to decode response: {e}")))
     }
 
     /// Revoke an API key via FIBP.
     pub async fn revoke_api_key(&self, key_id: &str) -> Result<(), StatusError> {
-        let req = fila_proto::RevokeApiKeyRequest {
+        let req = wire::RevokeApiKeyRequest {
             key_id: key_id.to_string(),
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_revoke_api_key_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_REVOKE_KEY, corr_id, payload);
 
@@ -864,29 +859,27 @@ impl FibpTransport {
     }
 
     /// List all API keys via FIBP.
-    pub async fn list_api_keys(&self) -> Result<fila_proto::ListApiKeysResponse, StatusError> {
-        let req = fila_proto::ListApiKeysRequest {};
-        let payload = Bytes::from(req.encode_to_vec());
+    pub async fn list_api_keys(&self) -> Result<wire::ListApiKeysResponse, StatusError> {
+        let payload = Bytes::new();
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_LIST_KEYS, corr_id, payload);
 
         let response = self.request(frame).await?;
-        fila_proto::ListApiKeysResponse::decode(response.payload).map_err(|e| {
-            StatusError::Internal(format!("failed to decode list api keys response: {e}"))
-        })
+        wire::decode_list_api_keys_response(response.payload)
+            .map_err(|e| StatusError::Internal(format!("failed to decode response: {e}")))
     }
 
     /// Set ACL permissions for an API key via FIBP.
     pub async fn set_acl(
         &self,
         key_id: &str,
-        permissions: Vec<fila_proto::AclPermission>,
+        permissions: Vec<wire::AclPermission>,
     ) -> Result<(), StatusError> {
-        let req = fila_proto::SetAclRequest {
+        let req = wire::SetAclRequest {
             key_id: key_id.to_string(),
             permissions,
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_set_acl_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_SET_ACL, corr_id, payload);
 
@@ -895,17 +888,17 @@ impl FibpTransport {
     }
 
     /// Get ACL permissions for an API key via FIBP.
-    pub async fn get_acl(&self, key_id: &str) -> Result<fila_proto::GetAclResponse, StatusError> {
-        let req = fila_proto::GetAclRequest {
+    pub async fn get_acl(&self, key_id: &str) -> Result<wire::GetAclResponse, StatusError> {
+        let req = wire::GetAclRequest {
             key_id: key_id.to_string(),
         };
-        let payload = Bytes::from(req.encode_to_vec());
+        let payload = wire::encode_get_acl_request(&req);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_AUTH_GET_ACL, corr_id, payload);
 
         let response = self.request(frame).await?;
-        fila_proto::GetAclResponse::decode(response.payload)
-            .map_err(|e| StatusError::Internal(format!("failed to decode get acl response: {e}")))
+        wire::decode_get_acl_response(response.payload)
+            .map_err(|e| StatusError::Internal(format!("failed to decode response: {e}")))
     }
 }
 
@@ -1020,7 +1013,7 @@ async fn dispatch_frame(
             let queue_name = cq.clone().unwrap_or_default();
             drop(cq);
 
-            match fibp_codec::decode_consume_push(frame.payload) {
+            match wire::decode_consume_push(frame.payload) {
                 Ok(messages) => {
                     for msg in messages {
                         let cm = ConsumeMessage {
@@ -1042,14 +1035,14 @@ async fn dispatch_frame(
                     }
                 }
                 Err(e) => {
-                    let _ = tx.try_send(Err(e));
+                    let _ = tx.try_send(Err(StatusError::Internal(e.to_string())));
                 }
             }
         }
         return;
     }
 
-    // Regular response frame — dispatch by correlation ID.
+    // Regular response frame -- dispatch by correlation ID.
     let corr_id = frame.correlation_id;
     let mut map = pending.lock().await;
     if let Some(sender) = map.remove(&corr_id) {

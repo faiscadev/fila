@@ -261,13 +261,15 @@ async fn cmd_queue_create(
     on_failure: Option<String>,
     visibility_timeout: Option<u64>,
 ) {
-    let config = fila_sdk::proto::QueueConfig {
-        on_enqueue_script: on_enqueue.unwrap_or_default(),
-        on_failure_script: on_failure.unwrap_or_default(),
-        visibility_timeout_ms: visibility_timeout.unwrap_or(0),
-    };
-
-    match transport.create_queue(&name, Some(config)).await {
+    match transport
+        .create_queue(
+            &name,
+            &on_enqueue.unwrap_or_default(),
+            &on_failure.unwrap_or_default(),
+            visibility_timeout.unwrap_or(0),
+        )
+        .await
+    {
         Ok(_) => println!("Created queue \"{name}\""),
         Err(err) => {
             eprintln!("{}", format_error(err, &format!("queue \"{name}\"")));
@@ -511,7 +513,7 @@ async fn cmd_auth_acl_set(transport: &FibpTransport, key_id: String, permissions
                 process::exit(1);
             }
         }
-        acl_permissions.push(fila_sdk::proto::AclPermission {
+        acl_permissions.push(fila_fibp::wire::AclPermission {
             kind: kind.to_string(),
             pattern: pattern.to_string(),
         });

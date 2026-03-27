@@ -41,9 +41,9 @@ pub enum FibpError {
     #[error("permission denied: {reason}")]
     PermissionDenied { reason: String },
 
-    /// Protobuf decode error on an admin payload.
-    #[error("protobuf decode error: {0}")]
-    ProtobufDecode(#[from] prost::DecodeError),
+    /// Wire decode error on an admin payload.
+    #[error("wire decode error: {0}")]
+    WireDecode(#[from] fila_fibp::FibpCodecError),
 
     /// TLS configuration error.
     #[error("tls error: {reason}")]

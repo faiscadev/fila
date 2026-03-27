@@ -106,14 +106,7 @@ async fn create_queue(addr: &str, name: &str) {
         .await
         .expect("connect for create_queue");
     transport
-        .create_queue(
-            name,
-            Some(fila_sdk::proto::QueueConfig {
-                on_enqueue_script: String::new(),
-                on_failure_script: String::new(),
-                visibility_timeout_ms: 30_000,
-            }),
-        )
+        .create_queue(name, "", "", 30_000)
         .await
         .expect("create queue");
 }
