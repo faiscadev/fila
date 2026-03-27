@@ -27,8 +27,7 @@ use super::codec::{
     FibpCodec, Frame, FLAG_STREAM, OP_ACK, OP_AUTH, OP_AUTH_CREATE_KEY, OP_AUTH_GET_ACL,
     OP_AUTH_LIST_KEYS, OP_AUTH_REVOKE_KEY, OP_AUTH_SET_ACL, OP_CONFIG_GET, OP_CONFIG_LIST,
     OP_CONFIG_SET, OP_CONSUME, OP_CREATE_QUEUE, OP_DELETE_QUEUE, OP_ENQUEUE, OP_FLOW, OP_GOAWAY,
-    OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_PAUSE_QUEUE, OP_QUEUE_STATS, OP_REDRIVE,
-    OP_RESUME_QUEUE,
+    OP_HEARTBEAT, OP_LIST_QUEUES, OP_NACK, OP_QUEUE_STATS, OP_REDRIVE,
 };
 use super::dispatch;
 use super::error::FibpError;
@@ -273,13 +272,6 @@ impl FibpConnection {
             OP_DELETE_QUEUE => self.handle_admin(frame, Permission::Admin).await,
             OP_QUEUE_STATS => self.handle_admin(frame, Permission::Admin).await,
             OP_LIST_QUEUES => self.handle_admin(frame, Permission::Admin).await,
-            OP_PAUSE_QUEUE | OP_RESUME_QUEUE => {
-                let err_frame = Frame::error(
-                    frame.correlation_id,
-                    &format!("operation 0x{:02X} not implemented", frame.op),
-                );
-                self.write_frame(err_frame).await
-            }
             OP_REDRIVE => self.handle_admin(frame, Permission::Admin).await,
             // Config operations — protobuf-encoded payloads.
             OP_CONFIG_SET | OP_CONFIG_GET | OP_CONFIG_LIST => {

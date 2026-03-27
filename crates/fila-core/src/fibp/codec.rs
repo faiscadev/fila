@@ -34,10 +34,6 @@ pub const OP_DELETE_QUEUE: u8 = 0x11;
 pub const OP_QUEUE_STATS: u8 = 0x12;
 /// List queues.
 pub const OP_LIST_QUEUES: u8 = 0x13;
-/// Pause a queue.
-pub const OP_PAUSE_QUEUE: u8 = 0x14;
-/// Resume a paused queue.
-pub const OP_RESUME_QUEUE: u8 = 0x15;
 /// Redrive messages from a dead-letter queue.
 pub const OP_REDRIVE: u8 = 0x16;
 
