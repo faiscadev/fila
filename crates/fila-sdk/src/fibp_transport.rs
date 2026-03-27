@@ -11,15 +11,18 @@
 //! to a separate mpsc channel.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
 use prost::Message as ProstMessage;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::{Encoder, Framed};
 
 use crate::client::{ConsumeMessage, EnqueueMessage};
@@ -34,6 +37,28 @@ use crate::fibp_codec::{
 
 /// Maximum frame size for the SDK client (16 MB, matching server default).
 const MAX_FRAME_SIZE: u32 = 16_777_216;
+
+/// A consume stream returned by [`FibpTransport::consume`].
+///
+/// Wraps the mpsc receiver and optionally owns a leader transport created
+/// during a cluster leader-hint redirect. The leader transport's TCP
+/// connection is kept alive as long as this stream is live, and is dropped
+/// (closing the connection) when this stream is dropped.
+pub struct ConsumeStream {
+    inner: ReceiverStream<Result<ConsumeMessage, StatusError>>,
+    /// Keeps the leader transport alive for the duration of the consume
+    /// session when a cluster redirect was performed. `None` for direct
+    /// (non-redirected) consumes.
+    _leader_transport: Option<FibpTransport>,
+}
+
+impl Stream for ConsumeStream {
+    type Item = Result<ConsumeMessage, StatusError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
 
 /// Initial credits granted to the server when opening a consume stream.
 const INITIAL_CREDITS: u32 = 64;
@@ -82,6 +107,16 @@ struct FibpTransportInner {
     consume_queue: Arc<Mutex<Option<String>>>,
     /// Configuration used to create this transport, preserved for leader redirects.
     connect_config: TransportConnectConfig,
+    /// Handle to the background IO loop task. Aborted on drop to ensure the
+    /// TCP connection is closed immediately when the transport is dropped,
+    /// rather than waiting for the writer channel close to propagate.
+    io_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for FibpTransportInner {
+    fn drop(&mut self) {
+        self.io_task.abort();
+    }
 }
 
 impl std::fmt::Debug for FibpTransport {
@@ -261,7 +296,7 @@ impl FibpTransport {
 
         let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>(256);
 
-        spawn_io_loop(
+        let io_task = spawn_io_loop(
             framed,
             writer_rx,
             Arc::clone(&pending),
@@ -277,6 +312,7 @@ impl FibpTransport {
                 consume_push_tx,
                 next_correlation_id: AtomicU32::new(1),
                 consume_queue,
+                io_task,
                 connect_config,
             }),
         };
@@ -449,20 +485,39 @@ impl FibpTransport {
     /// requested queue, the server returns a `leader_hint:<addr>` error.
     /// This method transparently opens a new connection to the leader and
     /// returns a consume stream from that connection.
-    pub async fn consume(
-        &self,
-        queue: &str,
-    ) -> Result<mpsc::Receiver<Result<ConsumeMessage, StatusError>>, ConsumeError> {
+    ///
+    /// The returned [`ConsumeStream`] owns any leader transport created
+    /// during a redirect. Dropping the stream closes the push receiver and,
+    /// for redirected sessions, tears down the leader TCP connection.
+    pub async fn consume(&self, queue: &str) -> Result<ConsumeStream, ConsumeError> {
+        // Set up push channel BEFORE sending the request — the server starts
+        // pushing messages immediately after processing OP_CONSUME, and those
+        // frames would be dropped if consume_push_tx isn't ready.
+        let push_rx = self.setup_consume_channel(queue).await?;
+
         let payload = fibp_codec::encode_consume_request(queue, INITIAL_CREDITS);
         let corr_id = self.next_id();
         let frame = Frame::new(0, OP_CONSUME, corr_id, payload);
 
         match self.request(frame).await {
             Ok(_response) => {
-                // Successfully opened consume on this node — set up push channel.
-                self.setup_consume_channel(queue).await
+                // Successfully opened consume on this node.
+                Ok(ConsumeStream {
+                    inner: ReceiverStream::new(push_rx),
+                    _leader_transport: None,
+                })
             }
             Err(StatusError::Internal(ref msg)) if msg.starts_with("leader_hint:") => {
+                // Not the leader — tear down the push channel we pre-set on self.
+                {
+                    let mut cpt = self.inner.consume_push_tx.lock().await;
+                    *cpt = None;
+                }
+                {
+                    let mut cq = self.inner.consume_queue.lock().await;
+                    *cq = None;
+                }
+
                 // Server told us the leader address — connect there instead,
                 // reusing the same TLS and API key configuration.
                 let leader_addr = msg["leader_hint:".len()..].to_string();
@@ -473,7 +528,9 @@ impl FibpTransport {
                         )))
                     })?;
 
-                // Send consume request to the leader (no recursion — single hop).
+                // Set up push channel before sending request on leader transport.
+                let leader_push_rx = leader_transport.setup_consume_channel(queue).await?;
+
                 let payload2 = fibp_codec::encode_consume_request(queue, INITIAL_CREDITS);
                 let corr_id2 = leader_transport.next_id();
                 let frame2 = Frame::new(0, OP_CONSUME, corr_id2, payload2);
@@ -490,14 +547,42 @@ impl FibpTransport {
                         other => ConsumeError::Status(other),
                     })?;
 
-                leader_transport.setup_consume_channel(queue).await
+                // Bundle the leader transport into the stream so it stays alive
+                // exactly as long as the consume session. When the stream is
+                // dropped the leader transport is dropped too, closing the TCP
+                // connection immediately rather than leaking it until the
+                // enclosing client transport is dropped.
+                Ok(ConsumeStream {
+                    inner: ReceiverStream::new(leader_push_rx),
+                    _leader_transport: Some(leader_transport),
+                })
             }
             Err(StatusError::Internal(ref msg))
                 if msg.contains("not found") || msg.contains("queue") =>
             {
+                // Tear down the pre-set push channel on error.
+                {
+                    let mut cpt = self.inner.consume_push_tx.lock().await;
+                    *cpt = None;
+                }
+                {
+                    let mut cq = self.inner.consume_queue.lock().await;
+                    *cq = None;
+                }
                 Err(ConsumeError::QueueNotFound(msg.clone()))
             }
-            Err(other) => Err(ConsumeError::Status(other)),
+            Err(other) => {
+                // Tear down the pre-set push channel on error.
+                {
+                    let mut cpt = self.inner.consume_push_tx.lock().await;
+                    *cpt = None;
+                }
+                {
+                    let mut cq = self.inner.consume_queue.lock().await;
+                    *cq = None;
+                }
+                Err(ConsumeError::Status(other))
+            }
         }
     }
 
@@ -506,7 +591,12 @@ impl FibpTransport {
         &self,
         queue: &str,
     ) -> Result<mpsc::Receiver<Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        let (push_tx, push_rx) = mpsc::channel::<Result<ConsumeMessage, StatusError>>(64);
+        // Use a large capacity to prevent the IO loop from blocking when
+        // dispatching push frames. The IO loop also handles request/response
+        // frames (e.g. ack responses). If the push channel fills up and the
+        // IO loop blocks on send, it cannot dispatch the ack response, which
+        // the caller is waiting for — causing a deadlock.
+        let (push_tx, push_rx) = mpsc::channel::<Result<ConsumeMessage, StatusError>>(4096);
 
         {
             let mut cpt = self.inner.consume_push_tx.lock().await;
@@ -518,13 +608,18 @@ impl FibpTransport {
         }
 
         // Spawn a flow-control replenishment task.
-        let writer_tx = self.inner.writer_tx.clone();
-        let inner = Arc::clone(&self.inner);
+        // Use Weak<> so this task doesn't keep the transport alive after drop.
+        let weak_inner = Arc::downgrade(&self.inner);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
             loop {
                 interval.tick().await;
+                let Some(inner) = weak_inner.upgrade() else {
+                    break; // Transport dropped — stop sending flow frames.
+                };
                 let corr = inner.next_correlation_id.fetch_add(1, Ordering::Relaxed);
+                let writer_tx = inner.writer_tx.clone();
+                drop(inner); // Release the Arc before awaiting the send.
                 let flow_payload = fibp_codec::encode_flow(FLOW_CREDITS);
                 let flow_frame = Frame::new(0, OP_FLOW, corr, flow_payload);
                 if writer_tx
@@ -936,13 +1031,18 @@ async fn dispatch_frame(
                             attempt_count: msg.attempt_count,
                             queue: queue_name.clone(),
                         };
-                        if tx.send(Ok(cm)).await.is_err() {
+                        // Use try_send to avoid blocking the IO loop. If the
+                        // consume channel is full, the message is dropped. This
+                        // prevents a deadlock where the IO loop blocks on send
+                        // while the caller is waiting for a response frame (e.g.
+                        // ack) that is queued behind the push frames.
+                        if tx.try_send(Ok(cm)).is_err() {
                             break;
                         }
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(e)).await;
+                    let _ = tx.try_send(Err(e));
                 }
             }
         }

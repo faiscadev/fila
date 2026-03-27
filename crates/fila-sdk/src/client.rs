@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::error::{AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError};
-use crate::fibp_transport::FibpTransport;
-use tokio_stream::Stream;
+use crate::fibp_transport::{ConsumeStream, FibpTransport};
 
 /// A consumed message received from the broker.
 #[derive(Debug, Clone)]
@@ -234,13 +233,8 @@ impl FilaClient {
     }
 
     /// Open a streaming consumer on a queue.
-    pub async fn consume(
-        &self,
-        queue: &str,
-    ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        let rx = self.fibp.consume(queue).await?;
-        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        Ok(stream)
+    pub async fn consume(&self, queue: &str) -> Result<ConsumeStream, ConsumeError> {
+        self.fibp.consume(queue).await
     }
 
     /// Acknowledge a successfully processed message.
