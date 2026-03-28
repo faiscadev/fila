@@ -123,16 +123,20 @@ Flamegraph capture requires `sudo` for dtrace on macOS (SIP restriction). Code a
 ### Fix: Use `skip_all` Instead of `skip(self)`
 
 ```rust
-// FIX: skip ALL parameters, only record explicit fields
-#[instrument(skip_all, fields(queue = req.queue, msg_count = req.messages.len()))]
+// CURRENT (Debug-formats `request` including payload bytes):
+#[instrument(skip(self), fields(queue_id, msg_id))]
+async fn enqueue(&self, request: Request<EnqueueRequest>) -> ...
+
+// FIX (skip all parameters, keep the existing empty fields filled via Span::current().record()):
+#[instrument(skip_all, fields(queue_id, msg_id))]
 async fn enqueue(&self, request: Request<EnqueueRequest>) -> ...
 ```
 
 This change:
-- Skips Debug-formatting of `request` (and all other parameters)
-- Records only the explicitly named fields (queue name, message count)
-- Preserves observability (queue name and operation type are still visible in traces)
-- Zero cost for unused parameters
+- Skips Debug-formatting of `request` (and all other parameters) by using `skip_all`
+- Keeps the existing `fields(queue_id, msg_id)` which are already filled via `Span::current().record()` in the function body
+- Preserves observability — queue name and message ID are still recorded in spans
+- Zero cost for the payload bytes that were being Debug-formatted
 
 ### Expected Impact
 

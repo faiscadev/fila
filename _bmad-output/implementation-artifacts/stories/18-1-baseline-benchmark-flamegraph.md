@@ -37,7 +37,7 @@ So that subsequent optimizations can be measured against real data.
   - [x] Written `_bmad-output/planning-artifacts/research/tracing-hot-path-baseline.md`
   - [x] Includes: raw benchmark numbers, tracing overhead analysis, optimization targets
   - [x] Identifies specific `#[instrument]` macros and the fix (`skip_all`)
-- [ ] Task 4: PR with baseline numbers in description (AC: 3)
+- [x] Task 4: PR with baseline numbers in description (AC: 3)
 
 ## Dev Notes
 
