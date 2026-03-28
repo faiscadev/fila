@@ -4,10 +4,10 @@ startedAt: "2026-03-28"
 stories:
   - id: "18.1"
     title: "Baseline Benchmark & Flamegraph"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/18.1-baseline-benchmark-flamegraph"
-    pr: null
+    pr: 154
     dependsOn: []
   - id: "18.2"
     title: "Fix Tracing Overhead on Hot-Path Functions"
