@@ -5,7 +5,7 @@ stories:
   - id: "18.1"
     title: "Baseline Benchmark & Flamegraph"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/18.1-baseline-benchmark-flamegraph"
     pr: null
     dependsOn: []
