@@ -187,8 +187,8 @@ development_status:
 
   # Epic 18: Tracing Hot-Path Fix (Phase 2 — custom binary protocol)
   # +15% throughput from fixing #[instrument] Debug-formatting on hot paths.
-  epic-18: backlog
-  18-1-baseline-benchmark-flamegraph: backlog
+  epic-18: in-progress
+  18-1-baseline-benchmark-flamegraph: in-progress
   18-2-fix-tracing-overhead-on-hot-path-functions: backlog
   epic-18-retrospective: optional
 
