@@ -10,8 +10,10 @@
 # OS
 .DS_Store
 
-# Claude Code local settings
+# Claude Code
 .claude/settings.local.json
+.claude/projects/
+.claude/worktrees/
 
 # Environment
 .env
@@ -19,4 +21,11 @@
 
 # Benchmark output
 bench-results.json
+bench-results-*.json
 bench/competitive/results/
+
+# Runtime data (RocksDB, benchmarks)
+/data/
+
+# Build output
+/book/
