@@ -1,4 +1,4 @@
-# generated: 2026-03-04
+# generated: 2026-03-28
 # project: fila
 # project_key: NOKEY
 # tracking_system: file-system
@@ -33,7 +33,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-04
+generated: 2026-03-28
 project: fila
 project_key: NOKEY
 tracking_system: file-system
@@ -185,19 +185,36 @@ development_status:
   17-3-automatic-queue-to-node-assignment: done
   epic-17-retrospective: done
 
-  # Epic 18: Consumer Groups
+  # Epic 18: Tracing Hot-Path Fix (Phase 2 — custom binary protocol)
+  # +15% throughput from fixing #[instrument] Debug-formatting on hot paths.
   epic-18: backlog
-  18-1-broker-managed-consumer-groups: backlog
+  18-1-baseline-benchmark-flamegraph: backlog
+  18-2-fix-tracing-overhead-on-hot-path-functions: backlog
   epic-18-retrospective: optional
 
-  # Epic 19: Developer Experience (docs website, Helm, Lua helpers, guides)
+  # Epic 19: Wire Format Design & Batch-Native Scheduler
+  # Protocol spec + batch-native scheduler internals. No new transport yet.
   epic-19: backlog
-  19-1-built-in-lua-helpers: backlog
-  19-2-documentation-website-deployment-guides: backlog
-  19-3-sdk-integration-guides: backlog
+  19-1-wire-format-design-protocol-specification: backlog
+  19-2-batch-native-scheduler-internals: backlog
   epic-19-retrospective: optional
 
-  # Epic 20: Web Management GUI
+  # Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal
+  # Full protocol migration: server, auth, Rust SDK, CLI, cluster, gRPC removal.
   epic-20: backlog
-  20-1-web-management-gui: backlog
+  20-1-binary-protocol-server-hot-path-operations: backlog
+  20-2-admin-operations-auth-on-binary-protocol: backlog
+  20-3-rust-sdk-binary-protocol-client: backlog
+  20-4-cli-cluster-inter-node-migration: backlog
+  20-5-grpc-removal-final-benchmarks: backlog
   epic-20-retrospective: optional
+
+  # Epic 21: External SDK Migration
+  # All 5 external SDKs (Go, Python, JS, Ruby, Java) on binary protocol.
+  epic-21: backlog
+  21-1-go-sdk-binary-protocol: backlog
+  21-2-python-sdk-binary-protocol: backlog
+  21-3-javascript-sdk-binary-protocol: backlog
+  21-4-ruby-sdk-binary-protocol: backlog
+  21-5-java-sdk-binary-protocol: backlog
+  epic-21-retrospective: optional
