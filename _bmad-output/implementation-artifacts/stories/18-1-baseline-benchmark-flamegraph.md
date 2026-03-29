@@ -34,6 +34,7 @@ So that subsequent optimizations can be measured against real data.
   - [x] 12-second sample captures show 73.5% of enqueue CPU in `tracing::span::Span::new` → `Debug::fmt`
   - [x] Confirmed `request` parameter NOT skipped — payload bytes formatted twice (OTel + fmt layers)
   - [x] RocksDB WAL write is second bottleneck at 47.2% of scheduler thread active time
+  - [x] Generated flamegraph SVG via inferno-collapse-sample + inferno-flamegraph
   - [x] Identified all 4 hot-path functions + 13 admin functions with same pattern
 - [x] Task 3: Create baseline research document (AC: 1, 2)
   - [x] Written `_bmad-output/planning-artifacts/research/tracing-hot-path-baseline.md`
@@ -81,4 +82,5 @@ None.
 ### File List
 
 - `_bmad-output/planning-artifacts/research/tracing-hot-path-baseline.md` (new)
+- `_bmad-output/planning-artifacts/research/enqueue-flamegraph-baseline.svg` (new)
 - `_bmad-output/implementation-artifacts/stories/18-1-baseline-benchmark-flamegraph.md` (new)

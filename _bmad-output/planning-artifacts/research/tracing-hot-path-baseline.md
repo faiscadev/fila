@@ -114,15 +114,18 @@ The server always initializes a tracing subscriber in `crates/fila-core/src/tele
 
 13 additional functions in `crates/fila-server/src/admin_service.rs` have the same `#[instrument(skip(self))]` pattern. These are not hot-path (admin operations are infrequent), but should be fixed for consistency.
 
-### Server-Side Profile
+### Server-Side Profile & Flamegraph
 
-Captured using macOS `sample` tool during a sustained 1KB enqueue workload (~6,131 msg/s):
+Captured using macOS `sample` tool during a sustained 1KB enqueue workload (~6,131 msg/s), converted to flamegraph SVG via `inferno-collapse-sample` + `inferno-flamegraph`:
 
 ```
 /usr/bin/sample <fila-server-pid> 12 -f /tmp/fila-profile.txt
+inferno-collapse-sample /tmp/fila-profile.txt | inferno-flamegraph > enqueue-flamegraph-baseline.svg
 ```
 
 Binary built with `CARGO_PROFILE_RELEASE_DEBUG=2` (optimized + debug symbols).
+
+**Flamegraph:** [`enqueue-flamegraph-baseline.svg`](enqueue-flamegraph-baseline.svg) — open in a browser for interactive zoom/search. Search for `Debug::fmt` or `record_debug` to highlight the tracing overhead.
 
 #### tokio Worker Thread — Enqueue Handler (Thread_15452589)
 
