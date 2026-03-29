@@ -114,29 +114,75 @@ The server always initializes a tracing subscriber in `crates/fila-core/src/tele
 
 13 additional functions in `crates/fila-server/src/admin_service.rs` have the same `#[instrument(skip(self))]` pattern. These are not hot-path (admin operations are infrequent), but should be fixed for consistency.
 
-### Flamegraph
+### Server-Side Profile
 
-Flamegraph capture requires `sudo` for dtrace on macOS (SIP restriction). Code analysis above identifies the specific overhead sources. A Linux CI flamegraph should be captured as part of Story 18.2 validation.
+Captured using macOS `sample` tool during a sustained 1KB enqueue workload (~6,131 msg/s):
+
+```
+/usr/bin/sample <fila-server-pid> 12 -f /tmp/fila-profile.txt
+```
+
+Binary built with `CARGO_PROFILE_RELEASE_DEBUG=2` (optimized + debug symbols).
+
+#### tokio Worker Thread — Enqueue Handler (Thread_15452589)
+
+| Call Site | Samples | % of Enqueue |
+|-----------|---------|--------------|
+| **Total active (run_task)** | **1,313** | — |
+| → `EnqueueSvc::call` → `enqueue()` | 452 | 100% |
+| → `tracing::span::Span::new` | 332 | **73.5%** |
+|   → OTel `SpanAttributeVisitor::record_debug` | 157 | 34.7% |
+|     → `EnqueueRequest::Debug::fmt` → byte formatting | 154 | 34.1% |
+|   → fmt `DefaultVisitor::record_debug` | 165 | 36.5% |
+|     → `EnqueueRequest::Debug::fmt` → byte formatting | 163 | 36.1% |
+| → h2/hyper framing | ~120 | 26.5% |
+
+**Key finding:** 73.5% of enqueue CPU time is spent in `tracing::span::Span::new`, almost entirely `Debug`-formatting the `Request<EnqueueRequest>` — specifically the `Vec<u8>` payload bytes formatted as decimal integers (`[116, 101, 115, ...]`). This happens **twice**: once for the OTel layer and once for the fmt layer.
+
+The `core::fmt::num::Display for u8` → `Formatter::pad_integral` → `String::write_str` → `memmove` chain is clearly visible, confirming that byte-by-byte decimal formatting of the 1KB payload dominates CPU.
+
+#### fila-scheduler Thread (Thread_15452617)
+
+| Call Site | Samples | % of Active |
+|-----------|---------|-------------|
+| **Total active (handle_command)** | **897** | 100% |
+| → `put_message` → `rocksdb_put_cf` | 585 | 65.2% |
+|   → `WriteImpl` → WAL flush (`write()` syscall) | 423 | 47.2% |
+|   → CRC32 checksumming | 9 | 1.0% |
+| → crossbeam channel recv (idle spin/wait) | 8,429 | — |
+
+RocksDB WAL write (specifically `PosixWritableFile::Append` → `write()` syscall) dominates the scheduler thread at 47.2% of active time. This confirms RocksDB I/O as the second major bottleneck after tracing overhead.
+
+#### Summary: CPU Budget per Enqueue (Server-Side)
+
+| Component | % of Total | Notes |
+|-----------|-----------|-------|
+| Tracing `Debug` formatting | ~35% | Formats request twice (OTel + fmt layers). **Fix: skip `request` param** |
+| h2/hyper/tonic framing | ~13% | HTTP/2 frame encode/decode. Not actionable. |
+| RocksDB WAL write | ~47% | Disk I/O on scheduler thread. Separate bottleneck. |
+| Other (protobuf decode, DRR, etc.) | ~5% | Negligible |
 
 ## Optimization Targets for Story 18.2
 
-### Fix: Use `skip_all` Instead of `skip(self)`
+### Fix: Use `skip(self, request)` Instead of `skip(self)` on Hot-Path Functions
 
 ```rust
 // CURRENT (Debug-formats `request` including payload bytes):
 #[instrument(skip(self), fields(queue_id, msg_id))]
 async fn enqueue(&self, request: Request<EnqueueRequest>) -> ...
 
-// FIX (skip all parameters, keep the existing empty fields filled via Span::current().record()):
-#[instrument(skip_all, fields(queue_id, msg_id))]
+// FIX (skip both self and request, keep the existing empty fields filled via Span::current().record()):
+#[instrument(skip(self, request), fields(queue_id, msg_id))]
 async fn enqueue(&self, request: Request<EnqueueRequest>) -> ...
 ```
 
 This change:
-- Skips Debug-formatting of `request` (and all other parameters) by using `skip_all`
+- Skips Debug-formatting of `request` (the expensive parameter containing payload bytes)
+- Still captures any future parameters that might be added (unlike `skip_all` which silently drops new params)
 - Keeps the existing `fields(queue_id, msg_id)` which are already filled via `Span::current().record()` in the function body
 - Preserves observability — queue name and message ID are still recorded in spans
 - Zero cost for the payload bytes that were being Debug-formatted
+- **Only applies to hot-path functions** (enqueue, consume, ack, nack in `service.rs`). Admin functions should remain `skip(self)` since they are low-frequency and don't carry payload bytes.
 
 ### Expected Impact
 

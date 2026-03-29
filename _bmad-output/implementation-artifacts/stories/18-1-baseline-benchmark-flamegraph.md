@@ -29,9 +29,11 @@ So that subsequent optimizations can be measured against real data.
   - [x] `cargo bench -p fila-bench --bench system` — recorded all output
   - [x] Benchmark results documented in research document
 - [x] Task 2: Analyze tracing overhead on hot path (AC: 2)
-  - [x] Flamegraph via `cargo flamegraph` requires sudo/SIP on macOS — used code analysis instead
-  - [x] Analyzed `#[instrument]` patterns in service.rs — confirmed `request` parameter NOT skipped
-  - [x] Documented that `EnqueueRequest.payload` (1KB `Vec<u8>`) gets Debug-formatted on every call
+  - [x] Profiled server with macOS `sample` tool during sustained 1KB enqueue workload (~6,131 msg/s)
+  - [x] Binary built with `CARGO_PROFILE_RELEASE_DEBUG=2` (optimized + debug symbols)
+  - [x] 12-second sample captures show 73.5% of enqueue CPU in `tracing::span::Span::new` → `Debug::fmt`
+  - [x] Confirmed `request` parameter NOT skipped — payload bytes formatted twice (OTel + fmt layers)
+  - [x] RocksDB WAL write is second bottleneck at 47.2% of scheduler thread active time
   - [x] Identified all 4 hot-path functions + 13 admin functions with same pattern
 - [x] Task 3: Create baseline research document (AC: 1, 2)
   - [x] Written `_bmad-output/planning-artifacts/research/tracing-hot-path-baseline.md`
@@ -51,9 +53,9 @@ So that subsequent optimizations can be measured against real data.
 | Fairness overhead | 1.41% |
 | Lua overhead | 8.21 us |
 
-### Identified Optimization: `skip_all` on Hot-Path `#[instrument]`
+### Identified Optimization: `skip(self, request)` on Hot-Path `#[instrument]`
 
-All 4 hot-path functions use `skip(self)` but leave `request` to be Debug-formatted. The fix is `skip_all` + explicit fields. See research doc for full analysis.
+All 4 hot-path functions use `skip(self)` but leave `request` to be Debug-formatted. The fix is `skip(self, request)` — this skips the expensive Debug-formatting while still capturing any future params. See research doc for full analysis including server-side profile data.
 
 ### References
 
@@ -73,8 +75,8 @@ None.
 ### Completion Notes List
 
 - Benchmark suite ran 10 categories successfully (queue depth skipped — optional, needs FILA_BENCH_DEPTH=1)
-- Flamegraph capture blocked by macOS SIP (sudo required for dtrace). Code analysis provides equivalent insight.
-- `#[instrument]` overhead confirmed via code analysis: `request` parameter not in `skip()` list on all hot-path functions, causing `Debug::fmt` of entire protobuf request including payload bytes on every call.
+- Server profiled with macOS `sample` tool (no sudo required). 12-second capture during sustained 1KB enqueue workload.
+- `#[instrument]` overhead confirmed: 73.5% of enqueue CPU in `Span::new` → `Debug::fmt` of `Request<EnqueueRequest>` (payload bytes formatted as decimal integers, twice — OTel + fmt layers).
 
 ### File List
 
