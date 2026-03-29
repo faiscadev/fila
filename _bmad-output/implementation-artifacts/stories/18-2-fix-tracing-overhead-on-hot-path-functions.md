@@ -1,6 +1,6 @@
 # Story 18.2: Fix Tracing Overhead on Hot-Path Functions
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -24,21 +24,21 @@ So that throughput improves without losing observability.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix hot-path `#[instrument]` in service.rs (AC: 1, 2)
-  - [ ] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `enqueue()`
-  - [ ] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `consume()`
-  - [ ] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `ack()`
-  - [ ] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `nack()`
-- [ ] Task 2: Fix admin service `#[instrument]` for consistency (AC: 2)
-  - [ ] Change all 13 `#[instrument(skip(self))]` to `#[instrument(skip_all)]` in admin_service.rs (preserve existing fields)
-- [ ] Task 3: Verify all tests pass (AC: 3)
-  - [ ] `cargo test --workspace`
-  - [ ] `cargo clippy --workspace -- -D warnings`
-- [ ] Task 4: Run benchmarks and record improvement (AC: 1)
-  - [ ] `cargo build --release --workspace`
-  - [ ] `cargo bench -p fila-bench --bench system`
-  - [ ] Update research doc with post-fix numbers and delta from baseline
-  - [ ] Paste key numbers in PR description
+- [x] Task 1: Fix hot-path `#[instrument]` in service.rs (AC: 1, 2)
+  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `enqueue()`
+  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `consume()`
+  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `ack()`
+  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `nack()`
+- [x] Task 2: Fix admin service `#[instrument]` for consistency (AC: 2)
+  - [x] Change all 13 `#[instrument(skip(self))]` to `#[instrument(skip_all)]` in admin_service.rs (preserve existing fields)
+- [x] Task 3: Verify all tests pass (AC: 3)
+  - [x] `cargo test --workspace` — all tests pass
+  - [x] `cargo clippy --workspace -- -D warnings` — clean
+- [x] Task 4: Run benchmarks and record improvement (AC: 1)
+  - [x] `cargo build --release --workspace`
+  - [x] `cargo bench -p fila-bench --bench system`
+  - [x] Update research doc with post-fix numbers and delta from baseline
+  - [x] Paste key numbers in PR description
 
 ## Dev Notes
 
@@ -79,8 +79,20 @@ Change `skip(self)` to `skip_all` on all `#[instrument]` macros. This prevents D
 
 ### Agent Model Used
 
+Claude Opus 4.6 (1M context)
+
 ### Debug Log References
+
+None.
 
 ### Completion Notes List
 
+- Changed `skip(self)` to `skip_all` on all 17 `#[instrument]` macros (4 in service.rs, 13 in admin_service.rs)
+- Enqueue throughput improved +20.7% (6,697 → 8,082 msg/s), exceeding +15% hypothesis
+- All tests pass. No regressions. Observability preserved (span fields unchanged).
+
 ### File List
+
+- `crates/fila-server/src/service.rs` (modified — 4 `#[instrument]` macros)
+- `crates/fila-server/src/admin_service.rs` (modified — 13 `#[instrument]` macros)
+- `_bmad-output/planning-artifacts/research/tracing-hot-path-baseline.md` (updated — post-fix numbers)
