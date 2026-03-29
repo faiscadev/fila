@@ -116,14 +116,17 @@ The server always initializes a tracing subscriber in `crates/fila-core/src/tele
 
 ### Server-Side Profile & Flamegraph
 
-Captured using macOS `sample` tool during a sustained 1KB enqueue workload (~6,131 msg/s), converted to flamegraph SVG via `inferno-collapse-sample` + `inferno-flamegraph`:
+Captured using `scripts/flamegraph.sh` which profiles fila-server with dtrace (macOS) or perf (Linux) and renders via inferno:
 
-```
-/usr/bin/sample <fila-server-pid> 12 -f /tmp/fila-profile.txt
-inferno-collapse-sample /tmp/fila-profile.txt | inferno-flamegraph > enqueue-flamegraph-baseline.svg
+```bash
+make flamegraph                          # enqueue-only, 1KB, 30s
+make flamegraph-lifecycle                # concurrent produce + consume + ack
+./scripts/flamegraph.sh --duration 15    # custom duration
 ```
 
-Binary built with `CARGO_PROFILE_RELEASE_DEBUG=2` (optimized + debug symbols).
+Output goes to `target/flamegraphs/`. See `./scripts/flamegraph.sh --help` for all options.
+
+The initial baseline capture below was taken with macOS `sample` + `inferno-collapse-sample` during a sustained 1KB enqueue workload (~6,131 msg/s).
 
 **Flamegraph:** [`enqueue-flamegraph-baseline.svg`](enqueue-flamegraph-baseline.svg) — open in a browser for interactive zoom/search. Search for `Debug::fmt` or `record_debug` to highlight the tracing overhead.
 
