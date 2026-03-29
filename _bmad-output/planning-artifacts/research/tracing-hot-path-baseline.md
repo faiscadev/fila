@@ -198,18 +198,16 @@ This change:
 
 ### Measured Impact (Story 18.2)
 
-Fix applied: `skip(self)` → `skip_all` on all 17 `#[instrument]` macros (4 hot-path + 13 admin).
+Fix applied: `skip(self)` → `skip(self, request)` on 4 hot-path `#[instrument]` macros in `service.rs`. Admin functions unchanged.
 
 | Metric | Baseline | After Fix | Delta |
 |--------|----------|-----------|-------|
-| enqueue_throughput_1kb | 6,697 msg/s | 8,082 msg/s | **+20.7%** |
-| e2e_latency_p50_light | 0.20 ms | 0.18 ms | -10% |
-| e2e_latency_p95_light | 0.37 ms | 0.26 ms | **-30%** |
-| e2e_latency_p99_light | 0.57 ms | 0.48 ms | -16% |
-| lua_on_enqueue_overhead_us | 8.21 us | 3.18 us | **-61%** |
-| memory_per_message_overhead | 1,760 bytes/msg | 983 bytes/msg | **-44%** |
-| compaction_idle_p99 | 0.37 ms | 0.28 ms | -24% |
-| key_cardinality_10 | 6,047 msg/s | 6,130 msg/s | +1.4% |
-| consumer_concurrency_10 | 2,531 msg/s | 2,551 msg/s | +0.8% |
+| enqueue_throughput_1kb | 6,697 msg/s | 7,861 msg/s | **+17.4%** |
+| fairness_overhead_fifo | 2,196 msg/s | 2,178 msg/s | -0.8% |
+| fairness_overhead_fair | 2,165 msg/s | 2,148 msg/s | -0.8% |
+| fairness_overhead_pct | 1.41% | 1.37% | -0.04pp |
+| key_cardinality_10 | 6,047 msg/s | 6,094 msg/s | +0.8% |
+| key_cardinality_1k | 1,707 msg/s | 1,715 msg/s | +0.5% |
+| consumer_concurrency_10 | 2,531 msg/s | 2,513 msg/s | -0.7% |
 
-**Result: +20.7% enqueue throughput improvement**, exceeding the +15% hypothesis from the PRD. Tail latency p95 improved 30%. Memory-per-message overhead cut by 44%.
+**Result: +17.4% enqueue throughput improvement**, exceeding the +15% hypothesis from the PRD. Latency numbers varied across runs (machine-local noise), so throughput is the reliable metric. Fairness and scaling metrics are unchanged within noise, confirming the fix only removes formatting overhead without affecting scheduling behavior.

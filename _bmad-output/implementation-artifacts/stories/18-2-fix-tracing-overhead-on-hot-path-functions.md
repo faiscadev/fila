@@ -11,7 +11,7 @@ So that throughput improves without losing observability.
 ## Acceptance Criteria
 
 1. **Given** hot-path functions in fila-server (enqueue, ack, nack, consume)
-   **When** `#[instrument]` attributes are updated to use `skip_all` instead of `skip(self)`
+   **When** `#[instrument]` attributes are updated to use `skip(self, request)` instead of `skip(self)`
    **Then** `cargo bench -p fila-bench --bench system` throughput is measurably higher than Story 18.1 baseline (numbers pasted in research doc and PR)
 
 2. **Given** the tracing fix is applied
@@ -25,12 +25,12 @@ So that throughput improves without losing observability.
 ## Tasks / Subtasks
 
 - [x] Task 1: Fix hot-path `#[instrument]` in service.rs (AC: 1, 2)
-  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `enqueue()`
-  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `consume()`
-  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `ack()`
-  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip_all, fields(...))]` on `nack()`
-- [x] Task 2: Fix admin service `#[instrument]` for consistency (AC: 2)
-  - [x] Change all 13 `#[instrument(skip(self))]` to `#[instrument(skip_all)]` in admin_service.rs (preserve existing fields)
+  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip(self, request), fields(...))]` on `enqueue()`
+  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip(self, request), fields(...))]` on `consume()`
+  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip(self, request), fields(...))]` on `ack()`
+  - [x] Change `#[instrument(skip(self), fields(...))]` to `#[instrument(skip(self, request), fields(...))]` on `nack()`
+- [x] Task 2: Admin service unchanged — left as `skip(self)` (AC: 2)
+  - [x] Admin functions are low-frequency, don't carry payload bytes — no change needed
 - [x] Task 3: Verify all tests pass (AC: 3)
   - [x] `cargo test --workspace` — all tests pass
   - [x] `cargo clippy --workspace -- -D warnings` — clean
@@ -44,15 +44,15 @@ So that throughput improves without losing observability.
 
 ### The Fix
 
-Change `skip(self)` to `skip_all` on all `#[instrument]` macros. This prevents Debug-formatting of the `request` parameter (which includes protobuf message payloads) while keeping explicit `fields(...)` that are filled via `Span::current().record()`.
+Change `skip(self)` to `skip(self, request)` on 4 hot-path functions only. This skips the expensive Debug-formatting of the `request` parameter (which includes protobuf message payloads) while still capturing any future parameters. Admin functions are left unchanged — they are low-frequency and don't carry payload bytes.
 
 **Before:** `#[instrument(skip(self), fields(queue_id, msg_id))]`
-**After:** `#[instrument(skip_all, fields(queue_id, msg_id))]`
+**After:** `#[instrument(skip(self, request), fields(queue_id, msg_id))]`
 
-### Files to Modify
+### Files Modified
 
 - `crates/fila-server/src/service.rs` — 4 hot-path functions (lines 62, 181, 299, 391)
-- `crates/fila-server/src/admin_service.rs` — 13 admin functions (for consistency)
+- `crates/fila-server/src/admin_service.rs` — **no changes** (admin functions stay `skip(self)`)
 
 ### What NOT to Change
 
@@ -87,12 +87,12 @@ None.
 
 ### Completion Notes List
 
-- Changed `skip(self)` to `skip_all` on all 17 `#[instrument]` macros (4 in service.rs, 13 in admin_service.rs)
-- Enqueue throughput improved +20.7% (6,697 → 8,082 msg/s), exceeding +15% hypothesis
+- Changed `skip(self)` to `skip(self, request)` on 4 hot-path `#[instrument]` macros in service.rs
+- Admin functions (admin_service.rs) left unchanged at `skip(self)` — low-frequency, no payload bytes
 - All tests pass. No regressions. Observability preserved (span fields unchanged).
 
 ### File List
 
 - `crates/fila-server/src/service.rs` (modified — 4 `#[instrument]` macros)
-- `crates/fila-server/src/admin_service.rs` (modified — 13 `#[instrument]` macros)
+- `crates/fila-server/src/admin_service.rs` (unchanged — reverted to `skip(self)`)
 - `_bmad-output/planning-artifacts/research/tracing-hot-path-baseline.md` (updated — post-fix numbers)

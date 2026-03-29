@@ -163,7 +163,7 @@ impl AdminService {
 
 #[tonic::async_trait]
 impl FilaAdmin for AdminService {
-    #[instrument(skip_all, fields(queue_id))]
+    #[instrument(skip(self), fields(queue_id))]
     async fn create_queue(
         &self,
         request: Request<CreateQueueRequest>,
@@ -270,7 +270,7 @@ impl FilaAdmin for AdminService {
         }
     }
 
-    #[instrument(skip_all, fields(queue_id))]
+    #[instrument(skip(self), fields(queue_id))]
     async fn delete_queue(
         &self,
         request: Request<DeleteQueueRequest>,
@@ -330,7 +330,7 @@ impl FilaAdmin for AdminService {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn set_config(
         &self,
         request: Request<SetConfigRequest>,
@@ -371,7 +371,7 @@ impl FilaAdmin for AdminService {
         Ok(Response::new(SetConfigResponse {}))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn get_config(
         &self,
         request: Request<GetConfigRequest>,
@@ -407,7 +407,7 @@ impl FilaAdmin for AdminService {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn list_config(
         &self,
         request: Request<ListConfigRequest>,
@@ -447,7 +447,7 @@ impl FilaAdmin for AdminService {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn get_stats(
         &self,
         request: Request<GetStatsRequest>,
@@ -526,7 +526,7 @@ impl FilaAdmin for AdminService {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn redrive(
         &self,
         request: Request<RedriveRequest>,
@@ -555,7 +555,7 @@ impl FilaAdmin for AdminService {
         Ok(Response::new(RedriveResponse { redriven }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn list_queues(
         &self,
         request: Request<ListQueuesRequest>,
@@ -607,7 +607,7 @@ impl FilaAdmin for AdminService {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn create_api_key(
         &self,
         request: Request<CreateApiKeyRequest>,
@@ -648,7 +648,7 @@ impl FilaAdmin for AdminService {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn revoke_api_key(
         &self,
         request: Request<RevokeApiKeyRequest>,
@@ -669,7 +669,7 @@ impl FilaAdmin for AdminService {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn list_api_keys(
         &self,
         request: Request<ListApiKeysRequest>,
@@ -692,7 +692,7 @@ impl FilaAdmin for AdminService {
         Ok(Response::new(ListApiKeysResponse { keys }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn set_acl(
         &self,
         request: Request<SetAclRequest>,
@@ -744,7 +744,7 @@ impl FilaAdmin for AdminService {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     async fn get_acl(
         &self,
         request: Request<GetAclRequest>,

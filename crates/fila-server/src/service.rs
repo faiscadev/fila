@@ -59,7 +59,7 @@ fn ready_to_proto(ready: ReadyMessage) -> fila_proto::Message {
 }
 #[tonic::async_trait]
 impl FilaService for HotPathService {
-    #[instrument(skip_all, fields(queue_id, msg_id))]
+    #[instrument(skip(self, request), fields(queue_id, msg_id))]
     async fn enqueue(
         &self,
         request: Request<EnqueueRequest>,
@@ -178,7 +178,7 @@ impl FilaService for HotPathService {
 
     type ConsumeStream = tokio_stream::wrappers::ReceiverStream<Result<ConsumeResponse, Status>>;
 
-    #[instrument(skip_all, fields(queue_id))]
+    #[instrument(skip(self, request), fields(queue_id))]
     async fn consume(
         &self,
         request: Request<ConsumeRequest>,
@@ -296,7 +296,7 @@ impl FilaService for HotPathService {
         )))
     }
 
-    #[instrument(skip_all, fields(queue_id, msg_id))]
+    #[instrument(skip(self, request), fields(queue_id, msg_id))]
     async fn ack(&self, request: Request<AckRequest>) -> Result<Response<AckResponse>, Status> {
         let caller = request
             .extensions()
@@ -388,7 +388,7 @@ impl FilaService for HotPathService {
         Ok(Response::new(AckResponse {}))
     }
 
-    #[instrument(skip_all, fields(queue_id, msg_id))]
+    #[instrument(skip(self, request), fields(queue_id, msg_id))]
     async fn nack(&self, request: Request<NackRequest>) -> Result<Response<NackResponse>, Status> {
         let caller = request
             .extensions()
