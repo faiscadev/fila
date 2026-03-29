@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "18.2"
     title: "Fix Tracing Overhead on Hot-Path Functions"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/18.2-fix-tracing-overhead-hot-path"
-    pr: null
+    pr: 155
     dependsOn: ["18.1"]
 skippedIssues: []
