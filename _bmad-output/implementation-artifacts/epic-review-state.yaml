@@ -1,9 +1,10 @@
 epic: "Epic 19: Wire Format Design & Batch-Native Scheduler"
 epicNumber: 19
 startedAt: "2026-03-30T12:00:00Z"
+completedAt: "2026-03-30T19:14:26Z"
 yoloMode: false
 mode: normal
-currentPrIndex: 1
+currentPrIndex: 2
 prChain:
   - storyId: "19.1"
     storyKey: "19-1-wire-format-protocol-spec"
@@ -17,5 +18,5 @@ prChain:
     title: "Batch-Native Scheduler Internals"
     branch: "feat/19.2-batch-native-scheduler-internals"
     pr: 157
-    baseBranch: "feat/19.1-wire-format-protocol-spec"
-    status: pending
+    baseBranch: "main"
+    status: merged
