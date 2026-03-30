@@ -7,6 +7,8 @@ pub enum FrameError {
     UnknownOpcode(u8),
     #[error("incomplete frame: need {need} bytes, have {have}")]
     IncompleteFrame { need: usize, have: usize },
+    #[error("decoded count {count} exceeds maximum allowed {max}")]
+    CountExceedsLimit { count: usize, max: usize },
     #[error("invalid string: not valid UTF-8")]
     InvalidUtf8,
     #[error("io error")]

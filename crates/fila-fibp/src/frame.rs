@@ -142,8 +142,17 @@ impl PayloadWriter {
     }
 
     /// Write a length-prefixed string (u16 length + UTF-8 bytes).
+    ///
+    /// # Panics
+    /// Panics if the string exceeds `u16::MAX` bytes.
     pub fn put_string(&mut self, s: &str) {
         let bytes = s.as_bytes();
+        assert!(
+            bytes.len() <= u16::MAX as usize,
+            "string length {} exceeds u16::MAX ({})",
+            bytes.len(),
+            u16::MAX,
+        );
         self.buf.put_u16(bytes.len() as u16);
         self.buf.extend_from_slice(bytes);
     }
@@ -155,7 +164,16 @@ impl PayloadWriter {
     }
 
     /// Write a map<string, string>: u16 count + repeated (string key, string value).
+    ///
+    /// # Panics
+    /// Panics if the map has more than `u16::MAX` entries.
     pub fn put_string_map(&mut self, map: &std::collections::HashMap<String, String>) {
+        assert!(
+            map.len() <= u16::MAX as usize,
+            "string map length {} exceeds u16::MAX ({})",
+            map.len(),
+            u16::MAX,
+        );
         self.buf.put_u16(map.len() as u16);
         for (k, v) in map {
             self.put_string(k);
@@ -164,7 +182,16 @@ impl PayloadWriter {
     }
 
     /// Write a string array: u16 count + repeated string.
+    ///
+    /// # Panics
+    /// Panics if the array has more than `u16::MAX` entries.
     pub fn put_string_array(&mut self, arr: &[String]) {
+        assert!(
+            arr.len() <= u16::MAX as usize,
+            "string array length {} exceeds u16::MAX ({})",
+            arr.len(),
+            u16::MAX,
+        );
         self.buf.put_u16(arr.len() as u16);
         for s in arr {
             self.put_string(s);

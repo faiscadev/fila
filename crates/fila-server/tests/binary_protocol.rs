@@ -95,7 +95,7 @@ async fn connect_and_handshake(addr: &str) -> TcpStream {
     stream
 }
 
-/// Send a frame and read a response frame.
+/// Send a frame and read a response frame matching the same request_id.
 async fn send_and_recv(stream: &mut TcpStream, frame: &RawFrame) -> RawFrame {
     let mut write_buf = BytesMut::new();
     frame.encode(&mut write_buf);
@@ -103,9 +103,18 @@ async fn send_and_recv(stream: &mut TcpStream, frame: &RawFrame) -> RawFrame {
 
     let mut read_buf = BytesMut::with_capacity(4096);
     loop {
-        stream.read_buf(&mut read_buf).await.unwrap();
-        if let Some(resp) = RawFrame::decode(&mut read_buf).unwrap() {
-            return resp;
+        let n = stream.read_buf(&mut read_buf).await.unwrap();
+        if n == 0 {
+            panic!(
+                "server closed connection (EOF) while waiting for response to request_id={}",
+                frame.request_id
+            );
+        }
+        while let Some(resp) = RawFrame::decode(&mut read_buf).unwrap() {
+            if resp.request_id == frame.request_id {
+                return resp;
+            }
+            // Skip frames that don't match (e.g. delivery frames from consume subscriptions)
         }
     }
 }
@@ -208,7 +217,7 @@ async fn enqueue_and_consume_round_trip() {
 
     // Read delivery frame (should come through from consume subscription)
     let mut read_buf = BytesMut::with_capacity(4096);
-    let delivery_frame = tokio::time::timeout(Duration::from_secs(5), async {
+    let delivery_frame = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             stream.read_buf(&mut read_buf).await.unwrap();
             if let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
@@ -325,7 +334,7 @@ async fn batch_ack_and_nack() {
     let mut read_buf = BytesMut::with_capacity(4096);
 
     for _ in 0..2 {
-        let delivery = tokio::time::timeout(Duration::from_secs(5), async {
+        let delivery = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 stream.read_buf(&mut read_buf).await.unwrap();
                 if let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {

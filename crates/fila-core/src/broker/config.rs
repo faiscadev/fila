@@ -89,7 +89,7 @@ pub struct AuthConfig {
 pub struct ServerConfig {
     /// gRPC listen address (temporary, for cluster comms until binary protocol migration).
     pub listen_addr: String,
-    /// Binary protocol (FIBP) listen address. Defaults to 0.0.0.0:5555.
+    /// Binary protocol (FIBP) listen address. Defaults to None (disabled).
     pub binary_addr: Option<String>,
 }
 

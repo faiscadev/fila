@@ -4,10 +4,10 @@ startedAt: "2026-03-30"
 stories:
   - id: "20.1"
     title: "Binary Protocol Server — Hot-Path Operations"
-    status: in-progress
+    status: review
     currentPhase: "pr-ci"
     branch: "feat/20.1-binary-protocol-server-hot-path"
-    pr: null
+    pr: 158
     dependsOn: []
   - id: "20.2"
     title: "Admin Operations & Auth on Binary Protocol"

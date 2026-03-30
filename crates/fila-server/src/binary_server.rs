@@ -473,7 +473,17 @@ impl ConnectionState {
             })
             .map_err(ConnectionError::Broker)?;
 
-        self.consumers.insert(frame.request_id, consumer_id.clone());
+        // If there's already a consumer registered for this request_id,
+        // unregister the old one to prevent a consumer leak.
+        if let Some(old_consumer_id) = self.consumers.insert(frame.request_id, consumer_id.clone())
+        {
+            let _ =
+                self.server
+                    .broker
+                    .send_command(fila_core::SchedulerCommand::UnregisterConsumer {
+                        consumer_id: old_consumer_id,
+                    });
+        }
 
         debug!(consumer_id = %consumer_id, queue = %req.queue, "consume stream started");
 

@@ -7,6 +7,20 @@ use crate::error_code::ErrorCode;
 use crate::frame::{PayloadReader, PayloadWriter, RawFrame};
 use crate::opcode::Opcode;
 
+/// Maximum number of items allowed in a decoded batch/array to prevent
+/// memory-exhaustion attacks from a malicious or corrupt frame.
+const MAX_DECODED_COUNT: usize = 1_000_000;
+
+fn check_count(count: usize) -> Result<(), FrameError> {
+    if count > MAX_DECODED_COUNT {
+        return Err(FrameError::CountExceedsLimit {
+            count,
+            max: MAX_DECODED_COUNT,
+        });
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Control frames
 // ---------------------------------------------------------------------------
@@ -204,6 +218,7 @@ impl EnqueueRequest {
     pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
+        check_count(count)?;
         let mut messages = Vec::with_capacity(count);
         for _ in 0..count {
             let queue = r.read_string()?;
@@ -238,6 +253,7 @@ impl EnqueueResponse {
     pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
+        check_count(count)?;
         let mut results = Vec::with_capacity(count);
         for _ in 0..count {
             let error_code = ErrorCode::from_u8(r.read_u8()?);
@@ -297,6 +313,7 @@ impl DeliveryBatch {
     pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
+        check_count(count)?;
         let mut messages = Vec::with_capacity(count);
         for _ in 0..count {
             let message_id = r.read_string()?;
@@ -345,6 +362,7 @@ impl AckRequest {
     pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
+        check_count(count)?;
         let mut items = Vec::with_capacity(count);
         for _ in 0..count {
             let queue = r.read_string()?;
@@ -373,6 +391,7 @@ impl AckResponse {
     pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
+        check_count(count)?;
         let mut results = Vec::with_capacity(count);
         for _ in 0..count {
             let error_code = ErrorCode::from_u8(r.read_u8()?);
@@ -402,6 +421,7 @@ impl NackRequest {
     pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
+        check_count(count)?;
         let mut items = Vec::with_capacity(count);
         for _ in 0..count {
             let queue = r.read_string()?;
@@ -435,6 +455,7 @@ impl NackResponse {
     pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
+        check_count(count)?;
         let mut results = Vec::with_capacity(count);
         for _ in 0..count {
             let error_code = ErrorCode::from_u8(r.read_u8()?);
