@@ -11,8 +11,8 @@ stories:
     dependsOn: []
   - id: "20.2"
     title: "Admin Operations & Auth on Binary Protocol"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/20.2-admin-ops-auth-binary-protocol"
     pr: 159
     dependsOn: ["20.1"]
