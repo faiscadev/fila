@@ -84,7 +84,7 @@ All multi-byte integers are big-endian (network byte order).
 | `string[]` | `[u16 count][repeated: string]` | 2 + sum of strings |
 | `optional<T>` | `[u8 present (0 or 1)][T if present]` | 1 or 1 + sizeof(T) |
 
-Strings are limited to 65,535 bytes. Byte arrays (payload) are limited to 4 GiB.
+Strings are limited to 65,535 bytes. Byte arrays use a `u32` length prefix but are effectively limited by the 16 MiB maximum frame size.
 
 ## Opcode Table
 
