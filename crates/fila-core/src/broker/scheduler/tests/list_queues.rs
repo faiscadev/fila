@@ -66,10 +66,10 @@ fn list_queues_reports_nonzero_depth_and_consumers() {
     };
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     scheduler.handle_command(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     });
-    reply_rx.blocking_recv().unwrap().unwrap();
+    reply_rx.blocking_recv().unwrap().into_iter().next().unwrap().unwrap();
 
     // Register a consumer
     let (consumer_tx, _consumer_rx) = tokio::sync::mpsc::channel(10);

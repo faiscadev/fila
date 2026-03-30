@@ -168,35 +168,23 @@ impl Scheduler {
 
     fn handle_command(&mut self, cmd: SchedulerCommand) {
         match cmd {
-            SchedulerCommand::Enqueue { message, reply } => {
-                debug!(queue_id = %message.queue_id, msg_id = %message.id, "enqueue command received");
-                let queue_id = message.queue_id.clone();
-                let result = self.handle_enqueue(message);
-                let _ = reply.send(result);
+            SchedulerCommand::Enqueue { messages, reply } => {
+                let (results, queues_to_deliver) = self.handle_enqueue_batch(messages);
+                let _ = reply.send(results);
                 // Deliver immediately for responsiveness
-                self.drr_deliver_queue(&queue_id);
+                for queue_id in queues_to_deliver {
+                    self.drr_deliver_queue(&queue_id);
+                }
             }
-            SchedulerCommand::Ack {
-                queue_id,
-                msg_id,
-                reply,
-            } => {
-                debug!(%queue_id, %msg_id, "ack command received");
-                let result = self.handle_ack(&queue_id, &msg_id);
-                let _ = reply.send(result);
+            SchedulerCommand::Ack { items, reply } => {
+                let results = self.handle_ack_batch(&items);
+                let _ = reply.send(results);
             }
-            SchedulerCommand::Nack {
-                queue_id,
-                msg_id,
-                error,
-                reply,
-            } => {
-                debug!(%queue_id, %msg_id, %error, "nack command received");
-                let result = self.handle_nack(&queue_id, &msg_id, &error);
-                let ok = result.is_ok();
-                let _ = reply.send(result);
-                if ok {
-                    // Re-deliver: the nacked message is now back in the ready pool
+            SchedulerCommand::Nack { items, reply } => {
+                let (results, queues_to_deliver) = self.handle_nack_batch(&items);
+                let _ = reply.send(results);
+                // Re-deliver for queues with successful nacks
+                for queue_id in queues_to_deliver {
                     self.drr_deliver_queue(&queue_id);
                 }
             }

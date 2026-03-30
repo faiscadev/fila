@@ -436,8 +436,16 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                     }
 
                     let response = match request {
-                        super::types::ClusterRequest::Enqueue { message } => {
-                            ClusterResponse::Enqueue { msg_id: message.id }
+                        super::types::ClusterRequest::Enqueue {
+                            messages, message, ..
+                        } => {
+                            // Return the first message's ID for backward compatibility.
+                            let msg_id = messages
+                                .first()
+                                .map(|m| m.id)
+                                .or_else(|| message.as_ref().map(|m| m.id))
+                                .unwrap_or(uuid::Uuid::nil());
+                            ClusterResponse::Enqueue { msg_id }
                         }
                         super::types::ClusterRequest::Ack { .. } => ClusterResponse::Ack,
                         super::types::ClusterRequest::Nack { .. } => ClusterResponse::Nack,
@@ -634,174 +642,77 @@ impl FilaRaftStore {
         log_id: LogId<NodeId>,
     ) -> Result<(), StorageError<NodeId>> {
         match request {
-            super::types::ClusterRequest::Enqueue { message } => {
-                let queue_id = self.queue_id.as_deref().unwrap_or(&message.queue_id);
-                let msg_key = crate::storage::keys::message_key(
-                    queue_id,
-                    &message.fairness_key,
-                    message.enqueued_at,
-                    &message.id,
-                );
-                let idx_key = crate::storage::keys::msg_index_key(queue_id, &message.id);
-                let proto = fila_proto::Message::from(message.clone());
-                let msg_value = proto.encode_to_vec();
-                storage
-                    .apply_mutations(vec![
-                        Mutation::PutMessage {
-                            key: msg_key.clone(),
-                            value: msg_value,
-                        },
-                        Mutation::PutMsgIndex {
-                            key: idx_key,
-                            value: msg_key,
-                        },
-                    ])
-                    .map_err(|e| StorageError::IO {
-                        source: openraft::StorageIOError::apply(log_id, &e),
-                    })?;
-            }
-            super::types::ClusterRequest::Ack { queue_id, msg_id } => {
-                // O(1) lookup via message index, with fallback to scan for
-                // backward compatibility with Raft entries committed before
-                // the index was introduced.
-                let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
-                let msg_key_opt =
-                    storage
-                        .get_msg_index(&idx_key)
-                        .map_err(|e| StorageError::IO {
-                            source: openraft::StorageIOError::apply(log_id, &e),
-                        })?;
-
-                let msg_key = if let Some(key) = msg_key_opt {
-                    // Verify the message actually exists at this key (stale
-                    // index protection). If not, fall back to scan.
-                    if storage
-                        .get_message(&key)
-                        .map_err(|e| StorageError::IO {
-                            source: openraft::StorageIOError::apply(log_id, &e),
-                        })?
-                        .is_some()
-                    {
-                        Some(key)
-                    } else {
-                        let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                        let messages =
-                            storage
-                                .list_messages(&msg_prefix)
-                                .map_err(|e| StorageError::IO {
-                                    source: openraft::StorageIOError::apply(log_id, &e),
-                                })?;
-                        messages
-                            .into_iter()
-                            .find(|(_, msg)| msg.id == *msg_id)
-                            .map(|(key, _)| key)
-                    }
+            super::types::ClusterRequest::Enqueue {
+                messages, message, ..
+            } => {
+                // Resolve batch: new-format uses `messages`, legacy uses `message`.
+                let msgs: Vec<&crate::message::Message> = if !messages.is_empty() {
+                    messages.iter().collect()
+                } else if let Some(m) = message {
+                    vec![m]
                 } else {
-                    // Fallback: scan all messages in the queue (O(n)).
-                    let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                    let messages =
-                        storage
-                            .list_messages(&msg_prefix)
-                            .map_err(|e| StorageError::IO {
-                                source: openraft::StorageIOError::apply(log_id, &e),
-                            })?;
-                    messages
-                        .into_iter()
-                        .find(|(_, msg)| msg.id == *msg_id)
-                        .map(|(key, _)| key)
+                    vec![]
                 };
-
-                if let Some(key) = msg_key {
-                    let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-                    let mut mutations = vec![
-                        Mutation::DeleteMessage { key },
-                        Mutation::DeleteMsgIndex { key: idx_key },
-                    ];
-                    if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
-                        mutations.push(Mutation::DeleteLease { key: lease_key });
-                        if let Some(expiry_ts) =
-                            crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
-                        {
-                            let expiry_key =
-                                crate::storage::keys::lease_expiry_key(expiry_ts, queue_id, msg_id);
-                            mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
-                        }
-                    }
+                for msg in msgs {
+                    let queue_id = self.queue_id.as_deref().unwrap_or(&msg.queue_id);
+                    let msg_key = crate::storage::keys::message_key(
+                        queue_id,
+                        &msg.fairness_key,
+                        msg.enqueued_at,
+                        &msg.id,
+                    );
+                    let idx_key = crate::storage::keys::msg_index_key(queue_id, &msg.id);
+                    let proto = fila_proto::Message::from(msg.clone());
+                    let msg_value = proto.encode_to_vec();
                     storage
-                        .apply_mutations(mutations)
+                        .apply_mutations(vec![
+                            Mutation::PutMessage {
+                                key: msg_key.clone(),
+                                value: msg_value,
+                            },
+                            Mutation::PutMsgIndex {
+                                key: idx_key,
+                                value: msg_key,
+                            },
+                        ])
                         .map_err(|e| StorageError::IO {
                             source: openraft::StorageIOError::apply(log_id, &e),
                         })?;
                 }
             }
-            super::types::ClusterRequest::Nack {
-                queue_id, msg_id, ..
+            super::types::ClusterRequest::Ack {
+                items,
+                queue_id: legacy_queue_id,
+                msg_id: legacy_msg_id,
             } => {
-                // O(1) lookup via message index, with fallback scan.
-                let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
-                let msg_key_opt =
-                    storage
-                        .get_msg_index(&idx_key)
-                        .map_err(|e| StorageError::IO {
-                            source: openraft::StorageIOError::apply(log_id, &e),
-                        })?;
-
-                let found = if let Some(key) = msg_key_opt {
-                    // O(1) direct get. If the index points to a deleted message
-                    // (stale index), fall back to scan.
-                    match storage.get_message(&key).map_err(|e| StorageError::IO {
-                        source: openraft::StorageIOError::apply(log_id, &e),
-                    })? {
-                        Some(msg) => Some((key, msg)),
-                        None => {
-                            // Stale index — fall back to scan.
-                            let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                            let messages = storage.list_messages(&msg_prefix).map_err(|e| {
-                                StorageError::IO {
-                                    source: openraft::StorageIOError::apply(log_id, &e),
-                                }
-                            })?;
-                            messages.into_iter().find(|(_, msg)| msg.id == *msg_id)
-                        }
-                    }
+                // Resolve batch: new-format uses `items`, legacy uses queue_id + msg_id.
+                let ack_pairs: Vec<(&str, &uuid::Uuid)> = if !items.is_empty() {
+                    items.iter().map(|i| (i.queue_id.as_str(), &i.msg_id)).collect()
+                } else if let (Some(qid), Some(mid)) = (legacy_queue_id, legacy_msg_id) {
+                    vec![(qid.as_str(), mid)]
                 } else {
-                    // Fallback: scan all messages in the queue (O(n)).
-                    let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                    let messages =
-                        storage
-                            .list_messages(&msg_prefix)
-                            .map_err(|e| StorageError::IO {
-                                source: openraft::StorageIOError::apply(log_id, &e),
-                            })?;
-                    messages.into_iter().find(|(_, msg)| msg.id == *msg_id)
+                    vec![]
                 };
-
-                if let Some((key, msg)) = found {
-                    let mut updated = msg;
-                    updated.attempt_count += 1;
-                    updated.leased_at = None;
-                    let proto = fila_proto::Message::from(updated);
-                    let msg_value = proto.encode_to_vec();
-                    let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
-                    let mut mutations = vec![Mutation::PutMessage {
-                        key,
-                        value: msg_value,
-                    }];
-                    if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
-                        mutations.push(Mutation::DeleteLease { key: lease_key });
-                        if let Some(expiry_ts) =
-                            crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
-                        {
-                            let expiry_key =
-                                crate::storage::keys::lease_expiry_key(expiry_ts, queue_id, msg_id);
-                            mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
-                        }
-                    }
-                    storage
-                        .apply_mutations(mutations)
-                        .map_err(|e| StorageError::IO {
-                            source: openraft::StorageIOError::apply(log_id, &e),
-                        })?;
+                for (queue_id, msg_id) in ack_pairs {
+                    Self::apply_ack_to_storage(storage, queue_id, msg_id, log_id)?;
+                }
+            }
+            super::types::ClusterRequest::Nack {
+                items,
+                queue_id: legacy_queue_id,
+                msg_id: legacy_msg_id,
+                ..
+            } => {
+                // Resolve batch: new-format uses `items`, legacy uses queue_id + msg_id.
+                let nack_pairs: Vec<(&str, &uuid::Uuid)> = if !items.is_empty() {
+                    items.iter().map(|i| (i.queue_id.as_str(), &i.msg_id)).collect()
+                } else if let (Some(qid), Some(mid)) = (legacy_queue_id, legacy_msg_id) {
+                    vec![(qid.as_str(), mid)]
+                } else {
+                    vec![]
+                };
+                for (queue_id, msg_id) in nack_pairs {
+                    Self::apply_nack_to_storage(storage, queue_id, msg_id, log_id)?;
                 }
             }
             // Queue-level data operations are Enqueue, Ack, Nack only.
@@ -816,6 +727,155 @@ impl FilaRaftStore {
             | super::types::ClusterRequest::Redrive { .. }
             | super::types::ClusterRequest::CreateQueueGroup { .. }
             | super::types::ClusterRequest::DeleteQueueGroup { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// Apply a single ack to broker storage (extracted for reuse with batch).
+    #[allow(clippy::result_large_err)]
+    fn apply_ack_to_storage(
+        storage: &dyn StorageEngine,
+        queue_id: &str,
+        msg_id: &uuid::Uuid,
+        log_id: LogId<NodeId>,
+    ) -> Result<(), StorageError<NodeId>> {
+        let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
+        let msg_key_opt =
+            storage
+                .get_msg_index(&idx_key)
+                .map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
+
+        let msg_key = if let Some(key) = msg_key_opt {
+            if storage
+                .get_message(&key)
+                .map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?
+                .is_some()
+            {
+                Some(key)
+            } else {
+                let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+                let messages =
+                    storage
+                        .list_messages(&msg_prefix)
+                        .map_err(|e| StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        })?;
+                messages
+                    .into_iter()
+                    .find(|(_, msg)| msg.id == *msg_id)
+                    .map(|(key, _)| key)
+            }
+        } else {
+            let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+            let messages =
+                storage
+                    .list_messages(&msg_prefix)
+                    .map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    })?;
+            messages
+                .into_iter()
+                .find(|(_, msg)| msg.id == *msg_id)
+                .map(|(key, _)| key)
+        };
+
+        if let Some(key) = msg_key {
+            let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+            let mut mutations = vec![
+                Mutation::DeleteMessage { key },
+                Mutation::DeleteMsgIndex { key: idx_key },
+            ];
+            if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
+                mutations.push(Mutation::DeleteLease { key: lease_key });
+                if let Some(expiry_ts) =
+                    crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
+                {
+                    let expiry_key =
+                        crate::storage::keys::lease_expiry_key(expiry_ts, queue_id, msg_id);
+                    mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
+                }
+            }
+            storage
+                .apply_mutations(mutations)
+                .map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Apply a single nack to broker storage (extracted for reuse with batch).
+    #[allow(clippy::result_large_err)]
+    fn apply_nack_to_storage(
+        storage: &dyn StorageEngine,
+        queue_id: &str,
+        msg_id: &uuid::Uuid,
+        log_id: LogId<NodeId>,
+    ) -> Result<(), StorageError<NodeId>> {
+        let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
+        let msg_key_opt =
+            storage
+                .get_msg_index(&idx_key)
+                .map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
+
+        let found = if let Some(key) = msg_key_opt {
+            match storage.get_message(&key).map_err(|e| StorageError::IO {
+                source: openraft::StorageIOError::apply(log_id, &e),
+            })? {
+                Some(msg) => Some((key, msg)),
+                None => {
+                    let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+                    let messages = storage.list_messages(&msg_prefix).map_err(|e| {
+                        StorageError::IO {
+                            source: openraft::StorageIOError::apply(log_id, &e),
+                        }
+                    })?;
+                    messages.into_iter().find(|(_, msg)| msg.id == *msg_id)
+                }
+            }
+        } else {
+            let msg_prefix = crate::storage::keys::message_prefix(queue_id);
+            let messages =
+                storage
+                    .list_messages(&msg_prefix)
+                    .map_err(|e| StorageError::IO {
+                        source: openraft::StorageIOError::apply(log_id, &e),
+                    })?;
+            messages.into_iter().find(|(_, msg)| msg.id == *msg_id)
+        };
+
+        if let Some((key, msg)) = found {
+            let mut updated = msg;
+            updated.attempt_count += 1;
+            updated.leased_at = None;
+            let proto = fila_proto::Message::from(updated);
+            let msg_value = proto.encode_to_vec();
+            let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
+            let mut mutations = vec![Mutation::PutMessage {
+                key,
+                value: msg_value,
+            }];
+            if let Some(lease_value) = storage.get_lease(&lease_key).ok().flatten() {
+                mutations.push(Mutation::DeleteLease { key: lease_key });
+                if let Some(expiry_ts) =
+                    crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
+                {
+                    let expiry_key =
+                        crate::storage::keys::lease_expiry_key(expiry_ts, queue_id, msg_id);
+                    mutations.push(Mutation::DeleteLeaseExpiry { key: expiry_key });
+                }
+            }
+            storage
+                .apply_mutations(mutations)
+                .map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
         }
         Ok(())
     }
@@ -903,7 +963,8 @@ mod tests {
         let msg = test_message("q1", "tenant_a");
 
         let request = super::super::types::ClusterRequest::Enqueue {
-            message: msg.clone(),
+            messages: vec![msg.clone()],
+            message: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &request, test_log_id(1))
@@ -929,7 +990,8 @@ mod tests {
         // Enqueue a message (creates both message and index).
         let msg = test_message("q1", "tenant_a");
         let enqueue_req = super::super::types::ClusterRequest::Enqueue {
-            message: msg.clone(),
+            messages: vec![msg.clone()],
+            message: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
@@ -943,8 +1005,12 @@ mod tests {
 
         // Ack the message (should use index for O(1) lookup).
         let ack_req = super::super::types::ClusterRequest::Ack {
-            queue_id: "q1".to_string(),
-            msg_id: msg.id,
+            items: vec![super::super::types::AckItemData {
+                queue_id: "q1".to_string(),
+                msg_id: msg.id,
+            }],
+            queue_id: None,
+            msg_id: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(2))
@@ -963,7 +1029,8 @@ mod tests {
         // Enqueue a message.
         let msg = test_message("q1", "tenant_a");
         let enqueue_req = super::super::types::ClusterRequest::Enqueue {
-            message: msg.clone(),
+            messages: vec![msg.clone()],
+            message: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
@@ -971,9 +1038,14 @@ mod tests {
 
         // Nack the message (should use index for O(1) lookup).
         let nack_req = super::super::types::ClusterRequest::Nack {
-            queue_id: "q1".to_string(),
-            msg_id: msg.id,
-            error: "test error".to_string(),
+            items: vec![super::super::types::NackItemData {
+                queue_id: "q1".to_string(),
+                msg_id: msg.id,
+                error: "test error".to_string(),
+            }],
+            queue_id: None,
+            msg_id: None,
+            error: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &nack_req, test_log_id(2))
@@ -1004,8 +1076,12 @@ mod tests {
 
         // Ack should fall back to O(n) scan and still succeed.
         let ack_req = super::super::types::ClusterRequest::Ack {
-            queue_id: "q1".to_string(),
-            msg_id: msg.id,
+            items: vec![super::super::types::AckItemData {
+                queue_id: "q1".to_string(),
+                msg_id: msg.id,
+            }],
+            queue_id: None,
+            msg_id: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(1))
@@ -1027,9 +1103,14 @@ mod tests {
 
         // Nack should fall back to scan and still succeed.
         let nack_req = super::super::types::ClusterRequest::Nack {
-            queue_id: "q1".to_string(),
-            msg_id: msg.id,
-            error: "test".to_string(),
+            items: vec![super::super::types::NackItemData {
+                queue_id: "q1".to_string(),
+                msg_id: msg.id,
+                error: "test".to_string(),
+            }],
+            queue_id: None,
+            msg_id: None,
+            error: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &nack_req, test_log_id(1))
@@ -1054,7 +1135,7 @@ mod tests {
             if i == 50 {
                 target_id = msg.id;
             }
-            let req = super::super::types::ClusterRequest::Enqueue { message: msg };
+            let req = super::super::types::ClusterRequest::Enqueue { messages: vec![msg], message: None };
             store
                 .apply_to_broker_storage(rocksdb.as_ref(), &req, test_log_id(i + 1))
                 .unwrap();
@@ -1066,8 +1147,12 @@ mod tests {
 
         // Ack the 51st message — with index this is O(1), not O(100).
         let ack_req = super::super::types::ClusterRequest::Ack {
-            queue_id: "q1".to_string(),
-            msg_id: target_id,
+            items: vec![super::super::types::AckItemData {
+                queue_id: "q1".to_string(),
+                msg_id: target_id,
+            }],
+            queue_id: None,
+            msg_id: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(101))
@@ -1087,15 +1172,20 @@ mod tests {
 
         let msg = test_message("q1", "tenant_a");
         let enqueue_req = super::super::types::ClusterRequest::Enqueue {
-            message: msg.clone(),
+            messages: vec![msg.clone()],
+            message: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
             .unwrap();
 
         let ack_req = super::super::types::ClusterRequest::Ack {
-            queue_id: "q1".to_string(),
-            msg_id: msg.id,
+            items: vec![super::super::types::AckItemData {
+                queue_id: "q1".to_string(),
+                msg_id: msg.id,
+            }],
+            queue_id: None,
+            msg_id: None,
         };
         // First ack — deletes message.
         store
@@ -1116,8 +1206,12 @@ mod tests {
         let store = make_store(Arc::clone(&rocksdb), Arc::clone(&rocksdb), "q1");
 
         let ack_req = super::super::types::ClusterRequest::Ack {
-            queue_id: "q1".to_string(),
-            msg_id: uuid::Uuid::now_v7(),
+            items: vec![super::super::types::AckItemData {
+                queue_id: "q1".to_string(),
+                msg_id: uuid::Uuid::now_v7(),
+            }],
+            queue_id: None,
+            msg_id: None,
         };
         // Ack a message that was never enqueued — should not error.
         store

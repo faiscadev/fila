@@ -20,7 +20,7 @@ fn consumer_receives_enqueued_messages() {
     let msg_id = msg.id;
     let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -49,7 +49,7 @@ fn consumer_receives_pending_messages_on_register() {
         msg_ids.push(msg.id);
         let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -100,7 +100,7 @@ fn lease_creates_entries_in_storage() {
     let msg_id = msg.id;
     let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -145,7 +145,7 @@ fn multiple_consumers_get_different_messages() {
         msg_ids.push(msg.id);
         let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -205,7 +205,7 @@ fn unregister_consumer_stops_delivery() {
     let msg = test_message("unreg-queue");
     let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -243,7 +243,7 @@ fn enqueue_10_messages_lease_receives_all() {
         msg_ids.push(msg.id);
         let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -291,7 +291,7 @@ fn delivery_skips_closed_consumer_and_delivers_to_next() {
     let msg_id = msg.id;
     let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -341,7 +341,7 @@ fn delivery_rolls_back_lease_when_all_consumers_closed() {
     let msg_id = msg.id;
     let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -398,7 +398,7 @@ fn delivery_skips_full_consumer_and_delivers_to_next() {
         msg_ids.push(msg.id);
         let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -468,7 +468,7 @@ fn delivery_rolls_back_lease_when_all_consumers_full() {
         msg_ids.push(msg.id);
         let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();

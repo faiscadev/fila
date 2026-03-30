@@ -243,7 +243,7 @@ fn set_config_throttle_rate_enforced_on_delivery() {
             test_message_with_throttle_keys("config-throttle-q", vec!["rate:global".into()], i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -463,7 +463,7 @@ fn lua_e2e_non_throttle_config_via_set_config() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();

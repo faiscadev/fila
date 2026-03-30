@@ -1,7 +1,29 @@
 use super::*;
+use crate::broker::command::{AckItem, NackItem};
 
 impl Scheduler {
-    pub(super) fn handle_enqueue(
+    /// Process a batch of enqueue operations. Each message gets its own Result.
+    /// Returns (results, set of queue_ids that had successful enqueues for delivery).
+    pub(super) fn handle_enqueue_batch(
+        &mut self,
+        messages: Vec<crate::message::Message>,
+    ) -> (Vec<Result<uuid::Uuid, crate::error::EnqueueError>>, HashSet<String>) {
+        let mut results = Vec::with_capacity(messages.len());
+        let mut queues_to_deliver = HashSet::new();
+
+        for message in messages {
+            let queue_id = message.queue_id.clone();
+            let result = self.handle_enqueue(message);
+            if result.is_ok() {
+                queues_to_deliver.insert(queue_id);
+            }
+            results.push(result);
+        }
+
+        (results, queues_to_deliver)
+    }
+
+    fn handle_enqueue(
         &mut self,
         mut message: crate::message::Message,
     ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
@@ -216,7 +238,18 @@ impl Scheduler {
         Ok(())
     }
 
-    pub(super) fn handle_ack(
+    /// Process a batch of ack operations. Each item gets its own Result.
+    pub(super) fn handle_ack_batch(
+        &mut self,
+        items: &[AckItem],
+    ) -> Vec<Result<(), crate::error::AckError>> {
+        items
+            .iter()
+            .map(|item| self.handle_ack(&item.queue_id, &item.msg_id))
+            .collect()
+    }
+
+    fn handle_ack(
         &mut self,
         queue_id: &str,
         msg_id: &uuid::Uuid,
@@ -258,7 +291,27 @@ impl Scheduler {
         Ok(())
     }
 
-    pub(super) fn handle_nack(
+    /// Process a batch of nack operations. Each item gets its own Result.
+    /// Returns (results, set of queue_ids that had successful nacks for delivery).
+    pub(super) fn handle_nack_batch(
+        &mut self,
+        items: &[NackItem],
+    ) -> (Vec<Result<(), crate::error::NackError>>, HashSet<String>) {
+        let mut results = Vec::with_capacity(items.len());
+        let mut queues_to_deliver = HashSet::new();
+
+        for item in items {
+            let result = self.handle_nack(&item.queue_id, &item.msg_id, &item.error);
+            if result.is_ok() {
+                queues_to_deliver.insert(item.queue_id.clone());
+            }
+            results.push(result);
+        }
+
+        (results, queues_to_deliver)
+    }
+
+    fn handle_nack(
         &mut self,
         queue_id: &str,
         msg_id: &uuid::Uuid,

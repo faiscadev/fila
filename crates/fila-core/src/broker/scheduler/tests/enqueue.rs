@@ -8,7 +8,7 @@ fn enqueue_to_nonexistent_queue_returns_error() {
     let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
 
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -16,7 +16,7 @@ fn enqueue_to_nonexistent_queue_returns_error() {
 
     scheduler.run();
 
-    let err = reply_rx.try_recv().unwrap().unwrap_err();
+    let err = reply_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap_err();
     assert!(
         matches!(err, crate::error::EnqueueError::QueueNotFound(_)),
         "expected QueueNotFound, got {err:?}"
@@ -34,7 +34,7 @@ fn enqueue_persists_message_to_storage() {
     let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
 
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -42,7 +42,7 @@ fn enqueue_persists_message_to_storage() {
 
     scheduler.run();
 
-    let result = reply_rx.try_recv().unwrap().unwrap();
+    let result = reply_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap();
     assert_eq!(result, msg_id);
 
     // Verify the message was persisted by reading it back from storage
@@ -68,7 +68,7 @@ fn enqueue_100_messages_unique_time_ordered_ids() {
         msg.enqueued_at = i;
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -81,7 +81,7 @@ fn enqueue_100_messages_unique_time_ordered_ids() {
     // Collect all returned IDs
     let ids: Vec<Uuid> = receivers
         .into_iter()
-        .map(|mut rx| rx.try_recv().unwrap().unwrap())
+        .map(|mut rx| rx.try_recv().unwrap().into_iter().next().unwrap().unwrap())
         .collect();
 
     // All IDs must be unique

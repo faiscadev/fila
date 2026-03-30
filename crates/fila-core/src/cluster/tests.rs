@@ -390,7 +390,8 @@ mod tests {
 
         let resp = leader_raft
             .client_write(crate::cluster::ClusterRequest::Enqueue {
-                message: msg.clone(),
+                messages: vec![msg.clone()],
+                message: None,
             })
             .await
             .unwrap();
@@ -640,7 +641,8 @@ mod tests {
             .write_to_queue(
                 queue_id,
                 crate::ClusterRequest::Enqueue {
-                    message: msg.clone(),
+                    messages: vec![msg.clone()],
+                    message: None,
                 },
             )
             .await
@@ -657,13 +659,14 @@ mod tests {
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             node.broker
                 .send_command(crate::SchedulerCommand::Enqueue {
-                    message: msg,
+                    messages: vec![msg],
                     reply: reply_tx,
                 })
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                     format!("{e}").into()
                 })?;
-            let _ = reply_rx.await??;
+            let results = reply_rx.await?;
+            results.into_iter().next().unwrap()?;
         }
 
         Ok(msg_id)
@@ -838,8 +841,12 @@ mod tests {
             .write_to_queue(
                 "ack-test",
                 crate::ClusterRequest::Ack {
-                    queue_id: "ack-test".to_string(),
-                    msg_id,
+                    items: vec![crate::cluster::AckItemData {
+                        queue_id: "ack-test".to_string(),
+                        msg_id,
+                    }],
+                    queue_id: None,
+                    msg_id: None,
                 },
             )
             .await
@@ -859,12 +866,15 @@ mod tests {
             ack_node
                 .broker
                 .send_command(crate::SchedulerCommand::Ack {
-                    queue_id: "ack-test".to_string(),
-                    msg_id,
+                    items: vec![crate::broker::command::AckItem {
+                        queue_id: "ack-test".to_string(),
+                        msg_id,
+                    }],
                     reply: reply_tx,
                 })
                 .unwrap();
-            reply_rx.await.unwrap().unwrap();
+            let results = reply_rx.await.unwrap();
+            results.into_iter().next().unwrap().unwrap();
         }
 
         // Cleanup.

@@ -20,7 +20,7 @@ fn ack_removes_message_lease_and_expiry() {
     let msg_id = msg.id;
     let (enq_tx, _enq_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -28,8 +28,7 @@ fn ack_removes_message_lease_and_expiry() {
     // Ack the message
     let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Ack {
-        queue_id: "ack-queue".to_string(),
-        msg_id,
+        items: vec![AckItem { queue_id: "ack-queue".to_string(), msg_id }],
         reply: ack_tx,
     })
     .unwrap();
@@ -41,7 +40,7 @@ fn ack_removes_message_lease_and_expiry() {
     assert!(consumer_rx.try_recv().is_ok());
 
     // Ack should succeed
-    assert!(ack_rx.try_recv().unwrap().is_ok());
+    assert!(ack_rx.try_recv().unwrap().into_iter().next().unwrap().is_ok());
 
     // Message should be gone from message store
     let msg_key = crate::storage::keys::message_key("ack-queue", "default", 1_000_000_000, &msg_id);
@@ -67,8 +66,7 @@ fn ack_unknown_message_returns_not_found() {
     let msg_id = Uuid::now_v7();
     let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Ack {
-        queue_id: "ack-unknown-queue".to_string(),
-        msg_id,
+        items: vec![AckItem { queue_id: "ack-unknown-queue".to_string(), msg_id }],
         reply: ack_tx,
     })
     .unwrap();
@@ -76,7 +74,7 @@ fn ack_unknown_message_returns_not_found() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    let err = ack_rx.try_recv().unwrap().unwrap_err();
+    let err = ack_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap_err();
     assert!(
         matches!(err, crate::error::AckError::MessageNotFound(_)),
         "expected MessageNotFound, got {err:?}"
@@ -103,7 +101,7 @@ fn ack_same_message_twice_returns_not_found() {
     let msg_id = msg.id;
     let (enq_tx, _enq_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -111,8 +109,7 @@ fn ack_same_message_twice_returns_not_found() {
     // First ack
     let (ack1_tx, mut ack1_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Ack {
-        queue_id: "double-ack-queue".to_string(),
-        msg_id,
+        items: vec![AckItem { queue_id: "double-ack-queue".to_string(), msg_id }],
         reply: ack1_tx,
     })
     .unwrap();
@@ -120,8 +117,7 @@ fn ack_same_message_twice_returns_not_found() {
     // Second ack (same message)
     let (ack2_tx, mut ack2_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Ack {
-        queue_id: "double-ack-queue".to_string(),
-        msg_id,
+        items: vec![AckItem { queue_id: "double-ack-queue".to_string(), msg_id }],
         reply: ack2_tx,
     })
     .unwrap();
@@ -131,12 +127,12 @@ fn ack_same_message_twice_returns_not_found() {
 
     // First ack should succeed
     assert!(
-        ack1_rx.try_recv().unwrap().is_ok(),
+        ack1_rx.try_recv().unwrap().into_iter().next().unwrap().is_ok(),
         "first ack should succeed"
     );
 
     // Second ack should return NOT_FOUND
-    let err = ack2_rx.try_recv().unwrap().unwrap_err();
+    let err = ack2_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap_err();
     assert!(
         matches!(err, crate::error::AckError::MessageNotFound(_)),
         "second ack should return MessageNotFound, got {err:?}"
@@ -163,7 +159,7 @@ fn nack_requeues_message_with_incremented_attempt_count() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -171,9 +167,7 @@ fn nack_requeues_message_with_incremented_attempt_count() {
     // Nack the message
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "nack-queue".to_string(),
-        msg_id,
-        error: "processing failed".to_string(),
+        items: vec![NackItem { queue_id: "nack-queue".to_string(), msg_id, error: "processing failed".to_string() }],
         reply: nack_tx,
     })
     .unwrap();
@@ -189,7 +183,7 @@ fn nack_requeues_message_with_incremented_attempt_count() {
     assert_eq!(first.attempt_count, 0);
 
     // Nack should succeed
-    assert!(nack_rx.try_recv().unwrap().is_ok(), "nack should succeed");
+    assert!(nack_rx.try_recv().unwrap().into_iter().next().unwrap().is_ok(), "nack should succeed");
 
     // Second delivery: attempt_count = 1 (incremented by nack)
     let second = consumer_rx
@@ -227,7 +221,7 @@ fn nack_removes_lease_and_lease_expiry() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -241,9 +235,7 @@ fn nack_removes_lease_and_lease_expiry() {
     // Nack the message to release the lease
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "nack-lease-queue".to_string(),
-        msg_id,
-        error: "retry please".to_string(),
+        items: vec![NackItem { queue_id: "nack-lease-queue".to_string(), msg_id, error: "retry please".to_string() }],
         reply: nack_tx,
     })
     .unwrap();
@@ -253,7 +245,7 @@ fn nack_removes_lease_and_lease_expiry() {
 
     // Consume first delivery
     let _ = consumer_rx.try_recv();
-    assert!(nack_rx.try_recv().unwrap().is_ok());
+    assert!(nack_rx.try_recv().unwrap().into_iter().next().unwrap().is_ok());
 
     // Lease should be gone after nack (no re-delivery since consumer unregistered)
     let lease_key = crate::storage::keys::lease_key("nack-lease-queue", &msg_id);
@@ -283,9 +275,7 @@ fn nack_unknown_message_returns_not_found() {
     let msg_id = Uuid::now_v7();
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "nack-unknown-queue".to_string(),
-        msg_id,
-        error: "test error".to_string(),
+        items: vec![NackItem { queue_id: "nack-unknown-queue".to_string(), msg_id, error: "test error".to_string() }],
         reply: nack_tx,
     })
     .unwrap();
@@ -293,7 +283,7 @@ fn nack_unknown_message_returns_not_found() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    let err = nack_rx.try_recv().unwrap().unwrap_err();
+    let err = nack_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap_err();
     assert!(
         matches!(err, crate::error::NackError::MessageNotFound(_)),
         "expected MessageNotFound, got {err:?}"
@@ -318,7 +308,7 @@ fn double_nack_returns_not_found() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -332,9 +322,7 @@ fn double_nack_returns_not_found() {
     // First nack — should succeed
     let (nack1_tx, mut nack1_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "double-nack-queue".to_string(),
-        msg_id,
-        error: "first nack".to_string(),
+        items: vec![NackItem { queue_id: "double-nack-queue".to_string(), msg_id, error: "first nack".to_string() }],
         reply: nack1_tx,
     })
     .unwrap();
@@ -342,9 +330,7 @@ fn double_nack_returns_not_found() {
     // Second nack — lease is already gone, should return NOT_FOUND
     let (nack2_tx, mut nack2_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "double-nack-queue".to_string(),
-        msg_id,
-        error: "second nack".to_string(),
+        items: vec![NackItem { queue_id: "double-nack-queue".to_string(), msg_id, error: "second nack".to_string() }],
         reply: nack2_tx,
     })
     .unwrap();
@@ -356,10 +342,10 @@ fn double_nack_returns_not_found() {
     let _ = consumer_rx.try_recv();
 
     assert!(
-        nack1_rx.try_recv().unwrap().is_ok(),
+        nack1_rx.try_recv().unwrap().into_iter().next().unwrap().is_ok(),
         "first nack should succeed"
     );
-    let err = nack2_rx.try_recv().unwrap().unwrap_err();
+    let err = nack2_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap_err();
     assert!(
         matches!(err, crate::error::NackError::MessageNotFound(_)),
         "second nack should return MessageNotFound, got {err:?}"
@@ -384,7 +370,7 @@ fn nack_then_ack_completes_message_lifecycle() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -392,9 +378,7 @@ fn nack_then_ack_completes_message_lifecycle() {
     // Nack the message
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "nack-ack-queue".to_string(),
-        msg_id,
-        error: "first attempt failed".to_string(),
+        items: vec![NackItem { queue_id: "nack-ack-queue".to_string(), msg_id, error: "first attempt failed".to_string() }],
         reply: nack_tx,
     })
     .unwrap();
@@ -402,8 +386,7 @@ fn nack_then_ack_completes_message_lifecycle() {
     // Ack the redelivered message
     let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Ack {
-        queue_id: "nack-ack-queue".to_string(),
-        msg_id,
+        items: vec![AckItem { queue_id: "nack-ack-queue".to_string(), msg_id }],
         reply: ack_tx,
     })
     .unwrap();
@@ -416,14 +399,14 @@ fn nack_then_ack_completes_message_lifecycle() {
     assert_eq!(first.attempt_count, 0);
 
     // Nack succeeds
-    assert!(nack_rx.try_recv().unwrap().is_ok());
+    assert!(nack_rx.try_recv().unwrap().into_iter().next().unwrap().is_ok());
 
     // Second delivery with incremented count
     let second = consumer_rx.try_recv().expect("second delivery after nack");
     assert_eq!(second.attempt_count, 1);
 
     // Ack succeeds
-    assert!(ack_rx.try_recv().unwrap().is_ok());
+    assert!(ack_rx.try_recv().unwrap().into_iter().next().unwrap().is_ok());
 
     // Message should be deleted after ack
     let msg_key =
@@ -461,7 +444,7 @@ fn lease_expiry_redelivers_message_with_incremented_attempt_count() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -526,7 +509,7 @@ fn lease_expiry_clears_lease_and_expiry_entries() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -623,7 +606,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
     let msg_fast_id = msg_fast.id;
     let (enq_tx1, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg_fast,
+        messages: vec![msg_fast],
         reply: enq_tx1,
     })
     .unwrap();
@@ -631,7 +614,7 @@ fn lease_expiry_multiple_messages_different_timeouts() {
     let msg_slow = test_message("slow-queue");
     let (enq_tx2, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg_slow,
+        messages: vec![msg_slow],
         reply: enq_tx2,
     })
     .unwrap();
@@ -700,7 +683,7 @@ fn ack_before_expiry_prevents_redelivery() {
     let msg_id = msg.id;
     let (enq_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: enq_tx,
     })
     .unwrap();
@@ -720,8 +703,7 @@ fn ack_before_expiry_prevents_redelivery() {
     // Ack immediately (before the 100ms visibility timeout)
     let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Ack {
-        queue_id: "ack-before-expiry-queue".to_string(),
-        msg_id,
+        items: vec![AckItem { queue_id: "ack-before-expiry-queue".to_string(), msg_id }],
         reply: ack_tx,
     })
     .unwrap();
@@ -729,7 +711,7 @@ fn ack_before_expiry_prevents_redelivery() {
     // Wait to ensure ack is processed
     std::thread::sleep(Duration::from_millis(10));
     assert!(
-        ack_rx.blocking_recv().unwrap().is_ok(),
+        ack_rx.blocking_recv().unwrap().into_iter().next().unwrap().is_ok(),
         "ack should succeed"
     );
 
