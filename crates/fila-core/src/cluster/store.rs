@@ -436,14 +436,10 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
                     }
 
                     let response = match request {
-                        super::types::ClusterRequest::Enqueue {
-                            messages, message, ..
-                        } => {
-                            // Return the first message's ID for backward compatibility.
+                        super::types::ClusterRequest::Enqueue { messages } => {
                             let msg_id = messages
                                 .first()
                                 .map(|m| m.id)
-                                .or_else(|| message.as_ref().map(|m| m.id))
                                 .unwrap_or(uuid::Uuid::nil());
                             ClusterResponse::Enqueue { msg_id }
                         }
@@ -642,19 +638,9 @@ impl FilaRaftStore {
         log_id: LogId<NodeId>,
     ) -> Result<(), StorageError<NodeId>> {
         match request {
-            super::types::ClusterRequest::Enqueue {
-                messages, message, ..
-            } => {
-                // Resolve batch: new-format uses `messages`, legacy uses `message`.
-                let msgs: Vec<&crate::message::Message> = if !messages.is_empty() {
-                    messages.iter().collect()
-                } else if let Some(m) = message {
-                    vec![m]
-                } else {
-                    vec![]
-                };
-                let mut mutations = Vec::with_capacity(msgs.len() * 2);
-                for msg in msgs {
+            super::types::ClusterRequest::Enqueue { messages } => {
+                let mut mutations = Vec::with_capacity(messages.len() * 2);
+                for msg in messages {
                     let queue_id = self.queue_id.as_deref().unwrap_or(&msg.queue_id);
                     let msg_key = crate::storage::keys::message_key(
                         queue_id,
@@ -682,44 +668,15 @@ impl FilaRaftStore {
                         })?;
                 }
             }
-            super::types::ClusterRequest::Ack {
-                items,
-                queue_id: legacy_queue_id,
-                msg_id: legacy_msg_id,
-            } => {
-                // Resolve batch: new-format uses `items`, legacy uses queue_id + msg_id.
-                let ack_pairs: Vec<(&str, &uuid::Uuid)> = if !items.is_empty() {
-                    items
-                        .iter()
-                        .map(|i| (i.queue_id.as_str(), &i.msg_id))
-                        .collect()
-                } else if let (Some(qid), Some(mid)) = (legacy_queue_id, legacy_msg_id) {
-                    vec![(qid.as_str(), mid)]
-                } else {
-                    vec![]
-                };
-                for (queue_id, msg_id) in ack_pairs {
+            super::types::ClusterRequest::Ack { items } => {
+                for item in items {
+                    let (queue_id, msg_id) = (item.queue_id.as_str(), &item.msg_id);
                     Self::apply_ack_to_storage(storage, queue_id, msg_id, log_id)?;
                 }
             }
-            super::types::ClusterRequest::Nack {
-                items,
-                queue_id: legacy_queue_id,
-                msg_id: legacy_msg_id,
-                ..
-            } => {
-                // Resolve batch: new-format uses `items`, legacy uses queue_id + msg_id.
-                let nack_pairs: Vec<(&str, &uuid::Uuid)> = if !items.is_empty() {
-                    items
-                        .iter()
-                        .map(|i| (i.queue_id.as_str(), &i.msg_id))
-                        .collect()
-                } else if let (Some(qid), Some(mid)) = (legacy_queue_id, legacy_msg_id) {
-                    vec![(qid.as_str(), mid)]
-                } else {
-                    vec![]
-                };
-                for (queue_id, msg_id) in nack_pairs {
+            super::types::ClusterRequest::Nack { items } => {
+                for item in items {
+                    let (queue_id, msg_id) = (item.queue_id.as_str(), &item.msg_id);
                     Self::apply_nack_to_storage(storage, queue_id, msg_id, log_id)?;
                 }
             }
@@ -739,7 +696,7 @@ impl FilaRaftStore {
         Ok(())
     }
 
-    /// Apply a single ack to broker storage (extracted for reuse with batch).
+    /// Apply a single ack to broker storage.
     #[allow(clippy::result_large_err)]
     fn apply_ack_to_storage(
         storage: &dyn StorageEngine,
@@ -814,7 +771,7 @@ impl FilaRaftStore {
         Ok(())
     }
 
-    /// Apply a single nack to broker storage (extracted for reuse with batch).
+    /// Apply a single nack to broker storage.
     #[allow(clippy::result_large_err)]
     fn apply_nack_to_storage(
         storage: &dyn StorageEngine,
@@ -969,7 +926,6 @@ mod tests {
 
         let request = super::super::types::ClusterRequest::Enqueue {
             messages: vec![msg.clone()],
-            message: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &request, test_log_id(1))
@@ -996,7 +952,6 @@ mod tests {
         let msg = test_message("q1", "tenant_a");
         let enqueue_req = super::super::types::ClusterRequest::Enqueue {
             messages: vec![msg.clone()],
-            message: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
@@ -1014,8 +969,6 @@ mod tests {
                 queue_id: "q1".to_string(),
                 msg_id: msg.id,
             }],
-            queue_id: None,
-            msg_id: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(2))
@@ -1035,7 +988,6 @@ mod tests {
         let msg = test_message("q1", "tenant_a");
         let enqueue_req = super::super::types::ClusterRequest::Enqueue {
             messages: vec![msg.clone()],
-            message: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
@@ -1048,9 +1000,6 @@ mod tests {
                 msg_id: msg.id,
                 error: "test error".to_string(),
             }],
-            queue_id: None,
-            msg_id: None,
-            error: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &nack_req, test_log_id(2))
@@ -1085,8 +1034,6 @@ mod tests {
                 queue_id: "q1".to_string(),
                 msg_id: msg.id,
             }],
-            queue_id: None,
-            msg_id: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(1))
@@ -1113,9 +1060,6 @@ mod tests {
                 msg_id: msg.id,
                 error: "test".to_string(),
             }],
-            queue_id: None,
-            msg_id: None,
-            error: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &nack_req, test_log_id(1))
@@ -1142,7 +1086,6 @@ mod tests {
             }
             let req = super::super::types::ClusterRequest::Enqueue {
                 messages: vec![msg],
-                message: None,
             };
             store
                 .apply_to_broker_storage(rocksdb.as_ref(), &req, test_log_id(i + 1))
@@ -1159,8 +1102,6 @@ mod tests {
                 queue_id: "q1".to_string(),
                 msg_id: target_id,
             }],
-            queue_id: None,
-            msg_id: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &ack_req, test_log_id(101))
@@ -1181,7 +1122,6 @@ mod tests {
         let msg = test_message("q1", "tenant_a");
         let enqueue_req = super::super::types::ClusterRequest::Enqueue {
             messages: vec![msg.clone()],
-            message: None,
         };
         store
             .apply_to_broker_storage(rocksdb.as_ref(), &enqueue_req, test_log_id(1))
@@ -1192,8 +1132,6 @@ mod tests {
                 queue_id: "q1".to_string(),
                 msg_id: msg.id,
             }],
-            queue_id: None,
-            msg_id: None,
         };
         // First ack — deletes message.
         store
@@ -1218,8 +1156,6 @@ mod tests {
                 queue_id: "q1".to_string(),
                 msg_id: uuid::Uuid::now_v7(),
             }],
-            queue_id: None,
-            msg_id: None,
         };
         // Ack a message that was never enqueued — should not error.
         store

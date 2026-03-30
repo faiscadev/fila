@@ -50,17 +50,11 @@ impl ClusterGrpcService {
     /// This ensures the leader's scheduler has the data for serving consumers.
     async fn apply_to_scheduler(broker: &Broker, req: &super::types::ClusterRequest) {
         match req {
-            super::types::ClusterRequest::Enqueue {
-                messages, message, ..
-            } => {
-                // Resolve batch: new-format uses `messages`, legacy uses `message`.
-                let msgs: Vec<crate::message::Message> = if !messages.is_empty() {
-                    messages.clone()
-                } else if let Some(m) = message {
-                    vec![m.clone()]
-                } else {
+            super::types::ClusterRequest::Enqueue { messages } => {
+                if messages.is_empty() {
                     return;
-                };
+                }
+                let msgs = messages.clone();
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::Enqueue {
                     messages: msgs,
@@ -82,28 +76,17 @@ impl ClusterGrpcService {
                     }
                 }
             }
-            super::types::ClusterRequest::Ack {
-                items,
-                queue_id,
-                msg_id,
-            } => {
-                // Resolve batch: new-format uses `items`, legacy uses queue_id + msg_id.
-                let ack_items: Vec<crate::broker::command::AckItem> = if !items.is_empty() {
-                    items
-                        .iter()
-                        .map(|i| crate::broker::command::AckItem {
-                            queue_id: i.queue_id.clone(),
-                            msg_id: i.msg_id,
-                        })
-                        .collect()
-                } else if let (Some(qid), Some(mid)) = (queue_id, msg_id) {
-                    vec![crate::broker::command::AckItem {
-                        queue_id: qid.clone(),
-                        msg_id: *mid,
-                    }]
-                } else {
+            super::types::ClusterRequest::Ack { items } => {
+                if items.is_empty() {
                     return;
-                };
+                }
+                let ack_items: Vec<crate::broker::command::AckItem> = items
+                    .iter()
+                    .map(|i| crate::broker::command::AckItem {
+                        queue_id: i.queue_id.clone(),
+                        msg_id: i.msg_id,
+                    })
+                    .collect();
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::Ack {
                     items: ack_items,
@@ -125,31 +108,18 @@ impl ClusterGrpcService {
                     }
                 }
             }
-            super::types::ClusterRequest::Nack {
-                items,
-                queue_id,
-                msg_id,
-                error,
-            } => {
-                // Resolve batch: new-format uses `items`, legacy uses queue_id + msg_id + error.
-                let nack_items: Vec<crate::broker::command::NackItem> = if !items.is_empty() {
-                    items
-                        .iter()
-                        .map(|i| crate::broker::command::NackItem {
-                            queue_id: i.queue_id.clone(),
-                            msg_id: i.msg_id,
-                            error: i.error.clone(),
-                        })
-                        .collect()
-                } else if let (Some(qid), Some(mid)) = (queue_id, msg_id) {
-                    vec![crate::broker::command::NackItem {
-                        queue_id: qid.clone(),
-                        msg_id: *mid,
-                        error: error.clone().unwrap_or_default(),
-                    }]
-                } else {
+            super::types::ClusterRequest::Nack { items } => {
+                if items.is_empty() {
                     return;
-                };
+                }
+                let nack_items: Vec<crate::broker::command::NackItem> = items
+                    .iter()
+                    .map(|i| crate::broker::command::NackItem {
+                        queue_id: i.queue_id.clone(),
+                        msg_id: i.msg_id,
+                        error: i.error.clone(),
+                    })
+                    .collect();
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::Nack {
                     items: nack_items,

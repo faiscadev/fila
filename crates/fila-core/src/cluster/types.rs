@@ -18,14 +18,14 @@ openraft::declare_raft_types!(
         SnapshotData = Cursor<Vec<u8>>,
 );
 
-/// A single ack item in a batch ack cluster request.
+/// An ack item in a cluster request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AckItemData {
     pub queue_id: String,
     pub msg_id: uuid::Uuid,
 }
 
-/// A single nack item in a batch nack cluster request.
+/// A nack item in a cluster request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NackItemData {
     pub queue_id: String,
@@ -39,44 +39,17 @@ pub struct NackItemData {
 /// committed via Raft consensus, and then applied to the local state
 /// machine. Read-only operations bypass Raft entirely.
 ///
-/// Hot-path operations (Enqueue, Ack, Nack) are batch-native: they
-/// carry a Vec of items. Single operations use a batch of 1.
-/// New fields use `#[serde(default)]` for backward compatibility with
-/// Raft log entries written before batch support was added.
+/// Hot-path operations (Enqueue, Ack, Nack) carry a Vec of items.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClusterRequest {
     Enqueue {
-        /// Batch of messages. Pre-batch entries serialized a single `message`
-        /// field; `#[serde(default)]` ensures those deserialize as an empty vec,
-        /// and the `message` field is kept for backward compat.
-        #[serde(default)]
         messages: Vec<Message>,
-        /// Legacy single-message field for backward compatibility with Raft log
-        /// entries written before batch support.
-        #[serde(default)]
-        message: Option<Message>,
     },
     Ack {
-        /// Batch of ack items.
-        #[serde(default)]
         items: Vec<AckItemData>,
-        /// Legacy single-item fields for backward compatibility.
-        #[serde(default)]
-        queue_id: Option<String>,
-        #[serde(default)]
-        msg_id: Option<uuid::Uuid>,
     },
     Nack {
-        /// Batch of nack items.
-        #[serde(default)]
         items: Vec<NackItemData>,
-        /// Legacy single-item fields for backward compatibility.
-        #[serde(default)]
-        queue_id: Option<String>,
-        #[serde(default)]
-        msg_id: Option<uuid::Uuid>,
-        #[serde(default)]
-        error: Option<String>,
     },
     CreateQueue {
         name: String,

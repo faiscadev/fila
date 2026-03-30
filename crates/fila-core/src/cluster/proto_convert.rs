@@ -523,67 +523,47 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
     fn from(r: ClusterRequest) -> Self {
         use fila_proto::cluster_request_proto::Request;
         let request = match r {
-            ClusterRequest::Enqueue {
-                messages, message, ..
-            } => {
-                // Proto format only supports a single message. The cluster proto
-                // path (leader forwarding + Raft log) currently only sends single
-                // items; batch operations are handled at the scheduler level.
-                // This limitation will be removed when the binary protocol lands
-                // (Epic 20).
+            ClusterRequest::Enqueue { messages } => {
+                // Proto format supports single item only. The cluster proto path
+                // (leader forwarding + Raft log) currently only sends single
+                // items; multi-item operations are handled at the scheduler level.
                 debug_assert!(
                     messages.len() <= 1,
-                    "cluster proto serialization does not support batch enqueue (got {} messages)",
+                    "cluster proto serialization supports single item only (got {} messages)",
                     messages.len()
                 );
-                let msg = messages.into_iter().next().or(message);
+                let msg = messages.into_iter().next();
                 Some(Request::Enqueue(fila_proto::ClusterEnqueue {
                     message: msg.map(fila_proto::Message::from),
                 }))
             }
-            ClusterRequest::Ack {
-                items,
-                queue_id: legacy_queue_id,
-                msg_id: legacy_msg_id,
-            } => {
-                // Proto format only supports a single ack item. Same limitation
-                // as Enqueue above — will be removed with Epic 20 binary protocol.
+            ClusterRequest::Ack { items } => {
+                // Proto format supports single item only. Same limitation
+                // as Enqueue above.
                 debug_assert!(
                     items.len() <= 1,
-                    "cluster proto serialization does not support batch ack (got {} items)",
+                    "cluster proto serialization supports single item only (got {} items)",
                     items.len()
                 );
                 let (queue_id, msg_id) = if let Some(item) = items.into_iter().next() {
                     (item.queue_id, item.msg_id.to_string())
                 } else {
-                    (
-                        legacy_queue_id.unwrap_or_default(),
-                        legacy_msg_id.map(|m| m.to_string()).unwrap_or_default(),
-                    )
+                    (String::new(), String::new())
                 };
                 Some(Request::Ack(fila_proto::ClusterAck { queue_id, msg_id }))
             }
-            ClusterRequest::Nack {
-                items,
-                queue_id: legacy_queue_id,
-                msg_id: legacy_msg_id,
-                error: legacy_error,
-            } => {
-                // Proto format only supports a single nack item. Same limitation
-                // as Enqueue above — will be removed with Epic 20 binary protocol.
+            ClusterRequest::Nack { items } => {
+                // Proto format supports single item only. Same limitation
+                // as Enqueue above.
                 debug_assert!(
                     items.len() <= 1,
-                    "cluster proto serialization does not support batch nack (got {} items)",
+                    "cluster proto serialization supports single item only (got {} items)",
                     items.len()
                 );
                 let (queue_id, msg_id, error) = if let Some(item) = items.into_iter().next() {
                     (item.queue_id, item.msg_id.to_string(), item.error)
                 } else {
-                    (
-                        legacy_queue_id.unwrap_or_default(),
-                        legacy_msg_id.map(|m| m.to_string()).unwrap_or_default(),
-                        legacy_error.unwrap_or_default(),
-                    )
+                    (String::new(), String::new(), String::new())
                 };
                 Some(Request::Nack(fila_proto::ClusterNack {
                     queue_id,
@@ -666,7 +646,6 @@ impl TryFrom<fila_proto::ClusterRequestProto> for ClusterRequest {
                     .try_into()?;
                 Ok(ClusterRequest::Enqueue {
                     messages: vec![message],
-                    message: None,
                 })
             }
             Request::Ack(a) => {
@@ -676,8 +655,6 @@ impl TryFrom<fila_proto::ClusterRequestProto> for ClusterRequest {
                         queue_id: a.queue_id,
                         msg_id,
                     }],
-                    queue_id: None,
-                    msg_id: None,
                 })
             }
             Request::Nack(n) => {
@@ -688,9 +665,6 @@ impl TryFrom<fila_proto::ClusterRequestProto> for ClusterRequest {
                         msg_id,
                         error: n.error,
                     }],
-                    queue_id: None,
-                    msg_id: None,
-                    error: None,
                 })
             }
             Request::CreateQueue(cq) => Ok(ClusterRequest::CreateQueue {
@@ -966,7 +940,6 @@ mod tests {
             log_id: make_log_id(2, 5),
             payload: EntryPayload::Normal(ClusterRequest::Enqueue {
                 messages: vec![msg.clone()],
-                message: None,
             }),
         };
         let proto = entry_to_proto(original.clone());
@@ -1011,7 +984,6 @@ mod tests {
                     log_id: make_log_id(5, 100),
                     payload: EntryPayload::Normal(ClusterRequest::Enqueue {
                         messages: vec![msg.clone()],
-                        message: None,
                     }),
                 },
                 Entry {
@@ -1138,7 +1110,6 @@ mod tests {
         let msg = make_message();
         let original = ClusterRequest::Enqueue {
             messages: vec![msg.clone()],
-            message: None,
         };
         let proto = fila_proto::ClusterRequestProto::from(original);
         let bytes = proto.encode_to_vec();
@@ -1158,8 +1129,6 @@ mod tests {
                 queue_id: "q1".into(),
                 msg_id: id,
             }],
-            queue_id: None,
-            msg_id: None,
         };
         let proto = fila_proto::ClusterRequestProto::from(original);
         let roundtripped: ClusterRequest = proto.try_into().unwrap();
@@ -1181,9 +1150,6 @@ mod tests {
                 msg_id: id,
                 error: "test error".into(),
             }],
-            queue_id: None,
-            msg_id: None,
-            error: None,
         };
         let proto = fila_proto::ClusterRequestProto::from(original);
         let roundtripped: ClusterRequest = proto.try_into().unwrap();

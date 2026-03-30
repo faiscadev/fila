@@ -31,14 +31,14 @@ pub struct QueueSummary {
     pub leader_node_id: u64,
 }
 
-/// A single ack item in a batch ack command.
+/// An item in an ack command.
 #[derive(Debug, Clone)]
 pub struct AckItem {
     pub queue_id: String,
     pub msg_id: Uuid,
 }
 
-/// A single nack item in a batch nack command.
+/// An item in a nack command.
 #[derive(Debug, Clone)]
 pub struct NackItem {
     pub queue_id: String,
@@ -48,9 +48,8 @@ pub struct NackItem {
 
 /// Commands sent from IO threads to the single-threaded scheduler core.
 ///
-/// All hot-path commands (Enqueue, Ack, Nack) are batch-native: they accept
-/// a Vec of items and return a Vec of per-item results. Single-message
-/// operations use a batch of 1.
+/// All hot-path commands (Enqueue, Ack, Nack) accept a Vec of items and
+/// return a Vec of per-item results.
 ///
 /// Each variant that expects a response includes a `tokio::sync::oneshot::Sender`
 /// for the reply. Fire-and-forget commands omit the reply channel.

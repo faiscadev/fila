@@ -391,7 +391,6 @@ mod tests {
         let resp = leader_raft
             .client_write(crate::cluster::ClusterRequest::Enqueue {
                 messages: vec![msg.clone()],
-                message: None,
             })
             .await
             .unwrap();
@@ -642,7 +641,6 @@ mod tests {
                 queue_id,
                 crate::ClusterRequest::Enqueue {
                     messages: vec![msg.clone()],
-                    message: None,
                 },
             )
             .await
@@ -845,8 +843,6 @@ mod tests {
                         queue_id: "ack-test".to_string(),
                         msg_id,
                     }],
-                    queue_id: None,
-                    msg_id: None,
                 },
             )
             .await

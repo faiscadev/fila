@@ -14,13 +14,13 @@ struct PreparedEnqueue {
 }
 
 impl Scheduler {
-    /// Process a batch of enqueue operations. Validates each message
-    /// individually, then writes all valid messages in a single RocksDB
-    /// WriteBatch via `apply_mutations()`.
+    /// Process enqueue operations. Validates each message individually,
+    /// then writes all valid messages in a single RocksDB WriteBatch
+    /// via `apply_mutations()`.
     ///
     /// Returns (per-item results, set of queue_ids that had successful
     /// enqueues for delivery).
-    pub(super) fn handle_enqueue_batch(
+    pub(super) fn handle_enqueue(
         &mut self,
         messages: Vec<crate::message::Message>,
     ) -> (
@@ -304,9 +304,9 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Process a batch of ack operations. Validates each item individually,
-    /// then deletes all leases/messages in a single RocksDB WriteBatch.
-    pub(super) fn handle_ack_batch(
+    /// Process ack operations. Validates each item individually, then
+    /// deletes all leases/messages in a single RocksDB WriteBatch.
+    pub(super) fn handle_ack(
         &mut self,
         items: &[AckItem],
     ) -> Vec<Result<(), crate::error::AckError>> {
@@ -406,9 +406,9 @@ impl Scheduler {
         Ok(ops)
     }
 
-    /// Process a batch of nack operations. Each item gets its own Result.
+    /// Process nack operations. Each item gets its own Result.
     /// Returns (results, set of queue_ids that had successful nacks for delivery).
-    pub(super) fn handle_nack_batch(
+    pub(super) fn handle_nack(
         &mut self,
         items: &[NackItem],
     ) -> (Vec<Result<(), crate::error::NackError>>, HashSet<String>) {
@@ -416,7 +416,7 @@ impl Scheduler {
         let mut queues_to_deliver = HashSet::new();
 
         for item in items {
-            let result = self.handle_nack(&item.queue_id, &item.msg_id, &item.error);
+            let result = self.apply_nack(&item.queue_id, &item.msg_id, &item.error);
             if result.is_ok() {
                 queues_to_deliver.insert(item.queue_id.clone());
             }
@@ -426,7 +426,7 @@ impl Scheduler {
         (results, queues_to_deliver)
     }
 
-    fn handle_nack(
+    fn apply_nack(
         &mut self,
         queue_id: &str,
         msg_id: &uuid::Uuid,

@@ -169,7 +169,7 @@ impl Scheduler {
     fn handle_command(&mut self, cmd: SchedulerCommand) {
         match cmd {
             SchedulerCommand::Enqueue { messages, reply } => {
-                let (results, queues_to_deliver) = self.handle_enqueue_batch(messages);
+                let (results, queues_to_deliver) = self.handle_enqueue(messages);
                 let _ = reply.send(results);
                 // Deliver immediately for responsiveness
                 for queue_id in queues_to_deliver {
@@ -177,11 +177,11 @@ impl Scheduler {
                 }
             }
             SchedulerCommand::Ack { items, reply } => {
-                let results = self.handle_ack_batch(&items);
+                let results = self.handle_ack(&items);
                 let _ = reply.send(results);
             }
             SchedulerCommand::Nack { items, reply } => {
-                let (results, queues_to_deliver) = self.handle_nack_batch(&items);
+                let (results, queues_to_deliver) = self.handle_nack(&items);
                 let _ = reply.send(results);
                 // Re-deliver for queues with successful nacks
                 for queue_id in queues_to_deliver {

@@ -123,7 +123,6 @@ impl FilaService for HotPathService {
                     &req.queue,
                     ClusterRequest::Enqueue {
                         messages: vec![message.clone()],
-                        message: None,
                     },
                 )
                 .await
@@ -152,7 +151,7 @@ impl FilaService for HotPathService {
                 let results = reply_rx
                     .await
                     .map_err(|_| Status::internal("scheduler reply channel dropped"))?;
-                // Unwrap batch-of-1 result
+                // Unwrap single result
                 results
                     .into_iter()
                     .next()
@@ -166,7 +165,7 @@ impl FilaService for HotPathService {
                 message_id: msg_id.to_string(),
             }))
         } else {
-            // Single-node mode: direct to scheduler (batch-of-1).
+            // Single-node mode: direct to scheduler.
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             self.broker
                 .send_command(SchedulerCommand::Enqueue {
@@ -369,8 +368,6 @@ impl FilaService for HotPathService {
                             queue_id: ack_item.queue_id.clone(),
                             msg_id: ack_item.msg_id,
                         }],
-                        queue_id: None,
-                        msg_id: None,
                     },
                 )
                 .await
@@ -392,7 +389,7 @@ impl FilaService for HotPathService {
                 let results = reply_rx
                     .await
                     .map_err(|_| Status::internal("scheduler reply channel dropped"))?;
-                // Unwrap batch-of-1 result
+                // Unwrap single result
                 results
                     .into_iter()
                     .next()
@@ -481,9 +478,6 @@ impl FilaService for HotPathService {
                             msg_id: nack_item.msg_id,
                             error: nack_item.error.clone(),
                         }],
-                        queue_id: None,
-                        msg_id: None,
-                        error: None,
                     },
                 )
                 .await
@@ -505,7 +499,7 @@ impl FilaService for HotPathService {
                 let results = reply_rx
                     .await
                     .map_err(|_| Status::internal("scheduler reply channel dropped"))?;
-                // Unwrap batch-of-1 result
+                // Unwrap single result
                 results
                     .into_iter()
                     .next()
