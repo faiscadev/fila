@@ -33,8 +33,8 @@ impl Scheduler {
         let mut prepared: Vec<Result<PreparedEnqueue, crate::error::EnqueueError>> =
             Vec::with_capacity(len);
 
-        for mut message in messages {
-            prepared.push(self.prepare_enqueue(&mut message));
+        for message in messages {
+            prepared.push(self.prepare_enqueue(message));
         }
 
         // Phase 2: Accumulate mutations for all successful items and write in
@@ -98,7 +98,7 @@ impl Scheduler {
     /// needed to create a `Mutation::PutMessage` without actually writing.
     fn prepare_enqueue(
         &mut self,
-        message: &mut crate::message::Message,
+        mut message: crate::message::Message,
     ) -> Result<PreparedEnqueue, crate::error::EnqueueError> {
         // Verify queue exists
         if self.storage.get_queue(&message.queue_id)?.is_none() {
@@ -164,16 +164,22 @@ impl Scheduler {
             &msg_id,
         );
 
-        // Serialize message to protobuf bytes for the mutation
-        let proto = fila_proto::Message::from(message.clone());
+        // Clone small fields for PreparedEnqueue before consuming message
+        // into proto serialization (avoids cloning the heavy payload/headers).
+        let queue_id = message.queue_id.clone();
+        let fairness_key = message.fairness_key.clone();
+        let weight = message.weight;
+        let throttle_keys = message.throttle_keys.clone();
+
+        let proto = fila_proto::Message::from(message);
         let value = proto.encode_to_vec();
 
         Ok(PreparedEnqueue {
             msg_id,
-            queue_id: message.queue_id.clone(),
-            fairness_key: message.fairness_key.clone(),
-            weight: message.weight,
-            throttle_keys: message.throttle_keys.clone(),
+            queue_id,
+            fairness_key,
+            weight,
+            throttle_keys,
             key,
             value,
         })

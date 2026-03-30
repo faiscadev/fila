@@ -526,7 +526,16 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
             ClusterRequest::Enqueue {
                 messages, message, ..
             } => {
-                // Use the first message from the batch, or the legacy field.
+                // Proto format only supports a single message. The cluster proto
+                // path (leader forwarding + Raft log) currently only sends single
+                // items; batch operations are handled at the scheduler level.
+                // This limitation will be removed when the binary protocol lands
+                // (Epic 20).
+                debug_assert!(
+                    messages.len() <= 1,
+                    "cluster proto serialization does not support batch enqueue (got {} messages)",
+                    messages.len()
+                );
                 let msg = messages.into_iter().next().or(message);
                 Some(Request::Enqueue(fila_proto::ClusterEnqueue {
                     message: msg.map(fila_proto::Message::from),
@@ -537,7 +546,13 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
                 queue_id: legacy_queue_id,
                 msg_id: legacy_msg_id,
             } => {
-                // Use the first item from the batch, or the legacy fields.
+                // Proto format only supports a single ack item. Same limitation
+                // as Enqueue above — will be removed with Epic 20 binary protocol.
+                debug_assert!(
+                    items.len() <= 1,
+                    "cluster proto serialization does not support batch ack (got {} items)",
+                    items.len()
+                );
                 let (queue_id, msg_id) = if let Some(item) = items.into_iter().next() {
                     (item.queue_id, item.msg_id.to_string())
                 } else {
@@ -554,7 +569,13 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
                 msg_id: legacy_msg_id,
                 error: legacy_error,
             } => {
-                // Use the first item from the batch, or the legacy fields.
+                // Proto format only supports a single nack item. Same limitation
+                // as Enqueue above — will be removed with Epic 20 binary protocol.
+                debug_assert!(
+                    items.len() <= 1,
+                    "cluster proto serialization does not support batch nack (got {} items)",
+                    items.len()
+                );
                 let (queue_id, msg_id, error) = if let Some(item) = items.into_iter().next() {
                     (item.queue_id, item.msg_id.to_string(), item.error)
                 } else {

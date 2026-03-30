@@ -653,6 +653,7 @@ impl FilaRaftStore {
                 } else {
                     vec![]
                 };
+                let mut mutations = Vec::with_capacity(msgs.len() * 2);
                 for msg in msgs {
                     let queue_id = self.queue_id.as_deref().unwrap_or(&msg.queue_id);
                     let msg_key = crate::storage::keys::message_key(
@@ -664,17 +665,18 @@ impl FilaRaftStore {
                     let idx_key = crate::storage::keys::msg_index_key(queue_id, &msg.id);
                     let proto = fila_proto::Message::from(msg.clone());
                     let msg_value = proto.encode_to_vec();
+                    mutations.push(Mutation::PutMessage {
+                        key: msg_key.clone(),
+                        value: msg_value,
+                    });
+                    mutations.push(Mutation::PutMsgIndex {
+                        key: idx_key,
+                        value: msg_key,
+                    });
+                }
+                if !mutations.is_empty() {
                     storage
-                        .apply_mutations(vec![
-                            Mutation::PutMessage {
-                                key: msg_key.clone(),
-                                value: msg_value,
-                            },
-                            Mutation::PutMsgIndex {
-                                key: idx_key,
-                                value: msg_key,
-                            },
-                        ])
+                        .apply_mutations(mutations)
                         .map_err(|e| StorageError::IO {
                             source: openraft::StorageIOError::apply(log_id, &e),
                         })?;
