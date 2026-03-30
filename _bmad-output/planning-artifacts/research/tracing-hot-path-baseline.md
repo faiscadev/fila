@@ -119,15 +119,18 @@ The server always initializes a tracing subscriber in `crates/fila-core/src/tele
 Captured using `profile-workload --flamegraph` which profiles fila-server with dtrace (macOS, requires sudo) or perf (Linux), collapses stacks and renders SVG via the inferno crate:
 
 ```bash
+# Build first (never sudo cargo — it leaves root-owned artifacts in target/)
+cargo build --release --bin profile-workload
+
 # Generate flamegraph (macOS: sudo for dtrace, Linux: needs perf)
-sudo cargo run --release --bin profile-workload -- --flamegraph --duration 15
+sudo ./target/release/profile-workload --flamegraph --duration 15
 
 # Custom workload and output path
-sudo cargo run --release --bin profile-workload -- \
+sudo ./target/release/profile-workload \
     --workload lifecycle --duration 30 --flamegraph target/flamegraphs/lifecycle.svg
 
 # Just run workload without profiling (no sudo needed)
-cargo run --release --bin profile-workload -- --duration 10
+./target/release/profile-workload --duration 10
 ```
 
 Output defaults to `target/flamegraphs/<workload>.svg`. See `--help` for all options.
