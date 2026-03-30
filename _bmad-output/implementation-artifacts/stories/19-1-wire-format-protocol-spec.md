@@ -1,6 +1,6 @@
 # Story 19.1: Wire Format Design & Protocol Specification
 
-Status: review
+Status: done
 
 ## Story
 
@@ -179,6 +179,7 @@ None.
 - Protocol version negotiation in handshake enables future schema evolution
 - Cluster opcodes reserved in 0x40-0x5F range for future extension
 - CancelConsume frame added for explicit consumer unsubscribe (not in original proto — gRPC used stream close)
+- **Review additions:** Error frame now includes `map<string,string>` metadata for programmatic error handling (Lucas request). Continuation frames (Flags bit 0) enable unlimited payload/header sizes by splitting serialized operation bodies across multiple frames. `max_frame_size` added to HandshakeOk so clients discover the server's frame limit (Cubic P1).
 
 ### File List
 

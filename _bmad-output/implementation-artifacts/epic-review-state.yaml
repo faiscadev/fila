@@ -1,22 +1,21 @@
-epic: "Epic 18: Tracing Hot-Path Fix"
-epicNumber: 18
-startedAt: "2026-03-29T00:00:00Z"
-completedAt: "2026-03-30T01:32:00Z"
+epic: "Epic 19: Wire Format Design & Batch-Native Scheduler"
+epicNumber: 19
+startedAt: "2026-03-30T12:00:00Z"
 yoloMode: false
-currentPrIndex: 1
 mode: normal
+currentPrIndex: 1
 prChain:
-  - storyId: "18.1"
-    storyKey: "18-1-baseline-benchmark-flamegraph"
-    title: "Baseline Benchmark & Flamegraph"
-    branch: "feat/18.1-baseline-benchmark-flamegraph"
-    pr: 154
+  - storyId: "19.1"
+    storyKey: "19-1-wire-format-protocol-spec"
+    title: "Wire Format Design & Protocol Specification"
+    branch: "feat/19.1-wire-format-protocol-spec"
+    pr: 156
     baseBranch: "main"
     status: merged
-  - storyId: "18.2"
-    storyKey: "18-2-fix-tracing-overhead-on-hot-path-functions"
-    title: "Fix Tracing Overhead on Hot-Path Functions"
-    branch: "feat/18.2-fix-tracing-overhead-hot-path"
-    pr: 155
-    baseBranch: "main"
-    status: merged
+  - storyId: "19.2"
+    storyKey: "19-2-batch-native-scheduler-internals"
+    title: "Batch-Native Scheduler Internals"
+    branch: "feat/19.2-batch-native-scheduler-internals"
+    pr: 157
+    baseBranch: "feat/19.1-wire-format-protocol-spec"
+    status: pending
