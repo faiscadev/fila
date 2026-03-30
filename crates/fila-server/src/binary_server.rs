@@ -369,6 +369,21 @@ impl ConnectionState {
             Some(Opcode::CancelConsume) => self.handle_cancel_consume(frame).await?,
             Some(Opcode::Ack) => self.handle_ack(frame).await?,
             Some(Opcode::Nack) => self.handle_nack(frame).await?,
+            // Admin operations
+            Some(Opcode::CreateQueue) => self.handle_create_queue(frame).await?,
+            Some(Opcode::DeleteQueue) => self.handle_delete_queue(frame).await?,
+            Some(Opcode::GetStats) => self.handle_get_stats(frame).await?,
+            Some(Opcode::ListQueues) => self.handle_list_queues(frame).await?,
+            Some(Opcode::SetConfig) => self.handle_set_config(frame).await?,
+            Some(Opcode::GetConfig) => self.handle_get_config(frame).await?,
+            Some(Opcode::ListConfig) => self.handle_list_config(frame).await?,
+            Some(Opcode::Redrive) => self.handle_redrive(frame).await?,
+            // Auth management operations
+            Some(Opcode::CreateApiKey) => self.handle_create_api_key(frame).await?,
+            Some(Opcode::RevokeApiKey) => self.handle_revoke_api_key(frame).await?,
+            Some(Opcode::ListApiKeys) => self.handle_list_api_keys(frame).await?,
+            Some(Opcode::SetAcl) => self.handle_set_acl(frame).await?,
+            Some(Opcode::GetAcl) => self.handle_get_acl(frame).await?,
             _ => {
                 send_error(
                     &mut self.stream,
@@ -678,6 +693,684 @@ impl ConnectionState {
         }
 
         match binary_handlers::handle_nack(&self.server.broker, req).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    // --- Admin operation handlers ---
+
+    /// Check that the caller has global admin permission (admin:*).
+    /// Returns Ok(()) when auth is disabled or the caller has the permission.
+    fn check_global_admin(&self) -> Result<(), (ErrorCode, String)> {
+        if let Some(ref caller) = self.caller_key {
+            let permitted = self
+                .server
+                .broker
+                .check_permission(caller, fila_core::broker::auth::Permission::Admin, "*")
+                .map_err(|e| (ErrorCode::InternalError, format!("acl check error: {e}")))?;
+            if !permitted {
+                return Err((
+                    ErrorCode::Forbidden,
+                    "key does not have admin permission".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check that the caller has any admin permission.
+    /// Returns Ok(Some(caller)) when auth is enabled and the caller has admin,
+    /// Ok(None) when auth is disabled.
+    fn require_any_admin(
+        &self,
+    ) -> Result<Option<fila_core::broker::auth::CallerKey>, (ErrorCode, String)> {
+        match &self.caller_key {
+            None => Ok(None),
+            Some(caller) => {
+                let ok = self
+                    .server
+                    .broker
+                    .has_any_admin(caller)
+                    .map_err(|e| (ErrorCode::InternalError, format!("acl check error: {e}")))?;
+                if ok {
+                    Ok(Some(caller.clone()))
+                } else {
+                    Err((
+                        ErrorCode::Forbidden,
+                        "key does not have admin permission".to_string(),
+                    ))
+                }
+            }
+        }
+    }
+
+    async fn handle_create_queue(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::CreateQueueRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid create_queue frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        // ACL: require any admin, then check queue-scoped admin
+        match self.require_any_admin() {
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+            Ok(Some(ref caller)) => {
+                let ok = self
+                    .server
+                    .broker
+                    .caller_has_queue_admin(caller, &req.name)
+                    .map_err(|e| ConnectionError::Protocol(format!("acl check error: {e}")))?;
+                if !ok {
+                    send_error(
+                        &mut self.stream,
+                        frame.request_id,
+                        ErrorCode::Forbidden,
+                        &format!("no admin permission on queue \"{}\"", req.name),
+                        &HashMap::new(),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            }
+            Ok(None) => {} // auth disabled
+        }
+
+        match binary_handlers::handle_create_queue(&self.server.broker, req).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_delete_queue(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::DeleteQueueRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid delete_queue frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        // ACL: require any admin, then check queue-scoped admin
+        match self.require_any_admin() {
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+            Ok(Some(ref caller)) => {
+                let ok = self
+                    .server
+                    .broker
+                    .caller_has_queue_admin(caller, &req.queue)
+                    .map_err(|e| ConnectionError::Protocol(format!("acl check error: {e}")))?;
+                if !ok {
+                    send_error(
+                        &mut self.stream,
+                        frame.request_id,
+                        ErrorCode::Forbidden,
+                        &format!("no admin permission on queue \"{}\"", req.queue),
+                        &HashMap::new(),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            }
+            Ok(None) => {}
+        }
+
+        match binary_handlers::handle_delete_queue(&self.server.broker, req).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_get_stats(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::GetStatsRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid get_stats frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_get_stats(&self.server.broker, req).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_list_queues(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        // ListQueues has no payload to decode
+        let _ = fila_fibp::ListQueuesRequest::decode(frame.payload);
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_list_queues(&self.server.broker).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_set_config(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::SetConfigRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid set_config frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_set_config(&self.server.broker, req).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_get_config(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::GetConfigRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid get_config frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_get_config(&self.server.broker, req).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_list_config(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::ListConfigRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid list_config frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_list_config(&self.server.broker, req).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_redrive(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::RedriveRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid redrive frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_redrive(&self.server.broker, req).await {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    // --- Auth management handlers ---
+
+    async fn handle_create_api_key(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::CreateApiKeyRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid create_api_key frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        // ACL: require any admin
+        match self.require_any_admin() {
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+            Ok(Some(ref caller)) => {
+                // Only superadmins can create superadmin keys
+                if req.is_superadmin {
+                    let ok =
+                        self.server.broker.is_superadmin(caller).map_err(|e| {
+                            ConnectionError::Protocol(format!("acl check error: {e}"))
+                        })?;
+                    if !ok {
+                        send_error(
+                            &mut self.stream,
+                            frame.request_id,
+                            ErrorCode::Forbidden,
+                            "only superadmin keys can create other superadmin keys",
+                            &HashMap::new(),
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                }
+            }
+            Ok(None) => {} // auth disabled
+        }
+
+        match binary_handlers::handle_create_api_key(&self.server.broker, req) {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_revoke_api_key(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::RevokeApiKeyRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid revoke_api_key frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_revoke_api_key(&self.server.broker, req) {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_list_api_keys(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let _ = fila_fibp::ListApiKeysRequest::decode(frame.payload);
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_list_api_keys(&self.server.broker) {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_set_acl(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::SetAclRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid set_acl frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        // ACL: require any admin, then check delegation scope
+        match self.require_any_admin() {
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+            Ok(Some(ref caller)) => {
+                let perms: Vec<(String, String)> = req
+                    .permissions
+                    .iter()
+                    .map(|p| (p.kind.clone(), p.pattern.clone()))
+                    .collect();
+                let ok = self
+                    .server
+                    .broker
+                    .caller_can_grant_all(caller, &perms)
+                    .map_err(|e| ConnectionError::Protocol(format!("acl check error: {e}")))?;
+                if !ok {
+                    send_error(
+                        &mut self.stream,
+                        frame.request_id,
+                        ErrorCode::Forbidden,
+                        "one or more permissions exceed the caller's admin scope",
+                        &HashMap::new(),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            }
+            Ok(None) => {}
+        }
+
+        match binary_handlers::handle_set_acl(&self.server.broker, req) {
+            Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_get_acl(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
+        let req = match fila_fibp::GetAclRequest::decode(frame.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    ErrorCode::InvalidFrame,
+                    &format!("invalid get_acl frame: {e}"),
+                    &HashMap::new(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = self.check_global_admin() {
+            send_error(
+                &mut self.stream,
+                frame.request_id,
+                e.0,
+                &e.1,
+                &HashMap::new(),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match binary_handlers::handle_get_acl(&self.server.broker, req) {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
                 send_error(
