@@ -195,7 +195,7 @@ development_status:
   # Epic 19: Wire Format Design & Batch-Native Scheduler
   # Protocol spec + batch-native scheduler internals. No new transport yet.
   epic-19: in-progress
-  19-1-wire-format-design-protocol-specification: review
+  19-1-wire-format-design-protocol-specification: done
   19-2-batch-native-scheduler-internals: backlog
   epic-19-retrospective: optional
 

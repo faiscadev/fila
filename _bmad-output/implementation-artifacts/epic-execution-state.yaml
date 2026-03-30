@@ -4,10 +4,10 @@ startedAt: "2026-03-29"
 stories:
   - id: "19.1"
     title: "Wire Format Design & Protocol Specification"
-    status: in-progress
-    currentPhase: "pr-ci"
+    status: completed
+    currentPhase: ""
     branch: "feat/19.1-wire-format-protocol-spec"
-    pr: null
+    pr: 156
     dependsOn: []
   - id: "19.2"
     title: "Batch-Native Scheduler Internals"
