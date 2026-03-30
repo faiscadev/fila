@@ -1,6 +1,6 @@
 # Story 19.1: Wire Format Design & Protocol Specification
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
