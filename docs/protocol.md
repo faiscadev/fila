@@ -200,6 +200,7 @@ The client must send a Handshake frame as the first frame after connecting (or a
 [frame header: opcode=0x02, flags=0, request_id=0]
 [u16: negotiated_version]       -- version the server will use
 [u64: node_id]                  -- server's cluster node ID (0 if single-node)
+[u32: max_frame_size]           -- server's maximum frame size in bytes (0 = default 16 MiB)
 ```
 
 If the server rejects the handshake (unsupported version, invalid API key), it sends an Error frame and closes the connection.
@@ -778,7 +779,7 @@ A client can subscribe to a queue (Consume) and send Ack/Nack frames on the same
 
 ### Maximum Frame Size
 
-Individual frames are limited to a configurable maximum size (default: 16 MiB). The frame length field is u32, supporting up to ~4 GiB per frame, but the server enforces a lower limit to bound memory allocation per frame. This does **not** limit payload or header sizes — messages larger than the max frame size are transparently split using [continuation frames](#continuation-frames). Clients must use continuation frames when the serialized operation body exceeds the negotiated max frame size.
+Individual frames are limited to a configurable maximum size (default: 16 MiB). The frame length field is u32, supporting up to ~4 GiB per frame, but the server enforces a lower limit to bound memory allocation per frame. This does **not** limit payload or header sizes — messages larger than the max frame size are transparently split using [continuation frames](#continuation-frames). The server communicates its max frame size in the `HandshakeOk` response (`max_frame_size` field, 0 = default 16 MiB). Clients must use continuation frames when the serialized operation body exceeds this limit. Servers receiving an oversized frame must respond with `InvalidFrame` (0x0E).
 
 ### Byte Order
 
