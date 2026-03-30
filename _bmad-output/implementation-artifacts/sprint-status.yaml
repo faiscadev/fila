@@ -201,8 +201,8 @@ development_status:
 
   # Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal
   # Full protocol migration: server, auth, Rust SDK, CLI, cluster, gRPC removal.
-  epic-20: backlog
-  20-1-binary-protocol-server-hot-path-operations: backlog
+  epic-20: in-progress
+  20-1-binary-protocol-server-hot-path-operations: in-progress
   20-2-admin-operations-auth-on-binary-protocol: backlog
   20-3-rust-sdk-binary-protocol-client: backlog
   20-4-cli-cluster-inter-node-migration: backlog

@@ -1,24 +1,40 @@
-epic: "Epic 19: Wire Format Design & Batch-Native Scheduler"
+epic: "Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal"
 baseBranch: main
-startedAt: "2026-03-29"
+startedAt: "2026-03-30"
 stories:
-  - id: "19.1"
-    title: "Wire Format Design & Protocol Specification"
-    status: review
-    currentPhase: ""
-    branch: "feat/19.1-wire-format-protocol-spec"
-    pr: 156
+  - id: "20.1"
+    title: "Binary Protocol Server — Hot-Path Operations"
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/20.1-binary-protocol-server-hot-path"
+    pr: null
     dependsOn: []
-  - id: "19.2"
-    title: "Batch-Native Scheduler Internals"
-    status: completed
+  - id: "20.2"
+    title: "Admin Operations & Auth on Binary Protocol"
+    status: pending
     currentPhase: ""
-    branch: "feat/19.2-batch-native-scheduler-internals"
-    pr: 157
-    dependsOn: ["19.1"]
-completedAt: "2026-03-30"
-summary:
-  total: 2
-  completed: 2
-  skipped: 0
+    branch: ""
+    pr: null
+    dependsOn: ["20.1"]
+  - id: "20.3"
+    title: "Rust SDK Binary Protocol Client"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["20.1", "20.2"]
+  - id: "20.4"
+    title: "CLI & Cluster Inter-Node Migration"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["20.1", "20.2", "20.3"]
+  - id: "20.5"
+    title: "gRPC Removal & Final Benchmarks"
+    status: pending
+    currentPhase: ""
+    branch: ""
+    pr: null
+    dependsOn: ["20.1", "20.2", "20.3", "20.4"]
 skippedIssues: []
