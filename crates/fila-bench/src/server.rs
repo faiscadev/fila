@@ -10,7 +10,10 @@ use std::time::Duration;
 /// The server is killed when this struct is dropped.
 pub struct BenchServer {
     child: Option<Child>,
+    /// Binary protocol address (host:port) for SDK connections.
     addr: String,
+    /// gRPC address (http://host:port) for CLI commands.
+    grpc_addr: String,
     _data_dir: tempfile::TempDir,
 }
 
@@ -22,8 +25,10 @@ impl BenchServer {
 
     /// Start a new fila-server instance with a specific DRR quantum.
     pub fn start_with_quantum(quantum: Option<u32>) -> Self {
-        let port = free_port();
-        let addr = format!("127.0.0.1:{port}");
+        let grpc_port = free_port();
+        let binary_port = free_port();
+        let grpc_addr = format!("127.0.0.1:{grpc_port}");
+        let binary_addr = format!("127.0.0.1:{binary_port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");
 
         let scheduler_section = match quantum {
@@ -32,7 +37,8 @@ impl BenchServer {
         };
         let config_content = format!(
             r#"[server]
-listen_addr = "{addr}"
+listen_addr = "{grpc_addr}"
+binary_addr = "{binary_addr}"
 {scheduler_section}
 [telemetry]
 otlp_endpoint = ""
@@ -69,36 +75,48 @@ otlp_endpoint = ""
             }
         });
 
-        // Poll TCP until the server is reachable.
+        // Poll TCP until both ports are reachable.
         let start = std::time::Instant::now();
-        let mut connected = false;
+        let mut grpc_ok = false;
+        let mut binary_ok = false;
         while start.elapsed() < Duration::from_secs(10) {
-            if std::net::TcpStream::connect(&addr).is_ok() {
-                connected = true;
+            if !grpc_ok && std::net::TcpStream::connect(&grpc_addr).is_ok() {
+                grpc_ok = true;
+            }
+            if !binary_ok && std::net::TcpStream::connect(&binary_addr).is_ok() {
+                binary_ok = true;
+            }
+            if grpc_ok && binary_ok {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(
-            connected,
-            "fila-server did not become reachable at {addr} within 10s"
+            grpc_ok && binary_ok,
+            "fila-server did not become reachable within 10s"
         );
 
         Self {
             child: Some(child),
-            addr: format!("http://{addr}"),
+            addr: binary_addr,
+            grpc_addr: format!("http://{grpc_addr}"),
             _data_dir: data_dir,
         }
     }
 
-    /// The HTTP address of the running server (e.g., "http://127.0.0.1:12345").
+    /// The binary protocol address (host:port) for SDK connections.
     pub fn addr(&self) -> &str {
         &self.addr
     }
 
-    /// The raw host:port address (without http:// prefix).
+    /// The gRPC address (http://host:port) for CLI commands.
+    pub fn grpc_addr(&self) -> &str {
+        &self.grpc_addr
+    }
+
+    /// The raw host:port address for the binary protocol.
     pub fn host_port(&self) -> &str {
-        self.addr.strip_prefix("http://").unwrap_or(&self.addr)
+        &self.addr
     }
 
     /// The process ID of the running server.

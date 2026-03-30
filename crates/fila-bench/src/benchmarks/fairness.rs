@@ -14,13 +14,13 @@ const WARMUP_SECS: u64 = 1;
 pub async fn bench_fairness_overhead(server: &BenchServer) -> Vec<BenchResult> {
     // Baseline: FIFO queue (no Lua, single implicit fairness key)
     let fifo_queue = "bench-fairness-fifo";
-    create_queue_cli(server.addr(), fifo_queue);
+    create_queue_cli(server.grpc_addr(), fifo_queue);
     let fifo_throughput = measure_enqueue_throughput(server, fifo_queue).await;
 
     // Fair scheduling: queue with Lua assigning fairness_key from header
     let fair_queue = "bench-fairness-fair";
     let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" return { fairness_key = key, weight = 1, throttle_keys = {} } end"#;
-    create_queue_with_lua_cli(server.addr(), fair_queue, Some(on_enqueue), None);
+    create_queue_with_lua_cli(server.grpc_addr(), fair_queue, Some(on_enqueue), None);
     let fair_throughput = measure_enqueue_throughput_with_headers(server, fair_queue, || {
         let mut h = HashMap::new();
         h.insert("tenant_id".to_string(), "tenant-1".to_string());
@@ -67,7 +67,7 @@ pub async fn bench_fairness_overhead(server: &BenchServer) -> Vec<BenchResult> {
 pub async fn bench_fairness_accuracy(server: &BenchServer) -> Vec<BenchResult> {
     let queue = "bench-fairness-accuracy";
     let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["tenant_id"] or "default" local w = tonumber(msg.headers["weight"]) or 1 return { fairness_key = key, weight = w, throttle_keys = {} } end"#;
-    create_queue_with_lua_cli(server.addr(), queue, Some(on_enqueue), None);
+    create_queue_with_lua_cli(server.grpc_addr(), queue, Some(on_enqueue), None);
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await
