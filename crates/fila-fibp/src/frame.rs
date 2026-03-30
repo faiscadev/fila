@@ -343,6 +343,7 @@ impl PayloadReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opcode::Opcode;
 
     #[test]
     fn frame_encode_decode_round_trip() {

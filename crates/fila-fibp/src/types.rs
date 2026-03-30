@@ -478,6 +478,7 @@ impl ErrorFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn handshake_round_trip() {
