@@ -12,9 +12,9 @@ stories:
   - id: "20.2"
     title: "Admin Operations & Auth on Binary Protocol"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "pr-ci"
     branch: "feat/20.2-admin-ops-auth-binary-protocol"
-    pr: null
+    pr: 159
     dependsOn: ["20.1"]
   - id: "20.3"
     title: "Rust SDK Binary Protocol Client"

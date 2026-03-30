@@ -801,6 +801,10 @@ impl GetStatsResponse {
         w.put_u32(self.quantum);
         w.put_u64(self.leader_node_id);
         w.put_u32(self.replication_count);
+        assert!(
+            self.per_key_stats.len() <= u16::MAX as usize,
+            "per_key_stats count exceeds u16::MAX"
+        );
         w.put_u16(self.per_key_stats.len() as u16);
         for s in &self.per_key_stats {
             w.put_string(&s.key);
@@ -808,6 +812,10 @@ impl GetStatsResponse {
             w.put_i64(s.current_deficit);
             w.put_u32(s.weight);
         }
+        assert!(
+            self.per_throttle_stats.len() <= u16::MAX as usize,
+            "per_throttle_stats count exceeds u16::MAX"
+        );
         w.put_u16(self.per_throttle_stats.len() as u16);
         for s in &self.per_throttle_stats {
             w.put_string(&s.key);
