@@ -17,7 +17,7 @@ fn on_enqueue_assigns_fairness_key_from_header() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -55,7 +55,7 @@ fn on_enqueue_assigns_weight_and_throttle_keys() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -87,7 +87,7 @@ fn queue_without_script_uses_defaults() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -134,7 +134,7 @@ fn on_enqueue_reads_config_via_fila_get() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -192,7 +192,7 @@ fn on_enqueue_infinite_loop_falls_back_to_defaults() {
     let msg_id = msg.id;
     let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -201,7 +201,13 @@ fn on_enqueue_infinite_loop_falls_back_to_defaults() {
     scheduler.run();
 
     // Enqueue should succeed (Lua failure falls back to defaults)
-    assert!(reply_rx.try_recv().unwrap().is_ok());
+    assert!(reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .is_ok());
 
     // Message should have default fairness_key
     let key =
@@ -234,7 +240,7 @@ fn on_enqueue_memory_bomb_falls_back_to_defaults() {
     let msg_id = msg.id;
     let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -243,7 +249,13 @@ fn on_enqueue_memory_bomb_falls_back_to_defaults() {
     scheduler.run();
 
     // Enqueue should succeed (Lua failure falls back to defaults)
-    assert!(reply_rx.try_recv().unwrap().is_ok());
+    assert!(reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .is_ok());
 
     // Message should have default fairness_key
     let key =
@@ -278,7 +290,7 @@ fn circuit_breaker_trips_and_bypasses_lua() {
         msg_ids.push(msg.id);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -324,7 +336,7 @@ fn failed_script_does_not_break_subsequent_good_scripts() {
     let bad_msg = test_message("bad-queue");
     let (reply_tx1, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: bad_msg,
+        messages: vec![bad_msg],
         reply: reply_tx1,
     })
     .unwrap();
@@ -333,7 +345,7 @@ fn failed_script_does_not_break_subsequent_good_scripts() {
     let good_msg_id = good_msg.id;
     let (reply_tx2, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: good_msg,
+        messages: vec![good_msg],
         reply: reply_tx2,
     })
     .unwrap();
@@ -378,7 +390,7 @@ fn on_failure_retry_requeues_message() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -386,9 +398,11 @@ fn on_failure_retry_requeues_message() {
     // Nack the message — on_failure returns retry
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "retry-queue".to_string(),
-        msg_id,
-        error: "transient error".to_string(),
+        items: vec![NackItem {
+            queue_id: "retry-queue".to_string(),
+            msg_id,
+            error: "transient error".to_string(),
+        }],
         reply: nack_tx,
     })
     .unwrap();
@@ -397,7 +411,16 @@ fn on_failure_retry_requeues_message() {
     scheduler.run();
 
     // Nack should succeed
-    assert!(nack_rx.try_recv().unwrap().is_ok(), "nack should succeed");
+    assert!(
+        nack_rx
+            .try_recv()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .is_ok(),
+        "nack should succeed"
+    );
 
     // Should receive the message twice: initial delivery + retry after nack
     let first = consumer_rx.try_recv().expect("first delivery");
@@ -443,7 +466,7 @@ fn on_failure_dlq_moves_message_to_dead_letter_queue() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -451,9 +474,11 @@ fn on_failure_dlq_moves_message_to_dead_letter_queue() {
     // Nack the message — on_failure returns dlq
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "main-queue".to_string(),
-        msg_id,
-        error: "permanent error".to_string(),
+        items: vec![NackItem {
+            queue_id: "main-queue".to_string(),
+            msg_id,
+            error: "permanent error".to_string(),
+        }],
         reply: nack_tx,
     })
     .unwrap();
@@ -461,7 +486,16 @@ fn on_failure_dlq_moves_message_to_dead_letter_queue() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    assert!(nack_rx.try_recv().unwrap().is_ok(), "nack should succeed");
+    assert!(
+        nack_rx
+            .try_recv()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .is_ok(),
+        "nack should succeed"
+    );
 
     // First delivery on main queue (before nack)
     let first = main_rx.try_recv().expect("initial delivery on main queue");
@@ -523,7 +557,7 @@ fn on_failure_dlq_without_dlq_configured_falls_back_to_retry() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -531,9 +565,11 @@ fn on_failure_dlq_without_dlq_configured_falls_back_to_retry() {
     // Nack — on_failure says DLQ but no DLQ configured (it's a .dlq queue), should retry
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "orphan.dlq".to_string(),
-        msg_id,
-        error: "some error".to_string(),
+        items: vec![NackItem {
+            queue_id: "orphan.dlq".to_string(),
+            msg_id,
+            error: "some error".to_string(),
+        }],
         reply: nack_tx,
     })
     .unwrap();
@@ -541,7 +577,13 @@ fn on_failure_dlq_without_dlq_configured_falls_back_to_retry() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    assert!(nack_rx.try_recv().unwrap().is_ok());
+    assert!(nack_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .is_ok());
 
     // Should receive message twice (initial + retry fallback)
     let first = consumer_rx.try_recv().expect("first delivery");
@@ -589,7 +631,7 @@ fn on_failure_receives_attempt_count_and_error() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -597,9 +639,11 @@ fn on_failure_receives_attempt_count_and_error() {
     // Nack 1: attempt_count becomes 1, error is "transient" → retry
     let (nack1_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "attempts-queue".to_string(),
-        msg_id,
-        error: "transient".to_string(),
+        items: vec![NackItem {
+            queue_id: "attempts-queue".to_string(),
+            msg_id,
+            error: "transient".to_string(),
+        }],
         reply: nack1_tx,
     })
     .unwrap();
@@ -607,9 +651,11 @@ fn on_failure_receives_attempt_count_and_error() {
     // Nack 2: attempt_count becomes 2, error is "fatal" → retry (attempts < 3)
     let (nack2_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "attempts-queue".to_string(),
-        msg_id,
-        error: "fatal".to_string(),
+        items: vec![NackItem {
+            queue_id: "attempts-queue".to_string(),
+            msg_id,
+            error: "fatal".to_string(),
+        }],
         reply: nack2_tx,
     })
     .unwrap();
@@ -617,9 +663,11 @@ fn on_failure_receives_attempt_count_and_error() {
     // Nack 3: attempt_count becomes 3, error is "fatal" → DLQ (attempts >= 3 AND error == "fatal")
     let (nack3_tx, mut nack3_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "attempts-queue".to_string(),
-        msg_id,
-        error: "fatal".to_string(),
+        items: vec![NackItem {
+            queue_id: "attempts-queue".to_string(),
+            msg_id,
+            error: "fatal".to_string(),
+        }],
         reply: nack3_tx,
     })
     .unwrap();
@@ -627,7 +675,13 @@ fn on_failure_receives_attempt_count_and_error() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    assert!(nack3_rx.try_recv().unwrap().is_ok());
+    assert!(nack3_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .is_ok());
 
     // Main queue: initial delivery (0) + retry after nack 1 (1) + retry after nack 2 (2) = 3 deliveries
     let d0 = consumer_rx.try_recv().expect("delivery 0");
@@ -670,16 +724,18 @@ fn on_failure_no_script_uses_default_retry() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
 
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        queue_id: "no-script-queue".to_string(),
-        msg_id,
-        error: "some error".to_string(),
+        items: vec![NackItem {
+            queue_id: "no-script-queue".to_string(),
+            msg_id,
+            error: "some error".to_string(),
+        }],
         reply: nack_tx,
     })
     .unwrap();
@@ -687,7 +743,13 @@ fn on_failure_no_script_uses_default_retry() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    assert!(nack_rx.try_recv().unwrap().is_ok());
+    assert!(nack_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .is_ok());
 
     // Should get 2 deliveries: initial + retry (default behavior)
     let first = consumer_rx.try_recv().expect("first delivery");
@@ -716,7 +778,7 @@ fn recovery_restores_on_failure_scripts() {
     let msg_id = msg.id;
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -761,9 +823,11 @@ fn recovery_restores_on_failure_scripts() {
     // Nack the message — should trigger on_failure script (recovered from storage)
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx2.send(SchedulerCommand::Nack {
-        queue_id: "recovery-queue".to_string(),
-        msg_id,
-        error: "error after recovery".to_string(),
+        items: vec![NackItem {
+            queue_id: "recovery-queue".to_string(),
+            msg_id,
+            error: "error after recovery".to_string(),
+        }],
         reply: nack_tx,
     })
     .unwrap();
@@ -772,7 +836,13 @@ fn recovery_restores_on_failure_scripts() {
     scheduler2.run();
 
     assert!(
-        nack_rx.try_recv().unwrap().is_ok(),
+        nack_rx
+            .try_recv()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .is_ok(),
         "nack should succeed after recovery"
     );
 

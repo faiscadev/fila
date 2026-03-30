@@ -8,7 +8,7 @@ mod tests;
 pub mod types;
 
 pub use store::MetaStoreEvent;
-pub use types::{ClusterRequest, ClusterResponse, NodeId, TypeConfig};
+pub use types::{AckItemData, ClusterRequest, ClusterResponse, NackItemData, NodeId, TypeConfig};
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

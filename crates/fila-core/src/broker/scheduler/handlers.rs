@@ -1,10 +1,105 @@
 use super::*;
+use crate::broker::command::{AckItem, NackItem};
+use prost::Message as ProstMessage;
+
+/// Data for a validated enqueue that passed validation and Lua processing.
+struct PreparedEnqueue {
+    msg_id: uuid::Uuid,
+    queue_id: String,
+    fairness_key: String,
+    weight: u32,
+    throttle_keys: Vec<String>,
+    key: Vec<u8>,
+    value: Vec<u8>,
+}
 
 impl Scheduler {
+    /// Process enqueue operations. Validates each message individually,
+    /// then writes all valid messages in a single RocksDB WriteBatch
+    /// via `apply_mutations()`.
+    ///
+    /// Returns (per-item results, set of queue_ids that had successful
+    /// enqueues for delivery).
     pub(super) fn handle_enqueue(
         &mut self,
+        messages: Vec<crate::message::Message>,
+    ) -> (
+        Vec<Result<uuid::Uuid, crate::error::EnqueueError>>,
+        HashSet<String>,
+    ) {
+        let len = messages.len();
+        // Phase 1: Validate each message and prepare mutations.
+        // Results are either Ok(PreparedEnqueue) or Err(EnqueueError).
+        let mut prepared: Vec<Result<PreparedEnqueue, crate::error::EnqueueError>> =
+            Vec::with_capacity(len);
+
+        for message in messages {
+            prepared.push(self.prepare_enqueue(message));
+        }
+
+        // Phase 2: Accumulate mutations for all successful items and write in
+        // a single RocksDB WriteBatch.
+        let mut mutations = Vec::new();
+        for item in &prepared {
+            if let Ok(prep) = item {
+                mutations.push(Mutation::PutMessage {
+                    key: prep.key.clone(),
+                    value: prep.value.clone(),
+                });
+            }
+        }
+
+        // If there are mutations, write them all in one atomic batch.
+        let storage_err = if mutations.is_empty() {
+            None
+        } else {
+            self.storage.apply_mutations(mutations).err()
+        };
+
+        // Phase 3: Build results and update in-memory state.
+        let mut results = Vec::with_capacity(len);
+        let mut queues_to_deliver = HashSet::new();
+
+        for item in prepared {
+            match item {
+                Ok(prep) => {
+                    if let Some(ref err) = storage_err {
+                        // WriteBatch failed — all items in the batch fail with storage error.
+                        results.push(Err(crate::error::EnqueueError::Storage(
+                            crate::error::StorageError::Engine(err.to_string()),
+                        )));
+                    } else {
+                        self.metrics.record_enqueue(&prep.queue_id);
+                        self.drr
+                            .add_key(&prep.queue_id, &prep.fairness_key, prep.weight);
+                        self.pending_push(
+                            &prep.queue_id,
+                            &prep.fairness_key,
+                            PendingEntry {
+                                msg_key: prep.key,
+                                msg_id: prep.msg_id,
+                                throttle_keys: prep.throttle_keys,
+                            },
+                        );
+                        queues_to_deliver.insert(prep.queue_id);
+                        results.push(Ok(prep.msg_id));
+                    }
+                }
+                Err(e) => {
+                    results.push(Err(e));
+                }
+            }
+        }
+
+        (results, queues_to_deliver)
+    }
+
+    /// Validate a message and prepare it for storage. Returns the data
+    /// needed to create a `Mutation::PutMessage` without actually writing.
+    fn prepare_enqueue(
+        &mut self,
         mut message: crate::message::Message,
-    ) -> Result<uuid::Uuid, crate::error::EnqueueError> {
+    ) -> Result<PreparedEnqueue, crate::error::EnqueueError> {
         // Verify queue exists
         if self.storage.get_queue(&message.queue_id)?.is_none() {
             return Err(crate::error::EnqueueError::QueueNotFound(
@@ -21,7 +116,6 @@ impl Scheduler {
                 message.payload.len(),
                 &message.queue_id,
             ) {
-                // Record Lua metrics based on execution outcome
                 match outcome {
                     crate::lua::LuaExecOutcome::Success => {
                         let duration_us = start.elapsed().as_micros() as f64;
@@ -45,9 +139,7 @@ impl Scheduler {
                             self.metrics.record_lua_cb_activation(&message.queue_id);
                         }
                     }
-                    crate::lua::LuaExecOutcome::CircuitBreakerBypassed => {
-                        // No duration or error recording — script was not executed
-                    }
+                    crate::lua::LuaExecOutcome::CircuitBreakerBypassed => {}
                 }
                 message.fairness_key = result.fairness_key;
                 message.weight = result.weight;
@@ -57,9 +149,6 @@ impl Scheduler {
 
         let msg_id = message.id;
 
-        // Route the message to a Raft group based on (queue_id, fairness_key).
-        // Phase 1: trivial 1:1 routing — all fairness keys in a queue map to
-        // the same group. The routing call exists as a seam for phase 2.
         let group = self.router.route(&message.queue_id, &message.fairness_key);
         debug!(
             queue_id = %message.queue_id,
@@ -75,26 +164,25 @@ impl Scheduler {
             &msg_id,
         );
 
-        self.storage.put_message(&key, &message)?;
+        // Clone small fields for PreparedEnqueue before consuming message
+        // into proto serialization (avoids cloning the heavy payload/headers).
+        let queue_id = message.queue_id.clone();
+        let fairness_key = message.fairness_key.clone();
+        let weight = message.weight;
+        let throttle_keys = message.throttle_keys.clone();
 
-        self.metrics.record_enqueue(&message.queue_id);
+        let proto = fila_proto::Message::from(message);
+        let value = proto.encode_to_vec();
 
-        // Register the fairness key in DRR active set so it participates in scheduling
-        self.drr
-            .add_key(&message.queue_id, &message.fairness_key, message.weight);
-
-        // Add to pending index
-        self.pending_push(
-            &message.queue_id,
-            &message.fairness_key,
-            PendingEntry {
-                msg_key: key,
-                msg_id,
-                throttle_keys: message.throttle_keys.clone(),
-            },
-        );
-
-        Ok(msg_id)
+        Ok(PreparedEnqueue {
+            msg_id,
+            queue_id,
+            fairness_key,
+            weight,
+            throttle_keys,
+            key,
+            value,
+        })
     }
 
     pub(super) fn handle_create_queue(
@@ -216,12 +304,77 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Process ack operations. Validates each item individually, then
+    /// deletes all leases/messages in a single RocksDB WriteBatch.
     pub(super) fn handle_ack(
+        &mut self,
+        items: &[AckItem],
+    ) -> Vec<Result<(), crate::error::AckError>> {
+        // Phase 1: Validate each item and collect mutations.
+        let mut per_item: Vec<Result<Vec<Mutation>, crate::error::AckError>> =
+            Vec::with_capacity(items.len());
+        let mut acked_queues: Vec<String> = Vec::new();
+
+        for item in items {
+            match self.prepare_ack(&item.queue_id, &item.msg_id) {
+                Ok(ops) => {
+                    acked_queues.push(item.queue_id.clone());
+                    per_item.push(Ok(ops));
+                }
+                Err(e) => {
+                    per_item.push(Err(e));
+                }
+            }
+        }
+
+        // Phase 2: Accumulate all mutations and write in one batch.
+        let all_mutations: Vec<Mutation> = per_item
+            .iter()
+            .filter_map(|r| r.as_ref().ok())
+            .flat_map(|ops| ops.iter())
+            .map(|m| match m {
+                Mutation::DeleteLease { key } => Mutation::DeleteLease { key: key.clone() },
+                Mutation::DeleteLeaseExpiry { key } => {
+                    Mutation::DeleteLeaseExpiry { key: key.clone() }
+                }
+                Mutation::DeleteMessage { key } => Mutation::DeleteMessage { key: key.clone() },
+                other => panic!("unexpected mutation type in ack: {other:?}"),
+            })
+            .collect();
+
+        let storage_err = if all_mutations.is_empty() {
+            None
+        } else {
+            self.storage.apply_mutations(all_mutations).err()
+        };
+
+        // Phase 3: Build final results.
+        let mut idx = 0;
+        per_item
+            .into_iter()
+            .map(|r| match r {
+                Ok(_) => {
+                    if let Some(ref err) = storage_err {
+                        Err(crate::error::AckError::Storage(
+                            crate::error::StorageError::Engine(err.to_string()),
+                        ))
+                    } else {
+                        self.metrics.record_ack(&acked_queues[idx]);
+                        idx += 1;
+                        Ok(())
+                    }
+                }
+                Err(e) => Err(e),
+            })
+            .collect()
+    }
+
+    /// Validate a single ack and return the mutations needed (without applying them).
+    fn prepare_ack(
         &mut self,
         queue_id: &str,
         msg_id: &uuid::Uuid,
-    ) -> Result<(), crate::error::AckError> {
-        // Look up the lease — if it doesn't exist, the message is unknown or already acked
+    ) -> Result<Vec<Mutation>, crate::error::AckError> {
         let lease_key = crate::storage::keys::lease_key(queue_id, msg_id);
         let lease_value = self.storage.get_lease(&lease_key)?.ok_or_else(|| {
             crate::error::AckError::MessageNotFound(format!(
@@ -229,7 +382,6 @@ impl Scheduler {
             ))
         })?;
 
-        // Parse expiry timestamp from lease value to construct the lease_expiry key
         let expiry_ns = crate::storage::keys::parse_expiry_from_lease_value(&lease_value)
             .ok_or_else(|| {
                 crate::error::AckError::Storage(crate::error::StorageError::CorruptData(format!(
@@ -238,13 +390,11 @@ impl Scheduler {
             })?;
         let expiry_key = crate::storage::keys::lease_expiry_key(expiry_ns, queue_id, msg_id);
 
-        // Look up the message key from the leased index (O(1)), falling back to scan
         let msg_key = self
             .leased_msg_keys
             .remove(msg_id)
             .or_else(|| self.find_message_key(queue_id, msg_id).ok().flatten());
 
-        // Atomically delete the message, lease, and lease expiry
         let mut ops = vec![
             Mutation::DeleteLease { key: lease_key },
             Mutation::DeleteLeaseExpiry { key: expiry_key },
@@ -253,12 +403,30 @@ impl Scheduler {
             ops.push(Mutation::DeleteMessage { key });
         }
 
-        self.storage.apply_mutations(ops)?;
-        self.metrics.record_ack(queue_id);
-        Ok(())
+        Ok(ops)
     }
 
+    /// Process nack operations. Each item gets its own Result.
+    /// Returns (results, set of queue_ids that had successful nacks for delivery).
     pub(super) fn handle_nack(
+        &mut self,
+        items: &[NackItem],
+    ) -> (Vec<Result<(), crate::error::NackError>>, HashSet<String>) {
+        let mut results = Vec::with_capacity(items.len());
+        let mut queues_to_deliver = HashSet::new();
+
+        for item in items {
+            let result = self.apply_nack(&item.queue_id, &item.msg_id, &item.error);
+            if result.is_ok() {
+                queues_to_deliver.insert(item.queue_id.clone());
+            }
+            results.push(result);
+        }
+
+        (results, queues_to_deliver)
+    }
+
+    fn apply_nack(
         &mut self,
         queue_id: &str,
         msg_id: &uuid::Uuid,

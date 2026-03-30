@@ -523,26 +523,54 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
     fn from(r: ClusterRequest) -> Self {
         use fila_proto::cluster_request_proto::Request;
         let request = match r {
-            ClusterRequest::Enqueue { message } => {
+            ClusterRequest::Enqueue { messages } => {
+                // Proto format supports single item only. The cluster proto path
+                // (leader forwarding + Raft log) currently only sends single
+                // items; multi-item operations are handled at the scheduler level.
+                debug_assert!(
+                    messages.len() <= 1,
+                    "cluster proto serialization supports single item only (got {} messages)",
+                    messages.len()
+                );
+                let msg = messages.into_iter().next();
                 Some(Request::Enqueue(fila_proto::ClusterEnqueue {
-                    message: Some(fila_proto::Message::from(message)),
+                    message: msg.map(fila_proto::Message::from),
                 }))
             }
-            ClusterRequest::Ack { queue_id, msg_id } => {
-                Some(Request::Ack(fila_proto::ClusterAck {
+            ClusterRequest::Ack { items } => {
+                // Proto format supports single item only. Same limitation
+                // as Enqueue above.
+                debug_assert!(
+                    items.len() <= 1,
+                    "cluster proto serialization supports single item only (got {} items)",
+                    items.len()
+                );
+                let (queue_id, msg_id) = if let Some(item) = items.into_iter().next() {
+                    (item.queue_id, item.msg_id.to_string())
+                } else {
+                    (String::new(), String::new())
+                };
+                Some(Request::Ack(fila_proto::ClusterAck { queue_id, msg_id }))
+            }
+            ClusterRequest::Nack { items } => {
+                // Proto format supports single item only. Same limitation
+                // as Enqueue above.
+                debug_assert!(
+                    items.len() <= 1,
+                    "cluster proto serialization supports single item only (got {} items)",
+                    items.len()
+                );
+                let (queue_id, msg_id, error) = if let Some(item) = items.into_iter().next() {
+                    (item.queue_id, item.msg_id.to_string(), item.error)
+                } else {
+                    (String::new(), String::new(), String::new())
+                };
+                Some(Request::Nack(fila_proto::ClusterNack {
                     queue_id,
-                    msg_id: msg_id.to_string(),
+                    msg_id,
+                    error,
                 }))
             }
-            ClusterRequest::Nack {
-                queue_id,
-                msg_id,
-                error,
-            } => Some(Request::Nack(fila_proto::ClusterNack {
-                queue_id,
-                msg_id: msg_id.to_string(),
-                error,
-            })),
             ClusterRequest::CreateQueue { name, config } => {
                 Some(Request::CreateQueue(fila_proto::ClusterCreateQueue {
                     name,
@@ -612,21 +640,33 @@ impl TryFrom<fila_proto::ClusterRequestProto> for ClusterRequest {
             .ok_or(ConvertError::MissingField("cluster_request.request"))?
         {
             Request::Enqueue(e) => {
-                let message = e
+                let message: Message = e
                     .message
                     .ok_or(ConvertError::MissingField("enqueue.message"))?
                     .try_into()?;
-                Ok(ClusterRequest::Enqueue { message })
+                Ok(ClusterRequest::Enqueue {
+                    messages: vec![message],
+                })
             }
-            Request::Ack(a) => Ok(ClusterRequest::Ack {
-                queue_id: a.queue_id,
-                msg_id: a.msg_id.parse().map_err(ConvertError::InvalidUuid)?,
-            }),
-            Request::Nack(n) => Ok(ClusterRequest::Nack {
-                queue_id: n.queue_id,
-                msg_id: n.msg_id.parse().map_err(ConvertError::InvalidUuid)?,
-                error: n.error,
-            }),
+            Request::Ack(a) => {
+                let msg_id = a.msg_id.parse().map_err(ConvertError::InvalidUuid)?;
+                Ok(ClusterRequest::Ack {
+                    items: vec![crate::cluster::types::AckItemData {
+                        queue_id: a.queue_id,
+                        msg_id,
+                    }],
+                })
+            }
+            Request::Nack(n) => {
+                let msg_id = n.msg_id.parse().map_err(ConvertError::InvalidUuid)?;
+                Ok(ClusterRequest::Nack {
+                    items: vec![crate::cluster::types::NackItemData {
+                        queue_id: n.queue_id,
+                        msg_id,
+                        error: n.error,
+                    }],
+                })
+            }
             Request::CreateQueue(cq) => Ok(ClusterRequest::CreateQueue {
                 name: cq.name,
                 config: cq
@@ -899,7 +939,7 @@ mod tests {
         let original = Entry::<TypeConfig> {
             log_id: make_log_id(2, 5),
             payload: EntryPayload::Normal(ClusterRequest::Enqueue {
-                message: msg.clone(),
+                messages: vec![msg.clone()],
             }),
         };
         let proto = entry_to_proto(original.clone());
@@ -908,8 +948,8 @@ mod tests {
         let roundtripped = entry_from_proto(decoded).unwrap();
         assert_eq!(original.log_id, roundtripped.log_id);
         match roundtripped.payload {
-            EntryPayload::Normal(ClusterRequest::Enqueue { message }) => {
-                assert_eq!(msg, message);
+            EntryPayload::Normal(ClusterRequest::Enqueue { messages, .. }) => {
+                assert_eq!(msg, messages[0]);
             }
             _ => panic!("expected Normal(Enqueue)"),
         }
@@ -943,7 +983,7 @@ mod tests {
                 Entry {
                     log_id: make_log_id(5, 100),
                     payload: EntryPayload::Normal(ClusterRequest::Enqueue {
-                        message: msg.clone(),
+                        messages: vec![msg.clone()],
                     }),
                 },
                 Entry {
@@ -1069,14 +1109,14 @@ mod tests {
     fn roundtrip_cluster_request_enqueue() {
         let msg = make_message();
         let original = ClusterRequest::Enqueue {
-            message: msg.clone(),
+            messages: vec![msg.clone()],
         };
         let proto = fila_proto::ClusterRequestProto::from(original);
         let bytes = proto.encode_to_vec();
         let decoded = fila_proto::ClusterRequestProto::decode(bytes.as_slice()).unwrap();
         let roundtripped: ClusterRequest = decoded.try_into().unwrap();
         match roundtripped {
-            ClusterRequest::Enqueue { message } => assert_eq!(msg, message),
+            ClusterRequest::Enqueue { messages, .. } => assert_eq!(msg, messages[0]),
             _ => panic!("expected Enqueue"),
         }
     }
@@ -1085,15 +1125,17 @@ mod tests {
     fn roundtrip_cluster_request_ack() {
         let id = uuid::Uuid::now_v7();
         let original = ClusterRequest::Ack {
-            queue_id: "q1".into(),
-            msg_id: id,
+            items: vec![crate::cluster::types::AckItemData {
+                queue_id: "q1".into(),
+                msg_id: id,
+            }],
         };
         let proto = fila_proto::ClusterRequestProto::from(original);
         let roundtripped: ClusterRequest = proto.try_into().unwrap();
         match roundtripped {
-            ClusterRequest::Ack { queue_id, msg_id } => {
-                assert_eq!(queue_id, "q1");
-                assert_eq!(msg_id, id);
+            ClusterRequest::Ack { items, .. } => {
+                assert_eq!(items[0].queue_id, "q1");
+                assert_eq!(items[0].msg_id, id);
             }
             _ => panic!("expected Ack"),
         }
@@ -1103,21 +1145,19 @@ mod tests {
     fn roundtrip_cluster_request_nack() {
         let id = uuid::Uuid::now_v7();
         let original = ClusterRequest::Nack {
-            queue_id: "q1".into(),
-            msg_id: id,
-            error: "test error".into(),
+            items: vec![crate::cluster::types::NackItemData {
+                queue_id: "q1".into(),
+                msg_id: id,
+                error: "test error".into(),
+            }],
         };
         let proto = fila_proto::ClusterRequestProto::from(original);
         let roundtripped: ClusterRequest = proto.try_into().unwrap();
         match roundtripped {
-            ClusterRequest::Nack {
-                queue_id,
-                msg_id,
-                error,
-            } => {
-                assert_eq!(queue_id, "q1");
-                assert_eq!(msg_id, id);
-                assert_eq!(error, "test error");
+            ClusterRequest::Nack { items, .. } => {
+                assert_eq!(items[0].queue_id, "q1");
+                assert_eq!(items[0].msg_id, id);
+                assert_eq!(items[0].error, "test error");
             }
             _ => panic!("expected Nack"),
         }

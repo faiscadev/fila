@@ -11,7 +11,7 @@ fn get_stats_returns_depth_and_in_flight() {
         let msg = test_message_with_key("stats-q", "key-a", i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -54,7 +54,7 @@ fn get_stats_returns_per_fairness_key_stats() {
         let msg = test_message_with_key("stats-fk-q", "key-a", i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -62,7 +62,7 @@ fn get_stats_returns_per_fairness_key_stats() {
     let msg = test_message_with_key("stats-fk-q", "key-b", 10);
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -110,7 +110,7 @@ fn get_stats_returns_weighted_fairness_key_stats() {
     let msg = test_message_with_key_and_weight("stats-wt-q", "heavy", 5, 0);
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -118,7 +118,7 @@ fn get_stats_returns_weighted_fairness_key_stats() {
     let msg = test_message_with_key_and_weight("stats-wt-q", "light", 1, 1);
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -212,7 +212,7 @@ fn get_stats_integration_multi_key_with_leases_and_throttle() {
         msg.throttle_keys = vec!["rate:api".to_string()];
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -222,7 +222,7 @@ fn get_stats_integration_multi_key_with_leases_and_throttle() {
         msg.throttle_keys = vec!["rate:api".to_string()];
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -231,7 +231,7 @@ fn get_stats_integration_multi_key_with_leases_and_throttle() {
     msg.throttle_keys = vec!["rate:api".to_string()];
     let (reply_tx, _) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Enqueue {
-        message: msg,
+        messages: vec![msg],
         reply: reply_tx,
     })
     .unwrap();
@@ -307,7 +307,7 @@ fn get_stats_after_ack_decreases_in_flight_and_depth() {
         let msg = test_message_with_key("stats-ack-q", "key-a", i);
         let (reply_tx, _) = tokio::sync::oneshot::channel();
         tx.send(SchedulerCommand::Enqueue {
-            message: msg,
+            messages: vec![msg],
             reply: reply_tx,
         })
         .unwrap();
@@ -340,11 +340,19 @@ fn get_stats_after_ack_decreases_in_flight_and_depth() {
     // Ack the delivered message
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     scheduler.handle_command(SchedulerCommand::Ack {
-        queue_id: "stats-ack-q".to_string(),
-        msg_id: delivered.msg_id,
+        items: vec![AckItem {
+            queue_id: "stats-ack-q".to_string(),
+            msg_id: delivered.msg_id,
+        }],
         reply: reply_tx,
     });
-    reply_rx.blocking_recv().unwrap().unwrap();
+    reply_rx
+        .blocking_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap();
 
     // After ack: depth=2 (only pending), in_flight=0
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();

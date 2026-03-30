@@ -194,9 +194,9 @@ development_status:
 
   # Epic 19: Wire Format Design & Batch-Native Scheduler
   # Protocol spec + batch-native scheduler internals. No new transport yet.
-  epic-19: in-progress
+  epic-19: done
   19-1-wire-format-design-protocol-specification: done
-  19-2-batch-native-scheduler-internals: backlog
+  19-2-batch-native-scheduler-internals: done
   epic-19-retrospective: optional
 
   # Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal

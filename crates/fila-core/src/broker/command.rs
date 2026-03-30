@@ -31,25 +31,40 @@ pub struct QueueSummary {
     pub leader_node_id: u64,
 }
 
+/// An item in an ack command.
+#[derive(Debug, Clone)]
+pub struct AckItem {
+    pub queue_id: String,
+    pub msg_id: Uuid,
+}
+
+/// An item in a nack command.
+#[derive(Debug, Clone)]
+pub struct NackItem {
+    pub queue_id: String,
+    pub msg_id: Uuid,
+    pub error: String,
+}
+
 /// Commands sent from IO threads to the single-threaded scheduler core.
+///
+/// All hot-path commands (Enqueue, Ack, Nack) accept a Vec of items and
+/// return a Vec of per-item results.
 ///
 /// Each variant that expects a response includes a `tokio::sync::oneshot::Sender`
 /// for the reply. Fire-and-forget commands omit the reply channel.
 pub enum SchedulerCommand {
     Enqueue {
-        message: crate::message::Message,
-        reply: tokio::sync::oneshot::Sender<Result<Uuid, EnqueueError>>,
+        messages: Vec<crate::message::Message>,
+        reply: tokio::sync::oneshot::Sender<Vec<Result<Uuid, EnqueueError>>>,
     },
     Ack {
-        queue_id: String,
-        msg_id: Uuid,
-        reply: tokio::sync::oneshot::Sender<Result<(), AckError>>,
+        items: Vec<AckItem>,
+        reply: tokio::sync::oneshot::Sender<Vec<Result<(), AckError>>>,
     },
     Nack {
-        queue_id: String,
-        msg_id: Uuid,
-        error: String,
-        reply: tokio::sync::oneshot::Sender<Result<(), NackError>>,
+        items: Vec<NackItem>,
+        reply: tokio::sync::oneshot::Sender<Vec<Result<(), NackError>>>,
     },
     RegisterConsumer {
         queue_id: String,

@@ -478,13 +478,14 @@ mod tests {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         broker
             .send_command(SchedulerCommand::Enqueue {
-                message: msg,
+                messages: vec![msg],
                 reply: reply_tx,
             })
             .unwrap();
 
         // Give the scheduler thread time to process
-        let result = reply_rx.blocking_recv().unwrap().unwrap();
+        let results = reply_rx.blocking_recv().unwrap();
+        let result = results.into_iter().next().unwrap().unwrap();
         assert_eq!(result, msg_id);
 
         broker.shutdown().unwrap();

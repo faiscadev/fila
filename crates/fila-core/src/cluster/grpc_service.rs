@@ -50,10 +50,14 @@ impl ClusterGrpcService {
     /// This ensures the leader's scheduler has the data for serving consumers.
     async fn apply_to_scheduler(broker: &Broker, req: &super::types::ClusterRequest) {
         match req {
-            super::types::ClusterRequest::Enqueue { message } => {
+            super::types::ClusterRequest::Enqueue { messages } => {
+                if messages.is_empty() {
+                    return;
+                }
+                let msgs = messages.clone();
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::Enqueue {
-                    message: message.clone(),
+                    messages: msgs,
                     reply: reply_tx,
                 }) {
                     tracing::error!(error = %e, "failed to apply forwarded enqueue to scheduler");
@@ -63,17 +67,29 @@ impl ClusterGrpcService {
                     Err(e) => {
                         tracing::error!(error = %e, "scheduler dropped reply for forwarded enqueue");
                     }
-                    Ok(Err(e)) => {
-                        tracing::error!(error = %e, "scheduler rejected forwarded enqueue");
+                    Ok(results) => {
+                        for result in results {
+                            if let Err(e) = result {
+                                tracing::error!(error = %e, "scheduler rejected forwarded enqueue");
+                            }
+                        }
                     }
-                    Ok(Ok(_)) => {}
                 }
             }
-            super::types::ClusterRequest::Ack { queue_id, msg_id } => {
+            super::types::ClusterRequest::Ack { items } => {
+                if items.is_empty() {
+                    return;
+                }
+                let ack_items: Vec<crate::broker::command::AckItem> = items
+                    .iter()
+                    .map(|i| crate::broker::command::AckItem {
+                        queue_id: i.queue_id.clone(),
+                        msg_id: i.msg_id,
+                    })
+                    .collect();
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::Ack {
-                    queue_id: queue_id.clone(),
-                    msg_id: *msg_id,
+                    items: ack_items,
                     reply: reply_tx,
                 }) {
                     tracing::error!(error = %e, "failed to apply forwarded ack to scheduler");
@@ -83,22 +99,30 @@ impl ClusterGrpcService {
                     Err(e) => {
                         tracing::error!(error = %e, "scheduler dropped reply for forwarded ack");
                     }
-                    Ok(Err(e)) => {
-                        tracing::error!(error = %e, "scheduler rejected forwarded ack");
+                    Ok(results) => {
+                        for result in results {
+                            if let Err(e) = result {
+                                tracing::error!(error = %e, "scheduler rejected forwarded ack");
+                            }
+                        }
                     }
-                    Ok(Ok(_)) => {}
                 }
             }
-            super::types::ClusterRequest::Nack {
-                queue_id,
-                msg_id,
-                error,
-            } => {
+            super::types::ClusterRequest::Nack { items } => {
+                if items.is_empty() {
+                    return;
+                }
+                let nack_items: Vec<crate::broker::command::NackItem> = items
+                    .iter()
+                    .map(|i| crate::broker::command::NackItem {
+                        queue_id: i.queue_id.clone(),
+                        msg_id: i.msg_id,
+                        error: i.error.clone(),
+                    })
+                    .collect();
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 if let Err(e) = broker.send_command(crate::SchedulerCommand::Nack {
-                    queue_id: queue_id.clone(),
-                    msg_id: *msg_id,
-                    error: error.clone(),
+                    items: nack_items,
                     reply: reply_tx,
                 }) {
                     tracing::error!(error = %e, "failed to apply forwarded nack to scheduler");
@@ -108,10 +132,13 @@ impl ClusterGrpcService {
                     Err(e) => {
                         tracing::error!(error = %e, "scheduler dropped reply for forwarded nack");
                     }
-                    Ok(Err(e)) => {
-                        tracing::error!(error = %e, "scheduler rejected forwarded nack");
+                    Ok(results) => {
+                        for result in results {
+                            if let Err(e) = result {
+                                tracing::error!(error = %e, "scheduler rejected forwarded nack");
+                            }
+                        }
                     }
-                    Ok(Ok(_)) => {}
                 }
             }
             // Other request types (CreateQueue, DeleteQueue, etc.) are handled

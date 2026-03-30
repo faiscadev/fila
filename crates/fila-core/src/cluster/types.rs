@@ -18,24 +18,38 @@ openraft::declare_raft_types!(
         SnapshotData = Cursor<Vec<u8>>,
 );
 
+/// An ack item in a cluster request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AckItemData {
+    pub queue_id: String,
+    pub msg_id: uuid::Uuid,
+}
+
+/// A nack item in a cluster request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NackItemData {
+    pub queue_id: String,
+    pub msg_id: uuid::Uuid,
+    pub error: String,
+}
+
 /// All state-mutating operations that flow through the Raft log.
 ///
 /// Every write operation must be serialized into a `ClusterRequest`,
 /// committed via Raft consensus, and then applied to the local state
 /// machine. Read-only operations bypass Raft entirely.
+///
+/// Hot-path operations (Enqueue, Ack, Nack) carry a Vec of items.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClusterRequest {
     Enqueue {
-        message: Message,
+        messages: Vec<Message>,
     },
     Ack {
-        queue_id: String,
-        msg_id: uuid::Uuid,
+        items: Vec<AckItemData>,
     },
     Nack {
-        queue_id: String,
-        msg_id: uuid::Uuid,
-        error: String,
+        items: Vec<NackItemData>,
     },
     CreateQueue {
         name: String,
