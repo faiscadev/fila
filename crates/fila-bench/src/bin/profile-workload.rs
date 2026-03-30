@@ -4,115 +4,79 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use clap::{Parser, ValueEnum};
 use fila_bench::server::{create_queue_cli, BenchServer};
 use fila_sdk::FilaClient;
 use inferno::collapse::Collapse;
 use tokio_stream::StreamExt;
 
-fn print_usage() {
-    eprintln!(
-        r#"Usage: profile-workload [OPTIONS]
-
-Run a fila-server workload and optionally generate a CPU flamegraph.
-
-Options:
-  --workload NAME      enqueue-only|consume-only|lifecycle (default: enqueue-only)
-  --duration SECS      how long to run the workload (default: 30)
-  --message-size N     payload size in bytes (default: 1024)
-  --concurrency N      concurrent producers/consumers (default: 1)
-  --flamegraph [PATH]  generate flamegraph SVG (default: target/flamegraphs/<workload>.svg)
-                       macOS: run with sudo (dtrace). Linux: needs perf.
-  --sample-hz N        profiler sampling frequency in Hz (default: 997)
-  --help               show this help"#
-    );
+#[derive(Clone, ValueEnum)]
+enum Workload {
+    EnqueueOnly,
+    ConsumeOnly,
+    Lifecycle,
 }
 
-struct Config {
-    workload: String,
+impl std::fmt::Display for Workload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Workload::EnqueueOnly => write!(f, "enqueue-only"),
+            Workload::ConsumeOnly => write!(f, "consume-only"),
+            Workload::Lifecycle => write!(f, "lifecycle"),
+        }
+    }
+}
+
+/// Run a fila-server workload and optionally generate a CPU flamegraph.
+///
+/// For flamegraph generation, run with sudo (macOS needs dtrace, Linux needs perf).
+/// Build first with `cargo build --release`, then `sudo ./target/release/profile-workload --flamegraph`.
+#[derive(Parser)]
+#[command(name = "profile-workload")]
+struct Args {
+    /// Workload type to run
+    #[arg(long, value_enum, default_value_t = Workload::EnqueueOnly)]
+    workload: Workload,
+
+    /// How long to run the workload in seconds
+    #[arg(long, default_value_t = 30)]
     duration: u64,
-    msg_size: usize,
+
+    /// Payload size in bytes
+    #[arg(long, default_value_t = 1024)]
+    message_size: usize,
+
+    /// Number of concurrent producers/consumers
+    #[arg(long, default_value_t = 1)]
     concurrency: usize,
-    flamegraph: Option<PathBuf>,
+
+    /// Generate flamegraph SVG at this path (default: target/flamegraphs/<workload>.svg)
+    #[arg(long)]
+    flamegraph: Option<Option<PathBuf>>,
+
+    /// Profiler sampling frequency in Hz
+    #[arg(long, default_value_t = 997)]
     sample_hz: u32,
 }
 
-fn parse_args() -> Config {
-    let mut config = Config {
-        workload: "enqueue-only".to_string(),
-        duration: 30,
-        msg_size: 1024,
-        concurrency: 1,
-        flamegraph: None,
-        sample_hz: 997,
-    };
-
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--workload" => {
-                i += 1;
-                config.workload = args[i].clone();
-            }
-            "--duration" => {
-                i += 1;
-                config.duration = args[i].parse().expect("invalid --duration");
-            }
-            "--message-size" => {
-                i += 1;
-                config.msg_size = args[i].parse().expect("invalid --message-size");
-            }
-            "--concurrency" => {
-                i += 1;
-                config.concurrency = args[i].parse().expect("invalid --concurrency");
-            }
-            "--flamegraph" => {
-                if i + 1 < args.len() && !args[i + 1].starts_with('-') {
-                    i += 1;
-                    config.flamegraph = Some(PathBuf::from(&args[i]));
-                } else {
-                    config.flamegraph = Some(PathBuf::new()); // sentinel for default path
-                }
-            }
-            "--sample-hz" => {
-                i += 1;
-                config.sample_hz = args[i].parse().expect("invalid --sample-hz");
-            }
-            "--help" | "-h" => {
-                print_usage();
-                std::process::exit(0);
-            }
-            other => {
-                eprintln!("error: unknown option: {other}");
-                print_usage();
-                std::process::exit(1);
+impl Args {
+    fn resolved_flamegraph_path(&self) -> Option<PathBuf> {
+        match &self.flamegraph {
+            None => None,
+            Some(Some(path)) => Some(path.clone()),
+            Some(None) => {
+                let dir = PathBuf::from("target/flamegraphs");
+                std::fs::create_dir_all(&dir).expect("create target/flamegraphs");
+                Some(dir.join(format!("{}.svg", self.workload)))
             }
         }
-        i += 1;
     }
-
-    // Resolve default flamegraph path.
-    if config.flamegraph == Some(PathBuf::new()) {
-        let dir = PathBuf::from("target/flamegraphs");
-        std::fs::create_dir_all(&dir).expect("create target/flamegraphs");
-        config.flamegraph = Some(dir.join(format!("{}.svg", config.workload)));
-    }
-
-    config
 }
 
 #[tokio::main]
 async fn main() {
-    let config = parse_args();
-
-    match &["enqueue-only", "consume-only", "lifecycle"] {
-        valid if valid.contains(&config.workload.as_str()) => {}
-        _ => {
-            eprintln!("error: unknown workload '{}'", config.workload);
-            eprintln!("available: enqueue-only, consume-only, lifecycle");
-            std::process::exit(1);
-        }
-    }
+    let args = Args::parse();
+    let flamegraph_path = args.resolved_flamegraph_path();
 
     let server = BenchServer::start();
     let addr = server.addr().to_string();
@@ -123,42 +87,40 @@ async fn main() {
 
     eprintln!(
         "workload={} duration={}s msg_size={}B concurrency={} server_pid={} addr={}",
-        config.workload, config.duration, config.msg_size, config.concurrency, server_pid, addr,
+        args.workload, args.duration, args.message_size, args.concurrency, server_pid, addr,
     );
 
-    let profiler = config
-        .flamegraph
+    let profiler = flamegraph_path
         .as_ref()
-        .map(|output_path| start_profiler(server_pid, config.sample_hz, output_path));
+        .map(|output_path| start_profiler(server_pid, args.sample_hz, output_path));
 
     // Let the profiler attach and the server warm up.
     if profiler.is_some() {
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 
-    let payload = vec![0x42u8; config.msg_size];
-    let duration = Duration::from_secs(config.duration);
+    let payload = vec![0x42u8; args.message_size];
+    let duration = Duration::from_secs(args.duration);
     let start = Instant::now();
 
-    match config.workload.as_str() {
-        "enqueue-only" => {
-            run_enqueue_only(&addr, queue_name, &payload, config.concurrency, duration).await;
+    match args.workload {
+        Workload::EnqueueOnly => {
+            run_enqueue_only(&addr, queue_name, &payload, args.concurrency, duration).await;
         }
-        "consume-only" => {
-            run_consume_only(&addr, queue_name, &payload, config.concurrency, duration).await;
+        Workload::ConsumeOnly => {
+            run_consume_only(&addr, queue_name, &payload, args.concurrency, duration).await;
         }
-        "lifecycle" => {
-            run_lifecycle(&addr, queue_name, &payload, config.concurrency, duration).await;
+        Workload::Lifecycle => {
+            run_lifecycle(&addr, queue_name, &payload, args.concurrency, duration).await;
         }
-        _ => unreachable!(),
     }
 
     let elapsed = start.elapsed();
     eprintln!("workload complete in {:.1}s", elapsed.as_secs_f64());
 
     if let Some(profiler) = profiler {
-        let output_path = config.flamegraph.unwrap();
-        finish_profiler(profiler, &config.workload, &output_path);
+        let output_path = flamegraph_path.unwrap();
+        finish_profiler(profiler, &args.workload.to_string(), &output_path);
     }
 
     drop(server);

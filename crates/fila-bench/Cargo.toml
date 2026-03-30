@@ -11,6 +11,7 @@ description = "System-level benchmark suite for the Fila message broker"
 competitive = ["dep:rdkafka", "dep:lapin", "dep:async-nats", "dep:futures-util"]
 
 [dependencies]
+clap = { workspace = true }
 fila-sdk = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
