@@ -18,9 +18,9 @@ stories:
     dependsOn: ["20.1"]
   - id: "20.3"
     title: "Rust SDK Binary Protocol Client"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/20.3-rust-sdk-binary-protocol"
     pr: null
     dependsOn: ["20.1", "20.2"]
   - id: "20.4"
