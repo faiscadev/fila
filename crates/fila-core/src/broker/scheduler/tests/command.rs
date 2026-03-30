@@ -65,7 +65,13 @@ fn enqueue_reply_received() {
 
     scheduler.run();
 
-    let result = reply_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap();
+    let result = reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap();
     assert_eq!(result, msg_id);
 }
 
@@ -77,7 +83,10 @@ fn ack_without_lease_returns_error() {
     let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel();
 
     tx.send(SchedulerCommand::Ack {
-        items: vec![AckItem { queue_id: "q1".to_string(), msg_id }],
+        items: vec![AckItem {
+            queue_id: "q1".to_string(),
+            msg_id,
+        }],
         reply: reply_tx,
     })
     .unwrap();
@@ -86,7 +95,13 @@ fn ack_without_lease_returns_error() {
     scheduler.run();
 
     // Ack without a lease should fail
-    let err = reply_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap_err();
+    let err = reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap_err();
     assert!(matches!(err, crate::error::AckError::MessageNotFound(_)));
 }
 

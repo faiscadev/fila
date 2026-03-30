@@ -16,7 +16,13 @@ fn enqueue_to_nonexistent_queue_returns_error() {
 
     scheduler.run();
 
-    let err = reply_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap_err();
+    let err = reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap_err();
     assert!(
         matches!(err, crate::error::EnqueueError::QueueNotFound(_)),
         "expected QueueNotFound, got {err:?}"
@@ -42,7 +48,13 @@ fn enqueue_persists_message_to_storage() {
 
     scheduler.run();
 
-    let result = reply_rx.try_recv().unwrap().into_iter().next().unwrap().unwrap();
+    let result = reply_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap();
     assert_eq!(result, msg_id);
 
     // Verify the message was persisted by reading it back from storage

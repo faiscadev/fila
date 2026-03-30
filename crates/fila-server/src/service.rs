@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use fila_core::broker::command::{AckItem, NackItem};
+use fila_core::cluster::{AckItemData, NackItemData};
 use fila_core::{
     Broker, ClusterHandle, ClusterRequest, ClusterResponse, ClusterWriteError, Message,
     ReadyMessage, SchedulerCommand,
 };
-use fila_core::broker::command::{AckItem, NackItem};
-use fila_core::cluster::{AckItemData, NackItemData};
 use fila_proto::fila_service_server::FilaService;
 use fila_proto::{
     AckRequest, AckResponse, ConsumeRequest, ConsumeResponse, EnqueueRequest, EnqueueResponse,
@@ -156,7 +156,9 @@ impl FilaService for HotPathService {
                 results
                     .into_iter()
                     .next()
-                    .unwrap_or(Err(fila_core::EnqueueError::QueueNotFound("unknown".into())))
+                    .unwrap_or(Err(fila_core::EnqueueError::QueueNotFound(
+                        "unknown".into(),
+                    )))
                     .map_err(IntoStatus::into_status)?;
             }
 
@@ -180,7 +182,9 @@ impl FilaService for HotPathService {
             let msg_id = results
                 .into_iter()
                 .next()
-                .unwrap_or(Err(fila_core::EnqueueError::QueueNotFound("unknown".into())))
+                .unwrap_or(Err(fila_core::EnqueueError::QueueNotFound(
+                    "unknown".into(),
+                )))
                 .map_err(IntoStatus::into_status)?;
 
             Ok(Response::new(EnqueueResponse {

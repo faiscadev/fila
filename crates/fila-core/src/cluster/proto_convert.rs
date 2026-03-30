@@ -527,10 +527,7 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
                 messages, message, ..
             } => {
                 // Use the first message from the batch, or the legacy field.
-                let msg = messages
-                    .into_iter()
-                    .next()
-                    .or(message);
+                let msg = messages.into_iter().next().or(message);
                 Some(Request::Enqueue(fila_proto::ClusterEnqueue {
                     message: msg.map(fila_proto::Message::from),
                 }))
@@ -549,10 +546,7 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
                         legacy_msg_id.map(|m| m.to_string()).unwrap_or_default(),
                     )
                 };
-                Some(Request::Ack(fila_proto::ClusterAck {
-                    queue_id,
-                    msg_id,
-                }))
+                Some(Request::Ack(fila_proto::ClusterAck { queue_id, msg_id }))
             }
             ClusterRequest::Nack {
                 items,
@@ -575,7 +569,7 @@ impl From<ClusterRequest> for fila_proto::ClusterRequestProto {
                     msg_id,
                     error,
                 }))
-            },
+            }
             ClusterRequest::CreateQueue { name, config } => {
                 Some(Request::CreateQueue(fila_proto::ClusterCreateQueue {
                     name,

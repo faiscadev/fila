@@ -23,7 +23,10 @@ impl Scheduler {
     pub(super) fn handle_enqueue_batch(
         &mut self,
         messages: Vec<crate::message::Message>,
-    ) -> (Vec<Result<uuid::Uuid, crate::error::EnqueueError>>, HashSet<String>) {
+    ) -> (
+        Vec<Result<uuid::Uuid, crate::error::EnqueueError>>,
+        HashSet<String>,
+    ) {
         let len = messages.len();
         // Phase 1: Validate each message and prepare mutations.
         // Results are either Ok(PreparedEnqueue) or Err(EnqueueError).
@@ -67,11 +70,8 @@ impl Scheduler {
                         )));
                     } else {
                         self.metrics.record_enqueue(&prep.queue_id);
-                        self.drr.add_key(
-                            &prep.queue_id,
-                            &prep.fairness_key,
-                            prep.weight,
-                        );
+                        self.drr
+                            .add_key(&prep.queue_id, &prep.fairness_key, prep.weight);
                         self.pending_push(
                             &prep.queue_id,
                             &prep.fairness_key,

@@ -687,7 +687,10 @@ impl FilaRaftStore {
             } => {
                 // Resolve batch: new-format uses `items`, legacy uses queue_id + msg_id.
                 let ack_pairs: Vec<(&str, &uuid::Uuid)> = if !items.is_empty() {
-                    items.iter().map(|i| (i.queue_id.as_str(), &i.msg_id)).collect()
+                    items
+                        .iter()
+                        .map(|i| (i.queue_id.as_str(), &i.msg_id))
+                        .collect()
                 } else if let (Some(qid), Some(mid)) = (legacy_queue_id, legacy_msg_id) {
                     vec![(qid.as_str(), mid)]
                 } else {
@@ -705,7 +708,10 @@ impl FilaRaftStore {
             } => {
                 // Resolve batch: new-format uses `items`, legacy uses queue_id + msg_id.
                 let nack_pairs: Vec<(&str, &uuid::Uuid)> = if !items.is_empty() {
-                    items.iter().map(|i| (i.queue_id.as_str(), &i.msg_id)).collect()
+                    items
+                        .iter()
+                        .map(|i| (i.queue_id.as_str(), &i.msg_id))
+                        .collect()
                 } else if let (Some(qid), Some(mid)) = (legacy_queue_id, legacy_msg_id) {
                     vec![(qid.as_str(), mid)]
                 } else {
@@ -740,12 +746,11 @@ impl FilaRaftStore {
         log_id: LogId<NodeId>,
     ) -> Result<(), StorageError<NodeId>> {
         let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
-        let msg_key_opt =
-            storage
-                .get_msg_index(&idx_key)
-                .map_err(|e| StorageError::IO {
-                    source: openraft::StorageIOError::apply(log_id, &e),
-                })?;
+        let msg_key_opt = storage
+            .get_msg_index(&idx_key)
+            .map_err(|e| StorageError::IO {
+                source: openraft::StorageIOError::apply(log_id, &e),
+            })?;
 
         let msg_key = if let Some(key) = msg_key_opt {
             if storage
@@ -771,12 +776,11 @@ impl FilaRaftStore {
             }
         } else {
             let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-            let messages =
-                storage
-                    .list_messages(&msg_prefix)
-                    .map_err(|e| StorageError::IO {
-                        source: openraft::StorageIOError::apply(log_id, &e),
-                    })?;
+            let messages = storage
+                .list_messages(&msg_prefix)
+                .map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
             messages
                 .into_iter()
                 .find(|(_, msg)| msg.id == *msg_id)
@@ -817,12 +821,11 @@ impl FilaRaftStore {
         log_id: LogId<NodeId>,
     ) -> Result<(), StorageError<NodeId>> {
         let idx_key = crate::storage::keys::msg_index_key(queue_id, msg_id);
-        let msg_key_opt =
-            storage
-                .get_msg_index(&idx_key)
-                .map_err(|e| StorageError::IO {
-                    source: openraft::StorageIOError::apply(log_id, &e),
-                })?;
+        let msg_key_opt = storage
+            .get_msg_index(&idx_key)
+            .map_err(|e| StorageError::IO {
+                source: openraft::StorageIOError::apply(log_id, &e),
+            })?;
 
         let found = if let Some(key) = msg_key_opt {
             match storage.get_message(&key).map_err(|e| StorageError::IO {
@@ -831,22 +834,22 @@ impl FilaRaftStore {
                 Some(msg) => Some((key, msg)),
                 None => {
                     let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-                    let messages = storage.list_messages(&msg_prefix).map_err(|e| {
-                        StorageError::IO {
-                            source: openraft::StorageIOError::apply(log_id, &e),
-                        }
-                    })?;
+                    let messages =
+                        storage
+                            .list_messages(&msg_prefix)
+                            .map_err(|e| StorageError::IO {
+                                source: openraft::StorageIOError::apply(log_id, &e),
+                            })?;
                     messages.into_iter().find(|(_, msg)| msg.id == *msg_id)
                 }
             }
         } else {
             let msg_prefix = crate::storage::keys::message_prefix(queue_id);
-            let messages =
-                storage
-                    .list_messages(&msg_prefix)
-                    .map_err(|e| StorageError::IO {
-                        source: openraft::StorageIOError::apply(log_id, &e),
-                    })?;
+            let messages = storage
+                .list_messages(&msg_prefix)
+                .map_err(|e| StorageError::IO {
+                    source: openraft::StorageIOError::apply(log_id, &e),
+                })?;
             messages.into_iter().find(|(_, msg)| msg.id == *msg_id)
         };
 
@@ -1135,7 +1138,10 @@ mod tests {
             if i == 50 {
                 target_id = msg.id;
             }
-            let req = super::super::types::ClusterRequest::Enqueue { messages: vec![msg], message: None };
+            let req = super::super::types::ClusterRequest::Enqueue {
+                messages: vec![msg],
+                message: None,
+            };
             store
                 .apply_to_broker_storage(rocksdb.as_ref(), &req, test_log_id(i + 1))
                 .unwrap();

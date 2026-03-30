@@ -223,10 +223,20 @@ pub(super) fn dlq_one_message(
     // Nack to trigger on_failure → DLQ
     let (nack_tx, nack_rx) = tokio::sync::oneshot::channel();
     scheduler.handle_command(SchedulerCommand::Nack {
-        items: vec![NackItem { queue_id: queue_name.to_string(), msg_id, error: "test failure".to_string() }],
+        items: vec![NackItem {
+            queue_id: queue_name.to_string(),
+            msg_id,
+            error: "test failure".to_string(),
+        }],
         reply: nack_tx,
     });
-    nack_rx.blocking_recv().unwrap().into_iter().next().unwrap().unwrap();
+    nack_rx
+        .blocking_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap();
 
     // Unregister consumer
     scheduler.handle_command(SchedulerCommand::UnregisterConsumer {

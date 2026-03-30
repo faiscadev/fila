@@ -129,7 +129,11 @@ fn dlq_full_flow_enqueue_nack_dlq_lease() {
     // Nack — triggers on_failure which returns "dlq"
     let (nack_tx, mut nack_rx) = tokio::sync::oneshot::channel();
     tx.send(SchedulerCommand::Nack {
-        items: vec![NackItem { queue_id: "flow-queue".to_string(), msg_id, error: "permanent failure".to_string() }],
+        items: vec![NackItem {
+            queue_id: "flow-queue".to_string(),
+            msg_id,
+            error: "permanent failure".to_string(),
+        }],
         reply: nack_tx,
     })
     .unwrap();
@@ -137,7 +141,13 @@ fn dlq_full_flow_enqueue_nack_dlq_lease() {
     tx.send(SchedulerCommand::Shutdown).unwrap();
     scheduler.run();
 
-    assert!(nack_rx.try_recv().unwrap().into_iter().next().unwrap().is_ok());
+    assert!(nack_rx
+        .try_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .is_ok());
 
     // Initial delivery on main queue
     let initial = main_rx.try_recv().expect("initial delivery");

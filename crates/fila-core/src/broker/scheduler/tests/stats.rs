@@ -340,10 +340,19 @@ fn get_stats_after_ack_decreases_in_flight_and_depth() {
     // Ack the delivered message
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     scheduler.handle_command(SchedulerCommand::Ack {
-        items: vec![AckItem { queue_id: "stats-ack-q".to_string(), msg_id: delivered.msg_id }],
+        items: vec![AckItem {
+            queue_id: "stats-ack-q".to_string(),
+            msg_id: delivered.msg_id,
+        }],
         reply: reply_tx,
     });
-    reply_rx.blocking_recv().unwrap().into_iter().next().unwrap().unwrap();
+    reply_rx
+        .blocking_recv()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap();
 
     // After ack: depth=2 (only pending), in_flight=0
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
