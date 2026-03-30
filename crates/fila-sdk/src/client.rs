@@ -209,7 +209,8 @@ impl FilaClient {
     /// When TLS fields are set in `options`, the connection uses TLS/mTLS.
     pub async fn connect_with_options(options: ConnectOptions) -> Result<Self, ConnectError> {
         let stored_options = options.clone();
-        let host_port = normalize_addr(&options.addr);
+        let host_port = normalize_addr(&options.addr).to_string();
+        let timeout = options.timeout;
 
         // Validate partial mTLS: cert and key must both be provided or both absent.
         let has_cert = options.tls_client_cert_pem.is_some();
@@ -223,19 +224,36 @@ impl FilaClient {
 
         let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some() || has_cert;
 
-        // Establish TCP connection.
-        let tcp = TcpStream::connect(host_port)
-            .await
-            .map_err(ConnectError::Transport)?;
-
-        let (io_stream, api_key) = if tls_enabled {
-            let tls_stream = Self::tls_connect(tcp, host_port, &options).await?;
-            (IoStream::Tls(Box::new(tls_stream)), options.api_key)
+        // Establish TCP connection, applying timeout if configured.
+        let tcp_future = TcpStream::connect(host_port.as_str());
+        let tcp = if let Some(t) = timeout {
+            tokio::time::timeout(t, tcp_future)
+                .await
+                .map_err(|_| ConnectError::TimedOut)?
+                .map_err(ConnectError::Transport)?
         } else {
-            (IoStream::Plain(tcp), options.api_key)
+            tcp_future.await.map_err(ConnectError::Transport)?
         };
 
-        Self::setup_connection(io_stream, api_key, Some(stored_options)).await
+        let connect_future = async {
+            let (io_stream, api_key) = if tls_enabled {
+                let tls_stream = Self::tls_connect(tcp, &host_port, &options).await?;
+                (IoStream::Tls(Box::new(tls_stream)), options.api_key)
+            } else {
+                (IoStream::Plain(tcp), options.api_key)
+            };
+
+            Self::setup_connection(io_stream, api_key, Some(stored_options)).await
+        };
+
+        // Apply timeout to TLS handshake + FIBP handshake as well.
+        if let Some(t) = timeout {
+            tokio::time::timeout(t, connect_future)
+                .await
+                .map_err(|_| ConnectError::TimedOut)?
+        } else {
+            connect_future.await
+        }
     }
 
     /// Perform TLS handshake on an established TCP connection.
@@ -259,11 +277,11 @@ impl FilaClient {
                     ConnectError::TlsConfig(format!("failed to add CA certificate: {e}"))
                 })?;
             }
+        } else {
+            // No custom CA provided — use the Mozilla root certificates so
+            // server certs signed by public CAs are trusted out of the box.
+            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         }
-        // When no CA cert is provided and tls is enabled (via with_tls()),
-        // the root store is empty, which means the client will reject all
-        // server certificates. The user must provide a CA cert for self-signed
-        // certs, or the connection will fail.
 
         let tls_config = if let (Some(ref cert_pem), Some(ref key_pem)) =
             (&options.tls_client_cert_pem, &options.tls_client_key_pem)
@@ -815,9 +833,15 @@ async fn dispatch_frame(frame: RawFrame, inner: &Arc<Mutex<ConnectionInner>>) {
 
     match opcode {
         Some(Opcode::Delivery) => {
-            // Delivery frames go to the consume stream channel.
-            let guard = inner.lock().await;
-            if let Some(ref tx) = guard.delivery_tx {
+            // Clone the sender and drop the lock before awaiting sends.
+            // Holding the lock while awaiting channel sends can deadlock:
+            // if the channel is full, consumers need to call ack/nack which
+            // also acquires the lock.
+            let tx = {
+                let guard = inner.lock().await;
+                guard.delivery_tx.clone()
+            };
+            if let Some(tx) = tx {
                 match DeliveryBatch::decode(frame.payload) {
                     Ok(batch) => {
                         for msg in batch.messages {

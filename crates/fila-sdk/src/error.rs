@@ -43,6 +43,9 @@ pub enum ConnectError {
 
     #[error("TLS configuration error: {0}")]
     TlsConfig(String),
+
+    #[error("connection timed out")]
+    TimedOut,
 }
 
 #[derive(Debug, thiserror::Error)]
