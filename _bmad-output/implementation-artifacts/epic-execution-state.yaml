@@ -12,7 +12,7 @@ stories:
   - id: "19.2"
     title: "Batch-Native Scheduler Internals"
     status: in-progress
-    currentPhase: "dev"
+    currentPhase: "code-review"
     branch: "feat/19.2-batch-native-scheduler-internals"
     pr: null
     dependsOn: ["19.1"]
