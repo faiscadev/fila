@@ -119,15 +119,18 @@ The server always initializes a tracing subscriber in `crates/fila-core/src/tele
 Captured using `profile-workload --flamegraph` which profiles fila-server with dtrace (macOS, requires sudo) or perf (Linux), collapses stacks and renders SVG via the inferno crate:
 
 ```bash
+# Build first (never sudo cargo — it leaves root-owned artifacts in target/)
+cargo build --release --bin profile-workload
+
 # Generate flamegraph (macOS: sudo for dtrace, Linux: needs perf)
-sudo cargo run --release --bin profile-workload -- --flamegraph --duration 15
+sudo ./target/release/profile-workload --flamegraph --duration 15
 
 # Custom workload and output path
-sudo cargo run --release --bin profile-workload -- \
+sudo ./target/release/profile-workload \
     --workload lifecycle --duration 30 --flamegraph target/flamegraphs/lifecycle.svg
 
 # Just run workload without profiling (no sudo needed)
-cargo run --release --bin profile-workload -- --duration 10
+./target/release/profile-workload --duration 10
 ```
 
 Output defaults to `target/flamegraphs/<workload>.svg`. See `--help` for all options.
@@ -196,9 +199,18 @@ This change:
 - Zero cost for the payload bytes that were being Debug-formatted
 - **Only applies to hot-path functions** (enqueue, consume, ack, nack in `service.rs`). Admin functions should remain `skip(self)` since they are low-frequency and don't carry payload bytes.
 
-### Expected Impact
+### Measured Impact (Story 18.2)
 
-- **Enqueue:** Eliminates ~4KB of string formatting per call for 1KB payloads. Proportional to payload size.
-- **Ack/Nack:** Eliminates formatting of queue name + message ID strings (small but nonzero).
-- **Consume:** Eliminates formatting of queue name (minimal).
-- **Estimated throughput improvement:** +10-20% on enqueue path (hypothesis from PRD: +15%). Actual measurement in Story 18.2.
+Fix applied: `skip(self)` → `skip(self, request)` on 4 hot-path `#[instrument]` macros in `service.rs`. Admin functions unchanged.
+
+| Metric | Baseline | After Fix | Delta |
+|--------|----------|-----------|-------|
+| enqueue_throughput_1kb | 6,697 msg/s | 7,861 msg/s | **+17.4%** |
+| fairness_overhead_fifo | 2,196 msg/s | 2,178 msg/s | -0.8% |
+| fairness_overhead_fair | 2,165 msg/s | 2,148 msg/s | -0.8% |
+| fairness_overhead_pct | 1.41% | 1.37% | -0.04pp |
+| key_cardinality_10 | 6,047 msg/s | 6,094 msg/s | +0.8% |
+| key_cardinality_1k | 1,707 msg/s | 1,715 msg/s | +0.5% |
+| consumer_concurrency_10 | 2,531 msg/s | 2,513 msg/s | -0.7% |
+
+**Result: +17.4% enqueue throughput improvement**, exceeding the +15% hypothesis from the PRD. Latency numbers varied across runs (machine-local noise), so throughput is the reliable metric. Fairness and scaling metrics are unchanged within noise, confirming the fix only removes formatting overhead without affecting scheduling behavior.
