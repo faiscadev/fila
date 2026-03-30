@@ -1,6 +1,7 @@
 epic: "Epic 18: Tracing Hot-Path Fix"
 epicNumber: 18
 startedAt: "2026-03-29T00:00:00Z"
+completedAt: "2026-03-30T01:32:00Z"
 yoloMode: false
 currentPrIndex: 1
 mode: normal
@@ -17,5 +18,5 @@ prChain:
     title: "Fix Tracing Overhead on Hot-Path Functions"
     branch: "feat/18.2-fix-tracing-overhead-hot-path"
     pr: 155
-    baseBranch: "feat/18.1-baseline-benchmark-flamegraph"
-    status: pending
+    baseBranch: "main"
+    status: merged

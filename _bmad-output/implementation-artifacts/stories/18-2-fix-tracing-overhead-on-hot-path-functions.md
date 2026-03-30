@@ -1,6 +1,6 @@
 # Story 18.2: Fix Tracing Overhead on Hot-Path Functions
 
-Status: review
+Status: done
 
 ## Story
 

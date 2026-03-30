@@ -15,3 +15,22 @@
 - Performance stories must include actual profiling data (flamegraph or equivalent), not code analysis. Encode this in story ACs explicitly: "produce an SVG flamegraph artifact".
 - When an AC says "flamegraph", the dev agent must try multiple profiling tools before declaring it impossible. macOS options: `sample`, `dtrace` (with sudo), Instruments.app.
 - The `profile-workload` binary now exists for future profiling needs — use it instead of ad-hoc scripts.
+
+## PR #155: Fix Tracing Overhead on Hot-Path Functions
+
+### Gaps in Dev Process
+- Original implementation used `skip_all` on all 17 functions (4 hot-path + 13 admin) — a blunt hammer that degrades admin observability for no performance gain. Review caught this; archive branch `54daf2c` had the correct pattern.
+- Story ACs themselves said `skip_all` — the wrong recommendation from 18.1's research doc propagated into the story spec. ACs had to be renegotiated during review.
+- `sudo cargo run` in the research doc usage examples — would leave root-owned build artifacts. Cubic caught this.
+
+### Incorrect Decisions During Development
+- Applying tracing changes to admin functions that don't carry payload bytes and aren't on the hot path.
+- Not checking the archive branch for prior art — the correct `skip(self, request)` pattern was already implemented and validated there.
+
+### Deferred Work
+- Competitive bench workflow runs on every PR (~13 min) but produces artifacts nobody looks at. Should be moved to `workflow_dispatch` only.
+
+### Patterns for Future Stories
+- Check archive branch for prior art before implementing performance fixes — prior work may have already validated the approach.
+- `skip(self, request)` is the correct pattern for hot-path tracing: skips expensive params explicitly, still captures future params unlike `skip_all`.
+- Refactored profile-workload to use clap derive during review — new tooling should use clap from the start.
