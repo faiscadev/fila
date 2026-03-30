@@ -279,6 +279,9 @@
     file_structure_requirements</template-output>
     <template-output file="{default_output_file}">testing_requirements</template-output>
 
+    <!-- Verify research doc recommendations against reality -->
+    <action>If story ACs or Dev Notes reference recommendations from research docs, architecture docs, or previous story artifacts: verify those recommendations against the ACTUAL codebase before baking them into this story's ACs. Wrong recommendations propagate — a bad suggestion in a research doc becomes a bad AC becomes a bad implementation. Cross-check claims about what code does or should do.</action>
+
     <!-- Previous story intelligence -->
     <check
       if="previous story learnings available">

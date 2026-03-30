@@ -246,6 +246,12 @@
     <action if="3 consecutive implementation failures occur">HALT and request guidance</action>
     <action if="required configuration is missing">HALT: "Cannot proceed without necessary configuration files"</action>
 
+    <critical>BLOCKED ≠ FIRST OBSTACLE. When you encounter a tooling limitation, environment issue, or apparent dead-end:
+    1. Try at least 3 alternative approaches before declaring yourself blocked (e.g., different tools, different flags, different platforms, searching git history for prior art)
+    2. List every approach you tried and why it failed
+    3. Only HALT after exhausting alternatives — "I tried X, Y, Z; here's why each failed"
+    Declaring "blocked" after one failed attempt is not acceptable.</critical>
+
     <critical>NEVER implement anything not mapped to a specific task/subtask in the story file</critical>
     <critical>NEVER proceed to next task until current task/subtask is complete AND tests pass</critical>
     <critical>Execute continuously without pausing until all tasks/subtasks are complete or explicit HALT condition</critical>

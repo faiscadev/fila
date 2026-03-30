@@ -190,14 +190,14 @@ development_status:
   epic-18: done
   18-1-baseline-benchmark-flamegraph: done
   18-2-fix-tracing-overhead-on-hot-path-functions: done
-  epic-18-retrospective: optional
+  epic-18-retrospective: done
 
   # Epic 19: Wire Format Design & Batch-Native Scheduler
   # Protocol spec + batch-native scheduler internals. No new transport yet.
   epic-19: done
   19-1-wire-format-design-protocol-specification: done
   19-2-batch-native-scheduler-internals: done
-  epic-19-retrospective: optional
+  epic-19-retrospective: done
 
   # Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal
   # Full protocol migration: server, auth, Rust SDK, CLI, cluster, gRPC removal.
