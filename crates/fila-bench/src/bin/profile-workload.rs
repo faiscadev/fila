@@ -21,6 +21,7 @@ Options:
   --message-size N     payload size in bytes (default: 1024)
   --concurrency N      concurrent producers/consumers (default: 1)
   --flamegraph [PATH]  generate flamegraph SVG (default: target/flamegraphs/<workload>.svg)
+                       macOS: run with sudo (dtrace). Linux: needs perf.
   --sample-hz N        profiler sampling frequency in Hz (default: 997)
   --help               show this help"#
     );
@@ -207,21 +208,8 @@ fn start_profiler(server_pid: u32, sample_hz: u32, _output_path: &PathBuf) -> Pr
     {
         let stacks_file =
             std::env::temp_dir().join(format!("fila-dtrace-{}.stacks", std::process::id()));
-        // Pre-cache sudo credentials so dtrace can start non-interactively.
-        let sudo_check = Command::new("sudo")
-            .args(["-v"])
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status();
-        if sudo_check.map(|s| !s.success()).unwrap_or(true) {
-            eprintln!("error: sudo authentication failed — dtrace requires root");
-            std::process::exit(1);
-        }
-
-        let child = Command::new("sudo")
+        let child = Command::new("dtrace")
             .args([
-                "dtrace",
                 "-x",
                 "ustackframes=100",
                 "-n",
@@ -236,7 +224,7 @@ fn start_profiler(server_pid: u32, sample_hz: u32, _output_path: &PathBuf) -> Pr
             .spawn()
             .expect("failed to start dtrace");
 
-        eprintln!("profiler: dtrace attached to PID {server_pid} (via sudo)");
+        eprintln!("profiler: dtrace attached to PID {server_pid}");
         Profiler::Dtrace { child, stacks_file }
     }
 
