@@ -641,7 +641,7 @@ The protocol supports arbitrarily large payloads and headers through frame conti
 
 ### How It Works
 
-1. The sender serializes the full operation body (e.g., an Enqueue with all its messages) into a byte buffer
+1. The sender serializes the **entire operation body** — everything after the 6-byte frame header, including field counts, queue names, headers maps, payloads, and all other fields — into a byte buffer
 2. If the buffer fits in a single frame: send it normally with CONTINUATION=0
 3. If the buffer exceeds the max frame size:
    - Send the first chunk as a normal frame with CONTINUATION=1 (same opcode, same request ID)
@@ -650,7 +650,7 @@ The protocol supports arbitrarily large payloads and headers through frame conti
 
 ### Receiver Behavior
 
-When a receiver gets a frame with CONTINUATION=1, it buffers the frame body (excluding the 6-byte header). It continues buffering until a frame arrives with the same request ID and opcode with CONTINUATION=0, then concatenates all buffered bodies (in order) with the final frame's body and parses the result as a single operation body.
+When a receiver gets a frame with CONTINUATION=1, it buffers the frame body (excluding the 6-byte frame header). It continues buffering until a frame arrives with the same request ID and opcode with CONTINUATION=0, then concatenates all buffered bodies (in order) with the final frame's body. The result is parsed as a single operation body — the split point is at raw byte boundaries, so any field (headers, payload, or otherwise) may be split across frames.
 
 ### Rules
 
