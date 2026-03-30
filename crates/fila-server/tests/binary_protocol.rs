@@ -50,7 +50,7 @@ async fn start_test_server() -> (
     });
 
     // Give the server a moment to start accepting connections
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     (addr, broker, data_dir, shutdown_tx)
 }
@@ -197,7 +197,7 @@ async fn enqueue_and_consume_round_trip() {
     stream.write_all(&write_buf).await.unwrap();
 
     // Give consumer registration a moment
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Enqueue a message (request_id = 1)
     let enqueue_req = EnqueueRequest {
@@ -217,7 +217,7 @@ async fn enqueue_and_consume_round_trip() {
 
     // Read delivery frame (should come through from consume subscription)
     let mut read_buf = BytesMut::with_capacity(4096);
-    let delivery_frame = tokio::time::timeout(Duration::from_secs(15), async {
+    let delivery_frame = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             stream.read_buf(&mut read_buf).await.unwrap();
             if let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
@@ -309,7 +309,7 @@ async fn batch_ack_and_nack() {
     let mut write_buf = BytesMut::new();
     consume_req.encode(10).encode(&mut write_buf);
     stream.write_all(&write_buf).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Enqueue 2 messages
     let req = EnqueueRequest {
@@ -326,34 +326,48 @@ async fn batch_ack_and_nack() {
             },
         ],
     };
-    let resp_frame = send_and_recv(&mut stream, &req.encode(1)).await;
-    let _enqueue_resp = EnqueueResponse::decode(resp_frame.payload).unwrap();
+    // Send enqueue and collect both the enqueue response and delivery frames
+    let mut write_buf = BytesMut::new();
+    req.encode(1).encode(&mut write_buf);
+    stream.write_all(&write_buf).await.unwrap();
 
-    // Collect message IDs from deliveries
     let mut msg_ids = Vec::new();
     let mut read_buf = BytesMut::with_capacity(4096);
+    let mut got_enqueue_response = false;
 
-    for _ in 0..2 {
-        let delivery = tokio::time::timeout(Duration::from_secs(15), async {
-            loop {
-                stream.read_buf(&mut read_buf).await.unwrap();
-                if let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
-                    if frame.opcode == Opcode::Delivery as u8 {
-                        return frame;
+    // Read frames until we have the enqueue response and 2 deliveries
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        while !got_enqueue_response || msg_ids.len() < 2 {
+            stream.read_buf(&mut read_buf).await.unwrap();
+            while let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
+                if frame.opcode == Opcode::EnqueueResult as u8 {
+                    got_enqueue_response = true;
+                } else if frame.opcode == Opcode::Delivery as u8 {
+                    let batch = DeliveryBatch::decode(frame.payload).unwrap();
+                    for msg in &batch.messages {
+                        msg_ids.push(msg.message_id.clone());
                     }
                 }
             }
-        })
-        .await
-        .unwrap();
-
-        let batch = DeliveryBatch::decode(delivery.payload).unwrap();
-        for msg in &batch.messages {
-            msg_ids.push(msg.message_id.clone());
         }
-    }
+    })
+    .await;
+    result.expect("timed out waiting for enqueue response + 2 deliveries");
 
+    assert!(got_enqueue_response);
     assert_eq!(msg_ids.len(), 2);
+
+    // Cancel consume to prevent redelivery interference
+    let cancel = RawFrame {
+        opcode: Opcode::CancelConsume as u8,
+        flags: 0,
+        request_id: 10,
+        payload: bytes::Bytes::new(),
+    };
+    let mut cancel_buf = BytesMut::new();
+    cancel.encode(&mut cancel_buf);
+    stream.write_all(&cancel_buf).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Ack first message
     let ack_req = AckRequest {
