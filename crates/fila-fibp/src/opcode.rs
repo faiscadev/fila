@@ -1,0 +1,102 @@
+/// Protocol opcodes as defined in docs/protocol.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Opcode {
+    // Control (0x00-0x0F)
+    Handshake = 0x01,
+    HandshakeOk = 0x02,
+    Ping = 0x03,
+    Pong = 0x04,
+    Disconnect = 0x05,
+
+    // Hot-path (0x10-0x1F)
+    Enqueue = 0x10,
+    EnqueueResult = 0x11,
+    Consume = 0x12,
+    Delivery = 0x13,
+    CancelConsume = 0x14,
+    Ack = 0x15,
+    AckResult = 0x16,
+    Nack = 0x17,
+    NackResult = 0x18,
+
+    // Admin (0x20-0x3F)
+    CreateQueue = 0x20,
+    CreateQueueResult = 0x21,
+    DeleteQueue = 0x22,
+    DeleteQueueResult = 0x23,
+    GetStats = 0x24,
+    GetStatsResult = 0x25,
+    ListQueues = 0x26,
+    ListQueuesResult = 0x27,
+    SetConfig = 0x28,
+    SetConfigResult = 0x29,
+    GetConfig = 0x2A,
+    GetConfigResult = 0x2B,
+    ListConfig = 0x2C,
+    ListConfigResult = 0x2D,
+    Redrive = 0x2E,
+    RedriveResult = 0x2F,
+    CreateApiKey = 0x30,
+    CreateApiKeyResult = 0x31,
+    RevokeApiKey = 0x32,
+    RevokeApiKeyResult = 0x33,
+    ListApiKeys = 0x34,
+    ListApiKeysResult = 0x35,
+    SetAcl = 0x36,
+    SetAclResult = 0x37,
+    GetAcl = 0x38,
+    GetAclResult = 0x39,
+
+    // Error
+    Error = 0xFE,
+}
+
+impl Opcode {
+    pub fn from_u8(byte: u8) -> Option<Opcode> {
+        match byte {
+            0x01 => Some(Opcode::Handshake),
+            0x02 => Some(Opcode::HandshakeOk),
+            0x03 => Some(Opcode::Ping),
+            0x04 => Some(Opcode::Pong),
+            0x05 => Some(Opcode::Disconnect),
+            0x10 => Some(Opcode::Enqueue),
+            0x11 => Some(Opcode::EnqueueResult),
+            0x12 => Some(Opcode::Consume),
+            0x13 => Some(Opcode::Delivery),
+            0x14 => Some(Opcode::CancelConsume),
+            0x15 => Some(Opcode::Ack),
+            0x16 => Some(Opcode::AckResult),
+            0x17 => Some(Opcode::Nack),
+            0x18 => Some(Opcode::NackResult),
+            0x20 => Some(Opcode::CreateQueue),
+            0x21 => Some(Opcode::CreateQueueResult),
+            0x22 => Some(Opcode::DeleteQueue),
+            0x23 => Some(Opcode::DeleteQueueResult),
+            0x24 => Some(Opcode::GetStats),
+            0x25 => Some(Opcode::GetStatsResult),
+            0x26 => Some(Opcode::ListQueues),
+            0x27 => Some(Opcode::ListQueuesResult),
+            0x28 => Some(Opcode::SetConfig),
+            0x29 => Some(Opcode::SetConfigResult),
+            0x2A => Some(Opcode::GetConfig),
+            0x2B => Some(Opcode::GetConfigResult),
+            0x2C => Some(Opcode::ListConfig),
+            0x2D => Some(Opcode::ListConfigResult),
+            0x2E => Some(Opcode::Redrive),
+            0x2F => Some(Opcode::RedriveResult),
+            0x30 => Some(Opcode::CreateApiKey),
+            0x31 => Some(Opcode::CreateApiKeyResult),
+            0x32 => Some(Opcode::RevokeApiKey),
+            0x33 => Some(Opcode::RevokeApiKeyResult),
+            0x34 => Some(Opcode::ListApiKeys),
+            0x35 => Some(Opcode::ListApiKeysResult),
+            0x36 => Some(Opcode::SetAcl),
+            0x37 => Some(Opcode::SetAclResult),
+            0x38 => Some(Opcode::GetAcl),
+            0x39 => Some(Opcode::GetAclResult),
+            0xFE => Some(Opcode::Error),
+            _ => None,
+        }
+    }
+}
