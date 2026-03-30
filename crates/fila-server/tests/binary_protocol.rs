@@ -20,9 +20,15 @@ use tokio::net::TcpStream;
 
 /// Start a broker + binary server on a random port. Returns the TCP address
 /// and a shutdown sender (must be kept alive or the server exits).
-async fn start_test_server() -> (String, Arc<Broker>, tempfile::TempDir, tokio::sync::watch::Sender<bool>) {
+async fn start_test_server() -> (
+    String,
+    Arc<Broker>,
+    tempfile::TempDir,
+    tokio::sync::watch::Sender<bool>,
+) {
     let data_dir = tempfile::tempdir().expect("create temp dir");
-    let rocksdb = Arc::new(RocksDbEngine::open(data_dir.path().join("data").to_str().unwrap()).unwrap());
+    let rocksdb =
+        Arc::new(RocksDbEngine::open(data_dir.path().join("data").to_str().unwrap()).unwrap());
     let storage: Arc<dyn fila_core::StorageEngine> = Arc::clone(&rocksdb) as _;
 
     let config = BrokerConfig::default();

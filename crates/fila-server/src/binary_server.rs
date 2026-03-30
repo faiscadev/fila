@@ -7,8 +7,7 @@ use std::sync::Arc;
 use bytes::BytesMut;
 use fila_core::{Broker, BrokerError, ClusterHandle, TlsParams};
 use fila_fibp::{
-    ErrorCode, ErrorFrame, FrameError, Handshake, HandshakeOk, Opcode, RawFrame,
-    MAX_FRAME_SIZE,
+    ErrorCode, ErrorFrame, FrameError, Handshake, HandshakeOk, Opcode, RawFrame, MAX_FRAME_SIZE,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -24,11 +23,7 @@ pub struct BinaryServer {
 }
 
 impl BinaryServer {
-    pub fn new(
-        broker: Arc<Broker>,
-        cluster: Option<Arc<ClusterHandle>>,
-        node_id: u64,
-    ) -> Self {
+    pub fn new(broker: Arc<Broker>, cluster: Option<Arc<ClusterHandle>>, node_id: u64) -> Self {
         Self {
             broker,
             cluster,
@@ -81,7 +76,7 @@ pub async fn run(
 /// Possible IO stream types after optional TLS negotiation.
 enum Stream {
     Plain(TcpStream),
-    Tls(tokio_rustls::server::TlsStream<TcpStream>),
+    Tls(Box<tokio_rustls::server::TlsStream<TcpStream>>),
 }
 
 impl Stream {
@@ -118,7 +113,7 @@ async fn handle_connection(
     let mut stream = match tls_acceptor {
         Some(acceptor) => {
             let tls_stream = acceptor.accept(tcp).await.map_err(ConnectionError::Tls)?;
-            Stream::Tls(tls_stream)
+            Stream::Tls(Box::new(tls_stream))
         }
         None => Stream::Plain(tcp),
     };
@@ -250,7 +245,9 @@ impl ConnectionState {
     async fn frame_loop(&mut self) -> Result<(), ConnectionError> {
         loop {
             // Try to decode a frame from the read buffer first (no IO needed).
-            if let Some(frame) = RawFrame::decode(&mut self.read_buf).map_err(ConnectionError::Frame)? {
+            if let Some(frame) =
+                RawFrame::decode(&mut self.read_buf).map_err(ConnectionError::Frame)?
+            {
                 if self.dispatch_frame(frame).await? {
                     break;
                 }
@@ -288,9 +285,10 @@ impl ConnectionState {
 
         // Cleanup: unregister all active consumers
         for (_, consumer_id) in self.consumers.drain() {
-            let _ = self.server.broker.send_command(
-                fila_core::SchedulerCommand::UnregisterConsumer { consumer_id },
-            );
+            let _ = self
+                .server
+                .broker
+                .send_command(fila_core::SchedulerCommand::UnregisterConsumer { consumer_id });
         }
 
         Ok(())
@@ -376,7 +374,14 @@ impl ConnectionState {
         match binary_handlers::handle_enqueue(&self.server.broker, req).await {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
-                send_error(&mut self.stream, frame.request_id, e.0, &e.1, &HashMap::new()).await
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
             }
         }
     }
@@ -504,9 +509,10 @@ impl ConnectionState {
 
     async fn handle_cancel_consume(&mut self, frame: RawFrame) -> Result<(), ConnectionError> {
         if let Some(consumer_id) = self.consumers.remove(&frame.request_id) {
-            let _ = self.server.broker.send_command(
-                fila_core::SchedulerCommand::UnregisterConsumer { consumer_id },
-            );
+            let _ = self
+                .server
+                .broker
+                .send_command(fila_core::SchedulerCommand::UnregisterConsumer { consumer_id });
         }
         Ok(())
     }
@@ -555,7 +561,14 @@ impl ConnectionState {
         match binary_handlers::handle_ack(&self.server.broker, req).await {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
-                send_error(&mut self.stream, frame.request_id, e.0, &e.1, &HashMap::new()).await
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
             }
         }
     }
@@ -604,7 +617,14 @@ impl ConnectionState {
         match binary_handlers::handle_nack(&self.server.broker, req).await {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
-                send_error(&mut self.stream, frame.request_id, e.0, &e.1, &HashMap::new()).await
+                send_error(
+                    &mut self.stream,
+                    frame.request_id,
+                    e.0,
+                    &e.1,
+                    &HashMap::new(),
+                )
+                .await
             }
         }
     }
@@ -618,10 +638,7 @@ async fn read_frame(stream: &mut Stream, buf: &mut BytesMut) -> Result<RawFrame,
         if let Some(frame) = RawFrame::decode(buf).map_err(ConnectionError::Frame)? {
             return Ok(frame);
         }
-        let n = stream
-            .read_buf(buf)
-            .await
-            .map_err(ConnectionError::Io)?;
+        let n = stream.read_buf(buf).await.map_err(ConnectionError::Io)?;
         if n == 0 {
             return Err(ConnectionError::Io(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
@@ -663,21 +680,21 @@ pub async fn build_tls_acceptor(
     let cert_pem = tokio::fs::read(&tls.cert_file).await?;
     let key_pem = tokio::fs::read(&tls.key_file).await?;
 
-    let certs: Vec<_> = rustls_pemfile::certs(&mut std::io::Cursor::new(&cert_pem))
-        .collect::<Result<_, _>>()?;
+    let certs: Vec<_> =
+        rustls_pemfile::certs(&mut std::io::Cursor::new(&cert_pem)).collect::<Result<_, _>>()?;
     let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(&key_pem))?
         .ok_or("no private key found in PEM")?;
 
     let mut config = if let Some(ref ca_file) = tls.ca_file {
         let ca_pem = tokio::fs::read(ca_file).await?;
-        let ca_certs: Vec<_> = rustls_pemfile::certs(&mut std::io::Cursor::new(&ca_pem))
-            .collect::<Result<_, _>>()?;
+        let ca_certs: Vec<_> =
+            rustls_pemfile::certs(&mut std::io::Cursor::new(&ca_pem)).collect::<Result<_, _>>()?;
         let mut root_store = rustls::RootCertStore::empty();
         for cert in ca_certs {
             root_store.add(cert)?;
         }
-        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
-            .build()?;
+        let verifier =
+            rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
         rustls::ServerConfig::builder()
             .with_client_cert_verifier(verifier)
             .with_single_cert(certs, key)?

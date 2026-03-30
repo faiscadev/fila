@@ -94,6 +94,12 @@ pub struct PayloadWriter {
     buf: BytesMut,
 }
 
+impl Default for PayloadWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PayloadWriter {
     pub fn new() -> Self {
         Self {
@@ -308,7 +314,9 @@ impl PayloadReader {
     }
 
     /// Read a map<string, string>.
-    pub fn read_string_map(&mut self) -> Result<std::collections::HashMap<String, String>, FrameError> {
+    pub fn read_string_map(
+        &mut self,
+    ) -> Result<std::collections::HashMap<String, String>, FrameError> {
         let count = self.read_u16()? as usize;
         let mut map = std::collections::HashMap::with_capacity(count);
         for _ in 0..count {

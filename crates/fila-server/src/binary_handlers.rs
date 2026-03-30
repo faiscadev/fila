@@ -3,8 +3,8 @@
 
 use fila_core::{Broker, Message};
 use fila_fibp::{
-    AckResponse, AckResultItem, EnqueueResponse, EnqueueResultItem, ErrorCode,
-    NackResponse, NackResultItem,
+    AckResponse, AckResultItem, EnqueueResponse, EnqueueResultItem, ErrorCode, NackResponse,
+    NackResultItem,
 };
 use uuid::Uuid;
 
@@ -42,14 +42,22 @@ pub async fn handle_enqueue(
             reply: reply_tx,
         })
         .map_err(|e| match e {
-            fila_core::BrokerError::ChannelFull => (ErrorCode::ChannelFull, "scheduler overloaded".to_string()),
-            fila_core::BrokerError::ChannelDisconnected => (ErrorCode::InternalError, "scheduler unavailable".to_string()),
+            fila_core::BrokerError::ChannelFull => {
+                (ErrorCode::ChannelFull, "scheduler overloaded".to_string())
+            }
+            fila_core::BrokerError::ChannelDisconnected => (
+                ErrorCode::InternalError,
+                "scheduler unavailable".to_string(),
+            ),
             other => (ErrorCode::InternalError, format!("{other}")),
         })?;
 
-    let results = reply_rx
-        .await
-        .map_err(|_| (ErrorCode::InternalError, "scheduler reply dropped".to_string()))?;
+    let results = reply_rx.await.map_err(|_| {
+        (
+            ErrorCode::InternalError,
+            "scheduler reply dropped".to_string(),
+        )
+    })?;
 
     let items: Vec<EnqueueResultItem> = results
         .into_iter()
@@ -81,10 +89,7 @@ pub async fn handle_ack(
         .items
         .into_iter()
         .map(|item| {
-            let msg_id = item
-                .message_id
-                .parse::<Uuid>()
-                .unwrap_or(Uuid::nil());
+            let msg_id = item.message_id.parse::<Uuid>().unwrap_or(Uuid::nil());
             fila_core::broker::command::AckItem {
                 queue_id: item.queue,
                 msg_id,
@@ -99,14 +104,22 @@ pub async fn handle_ack(
             reply: reply_tx,
         })
         .map_err(|e| match e {
-            fila_core::BrokerError::ChannelFull => (ErrorCode::ChannelFull, "scheduler overloaded".to_string()),
-            fila_core::BrokerError::ChannelDisconnected => (ErrorCode::InternalError, "scheduler unavailable".to_string()),
+            fila_core::BrokerError::ChannelFull => {
+                (ErrorCode::ChannelFull, "scheduler overloaded".to_string())
+            }
+            fila_core::BrokerError::ChannelDisconnected => (
+                ErrorCode::InternalError,
+                "scheduler unavailable".to_string(),
+            ),
             other => (ErrorCode::InternalError, format!("{other}")),
         })?;
 
-    let results = reply_rx
-        .await
-        .map_err(|_| (ErrorCode::InternalError, "scheduler reply dropped".to_string()))?;
+    let results = reply_rx.await.map_err(|_| {
+        (
+            ErrorCode::InternalError,
+            "scheduler reply dropped".to_string(),
+        )
+    })?;
 
     let items: Vec<AckResultItem> = results
         .into_iter()
@@ -135,10 +148,7 @@ pub async fn handle_nack(
         .items
         .into_iter()
         .map(|item| {
-            let msg_id = item
-                .message_id
-                .parse::<Uuid>()
-                .unwrap_or(Uuid::nil());
+            let msg_id = item.message_id.parse::<Uuid>().unwrap_or(Uuid::nil());
             fila_core::broker::command::NackItem {
                 queue_id: item.queue,
                 msg_id,
@@ -154,14 +164,22 @@ pub async fn handle_nack(
             reply: reply_tx,
         })
         .map_err(|e| match e {
-            fila_core::BrokerError::ChannelFull => (ErrorCode::ChannelFull, "scheduler overloaded".to_string()),
-            fila_core::BrokerError::ChannelDisconnected => (ErrorCode::InternalError, "scheduler unavailable".to_string()),
+            fila_core::BrokerError::ChannelFull => {
+                (ErrorCode::ChannelFull, "scheduler overloaded".to_string())
+            }
+            fila_core::BrokerError::ChannelDisconnected => (
+                ErrorCode::InternalError,
+                "scheduler unavailable".to_string(),
+            ),
             other => (ErrorCode::InternalError, format!("{other}")),
         })?;
 
-    let results = reply_rx
-        .await
-        .map_err(|_| (ErrorCode::InternalError, "scheduler reply dropped".to_string()))?;
+    let results = reply_rx.await.map_err(|_| {
+        (
+            ErrorCode::InternalError,
+            "scheduler reply dropped".to_string(),
+        )
+    })?;
 
     let items: Vec<NackResultItem> = results
         .into_iter()

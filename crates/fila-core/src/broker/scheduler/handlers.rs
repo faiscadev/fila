@@ -40,13 +40,11 @@ impl Scheduler {
         // Phase 2: Accumulate mutations for all successful items and write in
         // a single RocksDB WriteBatch.
         let mut mutations = Vec::new();
-        for item in &prepared {
-            if let Ok(prep) = item {
-                mutations.push(Mutation::PutMessage {
-                    key: prep.key.clone(),
-                    value: prep.value.clone(),
-                });
-            }
+        for prep in prepared.iter().flatten() {
+            mutations.push(Mutation::PutMessage {
+                key: prep.key.clone(),
+                value: prep.value.clone(),
+            });
         }
 
         // If there are mutations, write them all in one atomic batch.
