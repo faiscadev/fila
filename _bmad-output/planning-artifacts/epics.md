@@ -136,7 +136,7 @@ The protocol wire format is designed and documented, and the scheduler processes
 **NFRs covered:** NFR-P3, NFR-P5
 
 ### Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal
-Full protocol migration in one epic: binary protocol server for all operations, cluster inter-node communication, Rust SDK, CLI, and gRPC removal. Single protocol when done — no dual-protocol maintenance window.
+Full protocol migration in one epic: binary protocol server for all operations, cluster inter-node communication, Rust SDK, CLI, and gRPC removal. Single protocol when done — no dual-protocol maintenance window. The wire format codec is extracted into a shared `crates/fila-fibp/` crate (frame types, opcodes, encode/decode) so the server and Rust SDK share a single implementation.
 **FRs covered:** FR-P1, FR-P3, FR-P4, FR-P5, FR-P6, FR-P7, FR-P8, FR-P9, FR-P10, FR-P11, FR-P13, FR-P15, FR1-7, FR26-34, FR46, FR67-73
 **NFRs covered:** NFR-P1, NFR-P2, NFR-P4
 
@@ -240,6 +240,7 @@ So that enqueue/consume/ack/nack have minimal transport overhead.
 **And** connection handshake includes protocol version negotiation per the spec
 **And** gRPC listener remains temporarily on a secondary port for cluster comms (removed in Story 20.5)
 **And** integration tests verify all hot-path operations over binary protocol
+**And** wire format codec extracted into `crates/fila-fibp/` crate (frame types, opcodes, encode/decode) so the Rust SDK can reuse it
 **And** `cargo bench` compares binary protocol vs gRPC throughput (numbers pasted in PR)
 
 ### Story 20.2: Admin Operations & Auth on Binary Protocol
@@ -272,6 +273,7 @@ So that my application benefits from the lower-overhead transport.
 **And** TLS and API key auth work through the SDK
 **And** the SDK's public API is unchanged or improved (batch operations are first-class, single = batch of 1)
 **And** the SDK handles connection errors, reconnection, and leader hints the same as before
+**And** Rust SDK uses `fila-fibp` crate for frame encoding/decoding — no duplicate codec implementation
 **And** all existing e2e tests in `crates/fila-e2e/` pass using the binary protocol SDK
 **And** `cargo bench` end-to-end throughput (SDK -> server -> SDK) shows improvement vs gRPC baseline (numbers pasted in PR)
 
