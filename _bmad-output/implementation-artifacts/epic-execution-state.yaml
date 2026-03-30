@@ -11,9 +11,9 @@ stories:
     dependsOn: []
   - id: "19.2"
     title: "Batch-Native Scheduler Internals"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/19.2-batch-native-scheduler-internals"
     pr: null
     dependsOn: ["19.1"]
 skippedIssues: []
