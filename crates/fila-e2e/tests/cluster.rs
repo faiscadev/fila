@@ -88,7 +88,7 @@ async fn cluster_cross_node_lifecycle() {
     let non_leader_b = (leader + 2) % 3;
 
     // Enqueue via a non-leader node (forwarded to leader)
-    let client_a = helpers::sdk_client(cluster.addr(non_leader_a)).await;
+    let client_a = helpers::sdk_client(cluster.binary_addr(non_leader_a)).await;
     let mut headers = HashMap::new();
     headers.insert("test".to_string(), "cross-node".to_string());
     let msg_id = client_a
@@ -98,7 +98,7 @@ async fn cluster_cross_node_lifecycle() {
     assert!(!msg_id.is_empty());
 
     // Consume via the leader node (consume requires leader)
-    let client_leader = helpers::sdk_client(cluster.addr(leader)).await;
+    let client_leader = helpers::sdk_client(cluster.binary_addr(leader)).await;
     let mut stream = client_leader
         .consume("cross-node")
         .await
@@ -112,7 +112,7 @@ async fn cluster_cross_node_lifecycle() {
     assert_eq!(msg.payload, b"hello-cluster");
 
     // Ack via a different non-leader node (forwarded to leader)
-    let client_b = helpers::sdk_client(cluster.addr(non_leader_b)).await;
+    let client_b = helpers::sdk_client(cluster.binary_addr(non_leader_b)).await;
     client_b
         .ack("cross-node", &msg_id)
         .await
@@ -129,7 +129,7 @@ async fn cluster_leader_failover_zero_message_loss() {
     let leader = find_leader_index(&cluster, "failover-q");
 
     // Enqueue messages via the leader
-    let client = helpers::sdk_client(cluster.addr(leader)).await;
+    let client = helpers::sdk_client(cluster.binary_addr(leader)).await;
     for i in 0..5 {
         client
             .enqueue(
@@ -163,7 +163,7 @@ async fn cluster_leader_failover_zero_message_loss() {
     let new_leader_index = (new_leader_id - 1) as usize;
 
     // Consume from the new leader — all 5 messages should be available
-    let new_client = helpers::sdk_client(cluster.addr(new_leader_index)).await;
+    let new_client = helpers::sdk_client(cluster.binary_addr(new_leader_index)).await;
     let mut stream = new_client
         .consume("failover-q")
         .await
@@ -198,7 +198,7 @@ async fn cluster_leader_forwarding() {
     let leader = find_leader_index(&cluster, "forwarding-q");
 
     // Enqueue via non-leader — should be forwarded to leader transparently
-    let client = helpers::sdk_client(cluster.addr(non_leader)).await;
+    let client = helpers::sdk_client(cluster.binary_addr(non_leader)).await;
     let msg_id = client
         .enqueue("forwarding-q", HashMap::new(), b"forwarded-msg".to_vec())
         .await
@@ -206,7 +206,7 @@ async fn cluster_leader_forwarding() {
     assert!(!msg_id.is_empty());
 
     // Verify message is on the leader
-    let leader_client = helpers::sdk_client(cluster.addr(leader)).await;
+    let leader_client = helpers::sdk_client(cluster.binary_addr(leader)).await;
     let mut stream = leader_client
         .consume("forwarding-q")
         .await
@@ -236,7 +236,7 @@ async fn cluster_node_rejoin_catchup() {
     let leader = find_leader_index(&cluster, "rejoin-q");
 
     // Enqueue initial messages
-    let client = helpers::sdk_client(cluster.addr(leader)).await;
+    let client = helpers::sdk_client(cluster.binary_addr(leader)).await;
     for i in 0..3 {
         client
             .enqueue(
@@ -334,7 +334,7 @@ async fn cluster_stats_cluster_metadata_all_nodes() {
 
     // Enqueue messages
     let leader = find_leader_index(&cluster, "stats-q");
-    let client = helpers::sdk_client(cluster.addr(leader)).await;
+    let client = helpers::sdk_client(cluster.binary_addr(leader)).await;
     for i in 0..5 {
         client
             .enqueue("stats-q", HashMap::new(), format!("msg-{i}").into_bytes())
@@ -387,7 +387,7 @@ async fn cluster_consume_leader_redirect() {
     let non_leader = find_non_leader_index(&cluster, "redirect-q");
 
     // Enqueue a message via any node (forwarded to leader).
-    let enqueue_client = helpers::sdk_client(cluster.addr(leader)).await;
+    let enqueue_client = helpers::sdk_client(cluster.binary_addr(leader)).await;
     let mut headers = HashMap::new();
     headers.insert("test".to_string(), "redirect".to_string());
     let msg_id = enqueue_client
@@ -398,7 +398,7 @@ async fn cluster_consume_leader_redirect() {
     // Connect consumer to NON-LEADER node. The SDK should detect the
     // leader hint in the UNAVAILABLE error and transparently reconnect
     // to the leader node.
-    let consumer_client = helpers::sdk_client(cluster.addr(non_leader)).await;
+    let consumer_client = helpers::sdk_client(cluster.binary_addr(non_leader)).await;
     let mut stream = consumer_client
         .consume("redirect-q")
         .await

@@ -20,7 +20,7 @@ async fn e2e_dlq_redrive() {
         None,
     );
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     // Enqueue a message
     let msg_id = client

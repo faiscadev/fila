@@ -28,6 +28,7 @@ use std::time::Duration;
 /// Generate a CA cert, server cert signed by CA, and client cert signed by CA.
 ///
 /// Returns (ca_pem, server_cert_pem, server_key_pem, client_cert_pem, client_key_pem).
+#[allow(clippy::type_complexity)]
 fn generate_mtls_certs() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
     // 1. CA cert
     let mut ca_params = CertificateParams::new(vec!["Test CA".to_string()]);
@@ -64,6 +65,8 @@ fn generate_mtls_certs() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
 }
 
 /// Start fila-server with mTLS enabled (server cert + client CA verification).
+///
+/// Returns (TestServer, binary_addr_string).
 fn start_mtls_server(
     ca_pem: &[u8],
     server_cert_pem: &[u8],
@@ -71,11 +74,16 @@ fn start_mtls_server(
 ) -> (helpers::TestServer, String) {
     use std::net::TcpListener;
 
-    let port = {
+    let grpc_port = {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");
         l.local_addr().unwrap().port()
     };
-    let addr = format!("127.0.0.1:{port}");
+    let binary_port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().unwrap().port()
+    };
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
+    let binary_addr = format!("127.0.0.1:{binary_port}");
 
     let data_dir = tempfile::tempdir().expect("temp dir");
     let cert_path = data_dir.path().join("server.crt");
@@ -86,7 +94,7 @@ fn start_mtls_server(
     std::fs::write(&ca_path, ca_pem).expect("write ca");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\nca_file = \"{ca}\"\n",
+        "[server]\nlisten_addr = \"{grpc_addr}\"\nbinary_addr = \"{binary_addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\nca_file = \"{ca}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
         ca = ca_path.to_str().unwrap(),
@@ -126,22 +134,28 @@ fn start_mtls_server(
     std::thread::spawn(move || for _ in std::io::BufReader::new(stderr).lines() {});
 
     let start = std::time::Instant::now();
-    let mut connected = false;
+    let mut grpc_ok = false;
+    let mut binary_ok = false;
     while start.elapsed() < Duration::from_secs(10) {
-        if std::net::TcpStream::connect(&addr).is_ok() {
-            connected = true;
+        if !grpc_ok && std::net::TcpStream::connect(&grpc_addr).is_ok() {
+            grpc_ok = true;
+        }
+        if !binary_ok && std::net::TcpStream::connect(&binary_addr).is_ok() {
+            binary_ok = true;
+        }
+        if grpc_ok && binary_ok {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(
-        connected,
-        "mTLS fila-server did not become reachable at {addr} within 10s"
+        grpc_ok && binary_ok,
+        "mTLS fila-server did not become reachable within 10s"
     );
 
-    let https_addr = format!("https://{addr}");
-    let server = helpers::TestServer::from_parts(child, https_addr.clone(), data_dir);
-    (server, https_addr)
+    let https_addr = format!("https://{grpc_addr}");
+    let server = helpers::TestServer::from_parts(child, https_addr, data_dir);
+    (server, binary_addr)
 }
 
 /// AC 1: mTLS with valid client certificate → connection succeeds, enqueue works.
@@ -150,20 +164,19 @@ async fn mtls_valid_client_cert_succeeds() {
     let (ca_pem, server_cert_pem, server_key_pem, client_cert_pem, client_key_pem) =
         generate_mtls_certs();
 
-    let (_server, addr) = start_mtls_server(&ca_pem, &server_cert_pem, &server_key_pem);
+    let (_server, binary_addr) = start_mtls_server(&ca_pem, &server_cert_pem, &server_key_pem);
 
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr)
+        fila_sdk::ConnectOptions::new(&binary_addr)
             .with_tls_ca_cert(ca_pem.clone())
             .with_tls_identity(client_cert_pem, client_key_pem),
     )
     .await
     .expect("mTLS connection with valid client cert should succeed");
 
-    // Verify data RPCs actually work over mTLS by enqueuing to any queue.
+    // Verify data operations actually work over mTLS by enqueuing to any queue.
     // The enqueue will fail with "queue not found" (no admin setup over mTLS),
-    // but a successful connection + gRPC round-trip proves mTLS works.
-    // A TLS handshake failure would surface as a transport error, not a queue error.
+    // but a successful connection + round-trip proves mTLS works.
     let result = client
         .enqueue("mtls-test", HashMap::new(), b"test".to_vec())
         .await;
@@ -171,10 +184,11 @@ async fn mtls_valid_client_cert_succeeds() {
         Ok(_) => {} // queue happened to exist — fine
         Err(e) => {
             let err_str = format!("{e:?}");
-            // "not found" means the gRPC call succeeded (mTLS worked) but queue doesn't exist.
-            // Any TLS/transport error would be a different message.
+            // "not found" / "QueueNotFound" means the binary protocol call succeeded
+            // (mTLS worked) but queue doesn't exist. Any TLS/transport error would
+            // be a different message.
             assert!(
-                err_str.contains("not found") || err_str.contains("NotFound"),
+                err_str.contains("not found") || err_str.contains("QueueNotFound"),
                 "expected queue-not-found error proving mTLS round-trip, got: {e:?}"
             );
         }
@@ -186,27 +200,20 @@ async fn mtls_valid_client_cert_succeeds() {
 async fn mtls_no_client_cert_rejected() {
     let (ca_pem, server_cert_pem, server_key_pem, _, _) = generate_mtls_certs();
 
-    let (_server, addr) = start_mtls_server(&ca_pem, &server_cert_pem, &server_key_pem);
+    let (_server, binary_addr) = start_mtls_server(&ca_pem, &server_cert_pem, &server_key_pem);
 
-    // Connect WITH CA cert (server verification) but WITHOUT client cert
+    // Connect WITH CA cert (server verification) but WITHOUT client cert.
+    // With the binary protocol, the TLS handshake is eager, so connect() itself
+    // should fail when the server requires client certificates.
     let connect_result = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_tls_ca_cert(ca_pem),
+        fila_sdk::ConnectOptions::new(&binary_addr).with_tls_ca_cert(ca_pem),
     )
     .await;
 
-    match connect_result {
-        Err(_) => {
-            // Connection failed at handshake — expected
-        }
-        Ok(client) => {
-            // Connection may be lazy; the first RPC must fail
-            let rpc_result = client.enqueue("probe", Default::default(), b"x").await;
-            assert!(
-                rpc_result.is_err(),
-                "mTLS server should reject client without client cert"
-            );
-        }
-    }
+    assert!(
+        connect_result.is_err(),
+        "mTLS server should reject client without client cert"
+    );
 }
 
 /// AC 4: Expired server certificate → connection rejected.
@@ -234,11 +241,16 @@ async fn tls_expired_cert_rejected() {
 
     // Start server with the expired cert (no ca_file — one-way TLS, not mTLS)
     use std::net::TcpListener;
-    let port = {
+    let grpc_port = {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");
         l.local_addr().unwrap().port()
     };
-    let addr = format!("127.0.0.1:{port}");
+    let binary_port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().unwrap().port()
+    };
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
+    let binary_addr = format!("127.0.0.1:{binary_port}");
     let data_dir = tempfile::tempdir().expect("temp dir");
     let cert_path = data_dir.path().join("server.crt");
     let key_path = data_dir.path().join("server.key");
@@ -246,7 +258,7 @@ async fn tls_expired_cert_rejected() {
     std::fs::write(&key_path, &server_key_pem).expect("write key");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
+        "[server]\nlisten_addr = \"{grpc_addr}\"\nbinary_addr = \"{binary_addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
     );
@@ -281,7 +293,7 @@ async fn tls_expired_cert_rejected() {
     let start = std::time::Instant::now();
     let mut connected = false;
     while start.elapsed() < Duration::from_secs(10) {
-        if std::net::TcpStream::connect(&addr).is_ok() {
+        if std::net::TcpStream::connect(&binary_addr).is_ok() {
             connected = true;
             break;
         }
@@ -289,27 +301,19 @@ async fn tls_expired_cert_rejected() {
     }
     assert!(
         connected,
-        "fila-server with expired cert did not become reachable at {addr} within 10s"
+        "fila-server with expired cert did not become reachable at {binary_addr} within 10s"
     );
 
-    let _server = helpers::TestServer::from_parts(child, format!("https://{addr}"), data_dir);
+    let _server = helpers::TestServer::from_parts(child, format!("https://{grpc_addr}"), data_dir);
 
-    // Client should reject expired cert
+    // Client should reject expired cert during TLS handshake.
     let connect_result = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&format!("https://{addr}")).with_tls_ca_cert(ca_pem),
+        fila_sdk::ConnectOptions::new(&binary_addr).with_tls_ca_cert(ca_pem),
     )
     .await;
 
-    match connect_result {
-        Err(_) => {
-            // Connection rejected at TLS handshake — expected
-        }
-        Ok(client) => {
-            let rpc_result = client.enqueue("probe", Default::default(), b"x").await;
-            assert!(
-                rpc_result.is_err(),
-                "expired cert should be rejected by the client"
-            );
-        }
-    }
+    assert!(
+        connect_result.is_err(),
+        "expired cert should be rejected by the client"
+    );
 }

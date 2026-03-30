@@ -1,15 +1,28 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use fila_proto::fila_service_client::FilaServiceClient;
-use fila_proto::{AckRequest, ConsumeRequest, EnqueueRequest, NackRequest};
-use tokio_stream::{Stream, StreamExt};
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
+use bytes::BytesMut;
+use fila_fibp::{
+    AckRequest as FibpAckRequest, AckResponse as FibpAckResponse, ConsumeRequest as FibpConsumeReq,
+    DeliveryBatch, EnqueueMessage, EnqueueRequest as FibpEnqueueReq,
+    EnqueueResponse as FibpEnqueueResp, ErrorCode, ErrorFrame, Handshake, HandshakeOk,
+    NackRequest as FibpNackRequest, NackResponse as FibpNackResponse, Opcode, RawFrame,
+};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio_stream::Stream;
 
 use crate::error::{
-    ack_status_error, consume_status_error, enqueue_status_error, nack_status_error, status_error,
+    ack_error_from_code, consume_error_from_code, enqueue_error_from_code, nack_error_from_code,
     AckError, ConnectError, ConsumeError, EnqueueError, NackError, StatusError,
 };
+
+/// Boxed stream of consume messages, returned by [`FilaClient::consume`].
+type ConsumeStream =
+    std::pin::Pin<Box<dyn Stream<Item = Result<ConsumeMessage, StatusError>> + Send>>;
 
 /// A consumed message received from the broker.
 #[derive(Debug, Clone)]
@@ -39,7 +52,7 @@ pub struct ConnectOptions {
     /// PEM-encoded client private key for mTLS authentication.
     pub tls_client_key_pem: Option<Vec<u8>>,
     /// API key for authenticating with the broker.
-    /// When set, every RPC includes `authorization: Bearer <key>` metadata.
+    /// When set, the key is sent in the Handshake frame during connection.
     pub api_key: Option<String>,
 }
 
@@ -83,55 +96,120 @@ impl ConnectOptions {
 
     /// Set an API key for authenticating with the broker.
     ///
-    /// When set, every RPC attaches `authorization: Bearer <key>` metadata.
+    /// When set, the key is sent during the handshake with the broker.
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
         self
     }
 }
 
+/// Strip URL scheme prefixes so addresses like "http://host:port" work.
+fn normalize_addr(addr: &str) -> &str {
+    addr.strip_prefix("http://")
+        .or_else(|| addr.strip_prefix("https://"))
+        .unwrap_or(addr)
+}
+
+/// IO stream abstraction for plain TCP and TLS.
+enum IoStream {
+    Plain(TcpStream),
+    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
+}
+
+/// Frame-level response from the background reader, dispatched to the waiting
+/// request via its request_id.
+enum ResponseFrame {
+    /// A response frame matching a request_id.
+    Response(RawFrame),
+    /// The connection was closed or errored.
+    Disconnected(String),
+}
+
+/// Shared state for the connection.
+struct ConnectionInner {
+    /// Pending request-response correlation: request_id -> oneshot sender.
+    pending: HashMap<u32, oneshot::Sender<ResponseFrame>>,
+    /// Channel for delivery messages received during consume.
+    delivery_tx: Option<mpsc::Sender<Result<ConsumeMessage, StatusError>>>,
+    /// The request_id used for the active consume subscription.
+    consume_request_id: Option<u32>,
+}
+
 /// Idiomatic Rust client for the Fila message broker.
 ///
-/// Wraps the hot-path gRPC operations: enqueue, consume, ack, nack.
+/// Wraps the hot-path binary protocol operations: enqueue, consume, ack, nack.
 /// The client is `Clone`, `Send`, and `Sync` — it can be shared across tasks.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FilaClient {
-    inner: FilaServiceClient<Channel>,
-    /// API key sent as `authorization: Bearer <key>` on every request.
-    api_key: Option<String>,
+    /// Write half of the connection, protected by a mutex.
+    writer: Arc<Mutex<WriteHalf>>,
+    /// Shared connection state for request-response correlation.
+    inner: Arc<Mutex<ConnectionInner>>,
+    /// Atomic counter for generating unique request IDs.
+    next_request_id: Arc<AtomicU32>,
     /// Stored connection options for transparent leader redirect reconnection.
-    /// When the consume call is redirected to a leader node, the SDK reuses
-    /// these options (TLS, timeout, auth) for the new connection.
     connect_options: Option<ConnectOptions>,
+    /// Handle to the background reader task (kept alive while client exists).
+    _reader_task: Arc<tokio::task::JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for FilaClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilaClient")
+            .field(
+                "connect_options",
+                &self.connect_options.as_ref().map(|o| &o.addr),
+            )
+            .finish()
+    }
+}
+
+/// Write half of the connection.
+struct WriteHalf {
+    buf: BytesMut,
+    stream: WriteStream,
+}
+
+enum WriteStream {
+    Plain(tokio::net::tcp::OwnedWriteHalf),
+    Tls(tokio::io::WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>),
+}
+
+impl WriteHalf {
+    async fn send_frame(&mut self, frame: &RawFrame) -> Result<(), std::io::Error> {
+        self.buf.clear();
+        frame.encode(&mut self.buf);
+        match &mut self.stream {
+            WriteStream::Plain(w) => {
+                w.write_all(&self.buf).await?;
+                w.flush().await?;
+            }
+            WriteStream::Tls(w) => {
+                w.write_all(&self.buf).await?;
+                w.flush().await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl FilaClient {
     /// Connect to a Fila broker at the given address.
     ///
-    /// The address should include the scheme, e.g. `http://localhost:5555`.
+    /// The address can include a scheme prefix (e.g. `http://localhost:5555`)
+    /// which will be stripped, or be a plain `host:port`.
     pub async fn connect(addr: impl Into<String>) -> Result<Self, ConnectError> {
         let addr = addr.into();
-        let inner = FilaServiceClient::connect(addr.clone()).await?;
-        Ok(Self {
-            inner,
-            api_key: None,
-            connect_options: Some(ConnectOptions::new(addr)),
-        })
+        let options = ConnectOptions::new(addr);
+        Self::connect_with_options(options).await
     }
 
     /// Connect to a Fila broker with custom options.
     ///
     /// When TLS fields are set in `options`, the connection uses TLS/mTLS.
-    /// The address should use `https://` when TLS is enabled.
     pub async fn connect_with_options(options: ConnectOptions) -> Result<Self, ConnectError> {
-        // Clone options for storage before consuming fields for TLS setup.
         let stored_options = options.clone();
-        let mut endpoint = Channel::from_shared(options.addr)
-            .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
-
-        if let Some(timeout) = options.timeout {
-            endpoint = endpoint.timeout(timeout);
-        }
+        let host_port = normalize_addr(&options.addr);
 
         // Validate partial mTLS: cert and key must both be provided or both absent.
         let has_cert = options.tls_client_cert_pem.is_some();
@@ -143,47 +221,250 @@ impl FilaClient {
             ));
         }
 
-        // Apply TLS config when explicitly enabled, CA cert is provided, or client identity is set.
         let tls_enabled = options.tls || options.tls_ca_cert_pem.is_some() || has_cert;
-        if tls_enabled {
-            let mut tls = ClientTlsConfig::new();
-            if let Some(ca_pem) = options.tls_ca_cert_pem {
-                tls = tls.ca_certificate(Certificate::from_pem(ca_pem));
+
+        // Establish TCP connection.
+        let tcp = TcpStream::connect(host_port)
+            .await
+            .map_err(ConnectError::Transport)?;
+
+        let (io_stream, api_key) = if tls_enabled {
+            let tls_stream = Self::tls_connect(tcp, host_port, &options).await?;
+            (IoStream::Tls(Box::new(tls_stream)), options.api_key)
+        } else {
+            (IoStream::Plain(tcp), options.api_key)
+        };
+
+        Self::setup_connection(io_stream, api_key, Some(stored_options)).await
+    }
+
+    /// Perform TLS handshake on an established TCP connection.
+    async fn tls_connect(
+        tcp: TcpStream,
+        host_port: &str,
+        options: &ConnectOptions,
+    ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, ConnectError> {
+        use rustls::pki_types::ServerName;
+
+        let mut root_store = rustls::RootCertStore::empty();
+
+        if let Some(ref ca_pem) = options.tls_ca_cert_pem {
+            let certs: Vec<_> = rustls_pemfile::certs(&mut std::io::Cursor::new(ca_pem))
+                .collect::<Result<_, _>>()
+                .map_err(|e| {
+                    ConnectError::TlsConfig(format!("failed to parse CA certificate: {e}"))
+                })?;
+            for cert in certs {
+                root_store.add(cert).map_err(|e| {
+                    ConnectError::TlsConfig(format!("failed to add CA certificate: {e}"))
+                })?;
             }
-            // Without ca_certificate, tonic uses the system trust store
-            // (via tls-native-roots feature).
-            if let (Some(cert_pem), Some(key_pem)) =
-                (options.tls_client_cert_pem, options.tls_client_key_pem)
-            {
-                tls = tls.identity(Identity::from_pem(cert_pem, key_pem));
+        }
+        // When no CA cert is provided and tls is enabled (via with_tls()),
+        // the root store is empty, which means the client will reject all
+        // server certificates. The user must provide a CA cert for self-signed
+        // certs, or the connection will fail.
+
+        let tls_config = if let (Some(ref cert_pem), Some(ref key_pem)) =
+            (&options.tls_client_cert_pem, &options.tls_client_key_pem)
+        {
+            let certs: Vec<_> = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem))
+                .collect::<Result<_, _>>()
+                .map_err(|e| {
+                    ConnectError::TlsConfig(format!("failed to parse client cert: {e}"))
+                })?;
+            let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
+                .map_err(|e| ConnectError::TlsConfig(format!("failed to parse client key: {e}")))?
+                .ok_or_else(|| {
+                    ConnectError::TlsConfig("no private key found in client key PEM".to_string())
+                })?;
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_client_auth_cert(certs, key)
+                .map_err(|e| {
+                    ConnectError::TlsConfig(format!("failed to configure client auth: {e}"))
+                })?
+        } else {
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth()
+        };
+
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
+
+        // Extract hostname from host:port for SNI.
+        let hostname = host_port.split(':').next().unwrap_or("localhost");
+        let server_name = ServerName::try_from(hostname.to_string())
+            .map_err(|e| ConnectError::TlsConfig(format!("invalid server name: {e}")))?;
+
+        connector
+            .connect(server_name, tcp)
+            .await
+            .map_err(ConnectError::Transport)
+    }
+
+    /// Set up the connection: perform handshake, split stream, start reader.
+    async fn setup_connection(
+        stream: IoStream,
+        api_key: Option<String>,
+        connect_options: Option<ConnectOptions>,
+    ) -> Result<Self, ConnectError> {
+        // We need to do the handshake before splitting the stream.
+        // Use a temporary full-stream approach for handshake, then split.
+        match stream {
+            IoStream::Plain(tcp) => {
+                let (reader, writer) = tcp.into_split();
+                Self::handshake_and_start(
+                    ReadStream::Plain(reader),
+                    WriteStream::Plain(writer),
+                    api_key,
+                    connect_options,
+                )
+                .await
             }
-            endpoint = endpoint
-                .tls_config(tls)
-                .map_err(|e| ConnectError::InvalidArgument(e.to_string()))?;
+            IoStream::Tls(tls) => {
+                let (reader, writer) = tokio::io::split(*tls);
+                Self::handshake_and_start(
+                    ReadStream::Tls(reader),
+                    WriteStream::Tls(writer),
+                    api_key,
+                    connect_options,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Perform the FIBP handshake then start the background reader task.
+    async fn handshake_and_start(
+        mut read: ReadStream,
+        mut write_stream: WriteStream,
+        api_key: Option<String>,
+        connect_options: Option<ConnectOptions>,
+    ) -> Result<Self, ConnectError> {
+        let handshake = Handshake {
+            protocol_version: 1,
+            api_key,
+        };
+        let frame = handshake.encode(0);
+        let mut write_buf = BytesMut::new();
+        frame.encode(&mut write_buf);
+        match &mut write_stream {
+            WriteStream::Plain(w) => {
+                w.write_all(&write_buf)
+                    .await
+                    .map_err(ConnectError::Transport)?;
+                w.flush().await.map_err(ConnectError::Transport)?;
+            }
+            WriteStream::Tls(w) => {
+                w.write_all(&write_buf)
+                    .await
+                    .map_err(ConnectError::Transport)?;
+                w.flush().await.map_err(ConnectError::Transport)?;
+            }
         }
 
-        let channel = endpoint.connect().await?;
-        let inner = FilaServiceClient::new(channel);
-        let api_key = stored_options.api_key.clone();
+        // Read handshake response.
+        let response_frame = read_one_frame(&mut read)
+            .await
+            .map_err(ConnectError::Transport)?
+            .ok_or_else(|| {
+                ConnectError::HandshakeFailed("connection closed during handshake".to_string())
+            })?;
+
+        let opcode = Opcode::from_u8(response_frame.opcode);
+        match opcode {
+            Some(Opcode::HandshakeOk) => {
+                let _handshake_ok = HandshakeOk::decode(response_frame.payload)
+                    .map_err(|e| ConnectError::HandshakeFailed(format!("decode error: {e}")))?;
+            }
+            Some(Opcode::Error) => {
+                let err = ErrorFrame::decode(response_frame.payload)
+                    .map_err(|e| ConnectError::HandshakeFailed(format!("decode error: {e}")))?;
+                return Err(ConnectError::HandshakeFailed(format!(
+                    "{:?}: {}",
+                    err.error_code, err.message
+                )));
+            }
+            _ => {
+                return Err(ConnectError::HandshakeFailed(format!(
+                    "unexpected opcode: 0x{:02x}",
+                    response_frame.opcode
+                )));
+            }
+        }
+
+        // Set up shared state and start background reader.
+        let inner = Arc::new(Mutex::new(ConnectionInner {
+            pending: HashMap::new(),
+            delivery_tx: None,
+            consume_request_id: None,
+        }));
+
+        let writer = Arc::new(Mutex::new(WriteHalf {
+            buf: BytesMut::with_capacity(1024),
+            stream: write_stream,
+        }));
+
+        let next_request_id = Arc::new(AtomicU32::new(1));
+
+        let reader_inner = Arc::clone(&inner);
+        let reader_task = tokio::spawn(async move {
+            background_reader(read, reader_inner).await;
+        });
+
         Ok(Self {
+            writer,
             inner,
-            api_key,
-            connect_options: Some(stored_options),
+            next_request_id,
+            connect_options,
+            _reader_task: Arc::new(reader_task),
         })
     }
 
-    /// Build a tonic `Request<T>` with the API key authorization header attached,
-    /// if an API key was configured.
-    fn request<T>(&self, body: T) -> tonic::Request<T> {
-        let mut req = tonic::Request::new(body);
-        if let Some(ref key) = self.api_key {
-            if let Ok(val) =
-                tonic::metadata::MetadataValue::try_from(format!("Bearer {key}").as_str())
-            {
-                req.metadata_mut().insert("authorization", val);
+    /// Allocate a unique request ID and register a response channel.
+    async fn start_request(&self) -> (u32, oneshot::Receiver<ResponseFrame>) {
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.inner.lock().await.pending.insert(request_id, tx);
+        (request_id, rx)
+    }
+
+    /// Send a frame and wait for the response.
+    async fn send_and_recv(&self, frame: RawFrame) -> Result<RawFrame, StatusError> {
+        let request_id = frame.request_id;
+        let rx = {
+            let (tx, rx) = oneshot::channel();
+            self.inner.lock().await.pending.insert(request_id, tx);
+            rx
+        };
+
+        // Send the frame.
+        self.writer
+            .lock()
+            .await
+            .send_frame(&frame)
+            .await
+            .map_err(StatusError::Transport)?;
+
+        // Wait for response.
+        match rx.await {
+            Ok(ResponseFrame::Response(resp)) => Ok(resp),
+            Ok(ResponseFrame::Disconnected(msg)) => {
+                Err(StatusError::Unavailable(format!("connection lost: {msg}")))
+            }
+            Err(_) => Err(StatusError::Unavailable("connection closed".to_string())),
+        }
+    }
+
+    /// Check if a response frame is an Error frame and convert it.
+    fn check_error(frame: &RawFrame) -> Option<(ErrorCode, String, HashMap<String, String>)> {
+        if Opcode::from_u8(frame.opcode) == Some(Opcode::Error) {
+            if let Ok(err) = ErrorFrame::decode(frame.payload.clone()) {
+                return Some((err.error_code, err.message, err.metadata));
             }
         }
-        req
+        None
     }
 
     /// Enqueue a message to a queue.
@@ -195,18 +476,46 @@ impl FilaClient {
         headers: HashMap<String, String>,
         payload: impl Into<Vec<u8>>,
     ) -> Result<String, EnqueueError> {
-        let response = self
-            .inner
-            .clone()
-            .enqueue(self.request(EnqueueRequest {
+        let (request_id, _) = self.start_request().await;
+
+        let req = FibpEnqueueReq {
+            messages: vec![EnqueueMessage {
                 queue: queue.to_string(),
                 headers,
                 payload: payload.into(),
-            }))
-            .await
-            .map_err(enqueue_status_error)?;
+            }],
+        };
 
-        Ok(response.into_inner().message_id)
+        let resp = self
+            .send_and_recv(req.encode(request_id))
+            .await
+            .map_err(EnqueueError::Status)?;
+
+        if let Some((code, message, _)) = Self::check_error(&resp) {
+            return Err(enqueue_error_from_code(code, message));
+        }
+
+        let enqueue_resp = FibpEnqueueResp::decode(resp.payload).map_err(|e| {
+            EnqueueError::Status(StatusError::Protocol(format!(
+                "failed to decode enqueue response: {e}"
+            )))
+        })?;
+
+        if enqueue_resp.results.is_empty() {
+            return Err(EnqueueError::Status(StatusError::Protocol(
+                "empty enqueue response".to_string(),
+            )));
+        }
+
+        let item = &enqueue_resp.results[0];
+        if item.error_code != ErrorCode::Ok {
+            return Err(enqueue_error_from_code(
+                item.error_code,
+                item.message_id.clone(),
+            ));
+        }
+
+        Ok(item.message_id.clone())
     }
 
     /// Open a streaming consumer on a queue.
@@ -219,113 +528,156 @@ impl FilaClient {
     /// or the stream cannot be established. The inner `Result` on each stream
     /// item uses [`StatusError`] — only transport/server errors, never
     /// queue-not-found.
-    pub async fn consume(
-        &self,
-        queue: &str,
-    ) -> Result<impl Stream<Item = Result<ConsumeMessage, StatusError>>, ConsumeError> {
-        let consume_req = ConsumeRequest {
+    pub async fn consume(&self, queue: &str) -> Result<ConsumeStream, ConsumeError> {
+        let (request_id, rx) = self.start_request().await;
+
+        let req = FibpConsumeReq {
             queue: queue.to_string(),
         };
 
-        let result = self
-            .inner
-            .clone()
-            .consume(self.request(consume_req.clone()))
-            .await;
+        // Send consume frame.
+        self.writer
+            .lock()
+            .await
+            .send_frame(&req.encode(request_id))
+            .await
+            .map_err(|e| ConsumeError::Status(StatusError::Transport(e)))?;
 
-        // If the server returns UNAVAILABLE with a leader hint, transparently
-        // reconnect to the hinted leader and retry once. This handles the
-        // cluster case where consumers must connect to the queue's Raft leader.
-        let response = match result {
-            Ok(resp) => resp,
-            Err(status)
-                if status.code() == tonic::Code::Unavailable
-                    && extract_leader_hint(&status).is_some() =>
-            {
-                let leader_addr = extract_leader_hint(&status).unwrap();
-                // Connect to the hinted leader, reusing the same TLS/auth
-                // config as the original connection.
-                let leader_url =
-                    if leader_addr.starts_with("http://") || leader_addr.starts_with("https://") {
-                        leader_addr
-                    } else {
-                        // Preserve the original scheme (http vs https).
-                        let scheme = self
-                            .connect_options
-                            .as_ref()
-                            .map(|o| {
-                                if o.tls || o.tls_ca_cert_pem.is_some() {
-                                    "https"
-                                } else {
-                                    "http"
-                                }
-                            })
-                            .unwrap_or("http");
-                        format!("{scheme}://{leader_addr}")
-                    };
-                // Build connection with same TLS/timeout options.
-                let leader_opts = match self.connect_options {
-                    Some(ref opts) => ConnectOptions {
-                        addr: leader_url,
-                        timeout: opts.timeout,
-                        tls: opts.tls,
-                        tls_ca_cert_pem: opts.tls_ca_cert_pem.clone(),
-                        tls_client_cert_pem: opts.tls_client_cert_pem.clone(),
-                        tls_client_key_pem: opts.tls_client_key_pem.clone(),
-                        api_key: opts.api_key.clone(),
-                    },
-                    None => ConnectOptions::new(leader_url),
-                };
-                match Self::connect_with_options(leader_opts).await {
-                    Ok(leader_client) => leader_client
-                        .inner
-                        .clone()
-                        .consume(leader_client.request(consume_req))
-                        .await
-                        .map_err(consume_status_error)?,
-                    Err(_) => {
-                        // Leader connection failed — return the original error.
-                        return Err(consume_status_error(status));
-                    }
-                }
+        // Wait for the initial response which may be an Error (queue not found, not leader, etc.)
+        // or the first Delivery. The background reader will route the initial response
+        // to our oneshot since we registered with this request_id.
+        let initial = match rx.await {
+            Ok(ResponseFrame::Response(frame)) => frame,
+            Ok(ResponseFrame::Disconnected(msg)) => {
+                return Err(ConsumeError::Status(StatusError::Unavailable(format!(
+                    "connection lost: {msg}"
+                ))));
             }
-            Err(status) => return Err(consume_status_error(status)),
+            Err(_) => {
+                return Err(ConsumeError::Status(StatusError::Unavailable(
+                    "connection closed".to_string(),
+                )));
+            }
         };
 
-        let stream = response.into_inner().filter_map(|result| match result {
-            Ok(consume_response) => {
-                // The server may send ConsumeResponse frames with `message: None` as
-                // keepalive signals on the streaming connection. These are expected
-                // and silently skipped — they are not protocol errors.
-                let msg = consume_response.message?;
-                let metadata = msg.metadata.unwrap_or_default();
-                Some(Ok(ConsumeMessage {
-                    id: msg.id,
-                    headers: msg.headers,
-                    payload: msg.payload,
-                    fairness_key: metadata.fairness_key,
-                    attempt_count: metadata.attempt_count,
-                    queue: metadata.queue_id,
-                }))
+        // Check for error response.
+        if let Some((code, message, metadata)) = Self::check_error(&initial) {
+            // Handle leader redirect.
+            if code == ErrorCode::NotLeader {
+                if let Some(leader_addr) = metadata.get("leader_addr") {
+                    return self.redirect_consume(leader_addr, queue).await;
+                }
             }
-            Err(status) => Some(Err(status_error(status))),
-        });
+            return Err(consume_error_from_code(code, message));
+        }
 
-        Ok(stream)
+        // The initial frame should be a Delivery batch. Set up the mpsc channel
+        // for subsequent deliveries.
+        let (delivery_tx, delivery_rx) = mpsc::channel(256);
+
+        // Process the initial delivery frame.
+        if Opcode::from_u8(initial.opcode) == Some(Opcode::Delivery) {
+            if let Ok(batch) = DeliveryBatch::decode(initial.payload) {
+                for msg in batch.messages {
+                    let consume_msg = ConsumeMessage {
+                        id: msg.message_id,
+                        headers: msg.headers,
+                        payload: msg.payload,
+                        fairness_key: msg.fairness_key,
+                        attempt_count: msg.attempt_count,
+                        queue: msg.queue,
+                    };
+                    let _ = delivery_tx.send(Ok(consume_msg)).await;
+                }
+            }
+        }
+
+        // Register the delivery channel so the background reader sends
+        // subsequent deliveries to it.
+        {
+            let mut inner = self.inner.lock().await;
+            inner.delivery_tx = Some(delivery_tx);
+            inner.consume_request_id = Some(request_id);
+        }
+
+        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+            delivery_rx,
+        )))
+    }
+
+    /// Handle transparent leader redirect for consume.
+    fn redirect_consume(
+        &self,
+        leader_addr: &str,
+        queue: &str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<ConsumeStream, ConsumeError>> + Send + '_>,
+    > {
+        let leader_addr = leader_addr.to_string();
+        let queue = queue.to_string();
+        Box::pin(async move {
+            let leader_opts = match self.connect_options {
+                Some(ref opts) => ConnectOptions {
+                    addr: leader_addr.clone(),
+                    timeout: opts.timeout,
+                    tls: opts.tls,
+                    tls_ca_cert_pem: opts.tls_ca_cert_pem.clone(),
+                    tls_client_cert_pem: opts.tls_client_cert_pem.clone(),
+                    tls_client_key_pem: opts.tls_client_key_pem.clone(),
+                    api_key: opts.api_key.clone(),
+                },
+                None => ConnectOptions::new(&leader_addr),
+            };
+            match Self::connect_with_options(leader_opts).await {
+                Ok(leader_client) => leader_client.consume(&queue).await,
+                Err(_) => Err(ConsumeError::Status(StatusError::Unavailable(format!(
+                    "failed to connect to leader at {leader_addr}"
+                )))),
+            }
+        })
     }
 
     /// Acknowledge a successfully processed message.
     ///
     /// The message is permanently removed from the queue.
     pub async fn ack(&self, queue: &str, message_id: &str) -> Result<(), AckError> {
-        self.inner
-            .clone()
-            .ack(self.request(AckRequest {
+        let (request_id, _) = self.start_request().await;
+
+        let req = FibpAckRequest {
+            items: vec![fila_fibp::AckItem {
                 queue: queue.to_string(),
                 message_id: message_id.to_string(),
-            }))
+            }],
+        };
+
+        let resp = self
+            .send_and_recv(req.encode(request_id))
             .await
-            .map_err(ack_status_error)?;
+            .map_err(AckError::Status)?;
+
+        if let Some((code, message, _)) = Self::check_error(&resp) {
+            return Err(ack_error_from_code(code, message));
+        }
+
+        let ack_resp = FibpAckResponse::decode(resp.payload).map_err(|e| {
+            AckError::Status(StatusError::Protocol(format!(
+                "failed to decode ack response: {e}"
+            )))
+        })?;
+
+        if ack_resp.results.is_empty() {
+            return Err(AckError::Status(StatusError::Protocol(
+                "empty ack response".to_string(),
+            )));
+        }
+
+        let item = &ack_resp.results[0];
+        if item.error_code != ErrorCode::Ok {
+            return Err(ack_error_from_code(
+                item.error_code,
+                format!("{:?}", item.error_code),
+            ));
+        }
 
         Ok(())
     }
@@ -335,26 +687,189 @@ impl FilaClient {
     /// The message is requeued for retry or routed to the dead-letter queue
     /// based on the queue's on_failure Lua hook configuration.
     pub async fn nack(&self, queue: &str, message_id: &str, error: &str) -> Result<(), NackError> {
-        self.inner
-            .clone()
-            .nack(self.request(NackRequest {
+        let (request_id, _) = self.start_request().await;
+
+        let req = FibpNackRequest {
+            items: vec![fila_fibp::NackItem {
                 queue: queue.to_string(),
                 message_id: message_id.to_string(),
                 error: error.to_string(),
-            }))
+            }],
+        };
+
+        let resp = self
+            .send_and_recv(req.encode(request_id))
             .await
-            .map_err(nack_status_error)?;
+            .map_err(NackError::Status)?;
+
+        if let Some((code, message, _)) = Self::check_error(&resp) {
+            return Err(nack_error_from_code(code, message));
+        }
+
+        let nack_resp = FibpNackResponse::decode(resp.payload).map_err(|e| {
+            NackError::Status(StatusError::Protocol(format!(
+                "failed to decode nack response: {e}"
+            )))
+        })?;
+
+        if nack_resp.results.is_empty() {
+            return Err(NackError::Status(StatusError::Protocol(
+                "empty nack response".to_string(),
+            )));
+        }
+
+        let item = &nack_resp.results[0];
+        if item.error_code != ErrorCode::Ok {
+            return Err(nack_error_from_code(
+                item.error_code,
+                format!("{:?}", item.error_code),
+            ));
+        }
 
         Ok(())
     }
 }
 
-/// Extract the leader's client address from gRPC error metadata.
-/// Returns `Some(addr)` if the `x-fila-leader-addr` key is present.
-fn extract_leader_hint(status: &tonic::Status) -> Option<String> {
-    status
-        .metadata()
-        .get("x-fila-leader-addr")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+// --- Read stream types ---
+
+enum ReadStream {
+    Plain(tokio::net::tcp::OwnedReadHalf),
+    Tls(tokio::io::ReadHalf<tokio_rustls::client::TlsStream<TcpStream>>),
+}
+
+/// Read a single frame from the stream.
+async fn read_one_frame(stream: &mut ReadStream) -> Result<Option<RawFrame>, std::io::Error> {
+    let mut buf = BytesMut::with_capacity(4096);
+    loop {
+        // Try to decode a frame from existing buffer data.
+        match RawFrame::decode(&mut buf) {
+            Ok(Some(frame)) => return Ok(Some(frame)),
+            Ok(None) => {} // Need more data.
+            Err(e) => {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e));
+            }
+        }
+
+        // Read more data from the stream.
+        let n = match stream {
+            ReadStream::Plain(r) => r.read_buf(&mut buf).await?,
+            ReadStream::Tls(r) => r.read_buf(&mut buf).await?,
+        };
+
+        if n == 0 {
+            return Ok(None); // Connection closed.
+        }
+    }
+}
+
+/// Background task that reads frames from the connection and dispatches them.
+async fn background_reader(mut stream: ReadStream, inner: Arc<Mutex<ConnectionInner>>) {
+    let mut buf = BytesMut::with_capacity(4096);
+
+    loop {
+        // Try to decode frames from existing buffer data.
+        loop {
+            match RawFrame::decode(&mut buf) {
+                Ok(Some(frame)) => {
+                    dispatch_frame(frame, &inner).await;
+                }
+                Ok(None) => break, // Need more data.
+                Err(e) => {
+                    // Protocol error — notify all pending requests and stop.
+                    let msg = format!("frame decode error: {e}");
+                    notify_all_disconnected(&inner, &msg).await;
+                    return;
+                }
+            }
+        }
+
+        // Read more data from the stream.
+        let n = match &mut stream {
+            ReadStream::Plain(r) => match r.read_buf(&mut buf).await {
+                Ok(n) => n,
+                Err(e) => {
+                    notify_all_disconnected(&inner, &format!("read error: {e}")).await;
+                    return;
+                }
+            },
+            ReadStream::Tls(r) => match r.read_buf(&mut buf).await {
+                Ok(n) => n,
+                Err(e) => {
+                    notify_all_disconnected(&inner, &format!("read error: {e}")).await;
+                    return;
+                }
+            },
+        };
+
+        if n == 0 {
+            notify_all_disconnected(&inner, "connection closed by server").await;
+            return;
+        }
+    }
+}
+
+/// Dispatch a received frame to the appropriate handler.
+async fn dispatch_frame(frame: RawFrame, inner: &Arc<Mutex<ConnectionInner>>) {
+    let opcode = Opcode::from_u8(frame.opcode);
+    let request_id = frame.request_id;
+
+    match opcode {
+        Some(Opcode::Delivery) => {
+            // Delivery frames go to the consume stream channel.
+            let guard = inner.lock().await;
+            if let Some(ref tx) = guard.delivery_tx {
+                match DeliveryBatch::decode(frame.payload) {
+                    Ok(batch) => {
+                        for msg in batch.messages {
+                            let consume_msg = ConsumeMessage {
+                                id: msg.message_id,
+                                headers: msg.headers,
+                                payload: msg.payload,
+                                fairness_key: msg.fairness_key,
+                                attempt_count: msg.attempt_count,
+                                queue: msg.queue,
+                            };
+                            let _ = tx.send(Ok(consume_msg)).await;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx
+                            .send(Err(StatusError::Protocol(format!(
+                                "delivery decode error: {e}"
+                            ))))
+                            .await;
+                    }
+                }
+            }
+        }
+        Some(Opcode::Pong) => {
+            // Pong responses are silently consumed.
+        }
+        _ => {
+            // Route response to the pending request by request_id.
+            let mut guard = inner.lock().await;
+
+            // If this is the consume request_id and it's an Error or initial Delivery,
+            // it should go through the oneshot (for the initial consume response).
+            if let Some(tx) = guard.pending.remove(&request_id) {
+                let _ = tx.send(ResponseFrame::Response(frame));
+            }
+            // If not found in pending, it might be an unsolicited frame — ignore.
+        }
+    }
+}
+
+/// Notify all pending requests that the connection has been lost.
+async fn notify_all_disconnected(inner: &Arc<Mutex<ConnectionInner>>, msg: &str) {
+    let mut guard = inner.lock().await;
+    for (_, tx) in guard.pending.drain() {
+        let _ = tx.send(ResponseFrame::Disconnected(msg.to_string()));
+    }
+    if let Some(ref tx) = guard.delivery_tx {
+        let _ = tx
+            .send(Err(StatusError::Unavailable(format!(
+                "connection lost: {msg}"
+            ))))
+            .await;
+    }
 }

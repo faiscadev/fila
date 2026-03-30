@@ -12,7 +12,7 @@ async fn e2e_enqueue_consume_ack() {
     let server = helpers::TestServer::start();
     helpers::create_queue_cli(server.addr(), "lifecycle-ack");
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     // Enqueue a message
     let mut headers = HashMap::new();
@@ -55,7 +55,7 @@ async fn e2e_enqueue_consume_nack_retry() {
     let server = helpers::TestServer::start();
     helpers::create_queue_cli(server.addr(), "lifecycle-nack");
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     let msg_id = client
         .enqueue("lifecycle-nack", HashMap::new(), b"retry-me".to_vec())

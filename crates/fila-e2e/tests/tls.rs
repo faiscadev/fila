@@ -19,18 +19,23 @@ fn generate_self_signed_cert() -> (Vec<u8>, Vec<u8>) {
     (cert_pem, key_pem)
 }
 
-/// Start fila-server with TLS enabled.
+/// Start fila-server with TLS enabled (both gRPC and binary protocol listeners).
 ///
-/// Returns (TestServer, https_addr, cert_pem) where `cert_pem` is both the
+/// Returns (TestServer, binary_addr, cert_pem) where `cert_pem` is both the
 /// server certificate and the CA cert to use for client verification.
 fn start_tls_server() -> (TestServer, String, Vec<u8>) {
     use std::net::TcpListener;
 
-    let port = {
+    let grpc_port = {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");
         l.local_addr().unwrap().port()
     };
-    let addr = format!("127.0.0.1:{port}");
+    let binary_port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().unwrap().port()
+    };
+    let grpc_addr = format!("127.0.0.1:{grpc_port}");
+    let binary_addr = format!("127.0.0.1:{binary_port}");
 
     let (cert_pem, key_pem) = generate_self_signed_cert();
 
@@ -41,7 +46,7 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
     std::fs::write(&key_path, &key_pem).expect("write key");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
+        "[server]\nlisten_addr = \"{grpc_addr}\"\nbinary_addr = \"{binary_addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
     );
@@ -79,12 +84,18 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
     let stderr = child.stderr.take().expect("stderr");
     std::thread::spawn(move || for _ in std::io::BufReader::new(stderr).lines() {});
 
-    // Poll TCP until the server is reachable.
+    // Poll TCP until both listeners are reachable.
     let start = std::time::Instant::now();
-    let mut connected = false;
+    let mut grpc_ok = false;
+    let mut binary_ok = false;
     while start.elapsed() < std::time::Duration::from_secs(10) {
-        if std::net::TcpStream::connect(&addr).is_ok() {
-            connected = true;
+        if !grpc_ok && std::net::TcpStream::connect(&grpc_addr).is_ok() {
+            grpc_ok = true;
+        }
+        if !binary_ok && std::net::TcpStream::connect(&binary_addr).is_ok() {
+            binary_ok = true;
+        }
+        if grpc_ok && binary_ok {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -94,19 +105,19 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
         "TLS fila-server did not become reachable at {addr} within 10s"
     );
 
-    let https_addr = format!("https://{addr}");
-    let server = TestServer::from_parts(child, https_addr.clone(), data_dir);
-    (server, https_addr, cert_pem)
+    let https_addr = format!("https://{grpc_addr}");
+    let server = TestServer::from_parts(child, https_addr, data_dir);
+    (server, binary_addr, cert_pem)
 }
 
 #[tokio::test]
 async fn tls_valid_cert_connects_successfully() {
-    let (_server, addr, ca_pem) = start_tls_server();
+    let (_server, binary_addr, ca_pem) = start_tls_server();
 
     // The cert is self-signed, so using the cert itself as the CA cert lets
     // the client verify the server's identity.
     let result = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_tls_ca_cert(ca_pem),
+        fila_sdk::ConnectOptions::new(&binary_addr).with_tls_ca_cert(ca_pem),
     )
     .await;
 
@@ -118,57 +129,34 @@ async fn tls_valid_cert_connects_successfully() {
 
 #[tokio::test]
 async fn tls_plaintext_client_is_rejected() {
-    let (_server, https_addr, _ca_pem) = start_tls_server();
+    let (_server, binary_addr, _ca_pem) = start_tls_server();
 
-    // Connect using http:// (no TLS) — the server speaks TLS, so this must fail.
-    let plaintext_addr = https_addr.replace("https://", "http://");
+    // Connect without TLS — the server speaks TLS, so the handshake must fail.
+    let connect_result = fila_sdk::FilaClient::connect(&binary_addr).await;
 
-    // tonic's connect() is lazy by default. We need to actually attempt an RPC
-    // to trigger the TLS handshake failure.
-    let connect_result = fila_sdk::FilaClient::connect(&plaintext_addr).await;
-
-    match connect_result {
-        Err(_) => {
-            // connect() itself failed — acceptable
-        }
-        Ok(client) => {
-            // The TLS server will reject a plaintext HTTP/2 client; the RPC must fail.
-            let rpc_result = client
-                .enqueue("probe-queue", Default::default(), b"x")
-                .await;
-            assert!(
-                rpc_result.is_err(),
-                "plaintext client should not be able to make RPCs to a TLS server"
-            );
-        }
-    }
+    // With the binary protocol, a plaintext connection to a TLS server should
+    // fail during the protocol handshake (the server expects a TLS ClientHello).
+    assert!(
+        connect_result.is_err(),
+        "plaintext client should fail to connect to a TLS server"
+    );
 }
 
 #[tokio::test]
 async fn tls_wrong_ca_cert_is_rejected() {
-    let (_server, addr, _correct_ca_pem) = start_tls_server();
+    let (_server, binary_addr, _correct_ca_pem) = start_tls_server();
 
     // Generate an entirely different cert/key pair; its cert is a different CA.
     let (wrong_ca_pem, _) = generate_self_signed_cert();
 
     let connect_result = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_tls_ca_cert(wrong_ca_pem),
+        fila_sdk::ConnectOptions::new(&binary_addr).with_tls_ca_cert(wrong_ca_pem),
     )
     .await;
 
-    match connect_result {
-        Err(_) => {
-            // connect() failed during TLS handshake — expected
-        }
-        Ok(client) => {
-            // TLS may be lazy — the first RPC must fail cert verification.
-            let rpc_result = client
-                .enqueue("probe-queue", Default::default(), b"x")
-                .await;
-            assert!(
-                rpc_result.is_err(),
-                "wrong CA should be rejected during TLS handshake"
-            );
-        }
-    }
+    // TLS handshake fails because the server's cert is not signed by wrong_ca.
+    assert!(
+        connect_result.is_err(),
+        "wrong CA should be rejected during TLS handshake"
+    );
 }

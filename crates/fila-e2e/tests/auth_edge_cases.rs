@@ -66,7 +66,7 @@ async fn auth_key_revocation_immediate() {
 
     // Verify the key works
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&eph_token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&eph_token),
     )
     .await
     .expect("connect with ephemeral key");
@@ -154,7 +154,7 @@ async fn auth_permission_removal_immediate() {
 
     // Verify produce works
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&token),
     )
     .await
     .expect("connect");
@@ -235,7 +235,8 @@ async fn auth_bootstrap_key_is_superadmin() {
 
     // Bootstrap key CAN do data operations (it's superadmin)
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(helpers::TEST_BOOTSTRAP_KEY),
+        fila_sdk::ConnectOptions::new(_server.binary_addr())
+            .with_api_key(helpers::TEST_BOOTSTRAP_KEY),
     )
     .await
     .expect("connect with bootstrap key");
@@ -260,7 +261,7 @@ async fn auth_superadmin_revocation() {
 
     // Verify sa2 works
     let sa2_client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&sa2_token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&sa2_token),
     )
     .await
     .expect("connect sa2");

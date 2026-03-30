@@ -20,7 +20,7 @@ async fn e2e_lua_on_enqueue_assigns_keys() {
         None,
     );
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     // Enqueue messages with different tenants
     let mut h1 = HashMap::new();
@@ -84,7 +84,7 @@ async fn e2e_lua_on_failure_retry_vs_dlq() {
         None,
     );
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     let msg_id = client
         .enqueue("lua-failure", HashMap::new(), b"fail-me".to_vec())

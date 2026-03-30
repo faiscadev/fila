@@ -1347,7 +1347,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
- "tonic",
 ]
 
 [[package]]
@@ -1376,12 +1375,15 @@ dependencies = [
 name = "fila-sdk"
 version = "0.1.0"
 dependencies = [
- "fila-proto",
+ "bytes",
+ "fila-fibp",
+ "rustls",
+ "rustls-pemfile",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
- "tonic",
 ]
 
 [[package]]

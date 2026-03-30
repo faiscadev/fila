@@ -7,17 +7,19 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Idiomatic Rust client SDK for Fila message broker"
 homepage.workspace = true
-keywords = ["message-broker", "queue", "grpc", "client"]
+keywords = ["message-broker", "queue", "binary-protocol", "client"]
 categories = ["network-programming", "api-bindings"]
 
 [dependencies]
-fila-proto.workspace = true
-tonic = { workspace = true, features = ["tls-native-roots"] }
+fila-fibp.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "sync", "rt", "macros"] }
 tokio-stream.workspace = true
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
+bytes.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-tokio-stream.workspace = true
-fila-proto.workspace = true
 tempfile = "3"
