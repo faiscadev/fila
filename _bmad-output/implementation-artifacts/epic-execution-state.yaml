@@ -4,7 +4,7 @@ startedAt: "2026-03-29"
 stories:
   - id: "19.1"
     title: "Wire Format Design & Protocol Specification"
-    status: completed
+    status: review
     currentPhase: ""
     branch: "feat/19.1-wire-format-protocol-spec"
     pr: 156

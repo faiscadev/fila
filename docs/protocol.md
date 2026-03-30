@@ -49,15 +49,15 @@ All communication uses length-prefixed frames. Every frame has the same outer st
 Every Frame Body starts with a fixed 6-byte header:
 
 ```
-+----------+-------+--------------+
-| Opcode   | Flags | Request ID   |
-| (1 byte) | (1 byte) | (4 bytes, BE) |
-+----------+-------+--------------+
++----------+----------+------------------+
+| Opcode   | Flags    | Request ID       |
+| (1 byte) | (1 byte) | (4 bytes, BE)    |
++----------+----------+------------------+
 ```
 
 - **Opcode**: Identifies the operation (see Opcode Table below).
 - **Flags**: Bitfield for frame-level options.
-  - Bit 0: Reserved (must be 0)
+  - Bit 0: **CONTINUATION** — When set, this frame is a continuation of the previous frame with the same request ID and opcode. The receiver concatenates frame bodies (excluding headers) until a frame with CONTINUATION=0 arrives. See [Continuation Frames](#continuation-frames) below.
   - Bits 1-7: Reserved (must be 0)
 - **Request ID**: Big-endian `u32`. Client-assigned identifier for correlating responses. Responses echo the request ID from the corresponding request. Server-initiated frames (ConsumeDelivery) use the request ID from the Consume subscribe request.
 
@@ -84,7 +84,7 @@ All multi-byte integers are big-endian (network byte order).
 | `string[]` | `[u16 count][repeated: string]` | 2 + sum of strings |
 | `optional<T>` | `[u8 present (0 or 1)][T if present]` | 1 or 1 + sizeof(T) |
 
-Strings are limited to 65,535 bytes. Byte arrays use a `u32` length prefix but are effectively limited by the 16 MiB maximum frame size.
+Strings are limited to 65,535 bytes. Byte arrays use a `u32` length prefix (up to ~4 GiB). When a single value exceeds the maximum frame size, the sender uses [continuation frames](#continuation-frames) to split the data across multiple frames.
 
 ## Opcode Table
 
@@ -622,8 +622,55 @@ Used for request-level errors (as opposed to per-item errors in batch results). 
 [frame header: opcode=0xFE]
 [u8: error_code]
 [string: message]               -- human-readable error description
-[optional<string>: leader_addr] -- only present for NotLeader (0x0C), format: "host:port"
+[map<string,string>: metadata]  -- structured key-value pairs for programmatic error handling
 ```
+
+The metadata map provides machine-readable context beyond the human-readable message. Standard metadata keys by error code:
+
+| Error Code | Metadata Key | Value | Description |
+|------------|-------------|-------|-------------|
+| `0x0C` NotLeader | `leader_addr` | `"host:port"` | Address of the current leader node |
+| `0x09` ChannelFull | `retry_after_ms` | `"100"` | Suggested backoff in milliseconds |
+| `0x0D` UnsupportedVersion | `max_version` | `"1"` | Highest version the server supports |
+
+SDKs should expose the metadata map to callers. Unknown metadata keys must be preserved (not discarded) for forward compatibility. The metadata map may be empty.
+
+## Continuation Frames
+
+The protocol supports arbitrarily large payloads and headers through frame continuation. When a message's encoded body exceeds the maximum frame size, the sender splits it across multiple frames using the CONTINUATION flag (Flags bit 0).
+
+### How It Works
+
+1. The sender serializes the full operation body (e.g., an Enqueue with all its messages) into a byte buffer
+2. If the buffer fits in a single frame: send it normally with CONTINUATION=0
+3. If the buffer exceeds the max frame size:
+   - Send the first chunk as a normal frame with CONTINUATION=1 (same opcode, same request ID)
+   - Send subsequent chunks as continuation frames: same opcode, same request ID, CONTINUATION=1
+   - Send the final chunk with CONTINUATION=0 to signal completion
+
+### Receiver Behavior
+
+When a receiver gets a frame with CONTINUATION=1, it buffers the frame body (excluding the 6-byte header). It continues buffering until a frame arrives with the same request ID and opcode with CONTINUATION=0, then concatenates all buffered bodies (in order) with the final frame's body and parses the result as a single operation body.
+
+### Rules
+
+- All continuation frames for a request must use the same opcode and request ID
+- The receiver may enforce a maximum total reassembled size (configurable, no protocol-level cap)
+- Interleaving: frames from different request IDs may be interleaved on the wire. The receiver tracks continuation state per request ID.
+- If a connection closes mid-continuation, the partial data is discarded
+
+### Example: Large Payload Enqueue
+
+Enqueuing a single 50 MiB message with a 16 MiB max frame size:
+
+| Frame | Flags | Size | Contents |
+|-------|-------|------|----------|
+| 1 | CONTINUATION=1 | 16 MiB | First 16 MiB of serialized Enqueue body |
+| 2 | CONTINUATION=1 | 16 MiB | Next 16 MiB |
+| 3 | CONTINUATION=1 | 16 MiB | Next 16 MiB |
+| 4 | CONTINUATION=0 | ~2 MiB | Final chunk (remainder) |
+
+The receiver reassembles frames 1-4 into the complete Enqueue body, then parses it normally.
 
 ## Overhead Analysis
 
@@ -731,7 +778,7 @@ A client can subscribe to a queue (Consume) and send Ack/Nack frames on the same
 
 ### Maximum Frame Size
 
-Frames are limited to 16 MiB (frame length field is u32, but values above 16,777,216 are rejected). This limits batch sizes — clients must split very large batches across multiple frames.
+Individual frames are limited to a configurable maximum size (default: 16 MiB). The frame length field is u32, supporting up to ~4 GiB per frame, but the server enforces a lower limit to bound memory allocation per frame. This does **not** limit payload or header sizes — messages larger than the max frame size are transparently split using [continuation frames](#continuation-frames). Clients must use continuation frames when the serialized operation body exceeds the negotiated max frame size.
 
 ### Byte Order
 
