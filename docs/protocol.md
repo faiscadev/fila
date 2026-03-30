@@ -6,7 +6,7 @@ Version: 1 (draft)
 
 Fila uses a custom binary protocol over TCP for all client-server communication. The protocol is designed for:
 
-- **Minimal overhead**: < 16 bytes per message beyond payload in batch operations
+- **Minimal overhead**: < 16 bytes amortized per message beyond payload in batch operations
 - **Zero-copy parsing**: Length-prefixed frames — no delimiter scanning
 - **Batch-native**: Every operation accepts multiple items; single message = batch of 1
 - **Multiplexed**: Multiple concurrent requests on a single connection via request IDs
@@ -132,6 +132,16 @@ Strings are limited to 65,535 bytes. Byte arrays (payload) are limited to 4 GiB.
 | `0x2D` | ListConfigResult | Server → Client | Config entries |
 | `0x2E` | Redrive | Client → Server | Redrive DLQ messages |
 | `0x2F` | RedriveResult | Server → Client | Redrive count |
+| `0x30` | CreateApiKey | Client → Server | Create an API key |
+| `0x31` | CreateApiKeyResult | Server → Client | API key creation result |
+| `0x32` | RevokeApiKey | Client → Server | Revoke an API key |
+| `0x33` | RevokeApiKeyResult | Server → Client | Revocation result |
+| `0x34` | ListApiKeys | Client → Server | List all API keys |
+| `0x35` | ListApiKeysResult | Server → Client | API key list |
+| `0x36` | SetAcl | Client → Server | Set ACL permissions for a key |
+| `0x37` | SetAclResult | Server → Client | ACL set result |
+| `0x38` | GetAcl | Client → Server | Get ACL permissions for a key |
+| `0x39` | GetAclResult | Server → Client | ACL permissions |
 
 ### Error Opcode (0xFE)
 
@@ -139,7 +149,7 @@ Strings are limited to 65,535 bytes. Byte arrays (payload) are limited to 4 GiB.
 |--------|------|-----------|-------------|
 | `0xFE` | Error | Server → Client | Operation error with error code and message |
 
-Opcodes `0x40-0xFD` and `0xFF` are reserved for future use. Clients must ignore frames with unknown opcodes. Servers must respond with Error (0xFE) for unknown request opcodes.
+Opcodes `0x3A-0x3F` and `0x40-0xFD` are reserved for future use. The `0x40-0x5F` range is reserved for cluster-specific opcodes. Clients must ignore frames with unknown opcodes. Servers must respond with Error (0xFE) for unknown request opcodes.
 
 ## Error Codes
 
@@ -159,9 +169,11 @@ Errors are returned either via the Error frame (for request-level failures) or i
 | `0x09` | ChannelFull | Server overloaded (backpressure) |
 | `0x0A` | Unauthorized | Missing or invalid API key |
 | `0x0B` | Forbidden | Insufficient permissions (ACL) |
-| `0x0C` | NotLeader | This node is not the leader for the queue |
+| `0x0C` | NotLeader | This node is not the leader for the queue (includes leader hint) |
 | `0x0D` | UnsupportedVersion | Protocol version not supported |
 | `0x0E` | InvalidFrame | Malformed or unparseable frame |
+| `0x0F` | ApiKeyNotFound | API key ID does not exist |
+| `0x10` | NodeNotReady | Cluster node is not ready (no leader elected yet) |
 | `0xFF` | InternalError | Unexpected server error |
 
 ## Connection Lifecycle
@@ -212,7 +224,7 @@ Either side sends Disconnect for graceful close, then closes the TCP connection.
 
 ### Enqueue (0x10)
 
-Enqueue one or more messages to queues.
+Enqueue one or more messages. Each message specifies its target queue independently, allowing cross-queue batching in a single frame. The server applies per-queue ACL checks and routes each message to the appropriate queue (including Raft group in cluster mode). Partial success is possible — some messages may succeed while others fail.
 
 **Request:**
 
@@ -261,7 +273,7 @@ Server pushes a batch of ready messages to a consuming client. Uses the request 
 [u32: message_count]
 For each message:
   [string: message_id]          -- UUID string
-  [string: queue_id]
+  [string: queue]
   [map<string,string>: headers]
   [bytes: payload]
   [string: fairness_key]
@@ -269,7 +281,7 @@ For each message:
   [string[]: throttle_keys]
   [u32: attempt_count]
   [u64: enqueued_at]            -- Unix timestamp milliseconds
-  [u64: leased_at]              -- Unix timestamp milliseconds
+  [u64: leased_at]              -- Unix timestamp milliseconds (0 if unavailable)
 ```
 
 ### CancelConsume (0x14)
@@ -475,7 +487,6 @@ For each queue:
 ```
 [frame header: opcode=0x2D]
 [u8: error_code]
-[u32: total_count]
 [u16: entry_count]
 For each entry:
   [string: key]
@@ -498,6 +509,109 @@ For each entry:
 [frame header: opcode=0x2F]
 [u8: error_code]
 [u64: redriven]
+```
+
+## Auth & ACL Operation Frames
+
+### CreateApiKey (0x30)
+
+**Request:**
+
+```
+[frame header: opcode=0x30]
+[string: name]                  -- human-readable label
+[u64: expires_at_ms]            -- Unix timestamp ms, 0 = no expiration
+[bool: is_superadmin]
+```
+
+**CreateApiKeyResult (0x31):**
+
+```
+[frame header: opcode=0x31]
+[u8: error_code]
+[string: key_id]                -- opaque ID for management
+[string: key]                   -- plaintext API key (returned once)
+[bool: is_superadmin]
+```
+
+### RevokeApiKey (0x32)
+
+**Request:**
+
+```
+[frame header: opcode=0x32]
+[string: key_id]
+```
+
+**RevokeApiKeyResult (0x33):**
+
+```
+[frame header: opcode=0x33]
+[u8: error_code]                -- 0x0F = ApiKeyNotFound
+```
+
+### ListApiKeys (0x34)
+
+**Request:**
+
+```
+[frame header: opcode=0x34]
+```
+
+**ListApiKeysResult (0x35):**
+
+```
+[frame header: opcode=0x35]
+[u8: error_code]
+[u16: key_count]
+For each key:
+  [string: key_id]
+  [string: name]
+  [u64: created_at_ms]
+  [u64: expires_at_ms]          -- 0 = no expiration
+  [bool: is_superadmin]
+```
+
+### SetAcl (0x36)
+
+**Request:**
+
+```
+[frame header: opcode=0x36]
+[string: key_id]
+[u16: permission_count]
+For each permission:
+  [string: kind]                -- "produce", "consume", or "admin"
+  [string: pattern]             -- queue name or wildcard ("*", "orders.*")
+```
+
+**SetAclResult (0x37):**
+
+```
+[frame header: opcode=0x37]
+[u8: error_code]                -- 0x0F = ApiKeyNotFound
+```
+
+### GetAcl (0x38)
+
+**Request:**
+
+```
+[frame header: opcode=0x38]
+[string: key_id]
+```
+
+**GetAclResult (0x39):**
+
+```
+[frame header: opcode=0x39]
+[u8: error_code]                -- 0x0F = ApiKeyNotFound
+[string: key_id]
+[bool: is_superadmin]
+[u16: permission_count]
+For each permission:
+  [string: kind]
+  [string: pattern]
 ```
 
 ## Error Frame (0xFE)
