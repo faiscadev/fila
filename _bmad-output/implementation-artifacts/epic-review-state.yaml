@@ -1,29 +1,21 @@
-epic: "Epic 16.5: Stability Hardening & Test Coverage"
-epicNumber: 16.5
-startedAt: "2026-03-21T15:00:00Z"
-completedAt: "2026-03-22T01:07:00Z"
+epic: "Epic 18: Tracing Hot-Path Fix"
+epicNumber: 18
+startedAt: "2026-03-29T00:00:00Z"
 yoloMode: false
-currentPrIndex: 2
+currentPrIndex: 1
 mode: normal
 prChain:
-  - storyId: "16.5.1"
-    storyKey: "16.5-1-cluster-e2e-test-suite"
-    title: "Cluster E2E Test Suite"
-    branch: "feat/16.5.1-cluster-e2e-test-suite"
-    pr: 79
+  - storyId: "18.1"
+    storyKey: "18-1-baseline-benchmark-flamegraph"
+    title: "Baseline Benchmark & Flamegraph"
+    branch: "feat/18.1-baseline-benchmark-flamegraph"
+    pr: 154
     baseBranch: "main"
     status: merged
-  - storyId: "16.5.2"
-    storyKey: "16.5-2-tls-auth-edge-case-hardening"
-    title: "TLS & Auth Edge Case Hardening"
-    branch: "feat/16.5.2-tls-auth-edge-case-hardening"
-    pr: 80
-    baseBranch: "main"
-    status: merged
-  - storyId: "16.5.3"
-    storyKey: "16.5-3-ci-code-coverage-quality-gates"
-    title: "CI Code Coverage & Quality Gates"
-    branch: "feat/16.5.3-ci-code-coverage-quality-gates"
-    pr: 81
-    baseBranch: "main"
-    status: merged
+  - storyId: "18.2"
+    storyKey: "18-2-fix-tracing-overhead-on-hot-path-functions"
+    title: "Fix Tracing Overhead on Hot-Path Functions"
+    branch: "feat/18.2-fix-tracing-overhead-hot-path"
+    pr: 155
+    baseBranch: "feat/18.1-baseline-benchmark-flamegraph"
+    status: pending
