@@ -437,10 +437,8 @@ impl RaftStorage<TypeConfig> for FilaRaftStore {
 
                     let response = match request {
                         super::types::ClusterRequest::Enqueue { messages } => {
-                            let msg_id = messages
-                                .first()
-                                .map(|m| m.id)
-                                .unwrap_or(uuid::Uuid::nil());
+                            let msg_id =
+                                messages.first().map(|m| m.id).unwrap_or(uuid::Uuid::nil());
                             ClusterResponse::Enqueue { msg_id }
                         }
                         super::types::ClusterRequest::Ack { .. } => ClusterResponse::Ack,
