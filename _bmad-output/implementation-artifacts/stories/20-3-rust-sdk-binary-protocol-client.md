@@ -1,6 +1,6 @@
 # Story 20.3: Rust SDK Binary Protocol Client
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -24,30 +24,30 @@ so that my application benefits from the lower-overhead transport.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Replace gRPC internals with binary protocol connection (AC: #1, #5)
-  - [ ] 1.1: Replace FilaServiceClient<Channel> with TCP connection + fila-fibp codec
-  - [ ] 1.2: Connection management — handshake on connect, request ID tracking
-  - [ ] 1.3: Request-response correlation using request IDs
-  - [ ] 1.4: Remove tonic/prost dependencies, add fila-fibp + tokio-rustls
+- [x] Task 1: Replace gRPC internals with binary protocol connection (AC: #1, #5)
+  - [x] 1.1: Replace FilaServiceClient<Channel> with TCP connection + fila-fibp codec
+  - [x] 1.2: Connection management — handshake on connect, request ID tracking
+  - [x] 1.3: Request-response correlation using request IDs
+  - [x] 1.4: Remove tonic/prost dependencies, add fila-fibp + tokio-rustls
 
-- [ ] Task 2: Implement all operations over binary protocol (AC: #1)
-  - [ ] 2.1: enqueue — single message (batch of 1) and batch variant
-  - [ ] 2.2: consume — streaming delivery via background read task
-  - [ ] 2.3: ack — single and batch
-  - [ ] 2.4: nack — single and batch
+- [x] Task 2: Implement all operations over binary protocol (AC: #1)
+  - [x] 2.1: enqueue — single message (batch of 1) and batch variant
+  - [x] 2.2: consume — streaming delivery via background read task
+  - [x] 2.3: ack — single and batch
+  - [x] 2.4: nack — single and batch
 
-- [ ] Task 3: TLS and auth (AC: #2)
-  - [ ] 3.1: TLS via tokio-rustls (system roots, custom CA, mTLS identity)
-  - [ ] 3.2: API key sent in handshake frame
+- [x] Task 3: TLS and auth (AC: #2)
+  - [x] 3.1: TLS via tokio-rustls (system roots, custom CA, mTLS identity)
+  - [x] 3.2: API key sent in handshake frame
 
-- [ ] Task 4: Leader hint reconnection (AC: #4)
-  - [ ] 4.1: Parse NotLeader error with leader_addr metadata
-  - [ ] 4.2: Reconnect to leader transparently in consume
+- [x] Task 4: Leader hint reconnection (AC: #4)
+  - [x] 4.1: Parse NotLeader error with leader_addr metadata
+  - [x] 4.2: Reconnect to leader transparently in consume
 
-- [ ] Task 5: Update e2e tests to use binary protocol (AC: #6)
-  - [ ] 5.1: Update fila-e2e test helpers to start server with binary_addr
-  - [ ] 5.2: Update SDK connection in tests to use binary protocol address
-  - [ ] 5.3: All existing e2e tests pass
+- [x] Task 5: Update e2e tests to use binary protocol (AC: #6)
+  - [x] 5.1: Update fila-e2e test helpers to start server with binary_addr
+  - [x] 5.2: Update SDK connection in tests to use binary protocol address
+  - [x] 5.3: All existing e2e tests pass
 
 ## Dev Notes
 
