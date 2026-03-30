@@ -126,9 +126,10 @@ async fn main() {
         config.workload, config.duration, config.msg_size, config.concurrency, server_pid, addr,
     );
 
-    let profiler = config.flamegraph.as_ref().map(|output_path| {
-        start_profiler(server_pid, config.sample_hz, output_path)
-    });
+    let profiler = config
+        .flamegraph
+        .as_ref()
+        .map(|output_path| start_profiler(server_pid, config.sample_hz, output_path));
 
     // Let the profiler attach and the server warm up.
     if profiler.is_some() {
@@ -213,9 +214,7 @@ fn start_profiler(server_pid: u32, sample_hz: u32, _output_path: &PathBuf) -> Pr
                 "-x",
                 "ustackframes=100",
                 "-n",
-                &format!(
-                    "profile-{sample_hz} /pid == {server_pid}/ {{ @[ustack()] = count(); }}"
-                ),
+                &format!("profile-{sample_hz} /pid == {server_pid}/ {{ @[ustack()] = count(); }}"),
                 "-o",
                 stacks_file.to_str().unwrap(),
             ])
