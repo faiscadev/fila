@@ -1,10 +1,10 @@
 mod admin_service;
 mod auth;
-mod binary_handlers;
-mod binary_server;
 mod error;
 mod service;
 mod trace_context;
+
+use fila_server::binary_server;
 
 use std::path::Path;
 use std::sync::Arc;
