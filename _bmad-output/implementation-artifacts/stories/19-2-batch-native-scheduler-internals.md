@@ -1,6 +1,6 @@
 # Story 19.2: Batch-Native Scheduler Internals
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
