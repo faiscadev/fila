@@ -25,9 +25,9 @@ stories:
     dependsOn: ["20.1", "20.2"]
   - id: "20.4"
     title: "CLI & Cluster Inter-Node Migration"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/20.4-cli-cluster-migration"
     pr: null
     dependsOn: ["20.1", "20.2", "20.3"]
   - id: "20.5"

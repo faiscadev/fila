@@ -205,7 +205,7 @@ development_status:
   20-1-binary-protocol-server-hot-path-operations: done
   20-2-admin-operations-auth-on-binary-protocol: done
   20-3-rust-sdk-binary-protocol-client: done
-  20-4-cli-cluster-inter-node-migration: backlog
+  20-4-cli-cluster-inter-node-migration: in-progress
   20-5-grpc-removal-final-benchmarks: backlog
   epic-20-retrospective: optional
 
