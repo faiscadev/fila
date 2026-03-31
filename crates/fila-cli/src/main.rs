@@ -350,11 +350,7 @@ async fn connect(
             root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         }
 
-        let mut config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_store.clone())
-            .with_no_client_auth();
-
-        if let (Some(cert_path), Some(key_path)) = (tls_cert, tls_key) {
+        let config = if let (Some(cert_path), Some(key_path)) = (tls_cert, tls_key) {
             let cert_pem = match std::fs::read(cert_path) {
                 Ok(b) => b,
                 Err(e) => {
@@ -389,14 +385,18 @@ async fn connect(
                     process::exit(1);
                 });
 
-            config = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store.clone())
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
                 .with_client_auth_cert(certs, key)
                 .unwrap_or_else(|e| {
                     eprintln!("Error: TLS client auth configuration failed: {e}");
                     process::exit(1);
-                });
-        }
+                })
+        } else {
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth()
+        };
 
         // Extract hostname from addr for SNI
         let hostname = addr.split(':').next().unwrap_or("localhost");
