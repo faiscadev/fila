@@ -1,3 +1,4 @@
+pub mod binary_service;
 pub mod grpc_service;
 pub mod multi_raft;
 pub mod network;
@@ -13,22 +14,21 @@ pub use types::{AckItemData, ClusterRequest, ClusterResponse, NackItemData, Node
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use bytes::BytesMut;
 use openraft::error::ClientWriteError;
 use openraft::error::RaftError;
 use openraft::storage::Adaptor;
 use openraft::{BasicNode, Config, Raft};
+#[allow(unused_imports)]
+use prost::Message as _;
 use tokio::task::JoinHandle;
-use tonic::transport::Server;
 use tracing::info;
-
-use tonic::transport::ClientTlsConfig;
 
 use crate::broker::config::{ClusterConfig, TlsParams};
 use crate::storage::RaftKeyValueStore;
-use fila_proto::fila_cluster_server::FilaClusterServer;
-use grpc_service::ClusterGrpcService;
+use binary_service::ClusterBinaryService;
 use multi_raft::MultiRaftManager;
-use network::FilaNetworkFactory;
+use network::{ClusterTlsConfig, FilaNetworkFactory};
 use store::FilaRaftStore;
 
 /// Shareable handle to cluster resources. Services hold this to check
@@ -45,14 +45,11 @@ pub struct ClusterHandle {
     /// only a subset is selected for each queue.
     pub replication_factor: usize,
     /// TLS config for outgoing cluster connections. `None` when TLS is disabled.
-    tls: Option<Arc<ClientTlsConfig>>,
-    /// Cached gRPC clients for forwarding writes to leader nodes.
-    /// Avoids opening a new HTTP/2 connection per forwarded request.
+    tls: Option<Arc<ClusterTlsConfig>>,
+    /// Cached binary protocol connections for forwarding writes to leader nodes.
+    /// Avoids opening a new TCP connection per forwarded request.
     client_cache: tokio::sync::Mutex<
-        std::collections::HashMap<
-            String,
-            fila_proto::fila_cluster_client::FilaClusterClient<tonic::transport::Channel>,
-        >,
+        std::collections::HashMap<String, Arc<tokio::sync::Mutex<Option<network::PeerStream>>>>,
     >,
 }
 
@@ -197,55 +194,81 @@ impl ClusterHandle {
         (members, addrs)
     }
 
-    /// Forward a client write to a specific node via the cluster gRPC
-    /// `ClientWrite` RPC. Used when this node is not the Raft leader.
-    /// Reuses cached gRPC connections to avoid per-request handshakes.
+    /// Forward a client write to a specific node via the binary protocol.
+    /// Used when this node is not the Raft leader.
+    /// Reuses cached TCP connections to avoid per-request handshakes.
     async fn forward_client_write(
         &self,
         leader_addr: &str,
         group_id: &str,
         request: &ClusterRequest,
     ) -> Result<ClusterResponse, ClusterWriteError> {
-        use fila_proto::fila_cluster_client::FilaClusterClient;
-
-        // Determine scheme-correct URL for cache key and connection.
-        let url = network::normalize_cluster_url(leader_addr, self.tls.is_some());
-
-        // Check cache without holding the lock during connect().
-        let cached = {
-            let cache = self.client_cache.lock().await;
-            cache.get(&url).cloned()
-        };
-        let client = if let Some(client) = cached {
-            client
-        } else {
-            let channel = network::connect_channel(&url, self.tls.as_deref())
-                .await
-                .map_err(|e| ClusterWriteError::Forward(format!("connect: {e}")))?;
-            let new_client = FilaClusterClient::new(channel);
+        // Get or create a cached connection.
+        let stream_slot = {
             let mut cache = self.client_cache.lock().await;
-            cache.entry(url).or_insert(new_client).clone()
+            cache
+                .entry(leader_addr.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
+                .clone()
         };
 
         let request_proto = fila_proto::ClusterRequestProto::from(request.clone());
+        let data = {
+            let mut buf = Vec::with_capacity(request_proto.encoded_len());
+            prost::Message::encode(&request_proto, &mut buf)
+                .map_err(|e| ClusterWriteError::Forward(format!("encode: {e}")))?;
+            buf
+        };
 
-        let resp = client
-            .clone()
-            .client_write(tonic::Request::new(fila_proto::RaftClientWriteRequest {
-                request: Some(request_proto),
-                group_id: group_id.to_string(),
-            }))
-            .await
-            .map_err(|e| ClusterWriteError::Forward(format!("rpc: {e}")))?
-            .into_inner();
+        let req_frame = fila_fibp::ClusterClientWriteRequest {
+            group_id: group_id.to_string(),
+            data,
+        }
+        .encode(1);
 
-        let response: ClusterResponse = resp
-            .response
-            .ok_or_else(|| ClusterWriteError::Forward("missing response".to_string()))?
-            .try_into()
-            .map_err(|e: proto_convert::ConvertError| {
-                ClusterWriteError::Forward(format!("deserialize: {e}"))
-            })?;
+        let resp_frame = {
+            let mut guard = stream_slot.lock().await;
+            // Connect if no cached connection.
+            if guard.is_none() {
+                let stream = network::connect_peer(leader_addr, self.tls.as_deref())
+                    .await
+                    .map_err(|e| ClusterWriteError::Forward(format!("connect: {e}")))?;
+                *guard = Some(stream);
+            }
+
+            let stream = guard.as_mut().expect("stream just initialized");
+            let result = send_recv_peer(stream, req_frame).await;
+
+            match result {
+                Ok(frame) => frame,
+                Err(e) => {
+                    // Clear cached stream so next call reconnects.
+                    *guard = None;
+                    return Err(ClusterWriteError::Forward(format!("rpc: {e}")));
+                }
+            }
+        };
+
+        // Check for error frame.
+        if resp_frame.opcode == fila_fibp::Opcode::Error as u8 {
+            let err_msg = fila_fibp::ErrorFrame::decode(resp_frame.payload)
+                .map(|e| e.message)
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(ClusterWriteError::Forward(err_msg));
+        }
+
+        let resp_data = fila_fibp::ClusterClientWriteResponse::decode(resp_frame.payload)
+            .map_err(|e| ClusterWriteError::Forward(format!("decode: {e}")))?;
+
+        let proto_resp: fila_proto::ClusterResponseProto = prost::Message::decode(&*resp_data.data)
+            .map_err(|e| ClusterWriteError::Forward(format!("proto: {e}")))?;
+
+        let response: ClusterResponse =
+            proto_resp
+                .try_into()
+                .map_err(|e: proto_convert::ConvertError| {
+                    ClusterWriteError::Forward(format!("deserialize: {e}"))
+                })?;
 
         // Check if the response is a ForwardToLeader error.
         if let ClusterResponse::Error { ref message } = response {
@@ -253,6 +276,28 @@ impl ClusterHandle {
         }
 
         Ok(response)
+    }
+}
+
+/// Send a frame and read the response over a peer stream (for forward_client_write).
+async fn send_recv_peer(
+    stream: &mut network::PeerStream,
+    frame: fila_fibp::RawFrame,
+) -> Result<fila_fibp::RawFrame, Box<dyn std::error::Error + Send + Sync>> {
+    let mut out = BytesMut::new();
+    frame.encode(&mut out);
+    stream.write_all(&out).await?;
+    stream.flush().await?;
+
+    let mut buf = BytesMut::with_capacity(8192);
+    loop {
+        if let Some(resp) = fila_fibp::RawFrame::decode(&mut buf)? {
+            return Ok(resp);
+        }
+        let n = stream.read_buf(&mut buf).await?;
+        if n == 0 {
+            return Err("connection closed".into());
+        }
     }
 }
 
@@ -437,62 +482,94 @@ pub async fn watch_leader_changes(
     }
 }
 
-/// Build a `ClientTlsConfig` from `TlsParams`.
+/// Build a `ClusterTlsConfig` (for outgoing connections) from `TlsParams`.
 /// Client cert/key are always set (used as the mTLS identity). CA cert is optional:
 /// when present it is used for peer verification; when absent the system trust store is used.
 async fn build_client_tls(
     tls: Option<&TlsParams>,
-) -> Result<Option<ClientTlsConfig>, Box<dyn std::error::Error>> {
+) -> Result<Option<ClusterTlsConfig>, Box<dyn std::error::Error>> {
     let tls = match tls {
         Some(t) => t,
         None => return Ok(None),
     };
     let cert_pem = tokio::fs::read(&tls.cert_file).await?;
     let key_pem = tokio::fs::read(&tls.key_file).await?;
-    let identity = tonic::transport::Identity::from_pem(cert_pem, key_pem);
-    let mut client_tls = ClientTlsConfig::new().identity(identity);
+
+    let certs = rustls_pemfile::certs(&mut &*cert_pem).collect::<Result<Vec<_>, _>>()?;
+    let key = rustls_pemfile::private_key(&mut &*key_pem)?.ok_or("no private key found in PEM")?;
+
+    let mut root_store = rustls::RootCertStore::empty();
     if let Some(ref ca_file) = tls.ca_file {
         let ca_pem = tokio::fs::read(ca_file).await?;
-        client_tls = client_tls.ca_certificate(tonic::transport::Certificate::from_pem(ca_pem));
+        let ca_certs = rustls_pemfile::certs(&mut &*ca_pem).collect::<Result<Vec<_>, _>>()?;
+        for cert in ca_certs {
+            root_store.add(cert)?;
+        }
     }
-    Ok(Some(client_tls))
+
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_client_auth_cert(certs, key)?;
+
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+
+    Ok(Some(ClusterTlsConfig {
+        connector,
+        server_name: rustls::pki_types::ServerName::try_from("localhost")?.to_owned(),
+    }))
 }
 
-/// Build a `ServerTlsConfig` from `TlsParams`.
-/// `ca_file` is optional: present → mTLS (verify client certs); absent → server-TLS only.
+/// Build a `TlsAcceptor` (for incoming connections) from `TlsParams`.
+/// `ca_file` is optional: present -> mTLS (verify client certs); absent -> server-TLS only.
 async fn build_server_tls(
     tls: Option<&TlsParams>,
-) -> Result<Option<tonic::transport::ServerTlsConfig>, Box<dyn std::error::Error>> {
+) -> Result<Option<tokio_rustls::TlsAcceptor>, Box<dyn std::error::Error>> {
     let tls = match tls {
         Some(t) => t,
         None => return Ok(None),
     };
     let cert_pem = tokio::fs::read(&tls.cert_file).await?;
     let key_pem = tokio::fs::read(&tls.key_file).await?;
-    let identity = tonic::transport::Identity::from_pem(cert_pem, key_pem);
-    let mut server_tls = tonic::transport::ServerTlsConfig::new().identity(identity);
-    if let Some(ref ca_file) = tls.ca_file {
+
+    let certs = rustls_pemfile::certs(&mut &*cert_pem).collect::<Result<Vec<_>, _>>()?;
+    let key = rustls_pemfile::private_key(&mut &*key_pem)?.ok_or("no private key found in PEM")?;
+
+    let config = if let Some(ref ca_file) = tls.ca_file {
         let ca_pem = tokio::fs::read(ca_file).await?;
-        server_tls = server_tls.client_ca_root(tonic::transport::Certificate::from_pem(ca_pem));
-    }
-    Ok(Some(server_tls))
+        let ca_certs = rustls_pemfile::certs(&mut &*ca_pem).collect::<Result<Vec<_>, _>>()?;
+        let mut root_store = rustls::RootCertStore::empty();
+        for cert in ca_certs {
+            root_store.add(cert)?;
+        }
+        let verifier =
+            rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
+        rustls::ServerConfig::builder()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(certs, key)?
+    } else {
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)?
+    };
+
+    Ok(Some(tokio_rustls::TlsAcceptor::from(Arc::new(config))))
 }
 
 /// Manages the Raft lifecycle: creates the meta Raft instance, starts the
-/// cluster gRPC service, bootstraps or joins the cluster, and manages
+/// cluster binary protocol service, bootstraps or joins the cluster, and manages
 /// per-queue Raft groups via `MultiRaftManager`.
 pub struct ClusterManager {
     node_id: NodeId,
     raft: Arc<Raft<TypeConfig>>,
     multi_raft: Arc<MultiRaftManager>,
-    grpc_handle: JoinHandle<()>,
-    shutdown_tx: tokio::sync::oneshot::Sender<()>,
-    /// Shared slot for wiring the Broker to the cluster gRPC service
-    /// after Broker creation. The gRPC service uses this to apply
+    service_handle: JoinHandle<()>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// Shared slot for wiring the Broker to the cluster binary service
+    /// after Broker creation. The binary service uses this to apply
     /// forwarded writes to the leader's local scheduler.
     broker_slot: Arc<std::sync::OnceLock<Arc<crate::Broker>>>,
     /// TLS config for outgoing cluster connections. Propagated to `ClusterHandle`.
-    client_tls: Option<Arc<ClientTlsConfig>>,
+    client_tls: Option<Arc<ClusterTlsConfig>>,
     /// Number of nodes per queue Raft group. Propagated to `ClusterHandle`.
     replication_factor: usize,
 }
@@ -500,13 +577,13 @@ pub struct ClusterManager {
 impl ClusterManager {
     /// Create and start the cluster manager.
     ///
-    /// This initializes the meta Raft instance, starts the cluster gRPC service
-    /// on `config.bind_addr`, and either bootstraps a new cluster or joins an
-    /// existing one.
+    /// This initializes the meta Raft instance, starts the cluster binary
+    /// protocol service on `config.bind_addr`, and either bootstraps a new
+    /// cluster or joins an existing one.
     ///
-    /// When `tls_config` is `Some`, TLS is enabled on the cluster gRPC server and
-    /// all outgoing peer connections. If `tls_config.ca_file` is also set, client
-    /// certificates are verified (mTLS); otherwise server-TLS only is used.
+    /// When `tls_config` is `Some`, TLS is enabled on the cluster TCP listener
+    /// and all outgoing peer connections. If `tls_config.ca_file` is also set,
+    /// client certificates are verified (mTLS); otherwise server-TLS only.
     pub async fn start(
         config: &ClusterConfig,
         db: Arc<dyn RaftKeyValueStore>,
@@ -527,7 +604,7 @@ impl ClusterManager {
         };
         let raft_config = Arc::new(raft_config.validate()?);
 
-        // Build optional TLS configs for the cluster server and outgoing connections.
+        // Build optional TLS configs for the cluster service and outgoing connections.
         let client_tls = build_client_tls(tls_config).await?;
         let server_tls = build_server_tls(tls_config).await?;
         let client_tls = client_tls.map(Arc::new);
@@ -535,12 +612,12 @@ impl ClusterManager {
         let store = FilaRaftStore::new(Arc::clone(&db), meta_event_tx);
         let (log_store, state_machine) = Adaptor::new(store);
 
-        let network = FilaNetworkFactory::meta_with_tls(client_tls.clone());
+        let network_factory = FilaNetworkFactory::meta_with_tls(client_tls.clone());
 
         let raft = Raft::new(
             node_id,
             Arc::clone(&raft_config),
-            network,
+            network_factory,
             log_store,
             state_machine,
         )
@@ -559,40 +636,23 @@ impl ClusterManager {
             .register_client_addr(node_id, client_listen_addr)
             .await;
 
-        // Start cluster gRPC service.
+        // Start cluster binary protocol service.
         let broker_slot = Arc::new(std::sync::OnceLock::new());
-        let service = ClusterGrpcService::new(
+        let service = Arc::new(ClusterBinaryService::new(
             Arc::clone(&raft),
             Arc::clone(&multi_raft),
             Arc::clone(&broker_slot),
             node_id,
             client_listen_addr.to_string(),
-        );
+        ));
         let bind_addr: std::net::SocketAddr = config.bind_addr.parse()?;
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-        info!(%bind_addr, node_id, "starting cluster gRPC service");
+        info!(%bind_addr, node_id, "starting cluster binary protocol service");
 
-        let grpc_handle = tokio::spawn(async move {
-            let mut builder = Server::builder();
-            if let Some(tls) = server_tls {
-                match builder.tls_config(tls) {
-                    Ok(b) => builder = b,
-                    Err(e) => {
-                        tracing::error!("cluster gRPC TLS config error: {e}");
-                        return;
-                    }
-                }
-            }
-            if let Err(e) = builder
-                .add_service(FilaClusterServer::new(service))
-                .serve_with_shutdown(bind_addr, async {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-            {
-                tracing::error!("cluster gRPC service error: {e}");
-            }
+        let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+        let service_handle = tokio::spawn(async move {
+            binary_service::run(service, listener, server_tls, shutdown_rx).await;
         });
 
         // Bootstrap or join cluster based on peers list.
@@ -618,7 +678,7 @@ impl ClusterManager {
             .await?;
         }
 
-        // Discover all cluster members' client addresses via GetNodeInfo RPC.
+        // Discover all cluster members' client addresses via GetNodeInfo.
         // This runs after join so all nodes are known in the Raft membership.
         {
             let metrics = raft.metrics().borrow().clone();
@@ -632,21 +692,19 @@ impl ClusterManager {
                 if peer_id == node_id {
                     continue; // Already registered our own address
                 }
-                let url = network::normalize_cluster_url(&cluster_addr, client_tls.is_some());
-                match network::connect_channel(&url, client_tls.as_deref()).await {
-                    Ok(channel) => {
-                        let mut client =
-                            fila_proto::fila_cluster_client::FilaClusterClient::new(channel);
-                        match client
-                            .get_node_info(tonic::Request::new(fila_proto::GetNodeInfoRequest {}))
-                            .await
-                        {
-                            Ok(resp) => {
-                                let info = resp.into_inner();
-                                if !info.client_addr.is_empty() {
-                                    multi_raft
-                                        .register_client_addr(info.node_id, &info.client_addr)
-                                        .await;
+                match network::connect_peer(&cluster_addr, client_tls.as_deref()).await {
+                    Ok(mut stream) => {
+                        let req_frame = fila_fibp::ClusterGetNodeInfoRequest.encode(1);
+                        match send_recv_peer(&mut stream, req_frame).await {
+                            Ok(resp_frame) => {
+                                if let Ok(info) = fila_fibp::ClusterGetNodeInfoResponse::decode(
+                                    resp_frame.payload,
+                                ) {
+                                    if !info.client_addr.is_empty() {
+                                        multi_raft
+                                            .register_client_addr(info.node_id, &info.client_addr)
+                                            .await;
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -665,7 +723,7 @@ impl ClusterManager {
             node_id,
             raft,
             multi_raft,
-            grpc_handle,
+            service_handle,
             shutdown_tx,
             broker_slot,
             client_tls,
@@ -673,36 +731,39 @@ impl ClusterManager {
         })
     }
 
-    /// Join an existing cluster by contacting seed peers.
+    /// Join an existing cluster by contacting seed peers via binary protocol.
     async fn join_cluster(
         node_id: u64,
         bind_addr: &str,
         client_listen_addr: &str,
         peers: &[String],
-        tls: Option<Arc<ClientTlsConfig>>,
+        tls: Option<Arc<ClusterTlsConfig>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use fila_proto::fila_cluster_client::FilaClusterClient;
-        use fila_proto::AddNodeRequest;
-
-        let req = AddNodeRequest {
+        let req = fila_fibp::ClusterAddNodeRequest {
             node_id,
             addr: bind_addr.to_string(),
             client_addr: client_listen_addr.to_string(),
         };
 
         for peer in peers {
-            let channel = match network::connect_channel(peer, tls.as_deref()).await {
-                Ok(c) => c,
+            let mut stream = match network::connect_peer(peer, tls.as_deref()).await {
+                Ok(s) => s,
                 Err(e) => {
                     tracing::warn!(peer, error = %e, "failed to connect to peer");
                     continue;
                 }
             };
-            let mut client = FilaClusterClient::new(channel);
 
-            match client.add_node(tonic::Request::new(req.clone())).await {
-                Ok(resp) => {
-                    let resp = resp.into_inner();
+            let frame = req.encode(1);
+            match send_recv_peer(&mut stream, frame).await {
+                Ok(resp_frame) => {
+                    let resp = match fila_fibp::ClusterAddNodeResponse::decode(resp_frame.payload) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!(peer, error = %e, "failed to decode add_node response");
+                            continue;
+                        }
+                    };
                     if resp.success {
                         info!(node_id, peer, "successfully joined cluster");
                         return Ok(());
@@ -710,23 +771,28 @@ impl ClusterManager {
 
                     // If not leader, try the leader address.
                     if !resp.leader_addr.is_empty() {
-                        match network::connect_channel(&resp.leader_addr, tls.as_deref()).await {
-                            Ok(leader_channel) => {
-                                let mut leader_client = FilaClusterClient::new(leader_channel);
-                                match leader_client
-                                    .add_node(tonic::Request::new(req.clone()))
-                                    .await
-                                {
-                                    Ok(resp) => {
-                                        let resp = resp.into_inner();
-                                        if resp.success {
-                                            info!(node_id, "joined cluster via leader redirect");
-                                            return Ok(());
+                        match network::connect_peer(&resp.leader_addr, tls.as_deref()).await {
+                            Ok(mut leader_stream) => {
+                                let leader_frame = req.encode(2);
+                                match send_recv_peer(&mut leader_stream, leader_frame).await {
+                                    Ok(leader_resp_frame) => {
+                                        if let Ok(leader_resp) =
+                                            fila_fibp::ClusterAddNodeResponse::decode(
+                                                leader_resp_frame.payload,
+                                            )
+                                        {
+                                            if leader_resp.success {
+                                                info!(
+                                                    node_id,
+                                                    "joined cluster via leader redirect"
+                                                );
+                                                return Ok(());
+                                            }
+                                            tracing::warn!(
+                                                error = leader_resp.error,
+                                                "failed to join via leader"
+                                            );
                                         }
-                                        tracing::warn!(
-                                            error = resp.error,
-                                            "failed to join via leader"
-                                        );
                                     }
                                     Err(e) => {
                                         tracing::warn!(error = %e, "leader add_node rpc failed");
@@ -760,7 +826,7 @@ impl ClusterManager {
         &self.multi_raft
     }
 
-    /// Wire the broker to the cluster gRPC service so forwarded writes
+    /// Wire the broker to the cluster binary service so forwarded writes
     /// can be applied to the leader's local scheduler. Must be called
     /// after Broker creation and before any client traffic.
     pub fn set_broker(&self, broker: Arc<crate::Broker>) {
@@ -779,7 +845,7 @@ impl ClusterManager {
         })
     }
 
-    /// Gracefully shut down all Raft instances and the cluster gRPC service.
+    /// Gracefully shut down all Raft instances and the cluster binary service.
     pub async fn shutdown(self) {
         info!("shutting down cluster manager");
         // Shut down queue Raft groups first, then the meta group.
@@ -787,7 +853,7 @@ impl ClusterManager {
         if let Err(e) = self.raft.shutdown().await {
             tracing::error!("raft shutdown error: {e:?}");
         }
-        let _ = self.shutdown_tx.send(());
-        let _ = self.grpc_handle.await;
+        let _ = self.shutdown_tx.send(true);
+        let _ = self.service_handle.await;
     }
 }
