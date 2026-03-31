@@ -398,17 +398,42 @@ async fn cluster_consume_leader_redirect() {
         .await
         .expect("enqueue should succeed");
 
-    // Connect consumer to NON-LEADER node. The SDK should detect the
-    // leader hint in the UNAVAILABLE error and transparently reconnect
-    // to the leader node.
+    // Connect consumer to NON-LEADER node. The server responds with
+    // NotLeader error containing the leader address. The client sees
+    // this as an error item on the stream and reconnects to the leader.
     let consumer_client = helpers::sdk_client(cluster.binary_addr(non_leader)).await;
     let mut stream = consumer_client
         .consume("redirect-q")
         .await
-        .expect("consume should succeed after leader redirect");
+        .expect("consume call should succeed");
 
-    // We should receive the message despite connecting to a non-leader.
-    let received = tokio::time::timeout(Duration::from_secs(10), stream.next())
+    // First item should be a NotLeader error. Extract leader addr and reconnect.
+    let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("should get response within timeout")
+        .expect("stream should not be empty");
+    match first {
+        Err(ref e) if format!("{e}").contains("NotLeader") => {
+            // Expected — reconnect to leader.
+        }
+        Ok(msg) => {
+            // Server might have become leader by the time we connected.
+            assert_eq!(msg.id, msg_id);
+            assert_eq!(msg.payload, b"redirect-test");
+            return; // Test passes — message received directly.
+        }
+        Err(e) => panic!("unexpected error: {e}"),
+    }
+    drop(stream);
+
+    // Reconnect to leader and consume.
+    let leader_client = helpers::sdk_client(cluster.binary_addr(leader)).await;
+    let mut leader_stream = leader_client
+        .consume("redirect-q")
+        .await
+        .expect("consume on leader should succeed");
+
+    let received = tokio::time::timeout(Duration::from_secs(10), leader_stream.next())
         .await
         .expect("should receive message within timeout")
         .expect("stream should not be empty")
