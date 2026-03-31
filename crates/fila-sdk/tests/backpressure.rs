@@ -1,6 +1,9 @@
-//! Proves that the internal delivery channel is bounded by TCP backpressure,
-//! not by unbounded memory growth. When a consumer stops reading, the internal
-//! channel stabilizes at a size bounded by the TCP receive window (~1MB).
+//! Proves that the internal delivery channel is bounded by application-level
+//! backpressure. When a consumer stops reading, the reader pauses TCP reads
+//! and the internal channel stays capped at the high-water mark.
+//!
+//! Requires `test-internals` feature: `cargo test --features test-internals`
+#![cfg(feature = "test-internals")]
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
