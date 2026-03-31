@@ -120,13 +120,6 @@ pub(crate) fn enqueue_error_from_code(code: ErrorCode, message: String) -> Enque
     }
 }
 
-pub(crate) fn consume_error_from_code(code: ErrorCode, message: String) -> ConsumeError {
-    match code {
-        ErrorCode::QueueNotFound => ConsumeError::QueueNotFound(message),
-        _ => ConsumeError::Status(error_code_to_status(code, message)),
-    }
-}
-
 pub(crate) fn ack_error_from_code(code: ErrorCode, message: String) -> AckError {
     match code {
         ErrorCode::MessageNotFound => AckError::MessageNotFound(message),
