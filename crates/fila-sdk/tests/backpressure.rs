@@ -1,9 +1,6 @@
 //! Proves that the internal delivery channel is bounded by application-level
 //! backpressure. When a consumer stops reading, the reader pauses TCP reads
 //! and the internal channel stays capped at the high-water mark.
-//!
-//! Requires `test-internals` feature: `cargo test --features test-internals`
-#![cfg(feature = "test-internals")]
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};

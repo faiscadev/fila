@@ -28,3 +28,4 @@ thiserror.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tempfile = "3"
+fila-sdk = { path = ".", features = ["test-internals"] }
