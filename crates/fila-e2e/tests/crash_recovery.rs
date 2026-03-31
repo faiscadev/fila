@@ -9,7 +9,7 @@ use tokio_stream::StreamExt;
 #[tokio::test]
 async fn e2e_crash_recovery() {
     let server = helpers::TestServer::start();
-    helpers::create_queue_cli(server.addr(), "recovery");
+    helpers::create_queue_cli(server.binary_addr(), "recovery");
 
     let client = helpers::sdk_client(server.binary_addr()).await;
 

@@ -10,7 +10,7 @@ use tokio_stream::StreamExt;
 #[tokio::test]
 async fn e2e_enqueue_consume_ack() {
     let server = helpers::TestServer::start();
-    helpers::create_queue_cli(server.addr(), "lifecycle-ack");
+    helpers::create_queue_cli(server.binary_addr(), "lifecycle-ack");
 
     let client = helpers::sdk_client(server.binary_addr()).await;
 
@@ -53,7 +53,7 @@ async fn e2e_enqueue_consume_ack() {
 #[tokio::test]
 async fn e2e_enqueue_consume_nack_retry() {
     let server = helpers::TestServer::start();
-    helpers::create_queue_cli(server.addr(), "lifecycle-nack");
+    helpers::create_queue_cli(server.binary_addr(), "lifecycle-nack");
 
     let client = helpers::sdk_client(server.binary_addr()).await;
 

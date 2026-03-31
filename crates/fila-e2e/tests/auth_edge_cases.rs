@@ -7,12 +7,13 @@ use std::collections::HashMap;
 /// AC 5: Key revocation takes effect immediately — revoked key rejected on next request.
 #[tokio::test]
 async fn auth_key_revocation_immediate() {
-    let (_server, addr) = helpers::start_auth_server();
-    let (admin_key_id, admin_token) = helpers::cli_create_superadmin_key(&addr, "admin");
+    let (_server, _addr) = helpers::start_auth_server();
+    let (admin_key_id, admin_token) =
+        helpers::cli_create_superadmin_key(_server.binary_addr(), "admin");
 
     // Create a regular key and give it produce permission
     let create_out = helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -44,7 +45,7 @@ async fn auth_key_revocation_immediate() {
 
     // Grant produce permission on all queues
     let acl_out = helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -60,7 +61,7 @@ async fn auth_key_revocation_immediate() {
 
     // Create a queue for testing
     helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &admin_token, "queue", "create", "revoke-test"],
     );
 
@@ -78,7 +79,7 @@ async fn auth_key_revocation_immediate() {
 
     // Revoke the key
     let revoke_out = helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &admin_token, "auth", "revoke", &eph_key_id],
     );
     assert!(revoke_out.success, "revoke failed: {}", revoke_out.stderr);
@@ -99,12 +100,13 @@ async fn auth_key_revocation_immediate() {
 /// AC 6: Permission removal takes effect immediately.
 #[tokio::test]
 async fn auth_permission_removal_immediate() {
-    let (_server, addr) = helpers::start_auth_server();
-    let (_admin_key_id, admin_token) = helpers::cli_create_superadmin_key(&addr, "admin");
+    let (_server, _addr) = helpers::start_auth_server();
+    let (_admin_key_id, admin_token) =
+        helpers::cli_create_superadmin_key(_server.binary_addr(), "admin");
 
     // Create a regular key with produce permission
     let create_out = helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -132,7 +134,7 @@ async fn auth_permission_removal_immediate() {
 
     // Grant produce + consume on test queue
     helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -148,7 +150,7 @@ async fn auth_permission_removal_immediate() {
     );
 
     helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &admin_token, "queue", "create", "perm-q"],
     );
 
@@ -166,7 +168,7 @@ async fn auth_permission_removal_immediate() {
 
     // Remove produce permission (keep only consume)
     helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -196,11 +198,11 @@ async fn auth_permission_removal_immediate() {
 /// for all permission checks). This test verifies the actual behavior.
 #[tokio::test]
 async fn auth_bootstrap_key_is_superadmin() {
-    let (_server, addr) = helpers::start_auth_server();
+    let (_server, _addr) = helpers::start_auth_server();
 
     // Bootstrap key can create API keys (admin op)
     let create_out = helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             helpers::TEST_BOOTSTRAP_KEY,
@@ -218,7 +220,7 @@ async fn auth_bootstrap_key_is_superadmin() {
 
     // Bootstrap key can also create queues (admin op)
     let queue_out = helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             helpers::TEST_BOOTSTRAP_KEY,
@@ -253,11 +255,13 @@ async fn auth_bootstrap_key_is_superadmin() {
 /// AC 8: Superadmin key revocation — revoked superadmin loses all access.
 #[tokio::test]
 async fn auth_superadmin_revocation() {
-    let (_server, addr) = helpers::start_auth_server();
+    let (_server, _addr) = helpers::start_auth_server();
 
     // Create two superadmin keys
-    let (_sa1_id, sa1_token) = helpers::cli_create_superadmin_key(&addr, "superadmin-1");
-    let (sa2_id, sa2_token) = helpers::cli_create_superadmin_key(&addr, "superadmin-2");
+    let (_sa1_id, sa1_token) =
+        helpers::cli_create_superadmin_key(_server.binary_addr(), "superadmin-1");
+    let (sa2_id, sa2_token) =
+        helpers::cli_create_superadmin_key(_server.binary_addr(), "superadmin-2");
 
     // Verify sa2 works
     let sa2_client = fila_sdk::FilaClient::connect_with_options(
@@ -267,7 +271,7 @@ async fn auth_superadmin_revocation() {
     .expect("connect sa2");
 
     helpers::cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &sa1_token, "queue", "create", "sa-test"],
     );
 
@@ -277,7 +281,10 @@ async fn auth_superadmin_revocation() {
     assert!(result.is_ok(), "sa2 should work before revocation");
 
     // Revoke sa2 using sa1
-    let revoke_out = helpers::cli_run(&addr, &["--api-key", &sa1_token, "auth", "revoke", &sa2_id]);
+    let revoke_out = helpers::cli_run(
+        _server.binary_addr(),
+        &["--api-key", &sa1_token, "auth", "revoke", &sa2_id],
+    );
     assert!(
         revoke_out.success,
         "revoke sa2 failed: {}",

@@ -57,7 +57,7 @@ fn parse_replicas(output: &str) -> u32 {
 
 /// Helper: find the leader node index (0-based) for a queue by checking stats on node 0.
 fn find_leader_index(cluster: &helpers::cluster::TestCluster, queue: &str) -> usize {
-    let output = queue_inspect(cluster.addr(0), queue);
+    let output = queue_inspect(cluster.binary_addr(0), queue);
     let leader_node_id = parse_leader_node_id(&output);
     assert!(leader_node_id > 0, "no leader found for queue '{queue}'");
     (leader_node_id - 1) as usize // node IDs are 1-based
@@ -81,7 +81,7 @@ fn find_non_leader_index(cluster: &helpers::cluster::TestCluster, queue: &str) -
 async fn cluster_cross_node_lifecycle() {
     let cluster = helpers::cluster::TestCluster::start(3);
 
-    create_cluster_queue(cluster.addr(0), "cross-node");
+    create_cluster_queue(cluster.binary_addr(0), "cross-node");
 
     let leader = find_leader_index(&cluster, "cross-node");
     let non_leader_a = (leader + 1) % 3;
@@ -124,7 +124,7 @@ async fn cluster_cross_node_lifecycle() {
 async fn cluster_leader_failover_zero_message_loss() {
     let mut cluster = helpers::cluster::TestCluster::start(3);
 
-    create_cluster_queue(cluster.addr(0), "failover-q");
+    create_cluster_queue(cluster.binary_addr(0), "failover-q");
 
     let leader = find_leader_index(&cluster, "failover-q");
 
@@ -149,7 +149,7 @@ async fn cluster_leader_failover_zero_message_loss() {
 
     // Find a surviving node and check if there's a new leader
     let surviving = (leader + 1) % 3;
-    let inspect = queue_inspect(cluster.addr(surviving), "failover-q");
+    let inspect = queue_inspect(cluster.binary_addr(surviving), "failover-q");
     let new_leader_id = parse_leader_node_id(&inspect);
     assert!(
         new_leader_id > 0,
@@ -192,7 +192,7 @@ async fn cluster_leader_failover_zero_message_loss() {
 async fn cluster_leader_forwarding() {
     let cluster = helpers::cluster::TestCluster::start(3);
 
-    create_cluster_queue(cluster.addr(0), "forwarding-q");
+    create_cluster_queue(cluster.binary_addr(0), "forwarding-q");
 
     let non_leader = find_non_leader_index(&cluster, "forwarding-q");
     let leader = find_leader_index(&cluster, "forwarding-q");
@@ -231,7 +231,7 @@ async fn cluster_leader_forwarding() {
 async fn cluster_node_rejoin_catchup() {
     let mut cluster = helpers::cluster::TestCluster::start(3);
 
-    create_cluster_queue(cluster.addr(0), "rejoin-q");
+    create_cluster_queue(cluster.binary_addr(0), "rejoin-q");
 
     let leader = find_leader_index(&cluster, "rejoin-q");
 
@@ -271,12 +271,12 @@ async fn cluster_node_rejoin_catchup() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Verify the leader sees all 6 messages
-    let leader_inspect = queue_inspect(cluster.addr(leader), "rejoin-q");
+    let leader_inspect = queue_inspect(cluster.binary_addr(leader), "rejoin-q");
     let depth = parse_depth(&leader_inspect);
     assert_eq!(depth, 6, "leader should see all 6 messages, saw {depth}");
 
     // Verify the restarted node has the queue and reports the correct cluster info
-    let victim_inspect = queue_inspect(cluster.addr(victim), "rejoin-q");
+    let victim_inspect = queue_inspect(cluster.binary_addr(victim), "rejoin-q");
     let replicas = parse_replicas(&victim_inspect);
     assert!(
         replicas >= 2,
@@ -293,13 +293,13 @@ async fn cluster_balanced_queue_leadership() {
     // Create 6 queues. The assignment strategy should distribute leadership
     // across the 3 nodes, not pile everything on the lowest node ID.
     for i in 0..6 {
-        create_cluster_queue(cluster.addr(0), &format!("balanced-{i}"));
+        create_cluster_queue(cluster.binary_addr(0), &format!("balanced-{i}"));
     }
 
     // Count leaderships per node.
     let mut leadership_counts: HashMap<u64, usize> = HashMap::new();
     for i in 0..6 {
-        let output = queue_inspect(cluster.addr(0), &format!("balanced-{i}"));
+        let output = queue_inspect(cluster.binary_addr(0), &format!("balanced-{i}"));
         let leader = parse_leader_node_id(&output);
         assert!(leader > 0, "queue balanced-{i} has no leader");
         *leadership_counts.entry(leader).or_insert(0) += 1;
@@ -330,7 +330,7 @@ async fn cluster_balanced_queue_leadership() {
 async fn cluster_stats_cluster_metadata_all_nodes() {
     let cluster = helpers::cluster::TestCluster::start(3);
 
-    create_cluster_queue(cluster.addr(0), "stats-q");
+    create_cluster_queue(cluster.binary_addr(0), "stats-q");
 
     // Enqueue messages
     let leader = find_leader_index(&cluster, "stats-q");
@@ -346,7 +346,7 @@ async fn cluster_stats_cluster_metadata_all_nodes() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Leader should report correct depth
-    let leader_inspect = queue_inspect(cluster.addr(leader), "stats-q");
+    let leader_inspect = queue_inspect(cluster.binary_addr(leader), "stats-q");
     let leader_depth = parse_depth(&leader_inspect);
     assert_eq!(
         leader_depth, 5,
@@ -355,7 +355,7 @@ async fn cluster_stats_cluster_metadata_all_nodes() {
 
     // All nodes should report the same leader and replica count
     for node_idx in 0..3 {
-        let inspect = queue_inspect(cluster.addr(node_idx), "stats-q");
+        let inspect = queue_inspect(cluster.binary_addr(node_idx), "stats-q");
         let leader_id = parse_leader_node_id(&inspect);
         let replicas = parse_replicas(&inspect);
 
@@ -381,7 +381,7 @@ async fn cluster_stats_cluster_metadata_all_nodes() {
 async fn cluster_consume_leader_redirect() {
     let cluster = helpers::cluster::TestCluster::start(3);
 
-    create_cluster_queue(cluster.addr(0), "redirect-q");
+    create_cluster_queue(cluster.binary_addr(0), "redirect-q");
 
     let leader = find_leader_index(&cluster, "redirect-q");
     let non_leader = find_non_leader_index(&cluster, "redirect-q");

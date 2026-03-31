@@ -70,7 +70,7 @@ impl TestCluster {
     }
 
     /// Get the HTTP address of node `i` (e.g., "http://127.0.0.1:12345").
-    /// Used by CLI commands which still use gRPC.
+    /// Used by gRPC clients.
     pub fn addr(&self, i: usize) -> &str {
         &self.nodes[i].as_ref().expect("node not running").addr
     }

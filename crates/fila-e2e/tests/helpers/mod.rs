@@ -146,7 +146,7 @@ otlp_endpoint = ""
     }
 
     /// The HTTP address of the running server (e.g., "http://127.0.0.1:12345").
-    /// Used by CLI commands which still use gRPC.
+    /// Used by gRPC clients.
     pub fn addr(&self) -> &str {
         &self.addr
     }

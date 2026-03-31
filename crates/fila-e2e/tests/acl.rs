@@ -58,18 +58,18 @@ fn assert_permission_denied_enqueue(result: Result<String, fila_sdk::EnqueueErro
 /// Key without any permissions cannot enqueue.
 #[tokio::test]
 async fn key_without_permissions_cannot_enqueue() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
     // Admin creates the queue using a superadmin key.
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &admin_token, "queue", "create", "acl-test-q"],
     );
     assert!(out.success, "create queue: {}", out.stderr);
 
     // Regular key with no permissions.
-    let (_, token) = cli_create_regular_key(&addr, "no-perms-key");
+    let (_, token) = cli_create_regular_key(_server.binary_addr(), "no-perms-key");
 
     let client = fila_sdk::FilaClient::connect_with_options(
         fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&token),
@@ -84,11 +84,11 @@ async fn key_without_permissions_cannot_enqueue() {
 /// Key with `produce:<queue>` permission can enqueue to that queue.
 #[tokio::test]
 async fn key_with_produce_permission_can_enqueue() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -100,9 +100,9 @@ async fn key_with_produce_permission_can_enqueue() {
     assert!(out.success, "create queue: {}", out.stderr);
 
     // Create a regular key and grant it produce:produce-test-q.
-    let (key_id, token) = cli_create_regular_key(&addr, "producer-key");
+    let (key_id, token) = cli_create_regular_key(_server.binary_addr(), "producer-key");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -134,17 +134,20 @@ async fn key_with_produce_permission_can_enqueue() {
 /// Key with `produce:<queue>` cannot enqueue to a *different* queue.
 #[tokio::test]
 async fn key_with_produce_permission_cannot_enqueue_to_other_queue() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "admin");
     for q in &["queue-a", "queue-b"] {
-        let out = cli_run(&addr, &["--api-key", &admin_token, "queue", "create", q]);
+        let out = cli_run(
+            _server.binary_addr(),
+            &["--api-key", &admin_token, "queue", "create", q],
+        );
         assert!(out.success, "create queue {q}: {}", out.stderr);
     }
 
-    let (key_id, token) = cli_create_regular_key(&addr, "narrow-producer");
+    let (key_id, token) = cli_create_regular_key(_server.binary_addr(), "narrow-producer");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -180,17 +183,20 @@ async fn key_with_produce_permission_cannot_enqueue_to_other_queue() {
 /// Wildcard `produce:*` grants enqueue on any queue.
 #[tokio::test]
 async fn wildcard_produce_permission_allows_any_queue() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "admin");
     for q in &["wc-queue-1", "wc-queue-2"] {
-        let out = cli_run(&addr, &["--api-key", &admin_token, "queue", "create", q]);
+        let out = cli_run(
+            _server.binary_addr(),
+            &["--api-key", &admin_token, "queue", "create", q],
+        );
         assert!(out.success, "create queue {q}: {}", out.stderr);
     }
 
-    let (key_id, token) = cli_create_regular_key(&addr, "wildcard-producer");
+    let (key_id, token) = cli_create_regular_key(_server.binary_addr(), "wildcard-producer");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -222,11 +228,11 @@ async fn wildcard_produce_permission_allows_any_queue() {
 /// Superadmin key bypasses all ACL checks.
 #[tokio::test]
 async fn superadmin_key_bypasses_acl() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "superadmin");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "superadmin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &admin_token, "queue", "create", "super-test-q"],
     );
     assert!(out.success, "create queue: {}", out.stderr);
@@ -246,15 +252,15 @@ async fn superadmin_key_bypasses_acl() {
 /// Admin operations require a key with `admin:*` permission (or superadmin).
 #[tokio::test]
 async fn admin_operations_require_admin_permission() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
     // Create the superadmin key first (bootstrap — no keys exist yet).
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "admin");
 
     // Create a regular key and grant it produce:* but not admin.
-    let (key_id, token) = cli_create_regular_key(&addr, "producer-only");
+    let (key_id, token) = cli_create_regular_key(_server.binary_addr(), "producer-only");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -270,7 +276,7 @@ async fn admin_operations_require_admin_permission() {
 
     // Attempt to create a queue using the produce-only key → PERMISSION_DENIED.
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &token, "queue", "create", "should-fail-queue"],
     );
     assert!(
@@ -289,13 +295,13 @@ async fn admin_operations_require_admin_permission() {
 /// `fila auth acl get` shows permissions for a key.
 #[test]
 fn cli_acl_get_shows_permissions() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
-    let (key_id, _) = cli_create_regular_key(&addr, "show-perms-key");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "admin");
+    let (key_id, _) = cli_create_regular_key(_server.binary_addr(), "show-perms-key");
 
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -312,7 +318,7 @@ fn cli_acl_get_shows_permissions() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &admin_token, "auth", "acl", "get", &key_id],
     );
     assert!(out.success, "get acl: {}", out.stderr);
@@ -331,19 +337,19 @@ fn cli_acl_get_shows_permissions() {
 /// Key without consume permission cannot nack.
 #[tokio::test]
 async fn key_without_consume_permission_cannot_nack() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &admin_token, "queue", "create", "nack-acl-q"],
     );
     assert!(out.success, "create queue: {}", out.stderr);
 
     // A key with only produce permission cannot nack.
-    let (key_id, token) = cli_create_regular_key(&addr, "produce-only-key");
+    let (key_id, token) = cli_create_regular_key(_server.binary_addr(), "produce-only-key");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -376,13 +382,13 @@ async fn key_without_consume_permission_cannot_nack() {
 /// `fila auth acl set` rejects unknown permission kinds.
 #[test]
 fn cli_acl_set_rejects_invalid_kind() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "admin");
-    let (key_id, _) = cli_create_regular_key(&addr, "target-key");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "admin");
+    let (key_id, _) = cli_create_regular_key(_server.binary_addr(), "target-key");
 
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -409,15 +415,15 @@ fn cli_acl_set_rejects_invalid_kind() {
 /// A key with admin permission can create a new API key (non-superadmin).
 #[test]
 fn key_with_admin_permission_can_create_api_key() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
     // Bootstrap creates the first superadmin.
-    let (_, admin_token) = cli_create_superadmin_key(&addr, "superadmin");
+    let (_, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "superadmin");
 
     // Create a key with admin:* and verify it can create another key.
-    let (key_id, admin_key_token) = cli_create_regular_key(&addr, "admin-key");
+    let (key_id, admin_key_token) = cli_create_regular_key(_server.binary_addr(), "admin-key");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -432,7 +438,7 @@ fn key_with_admin_permission_can_create_api_key() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_key_token,
@@ -452,14 +458,14 @@ fn key_with_admin_permission_can_create_api_key() {
 /// A key without admin permission cannot create a new API key.
 #[test]
 fn key_without_admin_permission_cannot_create_api_key() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, _) = cli_create_superadmin_key(&addr, "admin");
+    let (_, _) = cli_create_superadmin_key(_server.binary_addr(), "admin");
     // Regular key with no permissions at all.
-    let (_, no_perm_token) = cli_create_regular_key(&addr, "no-perm-key");
+    let (_, no_perm_token) = cli_create_regular_key(_server.binary_addr(), "no-perm-key");
 
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &no_perm_token,
@@ -488,14 +494,14 @@ fn key_without_admin_permission_cannot_create_api_key() {
 /// A per-queue admin can create a queue within their admin scope.
 #[test]
 fn per_queue_admin_can_create_queue_in_scope() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, superadmin_token) = cli_create_superadmin_key(&addr, "superadmin");
+    let (_, superadmin_token) = cli_create_superadmin_key(_server.binary_addr(), "superadmin");
 
     // Create a key with admin:orders.* permission.
-    let (key_id, token) = cli_create_regular_key(&addr, "orders-admin");
+    let (key_id, token) = cli_create_regular_key(_server.binary_addr(), "orders-admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &superadmin_token,
@@ -511,7 +517,7 @@ fn per_queue_admin_can_create_queue_in_scope() {
 
     // This key should be able to create orders.us.
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &token, "queue", "create", "orders.us"],
     );
     assert!(
@@ -524,12 +530,12 @@ fn per_queue_admin_can_create_queue_in_scope() {
 /// A per-queue admin cannot create a queue outside their admin scope.
 #[test]
 fn per_queue_admin_cannot_create_queue_outside_scope() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, superadmin_token) = cli_create_superadmin_key(&addr, "superadmin");
-    let (key_id, token) = cli_create_regular_key(&addr, "orders-admin");
+    let (_, superadmin_token) = cli_create_superadmin_key(_server.binary_addr(), "superadmin");
+    let (key_id, token) = cli_create_regular_key(_server.binary_addr(), "orders-admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &superadmin_token,
@@ -544,7 +550,10 @@ fn per_queue_admin_cannot_create_queue_outside_scope() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     // Attempting to create payments queue should be denied.
-    let out = cli_run(&addr, &["--api-key", &token, "queue", "create", "payments"]);
+    let out = cli_run(
+        _server.binary_addr(),
+        &["--api-key", &token, "queue", "create", "payments"],
+    );
     assert!(
         !out.success,
         "per-queue admin should be denied for out-of-scope queue; stdout={} stderr={}",
@@ -560,20 +569,20 @@ fn per_queue_admin_cannot_create_queue_outside_scope() {
 /// A per-queue admin can set ACL permissions that are within their admin scope.
 #[tokio::test]
 async fn per_queue_admin_can_set_acl_within_scope() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, superadmin_token) = cli_create_superadmin_key(&addr, "superadmin");
+    let (_, superadmin_token) = cli_create_superadmin_key(_server.binary_addr(), "superadmin");
 
     // Create the queue and the per-queue admin key.
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &superadmin_token, "queue", "create", "orders"],
     );
     assert!(out.success, "create queue: {}", out.stderr);
 
-    let (admin_key_id, admin_token) = cli_create_regular_key(&addr, "orders-admin");
+    let (admin_key_id, admin_token) = cli_create_regular_key(_server.binary_addr(), "orders-admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &superadmin_token,
@@ -588,9 +597,9 @@ async fn per_queue_admin_can_set_acl_within_scope() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     // Create a regular key and let the per-queue admin set its ACL.
-    let (target_key_id, target_token) = cli_create_regular_key(&addr, "producer");
+    let (target_key_id, target_token) = cli_create_regular_key(_server.binary_addr(), "producer");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -623,12 +632,12 @@ async fn per_queue_admin_can_set_acl_within_scope() {
 /// A per-queue admin cannot set ACL permissions that exceed their admin scope.
 #[test]
 fn per_queue_admin_cannot_set_acl_outside_scope() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, superadmin_token) = cli_create_superadmin_key(&addr, "superadmin");
-    let (admin_key_id, admin_token) = cli_create_regular_key(&addr, "orders-admin");
+    let (_, superadmin_token) = cli_create_superadmin_key(_server.binary_addr(), "superadmin");
+    let (admin_key_id, admin_token) = cli_create_regular_key(_server.binary_addr(), "orders-admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &superadmin_token,
@@ -642,11 +651,11 @@ fn per_queue_admin_cannot_set_acl_outside_scope() {
     );
     assert!(out.success, "set acl: {}", out.stderr);
 
-    let (target_key_id, _) = cli_create_regular_key(&addr, "target");
+    let (target_key_id, _) = cli_create_regular_key(_server.binary_addr(), "target");
 
     // Per-queue admin tries to grant produce:payments — outside their scope.
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -673,12 +682,12 @@ fn per_queue_admin_cannot_set_acl_outside_scope() {
 /// A per-queue admin cannot grant a wildcard permission wider than their scope.
 #[test]
 fn per_queue_admin_cannot_grant_broader_pattern() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, superadmin_token) = cli_create_superadmin_key(&addr, "superadmin");
-    let (admin_key_id, admin_token) = cli_create_regular_key(&addr, "orders-admin");
+    let (_, superadmin_token) = cli_create_superadmin_key(_server.binary_addr(), "superadmin");
+    let (admin_key_id, admin_token) = cli_create_regular_key(_server.binary_addr(), "orders-admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &superadmin_token,
@@ -692,11 +701,11 @@ fn per_queue_admin_cannot_grant_broader_pattern() {
     );
     assert!(out.success, "set acl: {}", out.stderr);
 
-    let (target_key_id, _) = cli_create_regular_key(&addr, "target");
+    let (target_key_id, _) = cli_create_regular_key(_server.binary_addr(), "target");
 
     // orders admin tries to grant produce:* — too broad.
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -718,14 +727,15 @@ fn per_queue_admin_cannot_grant_broader_pattern() {
 /// Only superadmin keys can create other superadmin keys.
 #[test]
 fn only_superadmin_can_create_superadmin_key() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, superadmin_token) = cli_create_superadmin_key(&addr, "first-superadmin");
+    let (_, superadmin_token) =
+        cli_create_superadmin_key(_server.binary_addr(), "first-superadmin");
 
     // admin:* key tries to create a superadmin key → denied.
-    let (admin_key_id, admin_token) = cli_create_regular_key(&addr, "global-admin");
+    let (admin_key_id, admin_token) = cli_create_regular_key(_server.binary_addr(), "global-admin");
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &superadmin_token,
@@ -740,7 +750,7 @@ fn only_superadmin_can_create_superadmin_key() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &admin_token,
@@ -766,12 +776,13 @@ fn only_superadmin_can_create_superadmin_key() {
 /// A superadmin can create another superadmin key.
 #[test]
 fn superadmin_can_create_another_superadmin() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (_, superadmin_token) = cli_create_superadmin_key(&addr, "first-superadmin");
+    let (_, superadmin_token) =
+        cli_create_superadmin_key(_server.binary_addr(), "first-superadmin");
 
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &[
             "--api-key",
             &superadmin_token,
@@ -792,12 +803,12 @@ fn superadmin_can_create_another_superadmin() {
 /// `fila auth acl get` shows superadmin status.
 #[test]
 fn cli_acl_get_shows_superadmin() {
-    let (_server, addr) = start_auth_server();
+    let (_server, _addr) = start_auth_server();
 
-    let (key_id, admin_token) = cli_create_superadmin_key(&addr, "super-key");
+    let (key_id, admin_token) = cli_create_superadmin_key(_server.binary_addr(), "super-key");
 
     let out = cli_run(
-        &addr,
+        _server.binary_addr(),
         &["--api-key", &admin_token, "auth", "acl", "get", &key_id],
     );
     assert!(out.success, "get acl: {}", out.stderr);
