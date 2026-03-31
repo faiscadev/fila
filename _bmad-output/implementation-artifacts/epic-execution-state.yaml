@@ -32,9 +32,9 @@ stories:
     dependsOn: ["20.1", "20.2", "20.3"]
   - id: "20.5"
     title: "gRPC Removal & Final Benchmarks"
-    status: pending
-    currentPhase: ""
-    branch: ""
+    status: in-progress
+    currentPhase: "dev"
+    branch: "feat/20.5-grpc-removal"
     pr: null
     dependsOn: ["20.1", "20.2", "20.3", "20.4"]
 skippedIssues: []
