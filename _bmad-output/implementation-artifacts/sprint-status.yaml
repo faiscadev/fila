@@ -206,7 +206,7 @@ development_status:
   20-2-admin-operations-auth-on-binary-protocol: done
   20-3-rust-sdk-binary-protocol-client: done
   20-4-cli-cluster-inter-node-migration: done
-  20-5-grpc-removal-final-benchmarks: in-progress
+  20-5-grpc-removal-final-benchmarks: done
   epic-20-retrospective: optional
 
   # Epic 21: External SDK Migration
