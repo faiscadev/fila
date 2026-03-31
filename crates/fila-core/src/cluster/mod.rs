@@ -1,5 +1,4 @@
 pub mod binary_service;
-pub mod grpc_service;
 pub mod multi_raft;
 pub mod network;
 pub mod proto_convert;
@@ -97,7 +96,7 @@ pub struct ClusterWriteResult {
 impl ClusterHandle {
     /// Submit a write to a queue's Raft group. If this node is not the
     /// leader, the request is transparently forwarded to the leader via
-    /// the cluster gRPC `ClientWrite` RPC.
+    /// the cluster binary protocol `ClientWrite` RPC.
     ///
     /// Returns a `ClusterWriteResult` indicating whether the write was
     /// handled locally (caller should apply to scheduler) or forwarded
@@ -173,7 +172,7 @@ impl ClusterHandle {
         Some(leader == Some(self.node_id))
     }
 
-    /// Get the leader's client-facing gRPC address for a queue. Returns `None`
+    /// Get the leader's client-facing address for a queue. Returns `None`
     /// if the queue group doesn't exist, no leader is elected, or the leader's
     /// client address is unknown.
     pub async fn get_queue_leader_client_addr(&self, queue_id: &str) -> Option<String> {

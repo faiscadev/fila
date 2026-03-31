@@ -1,8 +1,8 @@
 //! Binary protocol service for cluster inter-node communication.
 //!
-//! Replaces the gRPC-based `ClusterGrpcService` with a TCP listener that speaks
-//! the FIBP (Fila Binary Protocol). Raft payloads remain protobuf-serialized
-//! but are transported as opaque bytes inside binary protocol frames.
+//! Uses TCP with FIBP (Fila Binary Protocol) framing. Raft payloads remain
+//! protobuf-serialized but are transported as opaque bytes inside binary
+//! protocol frames.
 
 use std::sync::Arc;
 
@@ -23,6 +23,107 @@ use super::multi_raft::MultiRaftManager;
 use super::proto_convert;
 use super::types::{NodeId, TypeConfig};
 use crate::Broker;
+
+/// Apply a forwarded write to the local scheduler after Raft commit.
+/// This ensures the leader's scheduler has the data for serving consumers.
+pub(super) async fn apply_to_scheduler(broker: &crate::Broker, req: &super::types::ClusterRequest) {
+    match req {
+        super::types::ClusterRequest::Enqueue { messages } => {
+            if messages.is_empty() {
+                return;
+            }
+            let msgs = messages.clone();
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = broker.send_command(crate::SchedulerCommand::Enqueue {
+                messages: msgs,
+                reply: reply_tx,
+            }) {
+                tracing::error!(error = %e, "failed to apply forwarded enqueue to scheduler");
+                return;
+            }
+            match reply_rx.await {
+                Err(e) => {
+                    tracing::error!(error = %e, "scheduler dropped reply for forwarded enqueue");
+                }
+                Ok(results) => {
+                    for result in results {
+                        if let Err(e) = result {
+                            tracing::error!(error = %e, "scheduler rejected forwarded enqueue");
+                        }
+                    }
+                }
+            }
+        }
+        super::types::ClusterRequest::Ack { items } => {
+            if items.is_empty() {
+                return;
+            }
+            let ack_items: Vec<crate::broker::command::AckItem> = items
+                .iter()
+                .map(|i| crate::broker::command::AckItem {
+                    queue_id: i.queue_id.clone(),
+                    msg_id: i.msg_id,
+                })
+                .collect();
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = broker.send_command(crate::SchedulerCommand::Ack {
+                items: ack_items,
+                reply: reply_tx,
+            }) {
+                tracing::error!(error = %e, "failed to apply forwarded ack to scheduler");
+                return;
+            }
+            match reply_rx.await {
+                Err(e) => {
+                    tracing::error!(error = %e, "scheduler dropped reply for forwarded ack");
+                }
+                Ok(results) => {
+                    for result in results {
+                        if let Err(e) = result {
+                            tracing::error!(error = %e, "scheduler rejected forwarded ack");
+                        }
+                    }
+                }
+            }
+        }
+        super::types::ClusterRequest::Nack { items } => {
+            if items.is_empty() {
+                return;
+            }
+            let nack_items: Vec<crate::broker::command::NackItem> = items
+                .iter()
+                .map(|i| crate::broker::command::NackItem {
+                    queue_id: i.queue_id.clone(),
+                    msg_id: i.msg_id,
+                    error: i.error.clone(),
+                })
+                .collect();
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = broker.send_command(crate::SchedulerCommand::Nack {
+                items: nack_items,
+                reply: reply_tx,
+            }) {
+                tracing::error!(error = %e, "failed to apply forwarded nack to scheduler");
+                return;
+            }
+            match reply_rx.await {
+                Err(e) => {
+                    tracing::error!(error = %e, "scheduler dropped reply for forwarded nack");
+                }
+                Ok(results) => {
+                    for result in results {
+                        if let Err(e) = result {
+                            tracing::error!(error = %e, "scheduler rejected forwarded nack");
+                        }
+                    }
+                }
+            }
+        }
+        // Other request types (CreateQueue, DeleteQueue, etc.) are handled
+        // through the meta Raft event system, not here.
+        _ => {}
+    }
+}
 
 /// Shared state for the cluster binary protocol service.
 pub struct ClusterBinaryService {
@@ -417,7 +518,7 @@ async fn handle_client_write(
             // Apply to local scheduler so forwarded writes have
             // real side effects on the leader node.
             if let Some(broker) = service.broker.get() {
-                super::grpc_service::apply_to_scheduler(broker, &cluster_req).await;
+                apply_to_scheduler(broker, &cluster_req).await;
             }
 
             let response_proto = fila_proto::ClusterResponseProto::from(resp.data);

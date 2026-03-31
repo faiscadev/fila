@@ -22,7 +22,7 @@ pub use config::{AuthConfig, BrokerConfig, TlsParams};
 use scheduler::Scheduler;
 
 /// The broker owns the scheduler thread and the inbound command channel.
-/// IO threads (gRPC handlers) send commands through `send_command()`,
+/// IO threads (connection handlers) send commands through `send_command()`,
 /// and the single-threaded scheduler processes them sequentially.
 pub struct Broker {
     command_tx: crossbeam_channel::Sender<SchedulerCommand>,

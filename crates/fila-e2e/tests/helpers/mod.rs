@@ -14,9 +14,8 @@ use std::time::Duration;
 /// The server is killed when this struct is dropped.
 pub struct TestServer {
     child: Option<Child>,
-    addr: String,
     /// Binary protocol address (host:port, no scheme prefix).
-    binary_addr: String,
+    addr: String,
     /// Kept alive for the duration of the test. When dropped, the temp dir is cleaned up.
     /// `None` after `kill_and_take_data()` transfers ownership.
     data_dir: Option<tempfile::TempDir>,
@@ -37,10 +36,8 @@ impl TestServer {
         addr: String,
         data_dir: tempfile::TempDir,
     ) -> Self {
-        // When constructing from parts (e.g. TLS tests), the binary_addr defaults
-        // to the same as addr but without scheme, since those tests manage their
-        // own config. The SDK connects via binary_addr.
-        let binary_addr = addr
+        // Strip any scheme prefix — the binary protocol uses raw host:port.
+        let addr = addr
             .strip_prefix("http://")
             .or_else(|| addr.strip_prefix("https://"))
             .unwrap_or(&addr)
@@ -48,7 +45,6 @@ impl TestServer {
         Self {
             child: Some(child),
             addr,
-            binary_addr,
             data_dir: Some(data_dir),
         }
     }
@@ -67,13 +63,8 @@ impl TestServer {
 
     /// Start a new fila-server instance with custom options.
     fn start_with_options(opts: TestServerOptions) -> Self {
-        let grpc_port = free_port();
-        let mut binary_port = free_port();
-        while binary_port == grpc_port {
-            binary_port = free_port();
-        }
-        let grpc_addr = format!("127.0.0.1:{grpc_port}");
-        let binary_addr = format!("127.0.0.1:{binary_port}");
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");
 
         let config_path = data_dir.path().join("fila.toml");
@@ -84,8 +75,7 @@ impl TestServer {
         };
         let config_content = format!(
             r#"[server]
-listen_addr = "{grpc_addr}"
-binary_addr = "{binary_addr}"
+listen_addr = "{addr}"
 {scheduler_section}
 [telemetry]
 otlp_endpoint = ""
@@ -116,86 +106,61 @@ otlp_endpoint = ""
         let stderr = child.stderr.take().expect("stderr");
         std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
-        // Poll TCP until both the gRPC and binary protocol ports are reachable.
+        // Poll TCP until the port is reachable.
         let start = std::time::Instant::now();
-        let mut grpc_connected = false;
-        let mut binary_connected = false;
         while start.elapsed() < Duration::from_secs(10) {
-            if !grpc_connected && std::net::TcpStream::connect(&grpc_addr).is_ok() {
-                grpc_connected = true;
-            }
-            if !binary_connected && std::net::TcpStream::connect(&binary_addr).is_ok() {
-                binary_connected = true;
-            }
-            if grpc_connected && binary_connected {
+            if std::net::TcpStream::connect(&addr).is_ok() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(
-            grpc_connected && binary_connected,
-            "fila-server did not become reachable at gRPC={grpc_addr} binary={binary_addr} within 10s"
+            std::net::TcpStream::connect(&addr).is_ok(),
+            "fila-server did not become reachable at {addr} within 10s"
         );
 
         Self {
             child: Some(child),
-            addr: format!("http://{grpc_addr}"),
-            binary_addr,
+            addr,
             data_dir: Some(data_dir),
         }
     }
 
-    /// The HTTP address of the running server (e.g., "http://127.0.0.1:12345").
-    /// Used by gRPC clients.
+    /// The binary protocol address (host:port) for SDK and CLI connections.
     pub fn addr(&self) -> &str {
         &self.addr
     }
 
     /// The binary protocol address (host:port) for SDK connections.
+    /// Alias for `addr()` for backward compatibility.
     pub fn binary_addr(&self) -> &str {
-        &self.binary_addr
+        &self.addr
     }
 
-    /// The raw host:port address (without http:// prefix) for the gRPC port.
+    /// The raw host:port address (without any prefix).
     pub fn host_port(&self) -> &str {
-        self.addr.strip_prefix("http://").unwrap_or(&self.addr)
+        &self.addr
     }
 
     /// Kill the server and return the data directory for restarting on the same data.
     /// This simulates a crash — the server is killed with SIGKILL.
-    pub fn kill_and_take_data(mut self) -> (tempfile::TempDir, u16, u16) {
+    pub fn kill_and_take_data(mut self) -> (tempfile::TempDir, u16) {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let grpc_port = self.grpc_port();
-        let binary_port = self.binary_port();
+        let port = self.port();
         let data_dir = self.data_dir.take().expect("data_dir already taken");
-        (data_dir, grpc_port, binary_port)
+        (data_dir, port)
     }
 
-    fn grpc_port(&self) -> u16 {
-        self.host_port()
-            .split(':')
-            .next_back()
-            .unwrap()
-            .parse()
-            .unwrap()
+    fn port(&self) -> u16 {
+        self.addr.split(':').next_back().unwrap().parse().unwrap()
     }
 
-    fn binary_port(&self) -> u16 {
-        self.binary_addr
-            .split(':')
-            .next_back()
-            .unwrap()
-            .parse()
-            .unwrap()
-    }
-
-    /// Restart a server on the same data directory and ports.
-    pub fn restart_on(data_dir: tempfile::TempDir, grpc_port: u16, binary_port: u16) -> Self {
-        let grpc_addr = format!("127.0.0.1:{grpc_port}");
-        let binary_addr = format!("127.0.0.1:{binary_port}");
+    /// Restart a server on the same data directory and port.
+    pub fn restart_on(data_dir: tempfile::TempDir, port: u16) -> Self {
+        let addr = format!("127.0.0.1:{port}");
 
         let binary = server_binary();
         assert!(
@@ -221,29 +186,20 @@ otlp_endpoint = ""
         std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
         let start = std::time::Instant::now();
-        let mut grpc_connected = false;
-        let mut binary_connected = false;
         while start.elapsed() < Duration::from_secs(10) {
-            if !grpc_connected && std::net::TcpStream::connect(&grpc_addr).is_ok() {
-                grpc_connected = true;
-            }
-            if !binary_connected && std::net::TcpStream::connect(&binary_addr).is_ok() {
-                binary_connected = true;
-            }
-            if grpc_connected && binary_connected {
+            if std::net::TcpStream::connect(&addr).is_ok() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(
-            grpc_connected && binary_connected,
-            "fila-server did not become reachable at gRPC={grpc_addr} binary={binary_addr} within 10s after restart"
+            std::net::TcpStream::connect(&addr).is_ok(),
+            "fila-server did not become reachable at {addr} within 10s after restart"
         );
 
         Self {
             child: Some(child),
-            addr: format!("http://{grpc_addr}"),
-            binary_addr,
+            addr,
             data_dir: Some(data_dir),
         }
     }
@@ -337,16 +293,14 @@ pub const TEST_BOOTSTRAP_KEY: &str = "test-bootstrap-key-for-e2e";
 
 /// Start a fila-server with API key authentication enabled.
 ///
-/// Returns (TestServer, http_addr). Use `TEST_BOOTSTRAP_KEY` as the initial credential.
+/// Returns (TestServer, addr). Use `TEST_BOOTSTRAP_KEY` as the initial credential.
 pub fn start_auth_server() -> (TestServer, String) {
-    let grpc_port = free_port();
-    let binary_port = free_port();
-    let grpc_addr = format!("127.0.0.1:{grpc_port}");
-    let binary_addr = format!("127.0.0.1:{binary_port}");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
 
     let data_dir = tempfile::tempdir().expect("temp dir");
     let config_content = format!(
-        "[server]\nlisten_addr = \"{grpc_addr}\"\nbinary_addr = \"{binary_addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\nbootstrap_apikey = \"{TEST_BOOTSTRAP_KEY}\"\n"
+        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[auth]\nbootstrap_apikey = \"{TEST_BOOTSTRAP_KEY}\"\n"
     );
     let config_path = data_dir.path().join("fila.toml");
     std::fs::write(&config_path, config_content).expect("write config");
@@ -376,33 +330,23 @@ pub fn start_auth_server() -> (TestServer, String) {
 
     // Poll TCP until the server is reachable.
     let start = std::time::Instant::now();
-    let mut grpc_connected = false;
-    let mut binary_connected = false;
     while start.elapsed() < Duration::from_secs(10) {
-        if !grpc_connected && std::net::TcpStream::connect(&grpc_addr).is_ok() {
-            grpc_connected = true;
-        }
-        if !binary_connected && std::net::TcpStream::connect(&binary_addr).is_ok() {
-            binary_connected = true;
-        }
-        if grpc_connected && binary_connected {
+        if std::net::TcpStream::connect(&addr).is_ok() {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(
-        grpc_connected && binary_connected,
-        "fila-server (auth mode) did not become reachable at gRPC={grpc_addr} binary={binary_addr} within 10s"
+        std::net::TcpStream::connect(&addr).is_ok(),
+        "fila-server (auth mode) did not become reachable at {addr} within 10s"
     );
 
-    let http_addr = format!("http://{grpc_addr}");
     let server = TestServer {
         child: Some(child),
-        addr: http_addr.clone(),
-        binary_addr,
+        addr: addr.clone(),
         data_dir: Some(data_dir),
     };
-    (server, http_addr)
+    (server, addr)
 }
 
 /// Create a superadmin API key via CLI and return (key_id, token).

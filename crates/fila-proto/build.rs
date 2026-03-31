@@ -6,8 +6,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let proto_files = [
         proto_root.join("fila/v1/messages.proto"),
-        proto_root.join("fila/v1/service.proto"),
-        proto_root.join("fila/v1/admin.proto"),
         proto_root.join("fila/v1/cluster.proto"),
     ];
 
@@ -16,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("cargo:rerun-if-changed={}", proto.display());
     }
 
-    tonic_prost_build::configure().compile_protos(
+    prost_build::compile_protos(
         &proto_files
             .iter()
             .map(|p| p.to_string_lossy().into_owned())

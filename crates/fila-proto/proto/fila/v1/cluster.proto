@@ -4,34 +4,6 @@ package fila.v1;
 
 import "fila/v1/messages.proto";
 
-/// Internal cluster gRPC service for Raft consensus communication.
-/// This service runs on a separate port from the client-facing service.
-service FilaCluster {
-  /// Forward a Raft AppendEntries RPC.
-  rpc AppendEntries(RaftAppendEntriesRequest) returns (RaftAppendEntriesResponse);
-
-  /// Forward a Raft Vote RPC.
-  rpc Vote(RaftVoteRequest) returns (RaftVoteResponse);
-
-  /// Forward a Raft InstallSnapshot RPC.
-  rpc InstallSnapshot(RaftInstallSnapshotRequest) returns (RaftInstallSnapshotResponse);
-
-  /// Request to add this node to the cluster.
-  rpc AddNode(AddNodeRequest) returns (AddNodeResponse);
-
-  /// Request to remove a node from the cluster.
-  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
-
-  /// Forward a client write to the Raft leader for a specific group.
-  /// Used for transparent request routing: when a node receives a write
-  /// request but is not the leader for the target group, it serializes
-  /// the ClusterRequest and forwards it to the leader via this RPC.
-  rpc ClientWrite(RaftClientWriteRequest) returns (RaftClientWriteResponse);
-
-  /// Get this node's client-facing gRPC address (for leader hint routing).
-  rpc GetNodeInfo(GetNodeInfoRequest) returns (GetNodeInfoResponse);
-}
-
 // --- Primitive openraft types ---
 
 message RaftLeaderId {
@@ -228,7 +200,7 @@ message RaftClientWriteResponse {
 message AddNodeRequest {
   uint64 node_id = 1;
   string addr = 2;
-  /// The joining node's client-facing gRPC address (e.g., "host:5555").
+  /// The joining node's client-facing address (e.g., "host:5555").
   /// Used for leader hint routing so clients can be directed to the correct
   /// node for consume operations.
   string client_addr = 3;
@@ -255,6 +227,6 @@ message GetNodeInfoRequest {}
 
 message GetNodeInfoResponse {
   uint64 node_id = 1;
-  /// This node's client-facing gRPC address (e.g., "host:5555").
+  /// This node's client-facing address (e.g., "host:5555").
   string client_addr = 2;
 }

@@ -136,7 +136,7 @@ fn init_otel_pipeline(
 
     opentelemetry::global::set_meter_provider(meter_provider.clone());
 
-    // Set W3C TraceContext propagator for gRPC metadata extraction/injection
+    // Set W3C TraceContext propagator for trace context extraction/injection
     opentelemetry::global::set_text_map_propagator(
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );

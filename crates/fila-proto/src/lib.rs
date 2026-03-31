@@ -1,1 +1,1 @@
-tonic::include_proto!("fila.v1");
+include!(concat!(env!("OUT_DIR"), "/fila.v1.rs"));
