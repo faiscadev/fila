@@ -8,7 +8,8 @@ use fila_fibp::{
     AckRequest as FibpAckRequest, AckResponse as FibpAckResponse, ConsumeRequest as FibpConsumeReq,
     DeliveryBatch, EnqueueMessage, EnqueueRequest as FibpEnqueueReq,
     EnqueueResponse as FibpEnqueueResp, ErrorCode, ErrorFrame, Handshake, HandshakeOk,
-    NackRequest as FibpNackRequest, NackResponse as FibpNackResponse, Opcode, RawFrame,
+    NackRequest as FibpNackRequest, NackResponse as FibpNackResponse, Opcode, ProtocolMessage,
+    RawFrame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
