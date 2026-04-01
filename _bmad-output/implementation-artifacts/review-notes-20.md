@@ -19,3 +19,22 @@
 - When adding a new rustls-dependent crate alongside tonic, always install a CryptoProvider explicitly at startup
 - Binary protocol server patterns (DynStream, JoinSet, ContinuationAssembler) established here should be reused in stories 20.2-20.5
 - Admin opcodes grow downward from 0xFD — new admin opcodes get the next lower value
+
+## PR #159: Admin Operations & Auth on Binary Protocol
+
+### Gaps in Dev Process
+- Multiple `as u16` truncation sites in encode methods would silently corrupt frames for large lists — same class of bug Cubic caught in stats, repeated across queues list, config entries, API keys, and ACL permissions
+- No encode/decode trait formalized — each type had identical method signatures as inherent impls with no shared contract
+- All 37 protocol types in a single 1919-line types.rs file
+
+### Incorrect Decisions During Development
+- `assert!` used for stats list length check instead of truncation — would panic the server in production
+- types.rs not split into domain-specific modules
+
+### Deferred Work
+- u16 count limitation across all list types tracked in #164 — needs wire format change to u32
+
+### Patterns for Future Stories
+- All new protocol types must implement `ProtocolMessage` trait
+- All u16 list counts must use `.min(u16::MAX)` + `tracing::warn!` pattern, never `as u16` directly
+- Protocol types organized by domain: handshake.rs, hotpath.rs, admin.rs, auth.rs, error.rs

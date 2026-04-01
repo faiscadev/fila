@@ -1,6 +1,6 @@
 # Story 20.2: Admin Operations & Auth on Binary Protocol
 
-Status: review
+Status: done
 
 ## Story
 
