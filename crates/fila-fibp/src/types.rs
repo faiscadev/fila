@@ -802,6 +802,13 @@ impl GetStatsResponse {
         w.put_u64(self.leader_node_id);
         w.put_u32(self.replication_count);
         let key_count = self.per_key_stats.len().min(u16::MAX as usize);
+        if key_count < self.per_key_stats.len() {
+            tracing::warn!(
+                total = self.per_key_stats.len(),
+                included = key_count,
+                "per_key_stats truncated: count exceeds u16::MAX (see #164)"
+            );
+        }
         w.put_u16(key_count as u16);
         for s in self.per_key_stats.iter().take(key_count) {
             w.put_string(&s.key);
@@ -810,6 +817,13 @@ impl GetStatsResponse {
             w.put_u32(s.weight);
         }
         let throttle_count = self.per_throttle_stats.len().min(u16::MAX as usize);
+        if throttle_count < self.per_throttle_stats.len() {
+            tracing::warn!(
+                total = self.per_throttle_stats.len(),
+                included = throttle_count,
+                "per_throttle_stats truncated: count exceeds u16::MAX (see #164)"
+            );
+        }
         w.put_u16(throttle_count as u16);
         for s in self.per_throttle_stats.iter().take(throttle_count) {
             w.put_string(&s.key);

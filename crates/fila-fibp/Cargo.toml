@@ -11,6 +11,7 @@ description = "Fila Binary Protocol (FIBP) codec — frame types, opcodes, encod
 [dependencies]
 bytes = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
