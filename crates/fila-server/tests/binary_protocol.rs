@@ -13,7 +13,7 @@ use fila_core::{Broker, BrokerConfig, RocksDbEngine};
 use fila_fibp::{
     AckRequest, AckResponse, ConsumeRequest, DeliveryBatch, EnqueueMessage, EnqueueRequest,
     EnqueueResponse, ErrorCode, ErrorFrame, Handshake, HandshakeOk, NackRequest, NackResponse,
-    Opcode, RawFrame, FLAG_CONTINUATION,
+    Opcode, ProtocolMessage, RawFrame, FLAG_CONTINUATION,
 };
 use fila_fibp::{
     CreateQueueRequest as FibpCreateQueueRequest, CreateQueueResponse as FibpCreateQueueResponse,

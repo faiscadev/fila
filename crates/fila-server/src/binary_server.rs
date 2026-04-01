@@ -8,7 +8,7 @@ use bytes::BytesMut;
 use fila_core::{Broker, BrokerError, ClusterHandle, TlsParams};
 use fila_fibp::{
     ContinuationAssembler, ErrorCode, ErrorFrame, FrameError, Handshake, HandshakeOk, Opcode,
-    RawFrame, MAX_FRAME_SIZE,
+    ProtocolMessage, RawFrame, MAX_FRAME_SIZE,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};

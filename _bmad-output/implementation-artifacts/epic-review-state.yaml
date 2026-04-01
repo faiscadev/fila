@@ -3,7 +3,7 @@ epicNumber: 20
 startedAt: "2026-03-31T00:00:00Z"
 yoloMode: false
 mode: normal
-currentPrIndex: 0
+currentPrIndex: 1
 prChain:
   - storyId: "20.1"
     storyKey: "20-1-binary-protocol-server-hot-path-operations"
@@ -11,14 +11,14 @@ prChain:
     branch: "feat/20.1-binary-protocol-server-hot-path"
     pr: 158
     baseBranch: "main"
-    status: reviewing
+    status: merged
   - storyId: "20.2"
     storyKey: "20-2-admin-operations-auth-on-binary-protocol"
     title: "Admin Operations & Auth on Binary Protocol"
     branch: "feat/20.2-admin-ops-auth-binary-protocol"
     pr: 159
-    baseBranch: "feat/20.1-binary-protocol-server-hot-path"
-    status: pending
+    baseBranch: "main"
+    status: reviewing
   - storyId: "20.3"
     storyKey: "20-3-rust-sdk-binary-protocol-client"
     title: "Rust SDK Binary Protocol Client"

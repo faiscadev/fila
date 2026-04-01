@@ -12,4 +12,5 @@ pub use frame::{
     MAX_FRAME_SIZE,
 };
 pub use opcode::Opcode;
+pub use types::ProtocolMessage;
 pub use types::*;
