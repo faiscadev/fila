@@ -46,6 +46,8 @@ pub async fn run(
         "binary protocol server listening"
     );
 
+    let mut connections = tokio::task::JoinSet::new();
+
     loop {
         tokio::select! {
             accept_result = listener.accept() => {
@@ -54,7 +56,7 @@ pub async fn run(
                         debug!(%peer, "new TCP connection");
                         let server = Arc::clone(&server);
                         let tls = tls_acceptor.clone();
-                        tokio::spawn(async move {
+                        connections.spawn(async move {
                             if let Err(e) = handle_connection(server, stream, tls).await {
                                 debug!(%peer, error = %e, "connection ended");
                             }
@@ -65,39 +67,72 @@ pub async fn run(
                     }
                 }
             }
+            // Reap completed connection tasks to prevent unbounded JoinHandle growth.
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
             _ = shutdown.changed() => {
-                info!("binary protocol server shutting down");
+                info!(
+                    active_connections = connections.len(),
+                    "binary protocol server shutting down"
+                );
+                connections.abort_all();
+                while connections.join_next().await.is_some() {}
                 return;
             }
         }
     }
 }
 
-/// Possible IO stream types after optional TLS negotiation.
+/// Async stream abstraction over plain TCP and TLS connections.
+///
+/// Implements `AsyncRead + AsyncWrite` so all standard tokio IO extension
+/// methods (`read_buf`, `write_all`, `flush`) work directly.
 enum Stream {
     Plain(TcpStream),
     Tls(Box<tokio_rustls::server::TlsStream<TcpStream>>),
 }
 
-impl Stream {
-    async fn read_buf(&mut self, buf: &mut BytesMut) -> std::io::Result<usize> {
-        match self {
-            Stream::Plain(s) => s.read_buf(buf).await,
-            Stream::Tls(s) => s.read_buf(buf).await,
+impl tokio::io::AsyncRead for Stream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Plain(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            Stream::Tls(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for Stream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Stream::Plain(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            Stream::Tls(s) => std::pin::Pin::new(s).poll_write(cx, buf),
         }
     }
 
-    async fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        match self {
-            Stream::Plain(s) => s.write_all(buf).await,
-            Stream::Tls(s) => s.write_all(buf).await,
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Plain(s) => std::pin::Pin::new(s).poll_flush(cx),
+            Stream::Tls(s) => std::pin::Pin::new(s).poll_flush(cx),
         }
     }
 
-    async fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            Stream::Plain(s) => s.flush().await,
-            Stream::Tls(s) => s.flush().await,
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Plain(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            Stream::Tls(s) => std::pin::Pin::new(s).poll_shutdown(cx),
         }
     }
 }
@@ -109,7 +144,7 @@ async fn handle_connection(
     tcp: TcpStream,
     tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
 ) -> Result<(), ConnectionError> {
-    // Optional TLS
+    // Optional TLS — type-erase to DynStream
     let mut stream = match tls_acceptor {
         Some(acceptor) => {
             let tls_stream = acceptor.accept(tcp).await.map_err(ConnectionError::Tls)?;
@@ -274,10 +309,7 @@ impl ConnectionState {
                         Some(frame) => {
                             send_frame(&mut self.stream, &frame).await?;
                         }
-                        None => {
-                            // All delivery senders dropped — shouldn't happen
-                            // since we hold delivery_tx. Ignore.
-                        }
+                        None => unreachable!("delivery_tx is held by ConnectionState"),
                     }
                 }
             }
@@ -739,5 +771,52 @@ impl std::fmt::Display for ConnectionError {
             ConnectionError::Protocol(msg) => write!(f, "protocol: {msg}"),
             ConnectionError::Broker(e) => write!(f, "broker: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_error_display_io() {
+        let err = ConnectionError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "reset",
+        ));
+        assert_eq!(err.to_string(), "io: reset");
+    }
+
+    #[test]
+    fn connection_error_display_tls() {
+        let err = ConnectionError::Tls(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "cert invalid",
+        ));
+        assert_eq!(err.to_string(), "tls: cert invalid");
+    }
+
+    #[test]
+    fn connection_error_display_frame() {
+        let err = ConnectionError::Frame(FrameError::UnknownOpcode(0xFF));
+        assert_eq!(err.to_string(), "frame: unknown opcode: 0xff");
+    }
+
+    #[test]
+    fn connection_error_display_protocol() {
+        let err = ConnectionError::Protocol("bad handshake".into());
+        assert_eq!(err.to_string(), "protocol: bad handshake");
+    }
+
+    #[test]
+    fn stream_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Stream>();
+    }
+
+    #[test]
+    fn stream_is_unpin() {
+        fn assert_unpin<T: Unpin>() {}
+        assert_unpin::<Stream>();
     }
 }

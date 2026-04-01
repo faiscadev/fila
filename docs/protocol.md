@@ -112,44 +112,46 @@ Strings are limited to 65,535 bytes. Byte arrays use a `u32` length prefix (up t
 | `0x17` | Nack | Client → Server | Negative-acknowledge batch of messages |
 | `0x18` | NackResult | Server → Client | Per-message nack results |
 
-### Admin Opcodes (0x20-0x3F)
-
-| Opcode | Name | Direction | Description |
-|--------|------|-----------|-------------|
-| `0x20` | CreateQueue | Client → Server | Create a queue |
-| `0x21` | CreateQueueResult | Server → Client | Queue creation result |
-| `0x22` | DeleteQueue | Client → Server | Delete a queue |
-| `0x23` | DeleteQueueResult | Server → Client | Deletion result |
-| `0x24` | GetStats | Client → Server | Get queue statistics |
-| `0x25` | GetStatsResult | Server → Client | Queue statistics |
-| `0x26` | ListQueues | Client → Server | List all queues |
-| `0x27` | ListQueuesResult | Server → Client | Queue list |
-| `0x28` | SetConfig | Client → Server | Set runtime config key |
-| `0x29` | SetConfigResult | Server → Client | Config set result |
-| `0x2A` | GetConfig | Client → Server | Get runtime config key |
-| `0x2B` | GetConfigResult | Server → Client | Config value |
-| `0x2C` | ListConfig | Client → Server | List config keys by prefix |
-| `0x2D` | ListConfigResult | Server → Client | Config entries |
-| `0x2E` | Redrive | Client → Server | Redrive DLQ messages |
-| `0x2F` | RedriveResult | Server → Client | Redrive count |
-| `0x30` | CreateApiKey | Client → Server | Create an API key |
-| `0x31` | CreateApiKeyResult | Server → Client | API key creation result |
-| `0x32` | RevokeApiKey | Client → Server | Revoke an API key |
-| `0x33` | RevokeApiKeyResult | Server → Client | Revocation result |
-| `0x34` | ListApiKeys | Client → Server | List all API keys |
-| `0x35` | ListApiKeysResult | Server → Client | API key list |
-| `0x36` | SetAcl | Client → Server | Set ACL permissions for a key |
-| `0x37` | SetAclResult | Server → Client | ACL set result |
-| `0x38` | GetAcl | Client → Server | Get ACL permissions for a key |
-| `0x39` | GetAclResult | Server → Client | ACL permissions |
-
 ### Error Opcode (0xFE)
 
 | Opcode | Name | Direction | Description |
 |--------|------|-----------|-------------|
 | `0xFE` | Error | Server → Client | Operation error with error code and message |
 
-Opcodes `0x3A-0x3F` and `0x40-0xFD` are reserved for future use. The `0x40-0x5F` range is reserved for cluster-specific opcodes. Clients must ignore frames with unknown opcodes. Servers must respond with Error (0xFE) for unknown request opcodes.
+### Admin Opcodes (0xFD downward)
+
+Admin opcodes grow downward from `0xFD` so that both hot-path and admin ranges can expand independently without colliding. New admin opcodes are assigned the next lower value.
+
+| Opcode | Name | Direction | Description |
+|--------|------|-----------|-------------|
+| `0xFD` | CreateQueue | Client → Server | Create a queue |
+| `0xFC` | CreateQueueResult | Server → Client | Queue creation result |
+| `0xFB` | DeleteQueue | Client → Server | Delete a queue |
+| `0xFA` | DeleteQueueResult | Server → Client | Deletion result |
+| `0xF9` | GetStats | Client → Server | Get queue statistics |
+| `0xF8` | GetStatsResult | Server → Client | Queue statistics |
+| `0xF7` | ListQueues | Client → Server | List all queues |
+| `0xF6` | ListQueuesResult | Server → Client | Queue list |
+| `0xF5` | SetConfig | Client → Server | Set runtime config key |
+| `0xF4` | SetConfigResult | Server → Client | Config set result |
+| `0xF3` | GetConfig | Client → Server | Get runtime config key |
+| `0xF2` | GetConfigResult | Server → Client | Config value |
+| `0xF1` | ListConfig | Client → Server | List config keys by prefix |
+| `0xF0` | ListConfigResult | Server → Client | Config entries |
+| `0xEF` | Redrive | Client → Server | Redrive DLQ messages |
+| `0xEE` | RedriveResult | Server → Client | Redrive count |
+| `0xED` | CreateApiKey | Client → Server | Create an API key |
+| `0xEC` | CreateApiKeyResult | Server → Client | API key creation result |
+| `0xEB` | RevokeApiKey | Client → Server | Revoke an API key |
+| `0xEA` | RevokeApiKeyResult | Server → Client | Revocation result |
+| `0xE9` | ListApiKeys | Client → Server | List all API keys |
+| `0xE8` | ListApiKeysResult | Server → Client | API key list |
+| `0xE7` | SetAcl | Client → Server | Set ACL permissions for a key |
+| `0xE6` | SetAclResult | Server → Client | ACL set result |
+| `0xE5` | GetAcl | Client → Server | Get ACL permissions for a key |
+| `0xE4` | GetAclResult | Server → Client | ACL permissions |
+
+Opcodes `0x19-0xE3` are reserved for future use. Clients must ignore frames with unknown opcodes. Servers must respond with Error (0xFE) for unknown request opcodes.
 
 ## Error Codes
 
@@ -346,55 +348,55 @@ For each result:
 
 ## Admin Operation Frames
 
-### CreateQueue (0x20)
+### CreateQueue (0xFD)
 
 **Request:**
 
 ```
-[frame header: opcode=0x20]
+[frame header: opcode=0xFD]
 [string: name]
 [optional<string>: on_enqueue_script]
 [optional<string>: on_failure_script]
 [u64: visibility_timeout_ms]    -- 0 = server default
 ```
 
-**CreateQueueResult (0x21):**
+**CreateQueueResult (0xFC):**
 
 ```
-[frame header: opcode=0x21]
+[frame header: opcode=0xFC]
 [u8: error_code]
 [string: queue_id]              -- empty if error
 ```
 
-### DeleteQueue (0x22)
+### DeleteQueue (0xFB)
 
 **Request:**
 
 ```
-[frame header: opcode=0x22]
+[frame header: opcode=0xFB]
 [string: queue]
 ```
 
-**DeleteQueueResult (0x23):**
+**DeleteQueueResult (0xFA):**
 
 ```
-[frame header: opcode=0x23]
+[frame header: opcode=0xFA]
 [u8: error_code]
 ```
 
-### GetStats (0x24)
+### GetStats (0xF9)
 
 **Request:**
 
 ```
-[frame header: opcode=0x24]
+[frame header: opcode=0xF9]
 [string: queue]
 ```
 
-**GetStatsResult (0x25):**
+**GetStatsResult (0xF8):**
 
 ```
-[frame header: opcode=0x25]
+[frame header: opcode=0xF8]
 [u8: error_code]
 [u64: depth]
 [u64: in_flight]
@@ -417,18 +419,18 @@ For each throttle key stat:
   [f64: burst]
 ```
 
-### ListQueues (0x26)
+### ListQueues (0xF7)
 
 **Request:**
 
 ```
-[frame header: opcode=0x26]
+[frame header: opcode=0xF7]
 ```
 
-**ListQueuesResult (0x27):**
+**ListQueuesResult (0xF6):**
 
 ```
-[frame header: opcode=0x27]
+[frame header: opcode=0xF6]
 [u8: error_code]
 [u32: cluster_node_count]       -- 0 if single-node
 [u16: queue_count]
@@ -440,53 +442,53 @@ For each queue:
   [u64: leader_node_id]         -- 0 if single-node
 ```
 
-### SetConfig (0x28)
+### SetConfig (0xF5)
 
 **Request:**
 
 ```
-[frame header: opcode=0x28]
+[frame header: opcode=0xF5]
 [string: key]
 [string: value]
 ```
 
-**SetConfigResult (0x29):**
+**SetConfigResult (0xF4):**
 
 ```
-[frame header: opcode=0x29]
+[frame header: opcode=0xF4]
 [u8: error_code]
 ```
 
-### GetConfig (0x2A)
+### GetConfig (0xF3)
 
 **Request:**
 
 ```
-[frame header: opcode=0x2A]
+[frame header: opcode=0xF3]
 [string: key]
 ```
 
-**GetConfigResult (0x2B):**
+**GetConfigResult (0xF2):**
 
 ```
-[frame header: opcode=0x2B]
+[frame header: opcode=0xF2]
 [u8: error_code]
 [string: value]                 -- empty if error or key not found
 ```
 
-### ListConfig (0x2C)
+### ListConfig (0xF1)
 
 **Request:**
 
 ```
-[frame header: opcode=0x2C]
+[frame header: opcode=0xF1]
 [string: prefix]
 ```
 
-**ListConfigResult (0x2D):**
+**ListConfigResult (0xF0):**
 
 ```
-[frame header: opcode=0x2D]
+[frame header: opcode=0xF0]
 [u8: error_code]
 [u16: entry_count]
 For each entry:
@@ -494,75 +496,75 @@ For each entry:
   [string: value]
 ```
 
-### Redrive (0x2E)
+### Redrive (0xEF)
 
 **Request:**
 
 ```
-[frame header: opcode=0x2E]
+[frame header: opcode=0xEF]
 [string: dlq_queue]
 [u64: count]
 ```
 
-**RedriveResult (0x2F):**
+**RedriveResult (0xEE):**
 
 ```
-[frame header: opcode=0x2F]
+[frame header: opcode=0xEE]
 [u8: error_code]
 [u64: redriven]
 ```
 
 ## Auth & ACL Operation Frames
 
-### CreateApiKey (0x30)
+### CreateApiKey (0xED)
 
 **Request:**
 
 ```
-[frame header: opcode=0x30]
+[frame header: opcode=0xED]
 [string: name]                  -- human-readable label
 [u64: expires_at_ms]            -- Unix timestamp ms, 0 = no expiration
 [bool: is_superadmin]
 ```
 
-**CreateApiKeyResult (0x31):**
+**CreateApiKeyResult (0xEC):**
 
 ```
-[frame header: opcode=0x31]
+[frame header: opcode=0xEC]
 [u8: error_code]
 [string: key_id]                -- opaque ID for management
 [string: key]                   -- plaintext API key (returned once)
 [bool: is_superadmin]
 ```
 
-### RevokeApiKey (0x32)
+### RevokeApiKey (0xEB)
 
 **Request:**
 
 ```
-[frame header: opcode=0x32]
+[frame header: opcode=0xEB]
 [string: key_id]
 ```
 
-**RevokeApiKeyResult (0x33):**
+**RevokeApiKeyResult (0xEA):**
 
 ```
-[frame header: opcode=0x33]
+[frame header: opcode=0xEA]
 [u8: error_code]                -- 0x0F = ApiKeyNotFound
 ```
 
-### ListApiKeys (0x34)
+### ListApiKeys (0xE9)
 
 **Request:**
 
 ```
-[frame header: opcode=0x34]
+[frame header: opcode=0xE9]
 ```
 
-**ListApiKeysResult (0x35):**
+**ListApiKeysResult (0xE8):**
 
 ```
-[frame header: opcode=0x35]
+[frame header: opcode=0xE8]
 [u8: error_code]
 [u16: key_count]
 For each key:
@@ -573,12 +575,12 @@ For each key:
   [bool: is_superadmin]
 ```
 
-### SetAcl (0x36)
+### SetAcl (0xE7)
 
 **Request:**
 
 ```
-[frame header: opcode=0x36]
+[frame header: opcode=0xE7]
 [string: key_id]
 [u16: permission_count]
 For each permission:
@@ -586,26 +588,26 @@ For each permission:
   [string: pattern]             -- queue name or wildcard ("*", "orders.*")
 ```
 
-**SetAclResult (0x37):**
+**SetAclResult (0xE6):**
 
 ```
-[frame header: opcode=0x37]
+[frame header: opcode=0xE6]
 [u8: error_code]                -- 0x0F = ApiKeyNotFound
 ```
 
-### GetAcl (0x38)
+### GetAcl (0xE5)
 
 **Request:**
 
 ```
-[frame header: opcode=0x38]
+[frame header: opcode=0xE5]
 [string: key_id]
 ```
 
-**GetAclResult (0x39):**
+**GetAclResult (0xE4):**
 
 ```
-[frame header: opcode=0x39]
+[frame header: opcode=0xE4]
 [u8: error_code]                -- 0x0F = ApiKeyNotFound
 [string: key_id]
 [bool: is_superadmin]
