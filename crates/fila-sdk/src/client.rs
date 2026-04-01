@@ -112,9 +112,58 @@ fn normalize_addr(addr: &str) -> &str {
 }
 
 /// IO stream abstraction for plain TCP and TLS.
+///
+/// Implements `AsyncRead + AsyncWrite` so it can be split via `tokio::io::split()`
+/// into generic read/write halves without separate ReadStream/WriteStream enums.
 enum IoStream {
     Plain(TcpStream),
     Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
+}
+
+impl tokio::io::AsyncRead for IoStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            IoStream::Plain(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            IoStream::Tls(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for IoStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            IoStream::Plain(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            IoStream::Tls(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            IoStream::Plain(s) => std::pin::Pin::new(s).poll_flush(cx),
+            IoStream::Tls(s) => std::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            IoStream::Plain(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            IoStream::Tls(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
 }
 
 /// Frame-level response from the background reader, dispatched to the waiting
@@ -143,15 +192,18 @@ struct ConnectionInner {
 #[derive(Clone)]
 pub struct FilaClient {
     /// Write half of the connection, protected by a mutex.
-    writer: Arc<Mutex<WriteHalf>>,
+    writer: Arc<Mutex<FrameWriter>>,
     /// Shared connection state for request-response correlation.
     inner: Arc<Mutex<ConnectionInner>>,
     /// Atomic counter for generating unique request IDs.
+    /// Arc is needed because FilaClient is Clone — each clone must share the
+    /// same counter to avoid request ID collisions.
     next_request_id: Arc<AtomicU32>,
     /// Stored connection options for transparent leader redirect reconnection.
     connect_options: Option<ConnectOptions>,
-    /// Handle to the background reader task (kept alive while client exists).
-    _reader_task: Arc<tokio::task::JoinHandle<()>>,
+    /// Handle to the background reader task — held to keep the task alive.
+    #[allow(dead_code)]
+    reader_task: Arc<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for FilaClient {
@@ -166,30 +218,17 @@ impl std::fmt::Debug for FilaClient {
 }
 
 /// Write half of the connection.
-struct WriteHalf {
+struct FrameWriter {
     buf: BytesMut,
-    stream: WriteStream,
+    stream: tokio::io::WriteHalf<IoStream>,
 }
 
-enum WriteStream {
-    Plain(tokio::net::tcp::OwnedWriteHalf),
-    Tls(tokio::io::WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>),
-}
-
-impl WriteHalf {
+impl FrameWriter {
     async fn send_frame(&mut self, frame: &RawFrame) -> Result<(), std::io::Error> {
         self.buf.clear();
         frame.encode(&mut self.buf);
-        match &mut self.stream {
-            WriteStream::Plain(w) => {
-                w.write_all(&self.buf).await?;
-                w.flush().await?;
-            }
-            WriteStream::Tls(w) => {
-                w.write_all(&self.buf).await?;
-                w.flush().await?;
-            }
-        }
+        self.stream.write_all(&self.buf).await?;
+        self.stream.flush().await?;
         Ok(())
     }
 }
@@ -328,36 +367,14 @@ impl FilaClient {
         api_key: Option<String>,
         connect_options: Option<ConnectOptions>,
     ) -> Result<Self, ConnectError> {
-        // We need to do the handshake before splitting the stream.
-        // Use a temporary full-stream approach for handshake, then split.
-        match stream {
-            IoStream::Plain(tcp) => {
-                let (reader, writer) = tcp.into_split();
-                Self::handshake_and_start(
-                    ReadStream::Plain(reader),
-                    WriteStream::Plain(writer),
-                    api_key,
-                    connect_options,
-                )
-                .await
-            }
-            IoStream::Tls(tls) => {
-                let (reader, writer) = tokio::io::split(*tls);
-                Self::handshake_and_start(
-                    ReadStream::Tls(reader),
-                    WriteStream::Tls(writer),
-                    api_key,
-                    connect_options,
-                )
-                .await
-            }
-        }
+        let (reader, writer) = tokio::io::split(stream);
+        Self::handshake_and_start(reader, writer, api_key, connect_options).await
     }
 
     /// Perform the FIBP handshake then start the background reader task.
     async fn handshake_and_start(
-        mut read: ReadStream,
-        mut write_stream: WriteStream,
+        mut read: tokio::io::ReadHalf<IoStream>,
+        mut write_stream: tokio::io::WriteHalf<IoStream>,
         api_key: Option<String>,
         connect_options: Option<ConnectOptions>,
     ) -> Result<Self, ConnectError> {
@@ -368,20 +385,14 @@ impl FilaClient {
         let frame = handshake.encode(0);
         let mut write_buf = BytesMut::new();
         frame.encode(&mut write_buf);
-        match &mut write_stream {
-            WriteStream::Plain(w) => {
-                w.write_all(&write_buf)
-                    .await
-                    .map_err(ConnectError::Transport)?;
-                w.flush().await.map_err(ConnectError::Transport)?;
-            }
-            WriteStream::Tls(w) => {
-                w.write_all(&write_buf)
-                    .await
-                    .map_err(ConnectError::Transport)?;
-                w.flush().await.map_err(ConnectError::Transport)?;
-            }
-        }
+        write_stream
+            .write_all(&write_buf)
+            .await
+            .map_err(ConnectError::Transport)?;
+        write_stream
+            .flush()
+            .await
+            .map_err(ConnectError::Transport)?;
 
         // Read handshake response.
         let response_frame = read_one_frame(&mut read)
@@ -420,7 +431,7 @@ impl FilaClient {
             consume_request_id: None,
         }));
 
-        let writer = Arc::new(Mutex::new(WriteHalf {
+        let writer = Arc::new(Mutex::new(FrameWriter {
             buf: BytesMut::with_capacity(1024),
             stream: write_stream,
         }));
@@ -437,7 +448,7 @@ impl FilaClient {
             inner,
             next_request_id,
             connect_options,
-            _reader_task: Arc::new(reader_task),
+            reader_task: Arc::new(reader_task),
         })
     }
 
@@ -749,75 +760,54 @@ impl FilaClient {
     }
 }
 
-// --- Read stream types ---
-
-enum ReadStream {
-    Plain(tokio::net::tcp::OwnedReadHalf),
-    Tls(tokio::io::ReadHalf<tokio_rustls::client::TlsStream<TcpStream>>),
-}
-
 /// Read a single frame from the stream.
-async fn read_one_frame(stream: &mut ReadStream) -> Result<Option<RawFrame>, std::io::Error> {
+async fn read_one_frame(
+    stream: &mut tokio::io::ReadHalf<IoStream>,
+) -> Result<Option<RawFrame>, std::io::Error> {
     let mut buf = BytesMut::with_capacity(4096);
     loop {
-        // Try to decode a frame from existing buffer data.
         match RawFrame::decode(&mut buf) {
             Ok(Some(frame)) => return Ok(Some(frame)),
-            Ok(None) => {} // Need more data.
+            Ok(None) => {}
             Err(e) => {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e));
             }
         }
 
-        // Read more data from the stream.
-        let n = match stream {
-            ReadStream::Plain(r) => r.read_buf(&mut buf).await?,
-            ReadStream::Tls(r) => r.read_buf(&mut buf).await?,
-        };
-
+        let n = stream.read_buf(&mut buf).await?;
         if n == 0 {
-            return Ok(None); // Connection closed.
+            return Ok(None);
         }
     }
 }
 
 /// Background task that reads frames from the connection and dispatches them.
-async fn background_reader(mut stream: ReadStream, inner: Arc<Mutex<ConnectionInner>>) {
+async fn background_reader(
+    mut stream: tokio::io::ReadHalf<IoStream>,
+    inner: Arc<Mutex<ConnectionInner>>,
+) {
     let mut buf = BytesMut::with_capacity(4096);
 
     loop {
-        // Try to decode frames from existing buffer data.
         loop {
             match RawFrame::decode(&mut buf) {
                 Ok(Some(frame)) => {
                     dispatch_frame(frame, &inner).await;
                 }
-                Ok(None) => break, // Need more data.
+                Ok(None) => break,
                 Err(e) => {
-                    // Protocol error — notify all pending requests and stop.
-                    let msg = format!("frame decode error: {e}");
-                    notify_all_disconnected(&inner, &msg).await;
+                    notify_all_disconnected(&inner, &format!("frame decode error: {e}")).await;
                     return;
                 }
             }
         }
 
-        // Read more data from the stream.
-        let n = match &mut stream {
-            ReadStream::Plain(r) => match r.read_buf(&mut buf).await {
-                Ok(n) => n,
-                Err(e) => {
-                    notify_all_disconnected(&inner, &format!("read error: {e}")).await;
-                    return;
-                }
-            },
-            ReadStream::Tls(r) => match r.read_buf(&mut buf).await {
-                Ok(n) => n,
-                Err(e) => {
-                    notify_all_disconnected(&inner, &format!("read error: {e}")).await;
-                    return;
-                }
-            },
+        let n = match stream.read_buf(&mut buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                notify_all_disconnected(&inner, &format!("read error: {e}")).await;
+                return;
+            }
         };
 
         if n == 0 {
