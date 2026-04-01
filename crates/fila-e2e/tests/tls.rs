@@ -101,8 +101,8 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert!(
-        connected,
-        "TLS fila-server did not become reachable at {addr} within 10s"
+        grpc_ok && binary_ok,
+        "TLS fila-server did not become reachable within 10s (grpc={grpc_ok}, binary={binary_ok})"
     );
 
     let https_addr = format!("https://{grpc_addr}");
