@@ -13,7 +13,15 @@ use fila_core::{Broker, BrokerConfig, RocksDbEngine};
 use fila_fibp::{
     AckRequest, AckResponse, ConsumeRequest, DeliveryBatch, EnqueueMessage, EnqueueRequest,
     EnqueueResponse, ErrorCode, ErrorFrame, Handshake, HandshakeOk, NackRequest, NackResponse,
-    Opcode, RawFrame, FLAG_CONTINUATION,
+    Opcode, ProtocolMessage, RawFrame, FLAG_CONTINUATION,
+};
+use fila_fibp::{
+    CreateQueueRequest as FibpCreateQueueRequest, CreateQueueResponse as FibpCreateQueueResponse,
+    DeleteQueueRequest as FibpDeleteQueueRequest, DeleteQueueResponse as FibpDeleteQueueResponse,
+    GetConfigRequest as FibpGetConfigRequest, GetConfigResponse as FibpGetConfigResponse,
+    GetStatsRequest as FibpGetStatsRequest, GetStatsResponse as FibpGetStatsResponse,
+    ListQueuesRequest as FibpListQueuesRequest, ListQueuesResponse as FibpListQueuesResponse,
+    SetConfigRequest as FibpSetConfigRequest, SetConfigResponse as FibpSetConfigResponse,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -502,4 +510,322 @@ async fn continuation_frame_reassembly() {
     assert_eq!(resp.results.len(), 1);
     assert_eq!(resp.results[0].error_code, ErrorCode::Ok);
     assert!(!resp.results[0].message_id.is_empty());
+}
+
+// --- Admin operation tests ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_and_delete_queue_via_binary() {
+    let (addr, _broker, _dir, _shutdown) = start_test_server().await;
+    let mut stream = connect_and_handshake(&addr).await;
+
+    // Create a queue
+    let req = FibpCreateQueueRequest {
+        name: "binary-admin-queue".to_string(),
+        on_enqueue_script: None,
+        on_failure_script: None,
+        visibility_timeout_ms: 0, // server default
+    };
+    let resp_frame = send_and_recv(&mut stream, &req.encode(1)).await;
+    assert_eq!(resp_frame.opcode, Opcode::CreateQueueResult as u8);
+    let resp = FibpCreateQueueResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+    assert_eq!(resp.queue_id, "binary-admin-queue");
+
+    // Creating the same queue again should return QueueAlreadyExists
+    let resp_frame = send_and_recv(&mut stream, &req.encode(2)).await;
+    assert_eq!(resp_frame.opcode, Opcode::CreateQueueResult as u8);
+    let resp = FibpCreateQueueResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::QueueAlreadyExists);
+
+    // Delete the queue
+    let del_req = FibpDeleteQueueRequest {
+        queue: "binary-admin-queue".to_string(),
+    };
+    let resp_frame = send_and_recv(&mut stream, &del_req.encode(3)).await;
+    assert_eq!(resp_frame.opcode, Opcode::DeleteQueueResult as u8);
+    let resp = FibpDeleteQueueResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+
+    // Deleting again should return QueueNotFound
+    let resp_frame = send_and_recv(&mut stream, &del_req.encode(4)).await;
+    assert_eq!(resp_frame.opcode, Opcode::DeleteQueueResult as u8);
+    let resp = FibpDeleteQueueResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::QueueNotFound);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_stats_via_binary() {
+    let (addr, _broker, _dir, _shutdown) = start_test_server().await;
+    let mut stream = connect_and_handshake(&addr).await;
+
+    // Create a queue first
+    let create_req = FibpCreateQueueRequest {
+        name: "stats-queue".to_string(),
+        on_enqueue_script: None,
+        on_failure_script: None,
+        visibility_timeout_ms: 0,
+    };
+    let resp_frame = send_and_recv(&mut stream, &create_req.encode(1)).await;
+    let resp = FibpCreateQueueResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+
+    // Get stats
+    let stats_req = FibpGetStatsRequest {
+        queue: "stats-queue".to_string(),
+    };
+    let resp_frame = send_and_recv(&mut stream, &stats_req.encode(2)).await;
+    assert_eq!(resp_frame.opcode, Opcode::GetStatsResult as u8);
+    let stats = FibpGetStatsResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(stats.error_code, ErrorCode::Ok);
+    assert_eq!(stats.depth, 0);
+    assert_eq!(stats.in_flight, 0);
+    assert_eq!(stats.active_consumers, 0);
+    // Single-node: cluster fields are 0
+    assert_eq!(stats.leader_node_id, 0);
+    assert_eq!(stats.replication_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_stats_nonexistent_queue() {
+    let (addr, _broker, _dir, _shutdown) = start_test_server().await;
+    let mut stream = connect_and_handshake(&addr).await;
+
+    let stats_req = FibpGetStatsRequest {
+        queue: "nonexistent".to_string(),
+    };
+    let resp_frame = send_and_recv(&mut stream, &stats_req.encode(1)).await;
+    assert_eq!(resp_frame.opcode, Opcode::Error as u8);
+    let err = ErrorFrame::decode(resp_frame.payload).unwrap();
+    assert_eq!(err.error_code, ErrorCode::QueueNotFound);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_queues_via_binary() {
+    let (addr, _broker, _dir, _shutdown) = start_test_server().await;
+    let mut stream = connect_and_handshake(&addr).await;
+
+    // Initially no queues
+    let req = FibpListQueuesRequest;
+    let resp_frame = send_and_recv(&mut stream, &req.encode(1)).await;
+    assert_eq!(resp_frame.opcode, Opcode::ListQueuesResult as u8);
+    let resp = FibpListQueuesResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+    assert!(resp.queues.is_empty());
+
+    // Create a queue
+    let create_req = FibpCreateQueueRequest {
+        name: "list-test".to_string(),
+        on_enqueue_script: None,
+        on_failure_script: None,
+        visibility_timeout_ms: 0,
+    };
+    let resp_frame = send_and_recv(&mut stream, &create_req.encode(2)).await;
+    let resp = FibpCreateQueueResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+
+    // List again — should have list-test + list-test.dlq
+    let req = FibpListQueuesRequest;
+    let resp_frame = send_and_recv(&mut stream, &req.encode(3)).await;
+    let resp = FibpListQueuesResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+    let names: Vec<&str> = resp.queues.iter().map(|q| q.name.as_str()).collect();
+    assert!(names.contains(&"list-test"));
+    assert!(names.contains(&"list-test.dlq"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_get_config_via_binary() {
+    let (addr, _broker, _dir, _shutdown) = start_test_server().await;
+    let mut stream = connect_and_handshake(&addr).await;
+
+    // Set a config value
+    let set_req = FibpSetConfigRequest {
+        key: "throttle.api".to_string(),
+        value: "10.0,100.0".to_string(),
+    };
+    let resp_frame = send_and_recv(&mut stream, &set_req.encode(1)).await;
+    assert_eq!(resp_frame.opcode, Opcode::SetConfigResult as u8);
+    let resp = FibpSetConfigResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+
+    // Get it back
+    let get_req = FibpGetConfigRequest {
+        key: "throttle.api".to_string(),
+    };
+    let resp_frame = send_and_recv(&mut stream, &get_req.encode(2)).await;
+    assert_eq!(resp_frame.opcode, Opcode::GetConfigResult as u8);
+    let resp = FibpGetConfigResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+    assert_eq!(resp.value, "10.0,100.0");
+
+    // Get a nonexistent key — should return Ok with empty value
+    let get_req = FibpGetConfigRequest {
+        key: "nonexistent".to_string(),
+    };
+    let resp_frame = send_and_recv(&mut stream, &get_req.encode(3)).await;
+    let resp = FibpGetConfigResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.error_code, ErrorCode::Ok);
+    assert_eq!(resp.value, "");
+}
+
+// --- Auth test: connect with bad API key when auth is enabled ---
+
+/// Start a broker with auth enabled (bootstrap_apikey set).
+async fn start_auth_test_server() -> (
+    String,
+    Arc<Broker>,
+    tempfile::TempDir,
+    tokio::sync::watch::Sender<bool>,
+) {
+    let data_dir = tempfile::tempdir().expect("create temp dir");
+    let rocksdb =
+        Arc::new(RocksDbEngine::open(data_dir.path().join("data").to_str().unwrap()).unwrap());
+    let storage: Arc<dyn fila_core::StorageEngine> = Arc::clone(&rocksdb) as _;
+
+    let config = BrokerConfig {
+        auth: Some(fila_core::broker::config::AuthConfig {
+            bootstrap_apikey: "test-bootstrap-key".to_string(),
+        }),
+        ..Default::default()
+    };
+    let broker = Arc::new(Broker::new(config, storage).unwrap());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+
+    let binary_server = Arc::new(fila_server::binary_server::BinaryServer::new(
+        Arc::clone(&broker),
+        None,
+        0,
+    ));
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        fila_server::binary_server::run(binary_server, listener, None, shutdown_rx).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    (addr, broker, data_dir, shutdown_tx)
+}
+
+/// Connect with a specific API key and perform handshake.
+async fn connect_with_key(addr: &str, api_key: Option<String>) -> TcpStream {
+    let mut stream = None;
+    for _ in 0..50 {
+        match TcpStream::connect(addr).await {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+        }
+    }
+    let mut stream = stream.expect("failed to connect to binary server");
+
+    let hs = Handshake {
+        protocol_version: 1,
+        api_key,
+    };
+    let frame = hs.encode(0);
+    let mut buf = BytesMut::new();
+    frame.encode(&mut buf);
+    stream.write_all(&buf).await.unwrap();
+
+    stream
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_reject_bad_key() {
+    let (addr, _broker, _dir, _shutdown) = start_auth_test_server().await;
+
+    // Connect with a bad API key
+    let mut stream = connect_with_key(&addr, Some("bad-key".to_string())).await;
+
+    // The server sends HandshakeOk first (protocol handshake), then validates
+    // the API key and sends an Unauthorized error frame.
+    let mut read_buf = BytesMut::with_capacity(4096);
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut frames = Vec::new();
+        loop {
+            let n = stream.read_buf(&mut read_buf).await.unwrap();
+            while let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
+                frames.push(frame);
+            }
+            // We expect HandshakeOk then Error
+            if frames.len() >= 2 {
+                return frames;
+            }
+            if n == 0 && frames.len() < 2 {
+                return frames;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for auth error");
+
+    assert!(result.len() >= 2, "expected at least 2 frames");
+    assert_eq!(result[0].opcode, Opcode::HandshakeOk as u8);
+    assert_eq!(result[1].opcode, Opcode::Error as u8);
+    let err = ErrorFrame::decode(result[1].payload.clone()).unwrap();
+    assert_eq!(err.error_code, ErrorCode::Unauthorized);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_reject_no_key() {
+    let (addr, _broker, _dir, _shutdown) = start_auth_test_server().await;
+
+    // Connect with no API key
+    let mut stream = connect_with_key(&addr, None).await;
+
+    let mut read_buf = BytesMut::with_capacity(4096);
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut frames = Vec::new();
+        loop {
+            let n = stream.read_buf(&mut read_buf).await.unwrap();
+            while let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
+                frames.push(frame);
+            }
+            if frames.len() >= 2 {
+                return frames;
+            }
+            if n == 0 && frames.len() < 2 {
+                return frames;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for auth error");
+
+    assert!(result.len() >= 2, "expected at least 2 frames");
+    assert_eq!(result[0].opcode, Opcode::HandshakeOk as u8);
+    assert_eq!(result[1].opcode, Opcode::Error as u8);
+    let err = ErrorFrame::decode(result[1].payload.clone()).unwrap();
+    assert_eq!(err.error_code, ErrorCode::Unauthorized);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_accept_valid_bootstrap_key() {
+    let (addr, _broker, _dir, _shutdown) = start_auth_test_server().await;
+
+    // Connect with the bootstrap key
+    let mut stream = connect_with_key(&addr, Some("test-bootstrap-key".to_string())).await;
+
+    // Should get HandshakeOk back
+    let mut read_buf = BytesMut::with_capacity(4096);
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            stream.read_buf(&mut read_buf).await.unwrap();
+            if let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
+                return frame;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for handshake ok");
+
+    assert_eq!(result.opcode, Opcode::HandshakeOk as u8);
+    let ok = HandshakeOk::decode(result.payload).unwrap();
+    assert_eq!(ok.negotiated_version, 1);
 }

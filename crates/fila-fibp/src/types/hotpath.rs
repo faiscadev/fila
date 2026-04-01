@@ -7,36 +7,8 @@ use crate::error_code::ErrorCode;
 use crate::frame::{PayloadReader, PayloadWriter, RawFrame};
 use crate::opcode::Opcode;
 
-/// Maximum number of items allowed in a decoded batch/array to prevent
-/// memory-exhaustion attacks from a malicious or corrupt frame.
-const MAX_DECODED_COUNT: usize = 1_000_000;
-
-fn check_count(count: usize) -> Result<(), FrameError> {
-    if count > MAX_DECODED_COUNT {
-        return Err(FrameError::CountExceedsLimit {
-            count,
-            max: MAX_DECODED_COUNT,
-        });
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Control frames
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct Handshake {
-    pub protocol_version: u16,
-    pub api_key: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct HandshakeOk {
-    pub negotiated_version: u16,
-    pub node_id: u64,
-    pub max_frame_size: u32,
-}
+use super::check_count;
+use super::ProtocolMessage;
 
 // ---------------------------------------------------------------------------
 // Hot-path frames
@@ -133,73 +105,11 @@ pub struct NackResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Error frame
+// Encode/decode implementations
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
-pub struct ErrorFrame {
-    pub error_code: ErrorCode,
-    pub message: String,
-    pub metadata: HashMap<String, String>,
-}
-
-// ---------------------------------------------------------------------------
-// Encode implementations
-// ---------------------------------------------------------------------------
-
-impl Handshake {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
-        let mut w = PayloadWriter::new();
-        w.put_u16(self.protocol_version);
-        w.put_optional_string(&self.api_key);
-        RawFrame {
-            opcode: Opcode::Handshake as u8,
-            flags: 0,
-            request_id,
-            payload: w.finish(),
-        }
-    }
-
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
-        let mut r = PayloadReader::new(payload);
-        let protocol_version = r.read_u16()?;
-        let api_key = r.read_optional_string()?;
-        Ok(Self {
-            protocol_version,
-            api_key,
-        })
-    }
-}
-
-impl HandshakeOk {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
-        let mut w = PayloadWriter::new();
-        w.put_u16(self.negotiated_version);
-        w.put_u64(self.node_id);
-        w.put_u32(self.max_frame_size);
-        RawFrame {
-            opcode: Opcode::HandshakeOk as u8,
-            flags: 0,
-            request_id,
-            payload: w.finish(),
-        }
-    }
-
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
-        let mut r = PayloadReader::new(payload);
-        let negotiated_version = r.read_u16()?;
-        let node_id = r.read_u64()?;
-        let max_frame_size = r.read_u32()?;
-        Ok(Self {
-            negotiated_version,
-            node_id,
-            max_frame_size,
-        })
-    }
-}
-
-impl EnqueueRequest {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
+impl ProtocolMessage for EnqueueRequest {
+    fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::with_capacity(256 * self.messages.len());
         w.put_u32(self.messages.len() as u32);
         for msg in &self.messages {
@@ -215,7 +125,7 @@ impl EnqueueRequest {
         }
     }
 
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
         check_count(count)?;
@@ -234,8 +144,8 @@ impl EnqueueRequest {
     }
 }
 
-impl EnqueueResponse {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
+impl ProtocolMessage for EnqueueResponse {
+    fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_u32(self.results.len() as u32);
         for item in &self.results {
@@ -250,7 +160,7 @@ impl EnqueueResponse {
         }
     }
 
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
         check_count(count)?;
@@ -267,8 +177,8 @@ impl EnqueueResponse {
     }
 }
 
-impl ConsumeRequest {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
+impl ProtocolMessage for ConsumeRequest {
+    fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_string(&self.queue);
         RawFrame {
@@ -279,15 +189,15 @@ impl ConsumeRequest {
         }
     }
 
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let queue = r.read_string()?;
         Ok(Self { queue })
     }
 }
 
-impl DeliveryBatch {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
+impl ProtocolMessage for DeliveryBatch {
+    fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::with_capacity(256 * self.messages.len());
         w.put_u32(self.messages.len() as u32);
         for msg in &self.messages {
@@ -310,7 +220,7 @@ impl DeliveryBatch {
         }
     }
 
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
         check_count(count)?;
@@ -343,8 +253,8 @@ impl DeliveryBatch {
     }
 }
 
-impl AckRequest {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
+impl ProtocolMessage for AckRequest {
+    fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_u32(self.items.len() as u32);
         for item in &self.items {
@@ -359,7 +269,7 @@ impl AckRequest {
         }
     }
 
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
         check_count(count)?;
@@ -373,8 +283,8 @@ impl AckRequest {
     }
 }
 
-impl AckResponse {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
+impl ProtocolMessage for AckResponse {
+    fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_u32(self.results.len() as u32);
         for item in &self.results {
@@ -388,7 +298,7 @@ impl AckResponse {
         }
     }
 
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
         check_count(count)?;
@@ -401,8 +311,8 @@ impl AckResponse {
     }
 }
 
-impl NackRequest {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
+impl ProtocolMessage for NackRequest {
+    fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_u32(self.items.len() as u32);
         for item in &self.items {
@@ -418,7 +328,7 @@ impl NackRequest {
         }
     }
 
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
         check_count(count)?;
@@ -437,8 +347,8 @@ impl NackRequest {
     }
 }
 
-impl NackResponse {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
+impl ProtocolMessage for NackResponse {
+    fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_u32(self.results.len() as u32);
         for item in &self.results {
@@ -452,7 +362,7 @@ impl NackResponse {
         }
     }
 
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
         let mut r = PayloadReader::new(payload);
         let count = r.read_u32()? as usize;
         check_count(count)?;
@@ -465,67 +375,10 @@ impl NackResponse {
     }
 }
 
-impl ErrorFrame {
-    pub fn encode(&self, request_id: u32) -> RawFrame {
-        let mut w = PayloadWriter::new();
-        w.put_u8(self.error_code as u8);
-        w.put_string(&self.message);
-        w.put_string_map(&self.metadata);
-        RawFrame {
-            opcode: Opcode::Error as u8,
-            flags: 0,
-            request_id,
-            payload: w.finish(),
-        }
-    }
-
-    pub fn decode(payload: Bytes) -> Result<Self, FrameError> {
-        let mut r = PayloadReader::new(payload);
-        let error_code = ErrorCode::from_u8(r.read_u8()?);
-        let message = r.read_string()?;
-        let metadata = r.read_string_map()?;
-        Ok(Self {
-            error_code,
-            message,
-            metadata,
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use uuid::Uuid;
-
-    #[test]
-    fn handshake_round_trip() {
-        let hs = Handshake {
-            protocol_version: 1,
-            api_key: Some("secret-key".to_string()),
-        };
-        let frame = hs.encode(0);
-        let decoded = Handshake::decode(frame.payload).unwrap();
-        assert_eq!(decoded.protocol_version, 1);
-        assert_eq!(decoded.api_key, Some("secret-key".to_string()));
-    }
-
-    #[test]
-    fn handshake_ok_round_trip() {
-        let ok = HandshakeOk {
-            negotiated_version: 1,
-            node_id: 42,
-            max_frame_size: 0,
-        };
-        let frame = ok.encode(0);
-        let decoded = HandshakeOk::decode(frame.payload).unwrap();
-        assert_eq!(decoded.negotiated_version, 1);
-        assert_eq!(decoded.node_id, 42);
-        assert_eq!(decoded.max_frame_size, 0);
-    }
 
     #[test]
     fn enqueue_round_trip() {
@@ -633,25 +486,5 @@ mod tests {
         assert_eq!(decoded.messages[0].message_id, "msg-1");
         assert_eq!(decoded.messages[0].fairness_key, "tenant-a");
         assert_eq!(decoded.messages[0].enqueued_at, 1700000000000);
-    }
-
-    #[test]
-    fn error_frame_round_trip() {
-        let mut metadata = HashMap::new();
-        metadata.insert("leader_addr".to_string(), "127.0.0.1:5555".to_string());
-
-        let err = ErrorFrame {
-            error_code: ErrorCode::NotLeader,
-            message: "not the leader".to_string(),
-            metadata,
-        };
-        let frame = err.encode(99);
-        let decoded = ErrorFrame::decode(frame.payload).unwrap();
-        assert_eq!(decoded.error_code, ErrorCode::NotLeader);
-        assert_eq!(decoded.message, "not the leader");
-        assert_eq!(
-            decoded.metadata.get("leader_addr").unwrap(),
-            "127.0.0.1:5555"
-        );
     }
 }
