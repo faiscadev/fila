@@ -1,6 +1,6 @@
 # Story 20.1: Binary Protocol Server — Hot-Path Operations
 
-Status: review
+Status: done
 
 ## Story
 
