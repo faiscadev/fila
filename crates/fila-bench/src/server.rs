@@ -26,7 +26,10 @@ impl BenchServer {
     /// Start a new fila-server instance with a specific DRR quantum.
     pub fn start_with_quantum(quantum: Option<u32>) -> Self {
         let grpc_port = free_port();
-        let binary_port = free_port();
+        let mut binary_port = free_port();
+        while binary_port == grpc_port {
+            binary_port = free_port();
+        }
         let grpc_addr = format!("127.0.0.1:{grpc_port}");
         let binary_addr = format!("127.0.0.1:{binary_port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");

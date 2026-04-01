@@ -37,7 +37,10 @@ struct TestServer {
 impl TestServer {
     fn start() -> Self {
         let grpc_port = free_port();
-        let binary_port = free_port();
+        let mut binary_port = free_port();
+        while binary_port == grpc_port {
+            binary_port = free_port();
+        }
         let grpc_addr_raw = format!("127.0.0.1:{grpc_port}");
         let binary_addr = format!("127.0.0.1:{binary_port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");
