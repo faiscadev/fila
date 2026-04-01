@@ -380,8 +380,16 @@ impl ProtocolMessage for ListQueuesResponse {
         let mut w = PayloadWriter::new();
         w.put_u8(self.error_code as u8);
         w.put_u32(self.cluster_node_count);
-        w.put_u16(self.queues.len() as u16);
-        for q in &self.queues {
+        let queue_count = self.queues.len().min(u16::MAX as usize);
+        if queue_count < self.queues.len() {
+            tracing::warn!(
+                total = self.queues.len(),
+                included = queue_count,
+                "queues list truncated: count exceeds u16::MAX (see #164)"
+            );
+        }
+        w.put_u16(queue_count as u16);
+        for q in self.queues.iter().take(queue_count) {
             w.put_string(&q.name);
             w.put_u64(q.depth);
             w.put_u64(q.in_flight);
@@ -528,8 +536,16 @@ impl ProtocolMessage for ListConfigResponse {
     fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_u8(self.error_code as u8);
-        w.put_u16(self.entries.len() as u16);
-        for entry in &self.entries {
+        let entry_count = self.entries.len().min(u16::MAX as usize);
+        if entry_count < self.entries.len() {
+            tracing::warn!(
+                total = self.entries.len(),
+                included = entry_count,
+                "config entries truncated: count exceeds u16::MAX (see #164)"
+            );
+        }
+        w.put_u16(entry_count as u16);
+        for entry in self.entries.iter().take(entry_count) {
             w.put_string(&entry.key);
             w.put_string(&entry.value);
         }

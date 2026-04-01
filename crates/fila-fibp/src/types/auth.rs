@@ -203,8 +203,16 @@ impl ProtocolMessage for ListApiKeysResponse {
     fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_u8(self.error_code as u8);
-        w.put_u16(self.keys.len() as u16);
-        for k in &self.keys {
+        let key_count = self.keys.len().min(u16::MAX as usize);
+        if key_count < self.keys.len() {
+            tracing::warn!(
+                total = self.keys.len(),
+                included = key_count,
+                "API keys list truncated: count exceeds u16::MAX (see #164)"
+            );
+        }
+        w.put_u16(key_count as u16);
+        for k in self.keys.iter().take(key_count) {
             w.put_string(&k.key_id);
             w.put_string(&k.name);
             w.put_u64(k.created_at_ms);
@@ -247,8 +255,16 @@ impl ProtocolMessage for SetAclRequest {
     fn encode(&self, request_id: u32) -> RawFrame {
         let mut w = PayloadWriter::new();
         w.put_string(&self.key_id);
-        w.put_u16(self.permissions.len() as u16);
-        for p in &self.permissions {
+        let perm_count = self.permissions.len().min(u16::MAX as usize);
+        if perm_count < self.permissions.len() {
+            tracing::warn!(
+                total = self.permissions.len(),
+                included = perm_count,
+                "ACL permissions truncated: count exceeds u16::MAX (see #164)"
+            );
+        }
+        w.put_u16(perm_count as u16);
+        for p in self.permissions.iter().take(perm_count) {
             w.put_string(&p.kind);
             w.put_string(&p.pattern);
         }
@@ -322,8 +338,16 @@ impl ProtocolMessage for GetAclResponse {
         w.put_u8(self.error_code as u8);
         w.put_string(&self.key_id);
         w.put_bool(self.is_superadmin);
-        w.put_u16(self.permissions.len() as u16);
-        for p in &self.permissions {
+        let perm_count = self.permissions.len().min(u16::MAX as usize);
+        if perm_count < self.permissions.len() {
+            tracing::warn!(
+                total = self.permissions.len(),
+                included = perm_count,
+                "ACL permissions truncated: count exceeds u16::MAX (see #164)"
+            );
+        }
+        w.put_u16(perm_count as u16);
+        for p in self.permissions.iter().take(perm_count) {
             w.put_string(&p.kind);
             w.put_string(&p.pattern);
         }
