@@ -184,9 +184,24 @@ Claude Opus 4.6 (1M context)
 - Binary protocol server in fila-server with TCP listener, handshake, and all hot-path operation handlers
 - Consume streaming via delivery channel that multiplexes with the frame read loop using tokio::select!
 - TLS support via tokio-rustls with mTLS when ca_file is configured
-- 14 unit tests (codec round-trips) + 8 integration tests (full server lifecycle)
-- All 455+ existing tests pass (only pre-existing flaky tls_valid_cert_connects_successfully fails on main too)
 - Binary server is opt-in via `[server].binary_addr` config to avoid port conflicts with existing e2e tests
+- AC1 (TCP listener + hot-path ops): SATISFIED
+- AC2 (frame decode/encode to SchedulerCommand): SATISFIED
+- AC3 (TLS wraps TCP): SATISFIED
+- AC4 (handshake negotiation): SATISFIED
+- AC5 (gRPC coexistence): SATISFIED
+- AC6 (fila-fibp crate): SATISFIED
+- AC7 (integration tests): SATISFIED
+- AC8 (benchmark numbers in PR): SATISFIED
+
+### Review-Driven Changes
+- Admin opcodes renumbered from 0xFD downward (was 0x20+) per reviewer suggestion — both ranges grow independently
+- Stream enum implements AsyncRead/AsyncWrite traits instead of manual method delegation
+- Connection tasks tracked via JoinSet for proper graceful shutdown
+- ContinuationAssembler added: per-request_id frame reassembly with max pending streams (64) and max size limits
+- rustls CryptoProvider fix: explicit ring::default_provider().install_default() to resolve dual-provider panic
+- TLS e2e test fixes: pipe draining, telemetry config, readiness assert
+- 23 unit tests (codec) + 9 integration tests (server) — up from 14+8 pre-review
 
 ### File List
 - crates/fila-fibp/Cargo.toml (new)
