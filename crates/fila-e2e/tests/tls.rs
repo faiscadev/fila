@@ -1,6 +1,7 @@
 mod helpers;
 
 use helpers::TestServer;
+use std::io::BufRead;
 
 /// Generate a self-signed cert/key pair for testing.
 ///
@@ -40,7 +41,7 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
     std::fs::write(&key_path, &key_pem).expect("write key");
 
     let config_content = format!(
-        "[server]\nlisten_addr = \"{addr}\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
+        "[server]\nlisten_addr = \"{addr}\"\n\n[telemetry]\notlp_endpoint = \"\"\n\n[tls]\ncert_file = \"{cert}\"\nkey_file = \"{key}\"\n",
         cert = cert_path.to_str().unwrap(),
         key = key_path.to_str().unwrap(),
     );
@@ -61,7 +62,7 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
         "fila-server binary not found at {binary:?}. Run `cargo build` first."
     );
 
-    let child = std::process::Command::new(&binary)
+    let mut child = std::process::Command::new(&binary)
         .env(
             "FILA_DATA_DIR",
             data_dir.path().join("data").to_str().unwrap(),
@@ -72,14 +73,26 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
         .spawn()
         .expect("start fila-server with TLS");
 
+    // Drain stdout/stderr so the child process doesn't block on full pipes.
+    let stdout = child.stdout.take().expect("stdout");
+    std::thread::spawn(move || for _ in std::io::BufReader::new(stdout).lines() {});
+    let stderr = child.stderr.take().expect("stderr");
+    std::thread::spawn(move || for _ in std::io::BufReader::new(stderr).lines() {});
+
     // Poll TCP until the server is reachable.
     let start = std::time::Instant::now();
+    let mut connected = false;
     while start.elapsed() < std::time::Duration::from_secs(10) {
         if std::net::TcpStream::connect(&addr).is_ok() {
+            connected = true;
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    assert!(
+        connected,
+        "TLS fila-server did not become reachable at {addr} within 10s"
+    );
 
     let https_addr = format!("https://{addr}");
     let server = TestServer::from_parts(child, https_addr.clone(), data_dir);

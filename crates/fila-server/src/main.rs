@@ -4,6 +4,8 @@ mod error;
 mod service;
 mod trace_context;
 
+use fila_server::binary_server;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -60,6 +62,14 @@ fn load_config() -> BrokerConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install the ring CryptoProvider before any TLS operations.
+    // Both `ring` and `aws-lc-rs` features are enabled in the dependency tree
+    // (tonic uses ring via tls-ring, tokio-rustls pulls both), so rustls cannot
+    // auto-detect which to use. Explicitly installing ring matches tonic's choice.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("install rustls CryptoProvider");
+
     let mut config = load_config();
 
     // Initialize telemetry (logging + optional OTel export).
@@ -107,6 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cluster_handle = cluster_manager.as_ref().map(|cm| cm.handle());
 
+    let binary_addr_cfg = config.server.binary_addr.clone();
     let broker = Arc::new(Broker::new(config, Arc::clone(&storage))?);
 
     // Wire cluster ↔ broker integration:
@@ -138,10 +149,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let admin_service = AdminService::new(Arc::clone(&broker), cluster_handle.clone());
-    let hot_path_service = HotPathService::new(Arc::clone(&broker), cluster_handle);
+    let hot_path_service = HotPathService::new(Arc::clone(&broker), cluster_handle.clone());
 
-    let addr = listen_addr.parse()?;
-    info!(%addr, tls = tls_params.is_some(), "starting gRPC server");
+    // --- Binary protocol server (optional, enabled via [server].binary_addr) ---
+    let binary_shutdown_tx = if let Some(binary_addr) = binary_addr_cfg {
+        let binary_listener = tokio::net::TcpListener::bind(&binary_addr).await?;
+        info!(%binary_addr, "binary protocol listener bound");
+
+        let binary_tls = if let Some(ref tls) = tls_params {
+            Some(binary_server::build_tls_acceptor(tls).await?)
+        } else {
+            None
+        };
+
+        let node_id = if cluster_config.enabled {
+            cluster_config.node_id
+        } else {
+            0
+        };
+        let binary = Arc::new(binary_server::BinaryServer::new(
+            Arc::clone(&broker),
+            cluster_handle.clone(),
+            node_id,
+        ));
+
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(binary_server::run(binary, binary_listener, binary_tls, rx));
+        Some(tx)
+    } else {
+        None
+    };
+
+    // --- gRPC server (temporary, for cluster comms until Story 20.4) ---
+    let grpc_addr = listen_addr.parse()?;
+    info!(%grpc_addr, tls = tls_params.is_some(), "starting gRPC server");
 
     let mut server_builder = Server::builder();
     if let Some(ref tls) = tls_params {
@@ -156,10 +197,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(trace_context::TraceContextLayer)
         .add_service(FilaAdminServer::new(admin_service))
         .add_service(FilaServiceServer::new(hot_path_service))
-        .serve_with_shutdown(addr, shutdown_signal())
+        .serve_with_shutdown(grpc_addr, shutdown_signal())
         .await;
 
     info!("gRPC server stopped, shutting down broker");
+    if let Some(tx) = binary_shutdown_tx {
+        let _ = tx.send(true);
+    }
 
     // Graceful broker shutdown — Drop impl will handle it since Arc may have refs
     drop(broker);

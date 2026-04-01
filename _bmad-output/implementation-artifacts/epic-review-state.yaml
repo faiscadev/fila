@@ -1,22 +1,42 @@
-epic: "Epic 19: Wire Format Design & Batch-Native Scheduler"
-epicNumber: 19
-startedAt: "2026-03-30T12:00:00Z"
-completedAt: "2026-03-30T19:14:26Z"
+epic: "Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal"
+epicNumber: 20
+startedAt: "2026-03-31T00:00:00Z"
 yoloMode: false
 mode: normal
-currentPrIndex: 2
+currentPrIndex: 0
 prChain:
-  - storyId: "19.1"
-    storyKey: "19-1-wire-format-protocol-spec"
-    title: "Wire Format Design & Protocol Specification"
-    branch: "feat/19.1-wire-format-protocol-spec"
-    pr: 156
+  - storyId: "20.1"
+    storyKey: "20-1-binary-protocol-server-hot-path-operations"
+    title: "Binary Protocol Server — Hot-Path Operations"
+    branch: "feat/20.1-binary-protocol-server-hot-path"
+    pr: 158
     baseBranch: "main"
-    status: merged
-  - storyId: "19.2"
-    storyKey: "19-2-batch-native-scheduler-internals"
-    title: "Batch-Native Scheduler Internals"
-    branch: "feat/19.2-batch-native-scheduler-internals"
-    pr: 157
-    baseBranch: "main"
-    status: merged
+    status: reviewing
+  - storyId: "20.2"
+    storyKey: "20-2-admin-operations-auth-on-binary-protocol"
+    title: "Admin Operations & Auth on Binary Protocol"
+    branch: "feat/20.2-admin-ops-auth-binary-protocol"
+    pr: 159
+    baseBranch: "feat/20.1-binary-protocol-server-hot-path"
+    status: pending
+  - storyId: "20.3"
+    storyKey: "20-3-rust-sdk-binary-protocol-client"
+    title: "Rust SDK Binary Protocol Client"
+    branch: "feat/20.3-rust-sdk-binary-protocol"
+    pr: 160
+    baseBranch: "feat/20.2-admin-ops-auth-binary-protocol"
+    status: pending
+  - storyId: "20.4"
+    storyKey: "20-4-cli-cluster-inter-node-migration"
+    title: "CLI & Cluster Inter-Node Migration"
+    branch: "feat/20.4-cli-cluster-migration"
+    pr: 161
+    baseBranch: "feat/20.3-rust-sdk-binary-protocol"
+    status: pending
+  - storyId: "20.5"
+    storyKey: "20-5-grpc-removal-final-benchmarks"
+    title: "gRPC Removal & Final Benchmarks"
+    branch: "feat/20.5-grpc-removal"
+    pr: 162
+    baseBranch: "feat/20.4-cli-cluster-migration"
+    status: pending
