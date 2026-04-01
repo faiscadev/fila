@@ -801,23 +801,17 @@ impl GetStatsResponse {
         w.put_u32(self.quantum);
         w.put_u64(self.leader_node_id);
         w.put_u32(self.replication_count);
-        assert!(
-            self.per_key_stats.len() <= u16::MAX as usize,
-            "per_key_stats count exceeds u16::MAX"
-        );
-        w.put_u16(self.per_key_stats.len() as u16);
-        for s in &self.per_key_stats {
+        let key_count = self.per_key_stats.len().min(u16::MAX as usize);
+        w.put_u16(key_count as u16);
+        for s in self.per_key_stats.iter().take(key_count) {
             w.put_string(&s.key);
             w.put_u64(s.pending_count);
             w.put_i64(s.current_deficit);
             w.put_u32(s.weight);
         }
-        assert!(
-            self.per_throttle_stats.len() <= u16::MAX as usize,
-            "per_throttle_stats count exceeds u16::MAX"
-        );
-        w.put_u16(self.per_throttle_stats.len() as u16);
-        for s in &self.per_throttle_stats {
+        let throttle_count = self.per_throttle_stats.len().min(u16::MAX as usize);
+        w.put_u16(throttle_count as u16);
+        for s in self.per_throttle_stats.iter().take(throttle_count) {
             w.put_string(&s.key);
             w.put_f64(s.tokens);
             w.put_f64(s.rate_per_second);
