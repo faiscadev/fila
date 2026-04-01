@@ -13,7 +13,7 @@ use fila_core::{Broker, BrokerConfig, RocksDbEngine};
 use fila_fibp::{
     AckRequest, AckResponse, ConsumeRequest, DeliveryBatch, EnqueueMessage, EnqueueRequest,
     EnqueueResponse, ErrorCode, ErrorFrame, Handshake, HandshakeOk, NackRequest, NackResponse,
-    Opcode, RawFrame,
+    Opcode, RawFrame, FLAG_CONTINUATION,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -424,4 +424,81 @@ async fn unknown_opcode_returns_error() {
     assert_eq!(resp.opcode, Opcode::Error as u8);
     let err = ErrorFrame::decode(resp.payload).unwrap();
     assert_eq!(err.error_code, ErrorCode::InvalidFrame);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn continuation_frame_reassembly() {
+    let (addr, broker, _dir, _shutdown) = start_test_server().await;
+
+    // Create a queue first
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    broker
+        .send_command(fila_core::SchedulerCommand::CreateQueue {
+            name: "cont-queue".to_string(),
+            config: fila_core::queue::QueueConfig::new("".to_string()),
+            reply: reply_tx,
+        })
+        .unwrap();
+    reply_rx.await.unwrap().unwrap();
+
+    let mut stream = connect_and_handshake(&addr).await;
+
+    // Build a normal enqueue request and get its full payload.
+    let req = EnqueueRequest {
+        messages: vec![EnqueueMessage {
+            queue: "cont-queue".to_string(),
+            headers: HashMap::new(),
+            payload: b"continuation-test-payload".to_vec(),
+        }],
+    };
+    let full_frame = req.encode(1);
+    let full_payload = full_frame.payload;
+
+    // Split the payload roughly in half into two continuation frames.
+    let mid = full_payload.len() / 2;
+    let chunk1 = full_payload.slice(..mid);
+    let chunk2 = full_payload.slice(mid..);
+
+    // First frame: CONTINUATION=1 (more to come)
+    let frame1 = RawFrame {
+        opcode: Opcode::Enqueue as u8,
+        flags: FLAG_CONTINUATION,
+        request_id: 1,
+        payload: chunk1,
+    };
+    let mut buf = BytesMut::new();
+    frame1.encode(&mut buf);
+    stream.write_all(&buf).await.unwrap();
+
+    // Second frame: CONTINUATION=0 (final)
+    let frame2 = RawFrame {
+        opcode: Opcode::Enqueue as u8,
+        flags: 0,
+        request_id: 1,
+        payload: chunk2,
+    };
+    let mut buf = BytesMut::new();
+    frame2.encode(&mut buf);
+    stream.write_all(&buf).await.unwrap();
+
+    // Read the enqueue result — if reassembly works, the server decoded
+    // the concatenated payload as a valid EnqueueRequest.
+    let mut read_buf = BytesMut::with_capacity(4096);
+    let resp_frame = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            stream.read_buf(&mut read_buf).await.unwrap();
+            if let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
+                return frame;
+            }
+        }
+    })
+    .await
+    .expect("should receive enqueue result within 5s");
+
+    assert_eq!(resp_frame.opcode, Opcode::EnqueueResult as u8);
+    assert_eq!(resp_frame.request_id, 1);
+    let resp = EnqueueResponse::decode(resp_frame.payload).unwrap();
+    assert_eq!(resp.results.len(), 1);
+    assert_eq!(resp.results[0].error_code, ErrorCode::Ok);
+    assert!(!resp.results[0].message_id.is_empty());
 }

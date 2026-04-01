@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::error::FrameError;
@@ -87,6 +89,147 @@ impl RawFrame {
             payload,
         }))
     }
+}
+
+/// Default maximum reassembled payload size: 256 * MAX_FRAME_SIZE.
+pub const DEFAULT_MAX_REASSEMBLED_SIZE: usize = 256 * MAX_FRAME_SIZE as usize;
+
+/// In-progress reassembly state for a single request_id.
+struct PendingReassembly {
+    opcode: u8,
+    /// Accumulated payload chunks (concatenated on completion).
+    chunks: Vec<Bytes>,
+    /// Running total of payload bytes accumulated so far.
+    total_len: usize,
+}
+
+/// Tracks continuation frame reassembly across multiplexed request_ids.
+///
+/// When a frame arrives with `CONTINUATION=1`, its payload is buffered.
+/// Subsequent frames for the same `request_id` append their payloads.
+/// When a frame with `CONTINUATION=0` arrives for a tracked `request_id`,
+/// the payloads are concatenated into a single assembled `RawFrame`.
+///
+/// Non-continuation frames (no prior state and `CONTINUATION=0`) pass
+/// through unchanged.
+pub struct ContinuationAssembler {
+    pending: HashMap<u32, PendingReassembly>,
+    max_reassembled_size: usize,
+}
+
+impl ContinuationAssembler {
+    pub fn new() -> Self {
+        Self {
+            pending: HashMap::new(),
+            max_reassembled_size: DEFAULT_MAX_REASSEMBLED_SIZE,
+        }
+    }
+
+    pub fn with_max_reassembled_size(mut self, max: usize) -> Self {
+        self.max_reassembled_size = max;
+        self
+    }
+
+    /// Feed a decoded frame into the assembler.
+    ///
+    /// Returns `Ok(Some(frame))` when a complete (possibly reassembled) frame
+    /// is ready for dispatch. Returns `Ok(None)` when the frame was a
+    /// continuation chunk that has been buffered.
+    pub fn push_frame(&mut self, frame: RawFrame) -> Result<Option<RawFrame>, FrameError> {
+        let is_continuation = frame.is_continuation();
+
+        if self.pending.contains_key(&frame.request_id) {
+            // We already have in-progress reassembly for this request_id.
+            // Validate opcode consistency — peek the stored opcode before
+            // taking a &mut borrow so we can remove on error cleanly.
+            let initial_opcode = self.pending[&frame.request_id].opcode;
+
+            if frame.opcode != initial_opcode {
+                self.pending.remove(&frame.request_id);
+                return Err(FrameError::ContinuationOpcodeMismatch {
+                    request_id: frame.request_id,
+                    initial: initial_opcode,
+                    got: frame.opcode,
+                });
+            }
+
+            let state = self.pending.get_mut(&frame.request_id).unwrap();
+
+            let new_total = state.total_len + frame.payload.len();
+            if new_total > self.max_reassembled_size {
+                self.pending.remove(&frame.request_id);
+                return Err(FrameError::ReassembledTooLarge {
+                    request_id: frame.request_id,
+                    size: new_total,
+                    max: self.max_reassembled_size,
+                });
+            }
+
+            state.total_len = new_total;
+            state.chunks.push(frame.payload);
+
+            if is_continuation {
+                // Still accumulating.
+                Ok(None)
+            } else {
+                // Final frame — assemble.
+                let state = self.pending.remove(&frame.request_id).unwrap();
+                let assembled_payload = concat_chunks(state.chunks, state.total_len);
+                Ok(Some(RawFrame {
+                    opcode: state.opcode,
+                    flags: 0, // continuation cleared on assembled frame
+                    request_id: frame.request_id,
+                    payload: assembled_payload,
+                }))
+            }
+        } else if is_continuation {
+            // First frame of a new continuation sequence.
+            let total_len = frame.payload.len();
+            if total_len > self.max_reassembled_size {
+                return Err(FrameError::ReassembledTooLarge {
+                    request_id: frame.request_id,
+                    size: total_len,
+                    max: self.max_reassembled_size,
+                });
+            }
+            self.pending.insert(
+                frame.request_id,
+                PendingReassembly {
+                    opcode: frame.opcode,
+                    chunks: vec![frame.payload],
+                    total_len,
+                },
+            );
+            Ok(None)
+        } else {
+            // Non-continuation, no pending state — pass through.
+            Ok(Some(frame))
+        }
+    }
+
+    /// Discard all in-progress reassembly state (e.g. on connection close).
+    pub fn clear(&mut self) {
+        self.pending.clear();
+    }
+}
+
+impl Default for ContinuationAssembler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Concatenate a vec of Bytes chunks into a single Bytes.
+fn concat_chunks(chunks: Vec<Bytes>, total_len: usize) -> Bytes {
+    if chunks.len() == 1 {
+        // Avoid copy when there's only one chunk.
+        return chunks.into_iter().next().unwrap();
+    }
+    let mut buf = BytesMut::with_capacity(total_len);
+    for chunk in chunks {
+        buf.extend_from_slice(&chunk);
+    }
+    buf.freeze()
 }
 
 /// Helper for building frame payloads.
@@ -489,5 +632,246 @@ mod tests {
         assert_eq!(r.read_optional_string().unwrap(), None);
 
         assert_eq!(r.remaining(), 0);
+    }
+
+    // --- ContinuationAssembler tests ---
+
+    #[test]
+    fn assembler_single_frame_passthrough() {
+        let mut asm = ContinuationAssembler::new();
+        let frame = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: 0,
+            request_id: 1,
+            payload: Bytes::from_static(b"complete"),
+        };
+        let result = asm.push_frame(frame).unwrap();
+        assert!(result.is_some());
+        let out = result.unwrap();
+        assert_eq!(out.opcode, Opcode::Enqueue as u8);
+        assert_eq!(out.request_id, 1);
+        assert_eq!(out.payload, Bytes::from_static(b"complete"));
+        assert!(!out.is_continuation());
+    }
+
+    #[test]
+    fn assembler_two_frame_reassembly() {
+        let mut asm = ContinuationAssembler::new();
+
+        // First frame: continuation=1
+        let frame1 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 1,
+            payload: Bytes::from_static(b"hello "),
+        };
+        assert!(asm.push_frame(frame1).unwrap().is_none());
+
+        // Final frame: continuation=0
+        let frame2 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: 0,
+            request_id: 1,
+            payload: Bytes::from_static(b"world"),
+        };
+        let result = asm.push_frame(frame2).unwrap();
+        assert!(result.is_some());
+        let out = result.unwrap();
+        assert_eq!(out.opcode, Opcode::Enqueue as u8);
+        assert_eq!(out.request_id, 1);
+        assert_eq!(out.payload.as_ref(), b"hello world");
+        assert!(!out.is_continuation());
+    }
+
+    #[test]
+    fn assembler_three_frame_reassembly() {
+        let mut asm = ContinuationAssembler::new();
+
+        let f1 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 5,
+            payload: Bytes::from_static(b"aaa"),
+        };
+        let f2 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 5,
+            payload: Bytes::from_static(b"bbb"),
+        };
+        let f3 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: 0,
+            request_id: 5,
+            payload: Bytes::from_static(b"ccc"),
+        };
+
+        assert!(asm.push_frame(f1).unwrap().is_none());
+        assert!(asm.push_frame(f2).unwrap().is_none());
+        let out = asm.push_frame(f3).unwrap().unwrap();
+        assert_eq!(out.payload.as_ref(), b"aaabbbccc");
+    }
+
+    #[test]
+    fn assembler_interleaved_request_ids() {
+        let mut asm = ContinuationAssembler::new();
+
+        // Start continuation for request_id 1
+        let f1a = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 1,
+            payload: Bytes::from_static(b"1a-"),
+        };
+        assert!(asm.push_frame(f1a).unwrap().is_none());
+
+        // Start continuation for request_id 2
+        let f2a = RawFrame {
+            opcode: Opcode::Ack as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 2,
+            payload: Bytes::from_static(b"2a-"),
+        };
+        assert!(asm.push_frame(f2a).unwrap().is_none());
+
+        // A standalone frame for request_id 3 passes through
+        let f3 = RawFrame {
+            opcode: Opcode::Ping as u8,
+            flags: 0,
+            request_id: 3,
+            payload: Bytes::new(),
+        };
+        let pass = asm.push_frame(f3).unwrap().unwrap();
+        assert_eq!(pass.request_id, 3);
+        assert_eq!(pass.opcode, Opcode::Ping as u8);
+
+        // Finish request_id 2
+        let f2b = RawFrame {
+            opcode: Opcode::Ack as u8,
+            flags: 0,
+            request_id: 2,
+            payload: Bytes::from_static(b"2b"),
+        };
+        let out2 = asm.push_frame(f2b).unwrap().unwrap();
+        assert_eq!(out2.request_id, 2);
+        assert_eq!(out2.opcode, Opcode::Ack as u8);
+        assert_eq!(out2.payload.as_ref(), b"2a-2b");
+
+        // Finish request_id 1
+        let f1b = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: 0,
+            request_id: 1,
+            payload: Bytes::from_static(b"1b"),
+        };
+        let out1 = asm.push_frame(f1b).unwrap().unwrap();
+        assert_eq!(out1.request_id, 1);
+        assert_eq!(out1.opcode, Opcode::Enqueue as u8);
+        assert_eq!(out1.payload.as_ref(), b"1a-1b");
+    }
+
+    #[test]
+    fn assembler_opcode_mismatch_error() {
+        let mut asm = ContinuationAssembler::new();
+
+        let f1 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 1,
+            payload: Bytes::from_static(b"chunk"),
+        };
+        assert!(asm.push_frame(f1).unwrap().is_none());
+
+        let f2 = RawFrame {
+            opcode: Opcode::Ack as u8, // wrong opcode
+            flags: 0,
+            request_id: 1,
+            payload: Bytes::from_static(b"bad"),
+        };
+        let err = asm.push_frame(f2).unwrap_err();
+        assert!(matches!(
+            err,
+            FrameError::ContinuationOpcodeMismatch {
+                request_id: 1,
+                initial,
+                got,
+            } if initial == Opcode::Enqueue as u8 && got == Opcode::Ack as u8
+        ));
+    }
+
+    #[test]
+    fn assembler_max_size_exceeded_error() {
+        let mut asm = ContinuationAssembler::new().with_max_reassembled_size(10);
+
+        let f1 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 1,
+            payload: Bytes::from_static(b"12345678"), // 8 bytes
+        };
+        assert!(asm.push_frame(f1).unwrap().is_none());
+
+        let f2 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: 0,
+            request_id: 1,
+            payload: Bytes::from_static(b"abc"), // 8 + 3 = 11 > 10
+        };
+        let err = asm.push_frame(f2).unwrap_err();
+        assert!(matches!(
+            err,
+            FrameError::ReassembledTooLarge {
+                request_id: 1,
+                size: 11,
+                max: 10,
+            }
+        ));
+    }
+
+    #[test]
+    fn assembler_max_size_exceeded_on_first_frame() {
+        let mut asm = ContinuationAssembler::new().with_max_reassembled_size(3);
+
+        let f1 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 7,
+            payload: Bytes::from_static(b"toolong"),
+        };
+        let err = asm.push_frame(f1).unwrap_err();
+        assert!(matches!(
+            err,
+            FrameError::ReassembledTooLarge {
+                request_id: 7,
+                max: 3,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn assembler_clear_discards_pending() {
+        let mut asm = ContinuationAssembler::new();
+
+        let f1 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 1,
+            payload: Bytes::from_static(b"partial"),
+        };
+        assert!(asm.push_frame(f1).unwrap().is_none());
+
+        asm.clear();
+
+        // After clear, a non-continuation frame with request_id 1
+        // should pass through (not treated as a continuation).
+        let f2 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: 0,
+            request_id: 1,
+            payload: Bytes::from_static(b"fresh"),
+        };
+        let out = asm.push_frame(f2).unwrap().unwrap();
+        assert_eq!(out.payload.as_ref(), b"fresh");
     }
 }

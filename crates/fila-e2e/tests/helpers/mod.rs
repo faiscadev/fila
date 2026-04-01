@@ -93,23 +93,11 @@ otlp_endpoint = ""
             .spawn()
             .expect("start fila-server");
 
-        // Drain stderr so the process doesn't block on a full pipe.
+        // Drain stdout/stderr so the process doesn't block on full pipes.
+        let stdout = child.stdout.take().expect("stdout");
+        std::thread::spawn(move || for _ in BufReader::new(stdout).lines() {});
         let stderr = child.stderr.take().expect("stderr");
-        let reader = BufReader::new(stderr);
-        let addr_for_thread = addr.clone();
-        std::thread::spawn(move || {
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if line.contains(&addr_for_thread) || line.contains("starting gRPC server")
-                        {
-                            // Server is ready — keep draining.
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
         // Poll TCP until the server is reachable.
         let start = std::time::Instant::now();
@@ -180,23 +168,11 @@ otlp_endpoint = ""
             .spawn()
             .expect("restart fila-server");
 
+        // Drain stdout/stderr so the process doesn't block on full pipes.
+        let stdout = child.stdout.take().expect("stdout");
+        std::thread::spawn(move || for _ in BufReader::new(stdout).lines() {});
         let stderr = child.stderr.take().expect("stderr");
-        let reader = BufReader::new(stderr);
-        let addr_for_thread = addr.clone();
-        std::thread::spawn(move || {
-            for line in reader.lines() {
-                match line {
-                    Ok(_line) => {
-                        if _line.contains(&addr_for_thread)
-                            || _line.contains("starting gRPC server")
-                        {
-                            // ready
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
         let start = std::time::Instant::now();
         let mut connected = false;

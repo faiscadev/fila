@@ -7,7 +7,8 @@ use std::sync::Arc;
 use bytes::BytesMut;
 use fila_core::{Broker, BrokerError, ClusterHandle, TlsParams};
 use fila_fibp::{
-    ErrorCode, ErrorFrame, FrameError, Handshake, HandshakeOk, Opcode, RawFrame, MAX_FRAME_SIZE,
+    ContinuationAssembler, ErrorCode, ErrorFrame, FrameError, Handshake, HandshakeOk, Opcode,
+    RawFrame, MAX_FRAME_SIZE,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -256,6 +257,8 @@ struct ConnectionState {
     /// Channel for delivery frames from consume tasks → frame loop writer.
     delivery_tx: tokio::sync::mpsc::Sender<RawFrame>,
     delivery_rx: tokio::sync::mpsc::Receiver<RawFrame>,
+    /// Continuation frame reassembler for multiplexed streams.
+    assembler: ContinuationAssembler,
 }
 
 impl ConnectionState {
@@ -274,17 +277,28 @@ impl ConnectionState {
             consumers: HashMap::new(),
             delivery_tx,
             delivery_rx,
+            assembler: ContinuationAssembler::new(),
         }
     }
 
     async fn frame_loop(&mut self) -> Result<(), ConnectionError> {
         loop {
             // Try to decode a frame from the read buffer first (no IO needed).
-            if let Some(frame) =
+            if let Some(raw_frame) =
                 RawFrame::decode(&mut self.read_buf).map_err(ConnectionError::Frame)?
             {
-                if self.dispatch_frame(frame).await? {
-                    break;
+                // Pass through the continuation assembler. It returns None
+                // while accumulating chunks and Some(assembled) on the final
+                // frame of a continuation sequence.
+                match self.assembler.push_frame(raw_frame).map_err(ConnectionError::Frame)? {
+                    Some(frame) => {
+                        if self.dispatch_frame(frame).await? {
+                            break;
+                        }
+                    }
+                    None => {
+                        // Continuation chunk buffered, loop to read more.
+                    }
                 }
                 continue;
             }
@@ -314,6 +328,9 @@ impl ConnectionState {
                 }
             }
         }
+
+        // Cleanup: discard any partial continuation state
+        self.assembler.clear();
 
         // Cleanup: unregister all active consumers
         for (_, consumer_id) in self.consumers.drain() {
