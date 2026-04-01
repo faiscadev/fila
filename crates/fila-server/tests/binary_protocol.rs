@@ -486,7 +486,10 @@ async fn continuation_frame_reassembly() {
     let mut read_buf = BytesMut::with_capacity(4096);
     let resp_frame = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            stream.read_buf(&mut read_buf).await.unwrap();
+            let n = stream.read_buf(&mut read_buf).await.unwrap();
+            if n == 0 {
+                panic!("connection closed unexpectedly (EOF) before receiving enqueue result");
+            }
             if let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
                 return frame;
             }

@@ -112,9 +112,14 @@ struct PendingReassembly {
 ///
 /// Non-continuation frames (no prior state and `CONTINUATION=0`) pass
 /// through unchanged.
+/// Maximum number of concurrent in-flight continuation streams.
+/// Prevents memory exhaustion from many unfinished request IDs.
+pub const DEFAULT_MAX_PENDING_STREAMS: usize = 64;
+
 pub struct ContinuationAssembler {
     pending: HashMap<u32, PendingReassembly>,
     max_reassembled_size: usize,
+    max_pending_streams: usize,
 }
 
 impl ContinuationAssembler {
@@ -122,11 +127,17 @@ impl ContinuationAssembler {
         Self {
             pending: HashMap::new(),
             max_reassembled_size: DEFAULT_MAX_REASSEMBLED_SIZE,
+            max_pending_streams: DEFAULT_MAX_PENDING_STREAMS,
         }
     }
 
     pub fn with_max_reassembled_size(mut self, max: usize) -> Self {
         self.max_reassembled_size = max;
+        self
+    }
+
+    pub fn with_max_pending_streams(mut self, max: usize) -> Self {
+        self.max_pending_streams = max;
         self
     }
 
@@ -184,6 +195,12 @@ impl ContinuationAssembler {
             }
         } else if is_continuation {
             // First frame of a new continuation sequence.
+            if self.pending.len() >= self.max_pending_streams {
+                return Err(FrameError::TooManyContinuationStreams {
+                    count: self.pending.len() + 1,
+                    max: self.max_pending_streams,
+                });
+            }
             let total_len = frame.payload.len();
             if total_len > self.max_reassembled_size {
                 return Err(FrameError::ReassembledTooLarge {
@@ -873,5 +890,37 @@ mod tests {
         };
         let out = asm.push_frame(f2).unwrap().unwrap();
         assert_eq!(out.payload.as_ref(), b"fresh");
+    }
+
+    #[test]
+    fn assembler_max_pending_streams() {
+        let mut asm = ContinuationAssembler::new().with_max_pending_streams(2);
+
+        // Fill 2 pending streams
+        for rid in 0..2 {
+            let f = RawFrame {
+                opcode: Opcode::Enqueue as u8,
+                flags: FLAG_CONTINUATION,
+                request_id: rid,
+                payload: Bytes::from_static(b"chunk"),
+            };
+            assert!(asm.push_frame(f).unwrap().is_none());
+        }
+
+        // Third should be rejected
+        let f3 = RawFrame {
+            opcode: Opcode::Enqueue as u8,
+            flags: FLAG_CONTINUATION,
+            request_id: 99,
+            payload: Bytes::from_static(b"chunk"),
+        };
+        let err = asm.push_frame(f3).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FrameError::TooManyContinuationStreams { count: 3, max: 2 }
+            ),
+            "expected TooManyContinuationStreams, got: {err:?}"
+        );
     }
 }

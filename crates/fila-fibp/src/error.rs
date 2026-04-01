@@ -29,6 +29,8 @@ pub enum FrameError {
         size: usize,
         max: usize,
     },
+    #[error("too many in-flight continuation streams: {count} exceeds max {max}")]
+    TooManyContinuationStreams { count: usize, max: usize },
     #[error("io error")]
     Io(#[from] std::io::Error),
 }
