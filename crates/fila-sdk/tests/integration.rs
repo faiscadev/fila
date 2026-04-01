@@ -74,21 +74,11 @@ otlp_endpoint = ""
             .spawn()
             .expect("start fila-server");
 
+        // Drain stdout/stderr so the server doesn't block on full pipe buffers.
+        let stdout = child.stdout.take().expect("stdout");
+        std::thread::spawn(move || for _ in BufReader::new(stdout).lines() {});
         let stderr = child.stderr.take().expect("stderr");
-        let reader = BufReader::new(stderr);
-        let addr_clone = grpc_addr_raw.clone();
-        std::thread::spawn(move || {
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if line.contains(&addr_clone) || line.contains("starting gRPC server") {
-                            // Server is ready — keep draining.
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
         // Poll until both ports are reachable.
         let start = std::time::Instant::now();
