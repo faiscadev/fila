@@ -290,7 +290,11 @@ impl ConnectionState {
                 // Pass through the continuation assembler. It returns None
                 // while accumulating chunks and Some(assembled) on the final
                 // frame of a continuation sequence.
-                match self.assembler.push_frame(raw_frame).map_err(ConnectionError::Frame)? {
+                match self
+                    .assembler
+                    .push_frame(raw_frame)
+                    .map_err(ConnectionError::Frame)?
+                {
                     Some(frame) => {
                         if self.dispatch_frame(frame).await? {
                             break;
