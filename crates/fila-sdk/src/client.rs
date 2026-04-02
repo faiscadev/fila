@@ -15,6 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_stream::Stream;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{
     ack_error_from_code, consume_error_from_code, enqueue_error_from_code, nack_error_from_code,
@@ -185,34 +186,37 @@ struct ConnectionInner {
     consume_request_id: Option<u32>,
 }
 
+/// Shared internals of a [`FilaClient`]. A single `Arc<FilaClientInner>` is
+/// shared by every clone. When the last clone drops, [`Drop`] fires the
+/// cancellation token so the background reader task exits promptly.
+struct FilaClientInner {
+    writer: Mutex<FrameWriter>,
+    state: Mutex<ConnectionInner>,
+    next_request_id: AtomicU32,
+    cancel: CancellationToken,
+}
+
+impl Drop for FilaClientInner {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
 /// Idiomatic Rust client for the Fila message broker.
 ///
 /// Wraps the hot-path binary protocol operations: enqueue, consume, ack, nack.
 /// The client is `Clone`, `Send`, and `Sync` — it can be shared across tasks.
 #[derive(Clone)]
 pub struct FilaClient {
-    /// Write half of the connection, protected by a mutex.
-    writer: Arc<Mutex<FrameWriter>>,
-    /// Shared connection state for request-response correlation.
-    inner: Arc<Mutex<ConnectionInner>>,
-    /// Atomic counter for generating unique request IDs.
-    /// Arc is needed because FilaClient is Clone — each clone must share the
-    /// same counter to avoid request ID collisions.
-    next_request_id: Arc<AtomicU32>,
+    inner: Arc<FilaClientInner>,
     /// Stored connection options for transparent leader redirect reconnection.
     connect_options: Option<ConnectOptions>,
-    /// Handle to the background reader task — held to keep the task alive.
-    #[allow(dead_code)]
-    reader_task: Arc<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for FilaClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FilaClient")
-            .field(
-                "connect_options",
-                &self.connect_options.as_ref().map(|o| &o.addr),
-            )
+            .field("addr", &self.connect_options.as_ref().map(|o| &o.addr))
             .finish()
     }
 }
@@ -425,38 +429,38 @@ impl FilaClient {
         }
 
         // Set up shared state and start background reader.
-        let inner = Arc::new(Mutex::new(ConnectionInner {
-            pending: HashMap::new(),
-            delivery_tx: None,
-            consume_request_id: None,
-        }));
+        let cancel = CancellationToken::new();
 
-        let writer = Arc::new(Mutex::new(FrameWriter {
-            buf: BytesMut::with_capacity(1024),
-            stream: write_stream,
-        }));
-
-        let next_request_id = Arc::new(AtomicU32::new(1));
+        let inner = Arc::new(FilaClientInner {
+            writer: Mutex::new(FrameWriter {
+                buf: BytesMut::with_capacity(1024),
+                stream: write_stream,
+            }),
+            state: Mutex::new(ConnectionInner {
+                pending: HashMap::new(),
+                delivery_tx: None,
+                consume_request_id: None,
+            }),
+            next_request_id: AtomicU32::new(1),
+            cancel: cancel.clone(),
+        });
 
         let reader_inner = Arc::clone(&inner);
-        let reader_task = tokio::spawn(async move {
-            background_reader(read, reader_inner).await;
+        tokio::spawn(async move {
+            background_reader(read, reader_inner, cancel).await;
         });
 
         Ok(Self {
-            writer,
             inner,
-            next_request_id,
             connect_options,
-            reader_task: Arc::new(reader_task),
         })
     }
 
     /// Allocate a unique request ID and register a response channel.
     async fn start_request(&self) -> (u32, oneshot::Receiver<ResponseFrame>) {
-        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let request_id = self.inner.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.inner.lock().await.pending.insert(request_id, tx);
+        self.inner.state.lock().await.pending.insert(request_id, tx);
         (request_id, rx)
     }
 
@@ -465,12 +469,13 @@ impl FilaClient {
         let request_id = frame.request_id;
         let rx = {
             let (tx, rx) = oneshot::channel();
-            self.inner.lock().await.pending.insert(request_id, tx);
+            self.inner.state.lock().await.pending.insert(request_id, tx);
             rx
         };
 
         // Send the frame.
-        self.writer
+        self.inner
+            .writer
             .lock()
             .await
             .send_frame(&frame)
@@ -566,7 +571,8 @@ impl FilaClient {
         };
 
         // Send consume frame.
-        self.writer
+        self.inner
+            .writer
             .lock()
             .await
             .send_frame(&req.encode(request_id))
@@ -625,9 +631,9 @@ impl FilaClient {
         // Register the delivery channel so the background reader sends
         // subsequent deliveries to it.
         {
-            let mut inner = self.inner.lock().await;
-            inner.delivery_tx = Some(delivery_tx);
-            inner.consume_request_id = Some(request_id);
+            let mut state = self.inner.state.lock().await;
+            state.delivery_tx = Some(delivery_tx);
+            state.consume_request_id = Some(request_id);
         }
 
         Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
@@ -782,9 +788,13 @@ async fn read_one_frame(
 }
 
 /// Background task that reads frames from the connection and dispatches them.
+///
+/// Exits when the connection closes, a read error occurs, or the cancellation
+/// token is triggered (i.e. all `FilaClient` clones have been dropped).
 async fn background_reader(
     mut stream: tokio::io::ReadHalf<IoStream>,
-    inner: Arc<Mutex<ConnectionInner>>,
+    inner: Arc<FilaClientInner>,
+    cancel: CancellationToken,
 ) {
     let mut buf = BytesMut::with_capacity(4096);
 
@@ -792,33 +802,40 @@ async fn background_reader(
         loop {
             match RawFrame::decode(&mut buf) {
                 Ok(Some(frame)) => {
-                    dispatch_frame(frame, &inner).await;
+                    dispatch_frame(frame, &inner.state).await;
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    notify_all_disconnected(&inner, &format!("frame decode error: {e}")).await;
+                    notify_all_disconnected(&inner.state, &format!("frame decode error: {e}"))
+                        .await;
                     return;
                 }
             }
         }
 
-        let n = match stream.read_buf(&mut buf).await {
-            Ok(n) => n,
-            Err(e) => {
-                notify_all_disconnected(&inner, &format!("read error: {e}")).await;
+        tokio::select! {
+            result = stream.read_buf(&mut buf) => {
+                match result {
+                    Ok(0) => {
+                        notify_all_disconnected(&inner.state, "connection closed by server").await;
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        notify_all_disconnected(&inner.state, &format!("read error: {e}")).await;
+                        return;
+                    }
+                }
+            }
+            _ = cancel.cancelled() => {
                 return;
             }
-        };
-
-        if n == 0 {
-            notify_all_disconnected(&inner, "connection closed by server").await;
-            return;
         }
     }
 }
 
 /// Dispatch a received frame to the appropriate handler.
-async fn dispatch_frame(frame: RawFrame, inner: &Arc<Mutex<ConnectionInner>>) {
+async fn dispatch_frame(frame: RawFrame, state: &Mutex<ConnectionInner>) {
     let opcode = Opcode::from_u8(frame.opcode);
     let request_id = frame.request_id;
 
@@ -829,7 +846,7 @@ async fn dispatch_frame(frame: RawFrame, inner: &Arc<Mutex<ConnectionInner>>) {
             // if the channel is full, consumers need to call ack/nack which
             // also acquires the lock.
             let tx = {
-                let guard = inner.lock().await;
+                let guard = state.lock().await;
                 guard.delivery_tx.clone()
             };
             if let Some(tx) = tx {
@@ -862,7 +879,7 @@ async fn dispatch_frame(frame: RawFrame, inner: &Arc<Mutex<ConnectionInner>>) {
         }
         _ => {
             // Route response to the pending request by request_id.
-            let mut guard = inner.lock().await;
+            let mut guard = state.lock().await;
 
             // If this is the consume request_id and it's an Error or initial Delivery,
             // it should go through the oneshot (for the initial consume response).
@@ -875,8 +892,8 @@ async fn dispatch_frame(frame: RawFrame, inner: &Arc<Mutex<ConnectionInner>>) {
 }
 
 /// Notify all pending requests that the connection has been lost.
-async fn notify_all_disconnected(inner: &Arc<Mutex<ConnectionInner>>, msg: &str) {
-    let mut guard = inner.lock().await;
+async fn notify_all_disconnected(state: &Mutex<ConnectionInner>, msg: &str) {
+    let mut guard = state.lock().await;
     for (_, tx) in guard.pending.drain() {
         let _ = tx.send(ResponseFrame::Disconnected(msg.to_string()));
     }
