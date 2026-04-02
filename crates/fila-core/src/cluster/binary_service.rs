@@ -11,7 +11,7 @@ use fila_fibp::{
     ClusterAddNodeRequest, ClusterAddNodeResponse, ClusterClientWriteRequest,
     ClusterClientWriteResponse, ClusterGetNodeInfoResponse, ClusterRaftRequest,
     ClusterRaftResponse, ClusterRemoveNodeRequest, ClusterRemoveNodeResponse, FrameError, Opcode,
-    RawFrame,
+    ProtocolMessage, RawFrame,
 };
 use openraft::error::RaftError;
 use openraft::{BasicNode, Raft};

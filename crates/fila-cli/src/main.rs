@@ -8,8 +8,8 @@ use fila_fibp::{
     AclPermission, CreateApiKeyRequest, CreateApiKeyResponse, CreateQueueResponse,
     DeleteQueueResponse, ErrorCode, ErrorFrame, GetAclResponse, GetConfigResponse,
     GetStatsResponse, Handshake, HandshakeOk, ListApiKeysResponse, ListConfigResponse,
-    ListQueuesResponse, Opcode, RawFrame, RedriveResponse, RevokeApiKeyResponse, SetAclResponse,
-    SetConfigResponse,
+    ListQueuesResponse, Opcode, ProtocolMessage, RawFrame, RedriveResponse, RevokeApiKeyResponse,
+    SetAclResponse, SetConfigResponse,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

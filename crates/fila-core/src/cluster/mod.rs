@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::BytesMut;
+use fila_fibp::ProtocolMessage;
 use openraft::error::ClientWriteError;
 use openraft::error::RaftError;
 use openraft::storage::Adaptor;

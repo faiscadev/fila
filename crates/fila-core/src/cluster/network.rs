@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bytes::BytesMut;
-use fila_fibp::{ClusterRaftRequest, ClusterRaftResponse, Opcode, RawFrame};
+use fila_fibp::{ClusterRaftRequest, ClusterRaftResponse, Opcode, ProtocolMessage, RawFrame};
 use openraft::error::{InstallSnapshotError, RPCError, RaftError, Unreachable};
 use openraft::network::RPCOption;
 use openraft::raft::{
