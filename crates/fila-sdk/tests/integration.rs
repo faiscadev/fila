@@ -247,3 +247,46 @@ async fn enqueue_to_nonexistent_queue() {
         "expected QueueNotFound, got: {err:?}"
     );
 }
+
+#[tokio::test]
+async fn client_drop_sends_disconnect_and_cleans_up() {
+    let server = TestServer::start();
+    create_queue_cli(server.grpc_addr(), "disconnect-queue");
+
+    // Connect and start consuming so the server registers an active consumer.
+    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+    let _stream = client.consume("disconnect-queue").await.unwrap();
+
+    // Use CLI to verify the server sees an active consumer.
+    let stats_output = cli_stats(server.grpc_addr(), "disconnect-queue");
+    assert!(
+        stats_output.contains("active_consumers: 1") || stats_output.contains("consumers: 1"),
+        "expected 1 active consumer before drop, got: {stats_output}"
+    );
+
+    // Drop the consuming client — this should send a Disconnect frame
+    // and the server should unregister the consumer.
+    drop(_stream);
+    drop(client);
+
+    // Give the server a moment to process the disconnect.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let stats_output = cli_stats(server.grpc_addr(), "disconnect-queue");
+    assert!(
+        stats_output.contains("active_consumers: 0") || stats_output.contains("consumers: 0"),
+        "expected 0 consumers after client drop, got: {stats_output}"
+    );
+}
+
+/// Get queue stats via the CLI.
+fn cli_stats(grpc_addr: &str, queue: &str) -> String {
+    let cli = workspace_binary("fila");
+    let output: Output = Command::new(&cli)
+        .arg("--addr")
+        .arg(grpc_addr)
+        .args(["queue", "stats", queue])
+        .output()
+        .expect("run fila CLI stats");
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
