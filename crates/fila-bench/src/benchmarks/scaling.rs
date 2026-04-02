@@ -16,7 +16,7 @@ pub async fn bench_queue_depth_scaling(server: &BenchServer) -> Vec<BenchResult>
     for depth in [1_000_000u64, 10_000_000] {
         let depth_label = if depth == 1_000_000 { "1m" } else { "10m" };
         let queue = format!("bench-depth-{depth_label}");
-        create_queue_with_lua_cli(server.addr(), &queue, None, None);
+        create_queue_with_lua_cli(server.grpc_addr(), &queue, None, None);
 
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
@@ -96,7 +96,7 @@ pub async fn bench_key_cardinality(server: &BenchServer) -> Vec<BenchResult> {
         };
         let queue = format!("bench-cardinality-{key_label}");
         let on_enqueue = r#"function on_enqueue(msg) local key = msg.headers["fk"] or "default" return { fairness_key = key, weight = 1, throttle_keys = {} } end"#;
-        create_queue_with_lua_cli(server.addr(), &queue, Some(on_enqueue), None);
+        create_queue_with_lua_cli(server.grpc_addr(), &queue, Some(on_enqueue), None);
 
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await
@@ -141,7 +141,7 @@ pub async fn bench_consumer_concurrency(server: &BenchServer) -> Vec<BenchResult
 
     for consumer_count in [1u32, 10, 100] {
         let queue = format!("bench-concurrency-{consumer_count}");
-        create_queue_with_lua_cli(server.addr(), &queue, None, None);
+        create_queue_with_lua_cli(server.grpc_addr(), &queue, None, None);
 
         let client = fila_sdk::FilaClient::connect(server.addr())
             .await

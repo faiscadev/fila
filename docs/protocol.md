@@ -111,6 +111,7 @@ Strings are limited to 65,535 bytes. Byte arrays use a `u32` length prefix (up t
 | `0x16` | AckResult | Server → Client | Per-message ack results |
 | `0x17` | Nack | Client → Server | Negative-acknowledge batch of messages |
 | `0x18` | NackResult | Server → Client | Per-message nack results |
+| `0x19` | ConsumeOk | Server → Client | Consume subscription accepted |
 
 ### Error Opcode (0xFE)
 
@@ -151,7 +152,7 @@ Admin opcodes grow downward from `0xFD` so that both hot-path and admin ranges c
 | `0xE5` | GetAcl | Client → Server | Get ACL permissions for a key |
 | `0xE4` | GetAclResult | Server → Client | ACL permissions |
 
-Opcodes `0x19-0xE3` are reserved for future use. Clients must ignore frames with unknown opcodes. Servers must respond with Error (0xFE) for unknown request opcodes.
+Opcodes `0x1A-0xE3` are reserved for future use. Clients must ignore frames with unknown opcodes. Servers must respond with Error (0xFE) for unknown request opcodes.
 
 ## Error Codes
 
@@ -263,7 +264,18 @@ Subscribe to message delivery from a queue.
 [string: queue]
 ```
 
-If successful, the server begins pushing Delivery frames. If the server is not the leader for this queue (cluster mode), it responds with an Error frame containing error code `0x0C` (NotLeader) with the leader address in the error message.
+If successful, the server responds with a ConsumeOk frame, then begins pushing Delivery frames. If the server is not the leader for this queue (cluster mode), it responds with an Error frame containing error code `0x0C` (NotLeader) with the leader address in the error message.
+
+### ConsumeOk (0x19)
+
+Confirms a Consume subscription was accepted. Sent before any Delivery frames.
+
+**Server → Client:**
+
+```
+[frame header: opcode=0x19]
+[string: consumer_id]
+```
 
 ### Delivery (0x13)
 

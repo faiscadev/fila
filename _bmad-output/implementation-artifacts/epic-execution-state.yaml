@@ -18,10 +18,10 @@ stories:
     dependsOn: ["20.1"]
   - id: "20.3"
     title: "Rust SDK Binary Protocol Client"
-    status: pending
+    status: completed
     currentPhase: ""
-    branch: ""
-    pr: null
+    branch: "feat/20.3-rust-sdk-binary-protocol"
+    pr: 160
     dependsOn: ["20.1", "20.2"]
   - id: "20.4"
     title: "CLI & Cluster Inter-Node Migration"

@@ -23,7 +23,7 @@ async fn e2e_drr_weighted_fairness() {
 
     helpers::create_queue_with_scripts_cli(server.addr(), "fairness", Some(on_enqueue), None, None);
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     let msgs_per_key = 100;
 

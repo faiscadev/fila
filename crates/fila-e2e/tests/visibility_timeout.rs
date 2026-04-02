@@ -19,7 +19,7 @@ async fn e2e_visibility_timeout_expiry() {
         Some(2000), // 2s visibility timeout
     );
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     let msg_id = client
         .enqueue("vt-test", HashMap::new(), b"timeout-me".to_vec())

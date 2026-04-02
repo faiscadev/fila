@@ -11,17 +11,19 @@ use std::path::PathBuf;
 /// A running 3-node fila-server cluster for e2e testing.
 ///
 /// Spawns multiple `fila-server` processes with cluster configuration.
-/// Each node has distinct client and cluster gRPC ports.
+/// Each node has distinct client (gRPC), binary protocol, and cluster ports.
 /// Node 0 bootstraps the cluster (`peers = []`); the rest join via node 0's cluster port.
 pub struct TestCluster {
     nodes: Vec<Option<ClusterNode>>,
     client_ports: Vec<u16>,
+    binary_ports: Vec<u16>,
     cluster_ports: Vec<u16>,
 }
 
 struct ClusterNode {
     child: Child,
     addr: String,
+    binary_addr: String,
     data_dir: tempfile::TempDir,
 }
 
@@ -31,12 +33,13 @@ impl TestCluster {
         assert!(n >= 1, "cluster must have at least 1 node");
 
         let client_ports: Vec<u16> = (0..n).map(|_| free_port()).collect();
+        let binary_ports: Vec<u16> = (0..n).map(|_| free_port()).collect();
         let cluster_ports: Vec<u16> = (0..n).map(|_| free_port()).collect();
 
         let mut nodes = Vec::with_capacity(n);
 
         // Start node 0 first (bootstrap). Give it a moment to initialize Raft.
-        let node0 = start_cluster_node(0, client_ports[0], cluster_ports[0], &[]);
+        let node0 = start_cluster_node(0, client_ports[0], binary_ports[0], cluster_ports[0], &[]);
         nodes.push(Some(node0));
 
         // Brief delay to let node 0 bootstrap its single-node Raft cluster
@@ -45,7 +48,13 @@ impl TestCluster {
         // Start remaining nodes that join via node 0
         let seed = format!("127.0.0.1:{}", cluster_ports[0]);
         for i in 1..n {
-            let node = start_cluster_node(i, client_ports[i], cluster_ports[i], &[&seed]);
+            let node = start_cluster_node(
+                i,
+                client_ports[i],
+                binary_ports[i],
+                cluster_ports[i],
+                &[&seed],
+            );
             nodes.push(Some(node));
         }
 
@@ -55,16 +64,27 @@ impl TestCluster {
         TestCluster {
             nodes,
             client_ports,
+            binary_ports,
             cluster_ports,
         }
     }
 
     /// Get the HTTP address of node `i` (e.g., "http://127.0.0.1:12345").
+    /// Used by CLI commands which still use gRPC.
     pub fn addr(&self, i: usize) -> &str {
         &self.nodes[i].as_ref().expect("node not running").addr
     }
 
-    /// Get the raw host:port of node `i`.
+    /// Get the binary protocol address of node `i` (e.g., "127.0.0.1:12346").
+    /// Used by SDK connections.
+    pub fn binary_addr(&self, i: usize) -> &str {
+        &self.nodes[i]
+            .as_ref()
+            .expect("node not running")
+            .binary_addr
+    }
+
+    /// Get the raw host:port of node `i` (gRPC port).
     pub fn host_port(&self, i: usize) -> String {
         format!("127.0.0.1:{}", self.client_ports[i])
     }
@@ -79,6 +99,7 @@ impl TestCluster {
             self.nodes[i] = Some(ClusterNode {
                 child: node.child,
                 addr: node.addr,
+                binary_addr: node.binary_addr,
                 data_dir: node.data_dir,
             });
         }
@@ -101,6 +122,7 @@ impl TestCluster {
         let node = restart_cluster_node(
             i,
             self.client_ports[i],
+            self.binary_ports[i],
             self.cluster_ports[i],
             &seed_refs,
             data_dir,
@@ -116,11 +138,9 @@ impl TestCluster {
 
 impl Drop for TestCluster {
     fn drop(&mut self) {
-        for node in &mut self.nodes {
-            if let Some(ref mut n) = node {
-                let _ = n.child.kill();
-                let _ = n.child.wait();
-            }
+        for n in self.nodes.iter_mut().flatten() {
+            let _ = n.child.kill();
+            let _ = n.child.wait();
         }
     }
 }
@@ -128,35 +148,53 @@ impl Drop for TestCluster {
 fn start_cluster_node(
     index: usize,
     client_port: u16,
+    binary_port: u16,
     cluster_port: u16,
     seeds: &[&str],
 ) -> ClusterNode {
     let data_dir = tempfile::tempdir().expect("create temp dir");
-    write_cluster_config(&data_dir, index, client_port, cluster_port, seeds);
-    spawn_and_wait(data_dir, client_port)
+    write_cluster_config(
+        &data_dir,
+        index,
+        client_port,
+        binary_port,
+        cluster_port,
+        seeds,
+    );
+    spawn_and_wait(data_dir, client_port, binary_port)
 }
 
 fn restart_cluster_node(
     index: usize,
     client_port: u16,
+    binary_port: u16,
     cluster_port: u16,
     seeds: &[&str],
     data_dir: tempfile::TempDir,
 ) -> ClusterNode {
     // Rewrite config (it's already there but let's be safe)
-    write_cluster_config(&data_dir, index, client_port, cluster_port, seeds);
-    spawn_and_wait(data_dir, client_port)
+    write_cluster_config(
+        &data_dir,
+        index,
+        client_port,
+        binary_port,
+        cluster_port,
+        seeds,
+    );
+    spawn_and_wait(data_dir, client_port, binary_port)
 }
 
 fn write_cluster_config(
     data_dir: &tempfile::TempDir,
     index: usize,
     client_port: u16,
+    binary_port: u16,
     cluster_port: u16,
     seeds: &[&str],
 ) {
     let node_id = index as u64 + 1; // node IDs are 1-based
     let addr = format!("127.0.0.1:{client_port}");
+    let binary_addr = format!("127.0.0.1:{binary_port}");
     let bind_addr = format!("127.0.0.1:{cluster_port}");
 
     let peers_toml = if seeds.is_empty() {
@@ -169,6 +207,7 @@ fn write_cluster_config(
     let config = format!(
         r#"[server]
 listen_addr = "{addr}"
+binary_addr = "{binary_addr}"
 
 [telemetry]
 otlp_endpoint = ""
@@ -187,8 +226,9 @@ heartbeat_interval_ms = 150
     std::fs::write(&config_path, config).expect("write cluster config");
 }
 
-fn spawn_and_wait(data_dir: tempfile::TempDir, client_port: u16) -> ClusterNode {
-    let addr_str = format!("127.0.0.1:{client_port}");
+fn spawn_and_wait(data_dir: tempfile::TempDir, client_port: u16, binary_port: u16) -> ClusterNode {
+    let grpc_addr = format!("127.0.0.1:{client_port}");
+    let binary_addr = format!("127.0.0.1:{binary_port}");
     let binary = server_binary();
     assert!(
         binary.exists(),
@@ -210,24 +250,31 @@ fn spawn_and_wait(data_dir: tempfile::TempDir, client_port: u16) -> ClusterNode 
     let stderr = child.stderr.take().expect("stderr");
     std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
-    // Poll TCP until reachable
+    // Poll TCP until both ports are reachable
     let start = std::time::Instant::now();
-    let mut connected = false;
+    let mut grpc_ok = false;
+    let mut binary_ok = false;
     while start.elapsed() < Duration::from_secs(15) {
-        if std::net::TcpStream::connect(&addr_str).is_ok() {
-            connected = true;
+        if !grpc_ok && std::net::TcpStream::connect(&grpc_addr).is_ok() {
+            grpc_ok = true;
+        }
+        if !binary_ok && std::net::TcpStream::connect(&binary_addr).is_ok() {
+            binary_ok = true;
+        }
+        if grpc_ok && binary_ok {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(
-        connected,
-        "cluster node did not become reachable at {addr_str} within 15s"
+        grpc_ok && binary_ok,
+        "cluster node did not become reachable at gRPC={grpc_addr} binary={binary_addr} within 15s"
     );
 
     ClusterNode {
         child,
-        addr: format!("http://{addr_str}"),
+        addr: format!("http://{grpc_addr}"),
+        binary_addr,
         data_dir,
     }
 }

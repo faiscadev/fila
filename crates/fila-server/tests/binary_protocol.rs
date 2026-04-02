@@ -196,18 +196,19 @@ async fn enqueue_and_consume_round_trip() {
 
     let mut stream = connect_and_handshake(&addr).await;
 
-    // Subscribe to consume (request_id = 10)
+    // Subscribe to consume (request_id = 10) — expect ConsumeOk first
     let consume_req = ConsumeRequest {
         queue: "test-queue".to_string(),
     };
-    let mut write_buf = BytesMut::new();
-    consume_req.encode(10).encode(&mut write_buf);
-    stream.write_all(&write_buf).await.unwrap();
+    let consume_ok_frame = send_and_recv(&mut stream, &consume_req.encode(10)).await;
+    assert_eq!(consume_ok_frame.opcode, Opcode::ConsumeOk as u8);
+    assert_eq!(consume_ok_frame.request_id, 10);
+    let consume_ok = fila_fibp::ConsumeOkResponse::decode(consume_ok_frame.payload).unwrap();
+    assert!(!consume_ok.consumer_id.is_empty());
 
-    // Give consumer registration a moment
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // Enqueue a message (request_id = 1)
+    // Enqueue a message (request_id = 1).
+    // After enqueue the server may interleave the EnqueueResult (request_id=1)
+    // and the Delivery (request_id=10) in any order, so we collect both.
     let enqueue_req = EnqueueRequest {
         messages: vec![EnqueueMessage {
             queue: "test-queue".to_string(),
@@ -215,7 +216,38 @@ async fn enqueue_and_consume_round_trip() {
             payload: b"hello binary protocol".to_vec(),
         }],
     };
-    let resp_frame = send_and_recv(&mut stream, &enqueue_req.encode(1)).await;
+    let enqueue_frame = enqueue_req.encode(1);
+    let mut write_buf = BytesMut::new();
+    enqueue_frame.encode(&mut write_buf);
+    stream.write_all(&write_buf).await.unwrap();
+
+    // Read both the EnqueueResult and Delivery frames.
+    let mut read_buf = BytesMut::with_capacity(4096);
+    let mut enqueue_resp_frame: Option<RawFrame> = None;
+    let mut delivery_frame: Option<RawFrame> = None;
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while enqueue_resp_frame.is_none() || delivery_frame.is_none() {
+            while let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
+                match Opcode::from_u8(frame.opcode) {
+                    Some(Opcode::EnqueueResult) => enqueue_resp_frame = Some(frame),
+                    Some(Opcode::Delivery) => delivery_frame = Some(frame),
+                    other => panic!("unexpected opcode: {other:?}"),
+                }
+            }
+            if enqueue_resp_frame.is_some() && delivery_frame.is_some() {
+                break;
+            }
+            let n = stream.read_buf(&mut read_buf).await.unwrap();
+            if n == 0 {
+                panic!("server closed connection while waiting for enqueue result and delivery");
+            }
+        }
+    })
+    .await
+    .expect("enqueue result and delivery should arrive within 30s");
+
+    let resp_frame = enqueue_resp_frame.unwrap();
     assert_eq!(resp_frame.opcode, Opcode::EnqueueResult as u8);
     let enqueue_resp = EnqueueResponse::decode(resp_frame.payload).unwrap();
     assert_eq!(enqueue_resp.results.len(), 1);
@@ -223,19 +255,7 @@ async fn enqueue_and_consume_round_trip() {
     let msg_id = enqueue_resp.results[0].message_id.clone();
     assert!(!msg_id.is_empty());
 
-    // Read delivery frame (should come through from consume subscription)
-    let mut read_buf = BytesMut::with_capacity(4096);
-    let delivery_frame = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            stream.read_buf(&mut read_buf).await.unwrap();
-            if let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
-                return frame;
-            }
-        }
-    })
-    .await
-    .expect("delivery frame should arrive within 5s");
-
+    let delivery_frame = delivery_frame.unwrap();
     assert_eq!(delivery_frame.opcode, Opcode::Delivery as u8);
     assert_eq!(delivery_frame.request_id, 10); // matches consume request_id
     let delivery = DeliveryBatch::decode(delivery_frame.payload).unwrap();
@@ -310,14 +330,12 @@ async fn batch_ack_and_nack() {
 
     let mut stream = connect_and_handshake(&addr).await;
 
-    // Subscribe to consume
+    // Subscribe to consume and wait for ConsumeOk confirmation
     let consume_req = ConsumeRequest {
         queue: "ack-queue".to_string(),
     };
-    let mut write_buf = BytesMut::new();
-    consume_req.encode(10).encode(&mut write_buf);
-    stream.write_all(&write_buf).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let consume_ok_frame = send_and_recv(&mut stream, &consume_req.encode(10)).await;
+    assert_eq!(consume_ok_frame.opcode, Opcode::ConsumeOk as u8);
 
     // Enqueue 2 messages
     let req = EnqueueRequest {
@@ -743,8 +761,8 @@ async fn auth_reject_bad_key() {
     // Connect with a bad API key
     let mut stream = connect_with_key(&addr, Some("bad-key".to_string())).await;
 
-    // The server sends HandshakeOk first (protocol handshake), then validates
-    // the API key and sends an Unauthorized error frame.
+    // The server validates the API key BEFORE sending HandshakeOk, so on
+    // failure only a single Error frame is returned.
     let mut read_buf = BytesMut::with_capacity(4096);
     let result = tokio::time::timeout(Duration::from_secs(5), async {
         let mut frames = Vec::new();
@@ -753,11 +771,10 @@ async fn auth_reject_bad_key() {
             while let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
                 frames.push(frame);
             }
-            // We expect HandshakeOk then Error
-            if frames.len() >= 2 {
+            if !frames.is_empty() {
                 return frames;
             }
-            if n == 0 && frames.len() < 2 {
+            if n == 0 {
                 return frames;
             }
         }
@@ -765,10 +782,9 @@ async fn auth_reject_bad_key() {
     .await
     .expect("timed out waiting for auth error");
 
-    assert!(result.len() >= 2, "expected at least 2 frames");
-    assert_eq!(result[0].opcode, Opcode::HandshakeOk as u8);
-    assert_eq!(result[1].opcode, Opcode::Error as u8);
-    let err = ErrorFrame::decode(result[1].payload.clone()).unwrap();
+    assert!(!result.is_empty(), "expected at least 1 frame");
+    assert_eq!(result[0].opcode, Opcode::Error as u8);
+    let err = ErrorFrame::decode(result[0].payload.clone()).unwrap();
     assert_eq!(err.error_code, ErrorCode::Unauthorized);
 }
 
@@ -779,6 +795,8 @@ async fn auth_reject_no_key() {
     // Connect with no API key
     let mut stream = connect_with_key(&addr, None).await;
 
+    // The server validates the API key BEFORE sending HandshakeOk, so on
+    // failure only a single Error frame is returned.
     let mut read_buf = BytesMut::with_capacity(4096);
     let result = tokio::time::timeout(Duration::from_secs(5), async {
         let mut frames = Vec::new();
@@ -787,10 +805,10 @@ async fn auth_reject_no_key() {
             while let Some(frame) = RawFrame::decode(&mut read_buf).unwrap() {
                 frames.push(frame);
             }
-            if frames.len() >= 2 {
+            if !frames.is_empty() {
                 return frames;
             }
-            if n == 0 && frames.len() < 2 {
+            if n == 0 {
                 return frames;
             }
         }
@@ -798,10 +816,9 @@ async fn auth_reject_no_key() {
     .await
     .expect("timed out waiting for auth error");
 
-    assert!(result.len() >= 2, "expected at least 2 frames");
-    assert_eq!(result[0].opcode, Opcode::HandshakeOk as u8);
-    assert_eq!(result[1].opcode, Opcode::Error as u8);
-    let err = ErrorFrame::decode(result[1].payload.clone()).unwrap();
+    assert!(!result.is_empty(), "expected at least 1 frame");
+    assert_eq!(result[0].opcode, Opcode::Error as u8);
+    let err = ErrorFrame::decode(result[0].payload.clone()).unwrap();
     assert_eq!(err.error_code, ErrorCode::Unauthorized);
 }
 

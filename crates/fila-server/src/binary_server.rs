@@ -156,53 +156,21 @@ async fn handle_connection(
 
     let mut read_buf = BytesMut::with_capacity(8192);
 
-    // --- Protocol handshake ---
-    let api_key = protocol_handshake(&server, &mut stream, &mut read_buf).await?;
-
-    // Validate API key if auth is enabled
-    let caller_key: Option<fila_core::broker::auth::CallerKey> = if server.broker.auth_enabled {
-        match api_key {
-            Some(ref key) => match server.broker.validate_api_key(key) {
-                Ok(Some(caller)) => Some(caller),
-                Ok(None) | Err(_) => {
-                    send_error(
-                        &mut stream,
-                        0,
-                        ErrorCode::Unauthorized,
-                        "invalid API key",
-                        &HashMap::new(),
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            },
-            None => {
-                send_error(
-                    &mut stream,
-                    0,
-                    ErrorCode::Unauthorized,
-                    "API key required",
-                    &HashMap::new(),
-                )
-                .await?;
-                return Ok(());
-            }
-        }
-    } else {
-        None
-    };
+    // --- Protocol handshake (includes auth validation) ---
+    let caller_key = protocol_handshake(&server, &mut stream, &mut read_buf).await?;
 
     // --- Frame processing loop ---
     let mut conn = ConnectionState::new(server, stream, read_buf, caller_key);
     conn.frame_loop().await
 }
 
-/// Perform the protocol handshake: read Handshake, send HandshakeOk.
+/// Perform the protocol handshake: read Handshake, validate auth, send HandshakeOk.
+/// Returns the validated caller key (None when auth is disabled).
 async fn protocol_handshake(
     server: &BinaryServer,
     stream: &mut Stream,
     buf: &mut BytesMut,
-) -> Result<Option<String>, ConnectionError> {
+) -> Result<Option<fila_core::broker::auth::CallerKey>, ConnectionError> {
     // Read until we have a complete frame
     let frame = read_frame(stream, buf).await?;
 
@@ -236,6 +204,40 @@ async fn protocol_handshake(
         return Err(ConnectionError::Protocol("unsupported version".into()));
     }
 
+    // Validate API key BEFORE sending HandshakeOk so the client gets an Error
+    // frame on invalid/missing keys instead of a successful handshake.
+    let caller_key = if server.broker.auth_enabled {
+        match hs.api_key {
+            Some(ref key) => match server.broker.validate_api_key(key) {
+                Ok(Some(caller)) => Some(caller),
+                Ok(None) | Err(_) => {
+                    send_error(
+                        stream,
+                        0,
+                        ErrorCode::Unauthorized,
+                        "invalid API key",
+                        &HashMap::new(),
+                    )
+                    .await?;
+                    return Err(ConnectionError::Protocol("invalid API key".into()));
+                }
+            },
+            None => {
+                send_error(
+                    stream,
+                    0,
+                    ErrorCode::Unauthorized,
+                    "API key required",
+                    &HashMap::new(),
+                )
+                .await?;
+                return Err(ConnectionError::Protocol("API key required".into()));
+            }
+        }
+    } else {
+        None
+    };
+
     let ok = HandshakeOk {
         negotiated_version: 1,
         node_id: server.node_id,
@@ -243,7 +245,7 @@ async fn protocol_handshake(
     };
     send_frame(stream, &ok.encode(0)).await?;
 
-    Ok(hs.api_key)
+    Ok(caller_key)
 }
 
 /// Per-connection state including active consume subscriptions.
@@ -554,6 +556,12 @@ impl ConnectionState {
         }
 
         debug!(consumer_id = %consumer_id, queue = %req.queue, "consume stream started");
+
+        // Send ConsumeOk confirmation before any deliveries.
+        let ok = fila_fibp::ConsumeOkResponse {
+            consumer_id: consumer_id.clone(),
+        };
+        send_frame(&mut self.stream, &ok.encode(frame.request_id)).await?;
 
         // Spawn a task that converts ReadyMessage → Delivery frames and sends
         // them through the delivery channel to be written by the frame loop.

@@ -29,7 +29,7 @@ async fn e2e_throttle_rate_limiting() {
         set_result.stderr
     );
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     // Enqueue 3 messages for the throttled provider
     for i in 0..3 {

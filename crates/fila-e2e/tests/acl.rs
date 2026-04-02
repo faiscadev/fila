@@ -43,13 +43,11 @@ fn cli_create_regular_key(addr: &str, name: &str) -> (String, String) {
 
 fn assert_permission_denied_enqueue(result: Result<String, fila_sdk::EnqueueError>, context: &str) {
     match result {
-        Ok(_) => panic!("{context}: expected PERMISSION_DENIED, got Ok"),
-        Err(fila_sdk::EnqueueError::Status(fila_sdk::StatusError::Rpc { code, .. }))
-            if code == tonic::Code::PermissionDenied =>
-        {
+        Ok(_) => panic!("{context}: expected Forbidden, got Ok"),
+        Err(fila_sdk::EnqueueError::Status(fila_sdk::StatusError::Forbidden(_))) => {
             // correct
         }
-        Err(e) => panic!("{context}: expected PERMISSION_DENIED, got: {e:?}"),
+        Err(e) => panic!("{context}: expected Forbidden, got: {e:?}"),
     }
 }
 
@@ -74,7 +72,7 @@ async fn key_without_permissions_cannot_enqueue() {
     let (_, token) = cli_create_regular_key(&addr, "no-perms-key");
 
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&token),
     )
     .await
     .expect("connect");
@@ -119,7 +117,7 @@ async fn key_with_produce_permission_can_enqueue() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&token),
     )
     .await
     .expect("connect");
@@ -161,7 +159,7 @@ async fn key_with_produce_permission_cannot_enqueue_to_other_queue() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&token),
     )
     .await
     .expect("connect");
@@ -207,7 +205,7 @@ async fn wildcard_produce_permission_allows_any_queue() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&token),
     )
     .await
     .expect("connect");
@@ -234,7 +232,7 @@ async fn superadmin_key_bypasses_acl() {
     assert!(out.success, "create queue: {}", out.stderr);
 
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&admin_token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&admin_token),
     )
     .await
     .expect("connect");
@@ -360,7 +358,7 @@ async fn key_without_consume_permission_cannot_nack() {
     assert!(out.success, "set acl: {}", out.stderr);
 
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&token),
     )
     .await
     .expect("connect");
@@ -370,9 +368,8 @@ async fn key_without_consume_permission_cannot_nack() {
         .nack("nack-acl-q", "00000000-0000-0000-0000-000000000000", "err")
         .await;
     match result {
-        Err(fila_sdk::NackError::Status(fila_sdk::StatusError::Rpc { code, .. }))
-            if code == tonic::Code::PermissionDenied => {}
-        other => panic!("expected PERMISSION_DENIED, got: {other:?}"),
+        Err(fila_sdk::NackError::Status(fila_sdk::StatusError::Forbidden(_))) => {}
+        other => panic!("expected Forbidden, got: {other:?}"),
     }
 }
 
@@ -615,7 +612,7 @@ async fn per_queue_admin_can_set_acl_within_scope() {
 
     // Verify the granted permissions actually work.
     let client = fila_sdk::FilaClient::connect_with_options(
-        fila_sdk::ConnectOptions::new(&addr).with_api_key(&target_token),
+        fila_sdk::ConnectOptions::new(_server.binary_addr()).with_api_key(&target_token),
     )
     .await
     .expect("connect");

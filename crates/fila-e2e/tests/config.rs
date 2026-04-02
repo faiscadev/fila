@@ -65,7 +65,7 @@ async fn e2e_config_set_get_list_lua() {
         None,
     );
 
-    let client = helpers::sdk_client(server.addr()).await;
+    let client = helpers::sdk_client(server.binary_addr()).await;
 
     let msg_id = client
         .enqueue("config-lua", HashMap::new(), b"test".to_vec())
