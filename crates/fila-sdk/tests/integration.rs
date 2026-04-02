@@ -258,25 +258,38 @@ async fn client_drop_sends_disconnect_and_cleans_up() {
     let _stream = client.consume("disconnect-queue").await.unwrap();
 
     // Use CLI to verify the server sees an active consumer.
-    let stats_output = cli_inspect(server.grpc_addr(), "disconnect-queue");
-    assert!(
-        stats_output.contains("Active consumers:     1"),
-        "expected 1 active consumer before drop, got: {stats_output}"
-    );
+    let consumers = parse_active_consumers(&cli_inspect(server.grpc_addr(), "disconnect-queue"));
+    assert_eq!(consumers, 1, "should have 1 consumer before drop");
 
     // Drop the consuming client — this should send a Disconnect frame
     // and the server should unregister the consumer.
     drop(_stream);
     drop(client);
 
-    // Give the server time to process the disconnect.
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Poll until the server processes the disconnect (with timeout).
+    let start = std::time::Instant::now();
+    loop {
+        let consumers =
+            parse_active_consumers(&cli_inspect(server.grpc_addr(), "disconnect-queue"));
+        if consumers == 0 {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "server still has {consumers} consumers after 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
 
-    let stats_output = cli_inspect(server.grpc_addr(), "disconnect-queue");
-    assert!(
-        stats_output.contains("Active consumers:     0"),
-        "expected 0 consumers after client drop, got: {stats_output}"
-    );
+/// Parse `Active consumers:` value from CLI inspect output.
+fn parse_active_consumers(output: &str) -> u32 {
+    output
+        .lines()
+        .find(|l| l.contains("Active consumers:"))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|s| s.trim().parse().ok())
+        .expect("failed to parse Active consumers from CLI output")
 }
 
 /// Get queue inspect output via the CLI.

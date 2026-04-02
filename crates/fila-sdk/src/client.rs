@@ -577,6 +577,16 @@ impl FilaClient {
             queue: queue.to_string(),
         };
 
+        // Register the delivery channel BEFORE sending the Consume request so
+        // that early Delivery frames (pushed immediately after ConsumeOk) are not
+        // dropped by the background reader.
+        let (delivery_tx, delivery_rx) = mpsc::channel(256);
+        {
+            let mut state = self.inner.state.lock().await;
+            state.delivery_tx = Some(delivery_tx);
+            state.consume_request_id = Some(request_id);
+        }
+
         // Send consume frame.
         self.inner
             .writer
@@ -587,8 +597,8 @@ impl FilaClient {
             .map_err(|e| ConsumeError::Status(StatusError::Transport(e)))?;
 
         // Wait for the initial response which may be an Error (queue not found, not leader, etc.)
-        // or the first Delivery. The background reader will route the initial response
-        // to our oneshot since we registered with this request_id.
+        // or ConsumeOk. The background reader routes the initial response to our
+        // oneshot since we registered with this request_id.
         let initial = match rx.await {
             Ok(ResponseFrame::Response(frame)) => frame,
             Ok(ResponseFrame::Disconnected(msg)) => {
@@ -625,17 +635,6 @@ impl FilaClient {
                     other, initial.opcode
                 ))));
             }
-        }
-
-        // Set up the mpsc channel for deliveries.
-        let (delivery_tx, delivery_rx) = mpsc::channel(256);
-
-        // Register the delivery channel so the background reader sends
-        // subsequent deliveries to it.
-        {
-            let mut state = self.inner.state.lock().await;
-            state.delivery_tx = Some(delivery_tx);
-            state.consume_request_id = Some(request_id);
         }
 
         Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
