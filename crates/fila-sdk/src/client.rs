@@ -31,6 +31,10 @@ pub struct ConsumeStream {
     request_id: u32,
     writer: Arc<Mutex<FrameWriter>>,
     state: Arc<Mutex<ConnectionInner>>,
+    /// Keeps the owning client's internals alive for the stream's lifetime.
+    /// Without this, `redirect_consume` would drop the temporary client,
+    /// firing the cancel token and killing the background reader.
+    _keep_alive: Arc<FilaClientInner>,
 }
 
 impl Stream for ConsumeStream {
@@ -624,25 +628,56 @@ impl FilaClient {
             queue: queue.to_string(),
         };
 
+        // Register the delivery channel BEFORE sending the Consume request so
+        // early Delivery frames aren't dropped. Save the previous channel to
+        // restore on failure (avoids breaking an existing active consumer).
+        let (delivery_tx, delivery_rx) = mpsc::channel(256);
+        let prev_delivery_tx;
+        let prev_consume_request_id;
+        {
+            let mut state = self.inner.state.lock().await;
+            prev_delivery_tx = state.delivery_tx.take();
+            prev_consume_request_id = state.consume_request_id.take();
+            state.delivery_tx = Some(delivery_tx);
+            state.consume_request_id = Some(request_id);
+        }
+
+        // Helper to restore previous state on failure.
+        let restore_state = |inner: &Arc<FilaClientInner>| {
+            let state = Arc::clone(&inner.state);
+            let prev_tx = prev_delivery_tx.clone();
+            let prev_rid = prev_consume_request_id;
+            tokio::spawn(async move {
+                let mut guard = state.lock().await;
+                guard.delivery_tx = prev_tx;
+                guard.consume_request_id = prev_rid;
+            });
+        };
+
         // Send consume frame.
-        self.inner
+        if let Err(e) = self
+            .inner
             .writer
             .lock()
             .await
             .send_frame(&req.encode(request_id))
             .await
-            .map_err(|e| ConsumeError::Status(StatusError::Transport(e)))?;
+        {
+            restore_state(&self.inner);
+            return Err(ConsumeError::Status(StatusError::Transport(e)));
+        }
 
-        // Wait for the initial response which may be an Error (queue not found,
-        // not leader, etc.) or ConsumeOk.
+        // Wait for the initial response (ConsumeOk or Error).
         let initial = match rx.await {
             Ok(ResponseFrame::Response(frame)) => frame,
             Ok(ResponseFrame::Disconnected(msg)) => {
+                restore_state(&self.inner);
                 return Err(ConsumeError::Status(StatusError::Unavailable(format!(
                     "connection lost: {msg}"
                 ))));
             }
             Err(_) => {
+                restore_state(&self.inner);
                 return Err(ConsumeError::Status(StatusError::Unavailable(
                     "connection closed".to_string(),
                 )));
@@ -651,6 +686,7 @@ impl FilaClient {
 
         // Check for error response.
         if let Some((code, message, metadata)) = Self::check_error(&initial) {
+            restore_state(&self.inner);
             if code == ErrorCode::NotLeader {
                 if let Some(leader_addr) = metadata.get("leader_addr") {
                     return self.redirect_consume(leader_addr, queue).await;
@@ -662,9 +698,10 @@ impl FilaClient {
         // The initial frame should be a ConsumeOk confirmation.
         match Opcode::from_u8(initial.opcode) {
             Some(Opcode::ConsumeOk) => {
-                // Subscription confirmed. The server will now push Delivery frames.
+                // Subscription confirmed. Delivery channel is already registered.
             }
             other => {
+                restore_state(&self.inner);
                 return Err(ConsumeError::Status(StatusError::Protocol(format!(
                     "expected ConsumeOk, got opcode: {:?} (0x{:02x})",
                     other, initial.opcode
@@ -672,23 +709,12 @@ impl FilaClient {
             }
         }
 
-        // Register the delivery channel AFTER ConsumeOk succeeds. This avoids
-        // overwriting a previous active consumer's channel on failure/redirect
-        // paths. The race with early deliveries is minimal: the server sends
-        // ConsumeOk before any Delivery frames, so by the time deliveries
-        // arrive we've registered the channel.
-        let (delivery_tx, delivery_rx) = mpsc::channel(256);
-        {
-            let mut state = self.inner.state.lock().await;
-            state.delivery_tx = Some(delivery_tx);
-            state.consume_request_id = Some(request_id);
-        }
-
         Ok(ConsumeStream {
             inner: Box::pin(tokio_stream::wrappers::ReceiverStream::new(delivery_rx)),
             request_id,
             writer: Arc::clone(&self.inner.writer),
             state: Arc::clone(&self.inner.state),
+            _keep_alive: Arc::clone(&self.inner),
         })
     }
 
