@@ -577,16 +577,6 @@ impl FilaClient {
             queue: queue.to_string(),
         };
 
-        // Register the delivery channel BEFORE sending the Consume request so
-        // that early Delivery frames (pushed immediately after ConsumeOk) are not
-        // dropped by the background reader.
-        let (delivery_tx, delivery_rx) = mpsc::channel(256);
-        {
-            let mut state = self.inner.state.lock().await;
-            state.delivery_tx = Some(delivery_tx);
-            state.consume_request_id = Some(request_id);
-        }
-
         // Send consume frame.
         self.inner
             .writer
@@ -596,9 +586,8 @@ impl FilaClient {
             .await
             .map_err(|e| ConsumeError::Status(StatusError::Transport(e)))?;
 
-        // Wait for the initial response which may be an Error (queue not found, not leader, etc.)
-        // or ConsumeOk. The background reader routes the initial response to our
-        // oneshot since we registered with this request_id.
+        // Wait for the initial response which may be an Error (queue not found,
+        // not leader, etc.) or ConsumeOk.
         let initial = match rx.await {
             Ok(ResponseFrame::Response(frame)) => frame,
             Ok(ResponseFrame::Disconnected(msg)) => {
@@ -615,7 +604,6 @@ impl FilaClient {
 
         // Check for error response.
         if let Some((code, message, metadata)) = Self::check_error(&initial) {
-            // Handle leader redirect.
             if code == ErrorCode::NotLeader {
                 if let Some(leader_addr) = metadata.get("leader_addr") {
                     return self.redirect_consume(leader_addr, queue).await;
@@ -635,6 +623,18 @@ impl FilaClient {
                     other, initial.opcode
                 ))));
             }
+        }
+
+        // Register the delivery channel AFTER ConsumeOk succeeds. This avoids
+        // overwriting a previous active consumer's channel on failure/redirect
+        // paths. The race with early deliveries is minimal: the server sends
+        // ConsumeOk before any Delivery frames, so by the time deliveries
+        // arrive we've registered the channel.
+        let (delivery_tx, delivery_rx) = mpsc::channel(256);
+        {
+            let mut state = self.inner.state.lock().await;
+            state.delivery_tx = Some(delivery_tx);
+            state.consume_request_id = Some(request_id);
         }
 
         Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
