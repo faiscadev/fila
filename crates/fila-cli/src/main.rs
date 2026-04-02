@@ -870,6 +870,15 @@ async fn cmd_auth_acl_set(client: &mut CliClient, key_id: String, permissions: V
         .iter()
         .map(|p| {
             let (kind, pattern) = p.split_once(':').ok_or(p.as_str())?;
+            match kind {
+                "produce" | "consume" | "admin" => {}
+                _ => {
+                    eprintln!(
+                        "Error: invalid permission kind \"{kind}\" — must be one of: produce, consume, admin"
+                    );
+                    process::exit(1);
+                }
+            }
             Ok(AclPermission {
                 kind: kind.to_string(),
                 pattern: pattern.to_string(),

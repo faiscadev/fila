@@ -441,7 +441,13 @@ impl ConnectionState {
             }
         }
 
-        match binary_handlers::handle_enqueue(&self.server.broker, req).await {
+        match binary_handlers::handle_enqueue(
+            &self.server.broker,
+            self.server.cluster.as_deref(),
+            req,
+        )
+        .await
+        {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
                 send_error(
@@ -644,7 +650,9 @@ impl ConnectionState {
             }
         }
 
-        match binary_handlers::handle_ack(&self.server.broker, req).await {
+        match binary_handlers::handle_ack(&self.server.broker, self.server.cluster.as_deref(), req)
+            .await
+        {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
                 send_error(
@@ -700,7 +708,9 @@ impl ConnectionState {
             }
         }
 
-        match binary_handlers::handle_nack(&self.server.broker, req).await {
+        match binary_handlers::handle_nack(&self.server.broker, self.server.cluster.as_deref(), req)
+            .await
+        {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
                 send_error(
@@ -812,7 +822,13 @@ impl ConnectionState {
             Ok(None) => {} // auth disabled
         }
 
-        match binary_handlers::handle_create_queue(&self.server.broker, req).await {
+        match binary_handlers::handle_create_queue(
+            &self.server.broker,
+            self.server.cluster.as_deref(),
+            req,
+        )
+        .await
+        {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
                 send_error(
@@ -877,7 +893,13 @@ impl ConnectionState {
             Ok(None) => {}
         }
 
-        match binary_handlers::handle_delete_queue(&self.server.broker, req).await {
+        match binary_handlers::handle_delete_queue(
+            &self.server.broker,
+            self.server.cluster.as_deref(),
+            req,
+        )
+        .await
+        {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
                 send_error(
@@ -920,7 +942,13 @@ impl ConnectionState {
             return Ok(());
         }
 
-        match binary_handlers::handle_get_stats(&self.server.broker, req).await {
+        match binary_handlers::handle_get_stats(
+            &self.server.broker,
+            self.server.cluster.as_deref(),
+            req,
+        )
+        .await
+        {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
                 send_error(
@@ -951,7 +979,12 @@ impl ConnectionState {
             return Ok(());
         }
 
-        match binary_handlers::handle_list_queues(&self.server.broker).await {
+        match binary_handlers::handle_list_queues(
+            &self.server.broker,
+            self.server.cluster.as_deref(),
+        )
+        .await
+        {
             Ok(resp) => send_frame(&mut self.stream, &resp.encode(frame.request_id)).await,
             Err(e) => {
                 send_error(

@@ -59,7 +59,10 @@ fn parse_replicas(output: &str) -> u32 {
 fn find_leader_index(cluster: &helpers::cluster::TestCluster, queue: &str) -> usize {
     let output = queue_inspect(cluster.binary_addr(0), queue);
     let leader_node_id = parse_leader_node_id(&output);
-    assert!(leader_node_id > 0, "no leader found for queue '{queue}'");
+    assert!(
+        leader_node_id > 0,
+        "no leader found for queue '{queue}'\ninspect output:\n{output}"
+    );
     (leader_node_id - 1) as usize // node IDs are 1-based
 }
 
