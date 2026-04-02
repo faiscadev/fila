@@ -828,6 +828,15 @@ async fn background_reader(
                 }
             }
             _ = cancel.cancelled() => {
+                // Send a Disconnect frame so the server cleans up immediately
+                // instead of waiting for TCP EOF detection.
+                let disconnect = RawFrame {
+                    opcode: Opcode::Disconnect as u8,
+                    flags: 0,
+                    request_id: 0,
+                    payload: bytes::Bytes::new(),
+                };
+                let _ = inner.writer.lock().await.send_frame(&disconnect).await;
                 return;
             }
         }
