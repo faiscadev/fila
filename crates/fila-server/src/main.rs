@@ -107,7 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&storage),
                 Some(meta_event_tx),
                 tls_params.as_ref(),
-                &config.server.listen_addr,
+                config
+                    .server
+                    .binary_addr
+                    .as_deref()
+                    .unwrap_or(&config.server.listen_addr),
             )
             .await?,
         )
