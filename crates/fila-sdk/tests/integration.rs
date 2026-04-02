@@ -258,9 +258,9 @@ async fn client_drop_sends_disconnect_and_cleans_up() {
     let _stream = client.consume("disconnect-queue").await.unwrap();
 
     // Use CLI to verify the server sees an active consumer.
-    let stats_output = cli_stats(server.grpc_addr(), "disconnect-queue");
+    let stats_output = cli_inspect(server.grpc_addr(), "disconnect-queue");
     assert!(
-        stats_output.contains("active_consumers: 1") || stats_output.contains("consumers: 1"),
+        stats_output.contains("Active consumers:     1"),
         "expected 1 active consumer before drop, got: {stats_output}"
     );
 
@@ -269,24 +269,26 @@ async fn client_drop_sends_disconnect_and_cleans_up() {
     drop(_stream);
     drop(client);
 
-    // Give the server a moment to process the disconnect.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Give the server time to process the disconnect.
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let stats_output = cli_stats(server.grpc_addr(), "disconnect-queue");
+    let stats_output = cli_inspect(server.grpc_addr(), "disconnect-queue");
     assert!(
-        stats_output.contains("active_consumers: 0") || stats_output.contains("consumers: 0"),
+        stats_output.contains("Active consumers:     0"),
         "expected 0 consumers after client drop, got: {stats_output}"
     );
 }
 
-/// Get queue stats via the CLI.
-fn cli_stats(grpc_addr: &str, queue: &str) -> String {
+/// Get queue inspect output via the CLI.
+fn cli_inspect(grpc_addr: &str, queue: &str) -> String {
     let cli = workspace_binary("fila");
     let output: Output = Command::new(&cli)
         .arg("--addr")
         .arg(grpc_addr)
-        .args(["queue", "stats", queue])
+        .args(["queue", "inspect", queue])
         .output()
-        .expect("run fila CLI stats");
-    String::from_utf8_lossy(&output.stdout).to_string()
+        .expect("run fila CLI inspect");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    format!("{stdout}{stderr}")
 }

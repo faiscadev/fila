@@ -19,6 +19,7 @@ pub enum Opcode {
     AckResult = 0x16,
     Nack = 0x17,
     NackResult = 0x18,
+    ConsumeOk = 0x19,
 
     // Admin (0xFD downward — grows down so hot-path and admin never collide)
     CreateQueue = 0xFD,
@@ -69,6 +70,7 @@ impl Opcode {
             0x16 => Some(Opcode::AckResult),
             0x17 => Some(Opcode::Nack),
             0x18 => Some(Opcode::NackResult),
+            0x19 => Some(Opcode::ConsumeOk),
             0xFD => Some(Opcode::CreateQueue),
             0xFC => Some(Opcode::CreateQueueResult),
             0xFB => Some(Opcode::DeleteQueue),

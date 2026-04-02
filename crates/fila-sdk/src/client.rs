@@ -187,11 +187,12 @@ struct ConnectionInner {
 }
 
 /// Shared internals of a [`FilaClient`]. A single `Arc<FilaClientInner>` is
-/// shared by every clone. When the last clone drops, [`Drop`] fires the
-/// cancellation token so the background reader task exits promptly.
+/// shared by every clone — but NOT by the background reader task. When the
+/// last client clone drops, [`Drop`] fires the cancellation token so the
+/// background reader exits and sends a Disconnect frame.
 struct FilaClientInner {
-    writer: Mutex<FrameWriter>,
-    state: Mutex<ConnectionInner>,
+    writer: Arc<Mutex<FrameWriter>>,
+    state: Arc<Mutex<ConnectionInner>>,
     next_request_id: AtomicU32,
     cancel: CancellationToken,
 }
@@ -430,24 +431,30 @@ impl FilaClient {
 
         // Set up shared state and start background reader.
         let cancel = CancellationToken::new();
+        let state = Arc::new(Mutex::new(ConnectionInner {
+            pending: HashMap::new(),
+            delivery_tx: None,
+            consume_request_id: None,
+        }));
+
+        let writer = Arc::new(Mutex::new(FrameWriter {
+            buf: BytesMut::with_capacity(1024),
+            stream: write_stream,
+        }));
 
         let inner = Arc::new(FilaClientInner {
-            writer: Mutex::new(FrameWriter {
-                buf: BytesMut::with_capacity(1024),
-                stream: write_stream,
-            }),
-            state: Mutex::new(ConnectionInner {
-                pending: HashMap::new(),
-                delivery_tx: None,
-                consume_request_id: None,
-            }),
+            writer: Arc::clone(&writer),
+            state: Arc::clone(&state),
             next_request_id: AtomicU32::new(1),
             cancel: cancel.clone(),
         });
 
-        let reader_inner = Arc::clone(&inner);
+        // The background reader holds its own Arcs to state and writer, plus
+        // the cancel token — NOT an Arc<FilaClientInner>. This way, when all
+        // FilaClient clones drop, FilaClientInner::drop fires and cancels the
+        // token even though the reader task is still alive.
         tokio::spawn(async move {
-            background_reader(read, reader_inner, cancel).await;
+            background_reader(read, state, cancel, writer).await;
         });
 
         Ok(Self {
@@ -607,26 +614,21 @@ impl FilaClient {
             return Err(consume_error_from_code(code, message));
         }
 
-        // The initial frame should be a Delivery batch. Set up the mpsc channel
-        // for subsequent deliveries.
-        let (delivery_tx, delivery_rx) = mpsc::channel(256);
-
-        // Process the initial delivery frame.
-        if Opcode::from_u8(initial.opcode) == Some(Opcode::Delivery) {
-            if let Ok(batch) = DeliveryBatch::decode(initial.payload) {
-                for msg in batch.messages {
-                    let consume_msg = ConsumeMessage {
-                        id: msg.message_id,
-                        headers: msg.headers,
-                        payload: msg.payload,
-                        fairness_key: msg.fairness_key,
-                        attempt_count: msg.attempt_count,
-                        queue: msg.queue,
-                    };
-                    let _ = delivery_tx.send(Ok(consume_msg)).await;
-                }
+        // The initial frame should be a ConsumeOk confirmation.
+        match Opcode::from_u8(initial.opcode) {
+            Some(Opcode::ConsumeOk) => {
+                // Subscription confirmed. The server will now push Delivery frames.
+            }
+            other => {
+                return Err(ConsumeError::Status(StatusError::Protocol(format!(
+                    "expected ConsumeOk, got opcode: {:?} (0x{:02x})",
+                    other, initial.opcode
+                ))));
             }
         }
+
+        // Set up the mpsc channel for deliveries.
+        let (delivery_tx, delivery_rx) = mpsc::channel(256);
 
         // Register the delivery channel so the background reader sends
         // subsequent deliveries to it.
@@ -793,8 +795,9 @@ async fn read_one_frame(
 /// token is triggered (i.e. all `FilaClient` clones have been dropped).
 async fn background_reader(
     mut stream: tokio::io::ReadHalf<IoStream>,
-    inner: Arc<FilaClientInner>,
+    state: Arc<Mutex<ConnectionInner>>,
     cancel: CancellationToken,
+    writer: Arc<Mutex<FrameWriter>>,
 ) {
     let mut buf = BytesMut::with_capacity(4096);
 
@@ -802,12 +805,11 @@ async fn background_reader(
         loop {
             match RawFrame::decode(&mut buf) {
                 Ok(Some(frame)) => {
-                    dispatch_frame(frame, &inner.state).await;
+                    dispatch_frame(frame, &state).await;
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    notify_all_disconnected(&inner.state, &format!("frame decode error: {e}"))
-                        .await;
+                    notify_all_disconnected(&state, &format!("frame decode error: {e}")).await;
                     return;
                 }
             }
@@ -817,12 +819,12 @@ async fn background_reader(
             result = stream.read_buf(&mut buf) => {
                 match result {
                     Ok(0) => {
-                        notify_all_disconnected(&inner.state, "connection closed by server").await;
+                        notify_all_disconnected(&state, "connection closed by server").await;
                         return;
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        notify_all_disconnected(&inner.state, &format!("read error: {e}")).await;
+                        notify_all_disconnected(&state, &format!("read error: {e}")).await;
                         return;
                     }
                 }
@@ -836,7 +838,7 @@ async fn background_reader(
                     request_id: 0,
                     payload: bytes::Bytes::new(),
                 };
-                let _ = inner.writer.lock().await.send_frame(&disconnect).await;
+                let _ = writer.lock().await.send_frame(&disconnect).await;
                 return;
             }
         }

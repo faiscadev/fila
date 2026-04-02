@@ -557,6 +557,12 @@ impl ConnectionState {
 
         debug!(consumer_id = %consumer_id, queue = %req.queue, "consume stream started");
 
+        // Send ConsumeOk confirmation before any deliveries.
+        let ok = fila_fibp::ConsumeOkResponse {
+            consumer_id: consumer_id.clone(),
+        };
+        send_frame(&mut self.stream, &ok.encode(frame.request_id)).await?;
+
         // Spawn a task that converts ReadyMessage → Delivery frames and sends
         // them through the delivery channel to be written by the frame loop.
         let request_id = frame.request_id;

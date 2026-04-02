@@ -43,6 +43,11 @@ pub struct ConsumeRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct ConsumeOkResponse {
+    pub consumer_id: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct DeliveryMessage {
     pub message_id: String,
     pub queue: String,
@@ -193,6 +198,25 @@ impl ProtocolMessage for ConsumeRequest {
         let mut r = PayloadReader::new(payload);
         let queue = r.read_string()?;
         Ok(Self { queue })
+    }
+}
+
+impl ProtocolMessage for ConsumeOkResponse {
+    fn encode(&self, request_id: u32) -> RawFrame {
+        let mut w = PayloadWriter::new();
+        w.put_string(&self.consumer_id);
+        RawFrame {
+            opcode: Opcode::ConsumeOk as u8,
+            flags: 0,
+            request_id,
+            payload: w.finish(),
+        }
+    }
+
+    fn decode(payload: Bytes) -> Result<Self, FrameError> {
+        let mut r = PayloadReader::new(payload);
+        let consumer_id = r.read_string()?;
+        Ok(Self { consumer_id })
     }
 }
 
@@ -460,6 +484,19 @@ mod tests {
         let frame = req.encode(6);
         let decoded = NackRequest::decode(frame.payload).unwrap();
         assert_eq!(decoded.items[0].error, "processing failed");
+    }
+
+    #[test]
+    fn consume_ok_round_trip() {
+        let resp = ConsumeOkResponse {
+            consumer_id: "consumer-abc-123".to_string(),
+        };
+        let frame = resp.encode(42);
+        assert_eq!(frame.opcode, Opcode::ConsumeOk as u8);
+        assert_eq!(frame.request_id, 42);
+
+        let decoded = ConsumeOkResponse::decode(frame.payload).unwrap();
+        assert_eq!(decoded.consumer_id, "consumer-abc-123");
     }
 
     #[test]

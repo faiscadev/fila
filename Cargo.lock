@@ -1384,6 +1384,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tokio-util",
  "webpki-roots 0.26.11",
 ]
 
