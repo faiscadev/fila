@@ -3,7 +3,7 @@ epicNumber: 20
 startedAt: "2026-03-31T00:00:00Z"
 yoloMode: false
 mode: normal
-currentPrIndex: 2
+currentPrIndex: 3
 prChain:
   - storyId: "20.1"
     storyKey: "20-1-binary-protocol-server-hot-path-operations"
@@ -24,8 +24,8 @@ prChain:
     title: "Rust SDK Binary Protocol Client"
     branch: "feat/20.3-rust-sdk-binary-protocol"
     pr: 160
-    baseBranch: "feat/20.2-admin-ops-auth-binary-protocol"
-    status: pending
+    baseBranch: "main"
+    status: merged
   - storyId: "20.4"
     storyKey: "20-4-cli-cluster-inter-node-migration"
     title: "CLI & Cluster Inter-Node Migration"

@@ -38,3 +38,30 @@
 - All new protocol types must implement `ProtocolMessage` trait
 - All u16 list counts must use `.min(u16::MAX)` + `tracing::warn!` pattern, never `as u16` directly
 - Protocol types organized by domain: handshake.rs, hotpath.rs, admin.rs, auth.rs, error.rs
+
+## PR #160: Rust SDK Binary Protocol Client
+
+### Gaps in Dev Process
+- SDK consume() blocked forever waiting for initial response — protocol spec had no ConsumeOk confirmation opcode
+- Background reader task leaked on client drop — no cancellation mechanism
+- Dropping consume stream didn't send CancelConsume to server, leaving dead consumers registered
+- Delivery channel registered after ConsumeOk created race with early deliveries
+- redirect_consume dropped temporary client, killing background reader before stream could receive deliveries
+- SDK integration test server didn't drain stdout pipe (same bug as e2e TLS tests)
+- Server advertised gRPC address for cluster leader redirects instead of binary protocol address
+
+### Incorrect Decisions During Development
+- No ConsumeOk opcode in protocol spec — consume was fire-and-forget with no confirmation
+- IoStream/ReadStream/WriteStream used manual method delegation instead of AsyncRead/AsyncWrite traits
+- FilaClient stored fields in individual Arcs instead of a single Arc<Inner>
+- reader_task stored as Arc<JoinHandle> with _ prefix — served no purpose
+
+### Deferred Work
+- 3 cluster e2e tests fail: binary server lacks leader forwarding for writes (story 20.4 scope)
+
+### Patterns for Future Stories
+- ConsumeOk (0x13) must be sent before any Delivery frames
+- ConsumeStream must hold Arc<FilaClientInner> to keep connection alive
+- ConsumeStream Drop sends CancelConsume to clean up server-side consumer
+- Delivery channel registered before Consume request with save/restore on failure
+- Every server spawn in tests must drain BOTH stdout and stderr pipes

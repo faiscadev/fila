@@ -1,6 +1,6 @@
 # Story 20.3: Rust SDK Binary Protocol Client
 
-Status: review
+Status: done
 
 ## Story
 
