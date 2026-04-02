@@ -29,12 +29,10 @@ use crate::error::{
 pub struct ConsumeStream {
     inner: std::pin::Pin<Box<dyn Stream<Item = Result<ConsumeMessage, StatusError>> + Send>>,
     request_id: u32,
-    writer: Arc<Mutex<FrameWriter>>,
-    state: Arc<Mutex<ConnectionInner>>,
-    /// Keeps the owning client's internals alive for the stream's lifetime.
-    /// Without this, `redirect_consume` would drop the temporary client,
-    /// firing the cancel token and killing the background reader.
-    _keep_alive: Arc<FilaClientInner>,
+    /// Holds the owning client's internals alive for the stream's lifetime.
+    /// Used in Drop to send CancelConsume and clean up state.
+    /// Also keeps the background reader alive for redirected consume streams.
+    client_inner: Arc<FilaClientInner>,
 }
 
 impl Stream for ConsumeStream {
@@ -51,28 +49,24 @@ impl Stream for ConsumeStream {
 impl Drop for ConsumeStream {
     fn drop(&mut self) {
         let request_id = self.request_id;
-        let writer = Arc::clone(&self.writer);
-        let state = Arc::clone(&self.state);
+        let client = Arc::clone(&self.client_inner);
 
         // Spawn a task to send CancelConsume and clean up state.
         // We can't do async work in Drop directly.
         tokio::spawn(async move {
-            // Clear the delivery channel so the background reader stops
-            // routing deliveries to the dropped receiver.
             {
-                let mut guard = state.lock().await;
+                let mut guard = client.state.lock().await;
                 guard.delivery_tx = None;
                 guard.consume_request_id = None;
             }
 
-            // Send CancelConsume to the server.
             let cancel = RawFrame {
                 opcode: Opcode::CancelConsume as u8,
                 flags: 0,
                 request_id,
                 payload: bytes::Bytes::new(),
             };
-            let _ = writer.lock().await.send_frame(&cancel).await;
+            let _ = client.writer.lock().await.send_frame(&cancel).await;
         });
     }
 }
@@ -712,9 +706,7 @@ impl FilaClient {
         Ok(ConsumeStream {
             inner: Box::pin(tokio_stream::wrappers::ReceiverStream::new(delivery_rx)),
             request_id,
-            writer: Arc::clone(&self.inner.writer),
-            state: Arc::clone(&self.inner.state),
-            _keep_alive: Arc::clone(&self.inner),
+            client_inner: Arc::clone(&self.inner),
         })
     }
 
