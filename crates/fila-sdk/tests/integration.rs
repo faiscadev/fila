@@ -249,6 +249,75 @@ async fn enqueue_to_nonexistent_queue() {
 }
 
 #[tokio::test]
+async fn double_consume_does_not_hang() {
+    let server = TestServer::start();
+    // Create queue with short visibility timeout so in-flight messages from
+    // the first consumer are redelivered quickly after unregistration.
+    {
+        let cli = workspace_binary("fila");
+        let output: Output = Command::new(&cli)
+            .arg("--addr")
+            .arg(server.binary_addr())
+            .args([
+                "queue",
+                "create",
+                "double-consume",
+                "--visibility-timeout",
+                "1000",
+            ])
+            .output()
+            .expect("run fila CLI");
+        assert!(
+            output.status.success(),
+            "create failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+
+    // Enqueue messages
+    for i in 0..3 {
+        client
+            .enqueue(
+                "double-consume",
+                HashMap::new(),
+                format!("msg-{i}").into_bytes(),
+            )
+            .await
+            .unwrap();
+    }
+
+    // First consume — drain one message then drop
+    let mut stream1 = client.consume("double-consume").await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(2), stream1.next())
+        .await
+        .expect("timeout on first consume")
+        .unwrap()
+        .unwrap();
+    client.ack("double-consume", &msg.id).await.unwrap();
+    drop(stream1);
+
+    // Brief pause for CancelConsume to propagate
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Second consume must not hang
+    let stream2 = tokio::time::timeout(Duration::from_secs(3), client.consume("double-consume"))
+        .await
+        .expect("DEADLOCK: second consume timed out")
+        .expect("second consume failed");
+
+    let mut stream2 = stream2;
+    let msg2 = tokio::time::timeout(Duration::from_secs(2), stream2.next())
+        .await
+        .expect("timeout waiting for message on second consume")
+        .unwrap()
+        .unwrap();
+
+    client.ack("double-consume", &msg2.id).await.unwrap();
+}
+
+#[tokio::test]
 async fn client_drop_sends_disconnect_and_cleans_up() {
     let server = TestServer::start();
     create_queue_cli(server.binary_addr(), "disconnect-queue");

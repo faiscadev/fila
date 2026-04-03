@@ -38,6 +38,12 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
     let mut results = Vec::new();
 
     for level in LOAD_LEVELS {
+        eprintln!(
+            "    [{}/{}] level={}...",
+            level.producers,
+            LOAD_LEVELS.len(),
+            level.name
+        );
         let queue = format!("bench-latency-{}", level.name);
         create_queue_cli(server.addr(), &queue);
 
@@ -79,29 +85,29 @@ pub async fn bench_e2e_latency(server: &BenchServer) -> Vec<BenchResult> {
             }
         }
 
-        // Phase 2: Drain all queued messages so we start measurement clean.
-        {
-            let mut drain = client.consume(&queue).await.expect("consume drain");
-            let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            loop {
-                let next = tokio::time::timeout(Duration::from_millis(200), drain.next()).await;
-                match next {
-                    Ok(Some(Ok(msg))) => {
-                        let _ = client.ack(&queue, &msg.id).await;
-                    }
-                    _ => break, // timeout or stream end — queue is drained
+        // Phase 2+3: Drain background messages then measure latency using
+        // the same consume stream. We reuse the stream because dropping and
+        // re-creating it leaves in-flight messages leased until visibility
+        // timeout expires (the scheduler doesn't release them on consumer
+        // disconnect).
+        eprintln!("      consuming...");
+        let mut stream = client.consume(&queue).await.expect("consume stream");
+        eprintln!("      consume ok, draining...");
+        let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let next = tokio::time::timeout(Duration::from_millis(200), stream.next()).await;
+            match next {
+                Ok(Some(Ok(msg))) => {
+                    let _ = client.ack(&queue, &msg.id).await;
                 }
-                if tokio::time::Instant::now() > drain_deadline {
-                    break;
-                }
+                _ => break,
             }
-            drop(drain);
+            if tokio::time::Instant::now() > drain_deadline {
+                break;
+            }
         }
 
-        // Phase 3: Measure sequential enqueue-consume round-trip latency.
-        // Each sample: enqueue one message, consume the next available, record time.
-        // Since the queue is drained, the next consumed message IS the one we enqueued.
-        let mut stream = client.consume(&queue).await.expect("consume stream");
+        eprintln!("      drain done, measuring...");
         let mut sampler = LatencySampler::with_capacity(SAMPLES_PER_LEVEL);
 
         for _ in 0..SAMPLES_PER_LEVEL {

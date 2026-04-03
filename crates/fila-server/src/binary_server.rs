@@ -537,6 +537,18 @@ impl ConnectionState {
             }
         }
 
+        // Unregister all existing consumers for this connection before
+        // registering a new one. A connection supports at most one active
+        // consume subscription at a time.
+        for (_, old_consumer_id) in self.consumers.drain() {
+            let _ =
+                self.server
+                    .broker
+                    .send_command(fila_core::SchedulerCommand::UnregisterConsumer {
+                        consumer_id: old_consumer_id,
+                    });
+        }
+
         let consumer_id = uuid::Uuid::now_v7().to_string();
         let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel::<fila_core::ReadyMessage>(64);
 
@@ -549,17 +561,7 @@ impl ConnectionState {
             })
             .map_err(ConnectionError::Broker)?;
 
-        // If there's already a consumer registered for this request_id,
-        // unregister the old one to prevent a consumer leak.
-        if let Some(old_consumer_id) = self.consumers.insert(frame.request_id, consumer_id.clone())
-        {
-            let _ =
-                self.server
-                    .broker
-                    .send_command(fila_core::SchedulerCommand::UnregisterConsumer {
-                        consumer_id: old_consumer_id,
-                    });
-        }
+        self.consumers.insert(frame.request_id, consumer_id.clone());
 
         debug!(consumer_id = %consumer_id, queue = %req.queue, "consume stream started");
 

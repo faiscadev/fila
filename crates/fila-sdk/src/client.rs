@@ -51,15 +51,11 @@ impl Drop for ConsumeStream {
         let request_id = self.request_id;
         let client = Arc::clone(&self.client_inner);
 
-        // Spawn a task to send CancelConsume and clean up state.
-        // We can't do async work in Drop directly.
+        // Send CancelConsume to the server so it unregisters the consumer.
+        // We don't clear delivery_tx/consume_request_id here because this
+        // task races with a subsequent consume() call — the next consume()
+        // will overwrite them when it registers its own channel.
         tokio::spawn(async move {
-            {
-                let mut guard = client.state.lock().await;
-                guard.delivery_tx = None;
-                guard.consume_request_id = None;
-            }
-
             let cancel = RawFrame {
                 opcode: Opcode::CancelConsume as u8,
                 flags: 0,
@@ -622,6 +618,24 @@ impl FilaClient {
             queue: queue.to_string(),
         };
 
+        // If there's an existing consume subscription, cancel it on the server
+        // and clear the delivery channel so the background reader stops routing
+        // to the old (dead) channel before we register a new one.
+        {
+            let mut state = self.inner.state.lock().await;
+            if let Some(old_rid) = state.consume_request_id.take() {
+                state.delivery_tx = None;
+                drop(state); // release lock before acquiring writer lock
+                let cancel = RawFrame {
+                    opcode: Opcode::CancelConsume as u8,
+                    flags: 0,
+                    request_id: old_rid,
+                    payload: bytes::Bytes::new(),
+                };
+                let _ = self.inner.writer.lock().await.send_frame(&cancel).await;
+            }
+        }
+
         // Register the delivery channel BEFORE sending the Consume request so
         // early Delivery frames aren't dropped. Save the previous channel to
         // restore on failure (avoids breaking an existing active consumer).
@@ -919,10 +933,12 @@ async fn dispatch_frame(frame: RawFrame, state: &Mutex<ConnectionInner>) {
 
     match opcode {
         Some(Opcode::Delivery) => {
-            // Clone the sender and drop the lock before awaiting sends.
-            // Holding the lock while awaiting channel sends can deadlock:
-            // if the channel is full, consumers need to call ack/nack which
-            // also acquires the lock.
+            // Clone the sender and drop the lock before sending.
+            // Use try_send (non-blocking) to avoid deadlocking the
+            // background reader when the channel is full — if the reader
+            // blocks on send, it can't process response frames for other
+            // operations (enqueue, ack) that the consumer needs to make
+            // progress and drain the channel.
             let tx = {
                 let guard = state.lock().await;
                 guard.delivery_tx.clone()
@@ -939,15 +955,13 @@ async fn dispatch_frame(frame: RawFrame, state: &Mutex<ConnectionInner>) {
                                 attempt_count: msg.attempt_count,
                                 queue: msg.queue,
                             };
-                            let _ = tx.send(Ok(consume_msg)).await;
+                            let _ = tx.try_send(Ok(consume_msg));
                         }
                     }
                     Err(e) => {
-                        let _ = tx
-                            .send(Err(StatusError::Protocol(format!(
-                                "delivery decode error: {e}"
-                            ))))
-                            .await;
+                        let _ = tx.try_send(Err(StatusError::Protocol(format!(
+                            "delivery decode error: {e}"
+                        ))));
                     }
                 }
             }
