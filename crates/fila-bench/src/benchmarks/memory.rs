@@ -26,7 +26,7 @@ pub async fn bench_memory_footprint(server: &BenchServer) -> Vec<BenchResult> {
 
     // Load messages
     let queue = "bench-memory";
-    create_queue_cli(server.grpc_addr(), queue);
+    create_queue_cli(server.addr(), queue);
 
     let client = fila_sdk::FilaClient::connect(server.addr())
         .await

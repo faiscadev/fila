@@ -1,11 +1,13 @@
 mod admin;
 mod auth;
+mod cluster;
 mod error;
 mod handshake;
 mod hotpath;
 
 pub use admin::*;
 pub use auth::*;
+pub use cluster::*;
 pub use error::*;
 pub use handshake::*;
 pub use hotpath::*;

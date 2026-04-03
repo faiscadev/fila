@@ -17,7 +17,10 @@ async fn auth_disabled_requests_succeed_without_key() {
     // Enqueue to a queue that doesn't exist yet just to test auth (queue not found → EnqueueError,
     // but it should NOT be UNAUTHENTICATED).
     // Actually, let's create a queue first via CLI, then enqueue.
-    let out = cli_run(server.addr(), &["queue", "create", "auth-disabled-test"]);
+    let out = cli_run(
+        server.binary_addr(),
+        &["queue", "create", "auth-disabled-test"],
+    );
     assert!(out.success, "create queue: {}", out.stderr);
 
     let result = client
@@ -65,14 +68,14 @@ async fn auth_enabled_invalid_key_is_rejected() {
 /// AC 4: auth enabled, valid key → request succeeds.
 #[tokio::test]
 async fn auth_enabled_valid_key_allows_request() {
-    let (server, addr) = start_auth_server();
+    let (server, _addr) = start_auth_server();
 
     // Create a superadmin key via CLI (superadmin needed for queue create).
-    let (_, token) = cli_create_superadmin_key(&addr, "test-key");
+    let (_, token) = cli_create_superadmin_key(server.binary_addr(), "test-key");
 
     // Create the queue first using the valid key.
     let out = cli_run(
-        &addr,
+        server.binary_addr(),
         &["--api-key", &token, "queue", "create", "auth-valid-test"],
     );
     assert!(out.success, "create queue: {}", out.stderr);
@@ -97,10 +100,10 @@ async fn auth_enabled_valid_key_allows_request() {
 /// AC 4 (revoke): revoked key is rejected on next connection.
 #[tokio::test]
 async fn auth_enabled_revoked_key_is_rejected() {
-    let (server, addr) = start_auth_server();
+    let (server, _addr) = start_auth_server();
 
     // Create a superadmin key (superadmin needed so revoke itself works).
-    let (key_id, token) = cli_create_superadmin_key(&addr, "revoke-test-key");
+    let (key_id, token) = cli_create_superadmin_key(server.binary_addr(), "revoke-test-key");
 
     // Verify the key works first.
     let client = fila_sdk::FilaClient::connect_with_options(
@@ -110,7 +113,10 @@ async fn auth_enabled_revoked_key_is_rejected() {
     .expect("connect");
 
     // Revoke the key using itself for auth (RevokeApiKey requires a valid key).
-    let out = cli_run(&addr, &["--api-key", &token, "auth", "revoke", &key_id]);
+    let out = cli_run(
+        server.binary_addr(),
+        &["--api-key", &token, "auth", "revoke", &key_id],
+    );
     assert!(out.success, "revoke: {}", out.stderr);
 
     // Now the same key should be rejected. With binary protocol, the existing

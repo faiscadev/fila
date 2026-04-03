@@ -12,7 +12,7 @@ async fn e2e_config_set_get_list_lua() {
 
     // Set a config value via CLI
     let set = helpers::cli_run(
-        server.addr(),
+        server.binary_addr(),
         &["config", "set", "myapp.region", "us-east-1"],
     );
     assert!(set.success, "config set failed: {}", set.stderr);
@@ -23,7 +23,7 @@ async fn e2e_config_set_get_list_lua() {
     );
 
     // Get the value via CLI
-    let get = helpers::cli_run(server.addr(), &["config", "get", "myapp.region"]);
+    let get = helpers::cli_run(server.binary_addr(), &["config", "get", "myapp.region"]);
     assert!(get.success, "config get failed: {}", get.stderr);
     assert!(
         get.stdout.contains("us-east-1"),
@@ -32,11 +32,14 @@ async fn e2e_config_set_get_list_lua() {
     );
 
     // Set another value
-    let set2 = helpers::cli_run(server.addr(), &["config", "set", "myapp.env", "production"]);
+    let set2 = helpers::cli_run(
+        server.binary_addr(),
+        &["config", "set", "myapp.env", "production"],
+    );
     assert!(set2.success);
 
     // List all config entries
-    let list_all = helpers::cli_run(server.addr(), &["config", "list"]);
+    let list_all = helpers::cli_run(server.binary_addr(), &["config", "list"]);
     assert!(list_all.success, "config list failed: {}", list_all.stderr);
     assert!(
         list_all.stdout.contains("myapp.region"),
@@ -48,7 +51,10 @@ async fn e2e_config_set_get_list_lua() {
     );
 
     // List with prefix filter
-    let list_prefix = helpers::cli_run(server.addr(), &["config", "list", "--prefix", "myapp."]);
+    let list_prefix = helpers::cli_run(
+        server.binary_addr(),
+        &["config", "list", "--prefix", "myapp."],
+    );
     assert!(list_prefix.success);
     assert!(list_prefix.stdout.contains("myapp.region"));
     assert!(list_prefix.stdout.contains("myapp.env"));
@@ -58,7 +64,7 @@ async fn e2e_config_set_get_list_lua() {
     let on_enqueue = r#"function on_enqueue(msg) return { fairness_key = fila.get("myapp.region") or "unknown", weight = 1, throttle_keys = {} } end"#;
 
     helpers::create_queue_with_scripts_cli(
-        server.addr(),
+        server.binary_addr(),
         "config-lua",
         Some(on_enqueue),
         None,

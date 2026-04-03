@@ -13,7 +13,7 @@ async fn e2e_dlq_redrive() {
     let on_failure = r#"function on_failure(msg) if msg.attempts >= 2 then return { action = "dlq" } end return { action = "retry", delay_ms = 0 } end"#;
 
     helpers::create_queue_with_scripts_cli(
-        server.addr(),
+        server.binary_addr(),
         "redrive-src",
         None,
         Some(on_failure),
@@ -103,7 +103,7 @@ async fn e2e_dlq_redrive() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Now redrive via CLI — the message is pending (not in-flight) in the DLQ
-    let redrive = helpers::cli_run(server.addr(), &["redrive", "redrive-src.dlq"]);
+    let redrive = helpers::cli_run(server.binary_addr(), &["redrive", "redrive-src.dlq"]);
     assert!(redrive.success, "redrive failed: {}", redrive.stderr);
     assert!(
         redrive.stdout.contains("1 message"),

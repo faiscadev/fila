@@ -12,7 +12,7 @@ async fn e2e_visibility_timeout_expiry() {
 
     // Create queue with a short visibility timeout (2 seconds)
     helpers::create_queue_with_scripts_cli(
-        server.addr(),
+        server.binary_addr(),
         "vt-test",
         None,
         None,

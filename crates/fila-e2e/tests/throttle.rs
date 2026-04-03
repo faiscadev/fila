@@ -16,11 +16,17 @@ async fn e2e_throttle_rate_limiting() {
 
     let on_enqueue = r#"function on_enqueue(msg) local keys = {} if msg.headers["provider"] then table.insert(keys, "provider:" .. msg.headers["provider"]) end return { fairness_key = msg.headers["tenant"] or "default", weight = 1, throttle_keys = keys } end"#;
 
-    helpers::create_queue_with_scripts_cli(server.addr(), "throttle", Some(on_enqueue), None, None);
+    helpers::create_queue_with_scripts_cli(
+        server.binary_addr(),
+        "throttle",
+        Some(on_enqueue),
+        None,
+        None,
+    );
 
     // Set throttle rate: provider:slow = 1 msg/s
     let set_result = helpers::cli_run(
-        server.addr(),
+        server.binary_addr(),
         &["config", "set", "throttle.provider:slow", "1,1"],
     );
     assert!(

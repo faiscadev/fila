@@ -13,7 +13,7 @@ async fn e2e_lua_on_enqueue_assigns_keys() {
     let on_enqueue = r#"function on_enqueue(msg) return { fairness_key = msg.headers["tenant"] or "default", weight = tonumber(msg.headers["weight"]) or 1, throttle_keys = {} } end"#;
 
     helpers::create_queue_with_scripts_cli(
-        server.addr(),
+        server.binary_addr(),
         "lua-enqueue",
         Some(on_enqueue),
         None,
@@ -77,7 +77,7 @@ async fn e2e_lua_on_failure_retry_vs_dlq() {
     let on_failure = r#"function on_failure(msg) if msg.attempts >= 3 then return { action = "dlq" } end return { action = "retry", delay_ms = 0 } end"#;
 
     helpers::create_queue_with_scripts_cli(
-        server.addr(),
+        server.binary_addr(),
         "lua-failure",
         None,
         Some(on_failure),

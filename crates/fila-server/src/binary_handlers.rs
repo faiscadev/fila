@@ -1,7 +1,10 @@
 //! Binary protocol operation handlers — translate FIBP typed requests into
 //! `SchedulerCommand` batch variants and convert results back to FIBP responses.
 
-use fila_core::{Broker, Message};
+use std::collections::HashMap;
+
+use fila_core::cluster::{AckItemData, NackItemData};
+use fila_core::{Broker, ClusterHandle, ClusterRequest, ClusterResponse, Message};
 use fila_fibp::{
     AckResponse, AckResultItem, EnqueueResponse, EnqueueResultItem, ErrorCode, NackResponse,
     NackResultItem,
@@ -9,8 +12,14 @@ use fila_fibp::{
 use uuid::Uuid;
 
 /// Handle a batch enqueue request.
+///
+/// The binary protocol enqueue is batched — messages may target different
+/// queues. In cluster mode each queue gets its own Raft write; results are
+/// collected back into the original message order. In single-node mode the
+/// entire batch goes directly to the scheduler.
 pub async fn handle_enqueue(
     broker: &Broker,
+    cluster: Option<&ClusterHandle>,
     req: fila_fibp::EnqueueRequest,
 ) -> Result<EnqueueResponse, (ErrorCode, String)> {
     let now = std::time::SystemTime::now()
@@ -35,173 +44,503 @@ pub async fn handle_enqueue(
         })
         .collect();
 
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    broker
-        .send_command(fila_core::SchedulerCommand::Enqueue {
-            messages,
-            reply: reply_tx,
-        })
-        .map_err(|e| match e {
-            fila_core::BrokerError::ChannelFull => {
-                (ErrorCode::ChannelFull, "scheduler overloaded".to_string())
+    if let Some(cluster) = cluster {
+        // Cluster mode: group messages by queue, one Raft write per queue.
+        // Track original index so results come back in request order.
+        let mut by_queue: HashMap<String, Vec<(usize, Message)>> = HashMap::new();
+        for (idx, msg) in messages.iter().enumerate() {
+            by_queue
+                .entry(msg.queue_id.clone())
+                .or_default()
+                .push((idx, msg.clone()));
+        }
+
+        let mut results: Vec<EnqueueResultItem> = vec![
+            EnqueueResultItem {
+                error_code: ErrorCode::Ok,
+                message_id: String::new(),
+            };
+            messages.len()
+        ];
+
+        for (queue_id, items) in &by_queue {
+            let batch_msgs: Vec<Message> = items.iter().map(|(_, m)| m.clone()).collect();
+
+            let write_result = cluster
+                .write_to_queue(
+                    queue_id,
+                    ClusterRequest::Enqueue {
+                        messages: batch_msgs.clone(),
+                    },
+                )
+                .await;
+
+            match write_result {
+                Ok(result) => {
+                    match result.response {
+                        ClusterResponse::Enqueue { msg_id } => {
+                            // Raft returns a single msg_id (the first). For batches
+                            // within a single queue, we use the IDs we assigned.
+                            // Apply to local scheduler if handled locally.
+                            if result.handled_locally {
+                                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                                broker
+                                    .send_command(fila_core::SchedulerCommand::Enqueue {
+                                        messages: batch_msgs,
+                                        reply: reply_tx,
+                                    })
+                                    .map_err(broker_error_to_pair)?;
+
+                                let sched_results = reply_rx.await.map_err(|_| {
+                                    (
+                                        ErrorCode::InternalError,
+                                        "scheduler reply dropped".to_string(),
+                                    )
+                                })?;
+
+                                for ((orig_idx, _), sched_result) in
+                                    items.iter().zip(sched_results.into_iter())
+                                {
+                                    results[*orig_idx] = match sched_result {
+                                        Ok(id) => EnqueueResultItem {
+                                            error_code: ErrorCode::Ok,
+                                            message_id: id.to_string(),
+                                        },
+                                        Err(fila_core::EnqueueError::QueueNotFound(_)) => {
+                                            EnqueueResultItem {
+                                                error_code: ErrorCode::QueueNotFound,
+                                                message_id: String::new(),
+                                            }
+                                        }
+                                        Err(fila_core::EnqueueError::Storage(_)) => {
+                                            EnqueueResultItem {
+                                                error_code: ErrorCode::StorageError,
+                                                message_id: String::new(),
+                                            }
+                                        }
+                                    };
+                                }
+                            } else {
+                                // Forwarded — leader applied. Use the IDs we assigned.
+                                // For a batch of 1, Raft returns the msg_id directly.
+                                // For larger batches, use the pre-assigned UUIDs.
+                                if items.len() == 1 {
+                                    results[items[0].0] = EnqueueResultItem {
+                                        error_code: ErrorCode::Ok,
+                                        message_id: msg_id.to_string(),
+                                    };
+                                } else {
+                                    for (orig_idx, msg) in items {
+                                        results[*orig_idx] = EnqueueResultItem {
+                                            error_code: ErrorCode::Ok,
+                                            message_id: msg.id.to_string(),
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                        ClusterResponse::Error { message: _ } => {
+                            for (orig_idx, _) in items {
+                                results[*orig_idx] = EnqueueResultItem {
+                                    error_code: ErrorCode::InternalError,
+                                    message_id: String::new(),
+                                };
+                            }
+                        }
+                        _ => {
+                            for (orig_idx, _) in items {
+                                results[*orig_idx] = EnqueueResultItem {
+                                    error_code: ErrorCode::InternalError,
+                                    message_id: String::new(),
+                                };
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let (code, msg) = cluster_write_err_to_pair(e);
+                    for (orig_idx, _) in items {
+                        results[*orig_idx] = EnqueueResultItem {
+                            error_code: code,
+                            message_id: msg.clone(),
+                        };
+                    }
+                }
             }
-            fila_core::BrokerError::ChannelDisconnected => (
+        }
+
+        Ok(EnqueueResponse { results })
+    } else {
+        // Single-node mode: direct to scheduler.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(fila_core::SchedulerCommand::Enqueue {
+                messages,
+                reply: reply_tx,
+            })
+            .map_err(broker_error_to_pair)?;
+
+        let results = reply_rx.await.map_err(|_| {
+            (
                 ErrorCode::InternalError,
-                "scheduler unavailable".to_string(),
-            ),
-            other => (ErrorCode::InternalError, format!("{other}")),
+                "scheduler reply dropped".to_string(),
+            )
         })?;
 
-    let results = reply_rx.await.map_err(|_| {
-        (
-            ErrorCode::InternalError,
-            "scheduler reply dropped".to_string(),
-        )
-    })?;
+        let items: Vec<EnqueueResultItem> = results
+            .into_iter()
+            .map(|r| match r {
+                Ok(id) => EnqueueResultItem {
+                    error_code: ErrorCode::Ok,
+                    message_id: id.to_string(),
+                },
+                Err(fila_core::EnqueueError::QueueNotFound(_)) => EnqueueResultItem {
+                    error_code: ErrorCode::QueueNotFound,
+                    message_id: String::new(),
+                },
+                Err(fila_core::EnqueueError::Storage(_)) => EnqueueResultItem {
+                    error_code: ErrorCode::StorageError,
+                    message_id: String::new(),
+                },
+            })
+            .collect();
 
-    let items: Vec<EnqueueResultItem> = results
-        .into_iter()
-        .map(|r| match r {
-            Ok(id) => EnqueueResultItem {
-                error_code: ErrorCode::Ok,
-                message_id: id.to_string(),
-            },
-            Err(fila_core::EnqueueError::QueueNotFound(_)) => EnqueueResultItem {
-                error_code: ErrorCode::QueueNotFound,
-                message_id: String::new(),
-            },
-            Err(fila_core::EnqueueError::Storage(_)) => EnqueueResultItem {
-                error_code: ErrorCode::StorageError,
-                message_id: String::new(),
-            },
-        })
-        .collect();
-
-    Ok(EnqueueResponse { results: items })
+        Ok(EnqueueResponse { results: items })
+    }
 }
 
 /// Handle a batch ack request.
+///
+/// In cluster mode, items are grouped by queue and each queue gets its own
+/// Raft write. Results are collected back into original request order.
 pub async fn handle_ack(
     broker: &Broker,
+    cluster: Option<&ClusterHandle>,
     req: fila_fibp::AckRequest,
 ) -> Result<AckResponse, (ErrorCode, String)> {
-    let items: Vec<fila_core::broker::command::AckItem> = req
+    let items: Vec<(String, Uuid)> = req
         .items
         .into_iter()
         .map(|item| {
             let msg_id = item.message_id.parse::<Uuid>().unwrap_or(Uuid::nil());
-            fila_core::broker::command::AckItem {
-                queue_id: item.queue,
-                msg_id,
-            }
+            (item.queue, msg_id)
         })
         .collect();
 
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    broker
-        .send_command(fila_core::SchedulerCommand::Ack {
-            items,
-            reply: reply_tx,
-        })
-        .map_err(|e| match e {
-            fila_core::BrokerError::ChannelFull => {
-                (ErrorCode::ChannelFull, "scheduler overloaded".to_string())
+    if let Some(cluster) = cluster {
+        // Cluster mode: group by queue, one Raft write per queue.
+        let mut by_queue: HashMap<String, Vec<(usize, Uuid)>> = HashMap::new();
+        for (idx, (queue_id, msg_id)) in items.iter().enumerate() {
+            by_queue
+                .entry(queue_id.clone())
+                .or_default()
+                .push((idx, *msg_id));
+        }
+
+        let mut results: Vec<AckResultItem> = vec![
+            AckResultItem {
+                error_code: ErrorCode::Ok,
+            };
+            items.len()
+        ];
+
+        for (queue_id, queue_items) in &by_queue {
+            let cluster_items: Vec<AckItemData> = queue_items
+                .iter()
+                .map(|(_, msg_id)| AckItemData {
+                    queue_id: queue_id.clone(),
+                    msg_id: *msg_id,
+                })
+                .collect();
+
+            let write_result = cluster
+                .write_to_queue(
+                    queue_id,
+                    ClusterRequest::Ack {
+                        items: cluster_items,
+                    },
+                )
+                .await;
+
+            match write_result {
+                Ok(result) => {
+                    if let ClusterResponse::Error { message } = result.response {
+                        for (orig_idx, _) in queue_items {
+                            results[*orig_idx] = AckResultItem {
+                                error_code: ErrorCode::InternalError,
+                            };
+                        }
+                        tracing::warn!(queue = %queue_id, %message, "cluster ack error");
+                        continue;
+                    }
+
+                    if result.handled_locally {
+                        let sched_items: Vec<fila_core::broker::command::AckItem> = queue_items
+                            .iter()
+                            .map(|(_, msg_id)| fila_core::broker::command::AckItem {
+                                queue_id: queue_id.clone(),
+                                msg_id: *msg_id,
+                            })
+                            .collect();
+
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        broker
+                            .send_command(fila_core::SchedulerCommand::Ack {
+                                items: sched_items,
+                                reply: reply_tx,
+                            })
+                            .map_err(broker_error_to_pair)?;
+
+                        let sched_results = reply_rx.await.map_err(|_| {
+                            (
+                                ErrorCode::InternalError,
+                                "scheduler reply dropped".to_string(),
+                            )
+                        })?;
+
+                        for ((orig_idx, _), sched_result) in
+                            queue_items.iter().zip(sched_results.into_iter())
+                        {
+                            results[*orig_idx] = match sched_result {
+                                Ok(()) => AckResultItem {
+                                    error_code: ErrorCode::Ok,
+                                },
+                                Err(fila_core::AckError::MessageNotFound(_)) => AckResultItem {
+                                    error_code: ErrorCode::MessageNotFound,
+                                },
+                                Err(fila_core::AckError::Storage(_)) => AckResultItem {
+                                    error_code: ErrorCode::StorageError,
+                                },
+                            };
+                        }
+                    }
+                    // If forwarded, the leader already applied — results are Ok.
+                }
+                Err(e) => {
+                    let (code, _msg) = cluster_write_err_to_pair(e);
+                    for (orig_idx, _) in queue_items {
+                        results[*orig_idx] = AckResultItem { error_code: code };
+                    }
+                }
             }
-            fila_core::BrokerError::ChannelDisconnected => (
+        }
+
+        Ok(AckResponse { results })
+    } else {
+        // Single-node mode: direct to scheduler.
+        let sched_items: Vec<fila_core::broker::command::AckItem> = items
+            .into_iter()
+            .map(|(queue_id, msg_id)| fila_core::broker::command::AckItem { queue_id, msg_id })
+            .collect();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(fila_core::SchedulerCommand::Ack {
+                items: sched_items,
+                reply: reply_tx,
+            })
+            .map_err(broker_error_to_pair)?;
+
+        let results = reply_rx.await.map_err(|_| {
+            (
                 ErrorCode::InternalError,
-                "scheduler unavailable".to_string(),
-            ),
-            other => (ErrorCode::InternalError, format!("{other}")),
+                "scheduler reply dropped".to_string(),
+            )
         })?;
 
-    let results = reply_rx.await.map_err(|_| {
-        (
-            ErrorCode::InternalError,
-            "scheduler reply dropped".to_string(),
-        )
-    })?;
+        let items: Vec<AckResultItem> = results
+            .into_iter()
+            .map(|r| match r {
+                Ok(()) => AckResultItem {
+                    error_code: ErrorCode::Ok,
+                },
+                Err(fila_core::AckError::MessageNotFound(_)) => AckResultItem {
+                    error_code: ErrorCode::MessageNotFound,
+                },
+                Err(fila_core::AckError::Storage(_)) => AckResultItem {
+                    error_code: ErrorCode::StorageError,
+                },
+            })
+            .collect();
 
-    let items: Vec<AckResultItem> = results
-        .into_iter()
-        .map(|r| match r {
-            Ok(()) => AckResultItem {
-                error_code: ErrorCode::Ok,
-            },
-            Err(fila_core::AckError::MessageNotFound(_)) => AckResultItem {
-                error_code: ErrorCode::MessageNotFound,
-            },
-            Err(fila_core::AckError::Storage(_)) => AckResultItem {
-                error_code: ErrorCode::StorageError,
-            },
-        })
-        .collect();
-
-    Ok(AckResponse { results: items })
+        Ok(AckResponse { results: items })
+    }
 }
 
 /// Handle a batch nack request.
+///
+/// In cluster mode, items are grouped by queue and each queue gets its own
+/// Raft write. Results are collected back into original request order.
 pub async fn handle_nack(
     broker: &Broker,
+    cluster: Option<&ClusterHandle>,
     req: fila_fibp::NackRequest,
 ) -> Result<NackResponse, (ErrorCode, String)> {
-    let items: Vec<fila_core::broker::command::NackItem> = req
+    let items: Vec<(String, Uuid, String)> = req
         .items
         .into_iter()
         .map(|item| {
             let msg_id = item.message_id.parse::<Uuid>().unwrap_or(Uuid::nil());
-            fila_core::broker::command::NackItem {
-                queue_id: item.queue,
-                msg_id,
-                error: item.error,
-            }
+            (item.queue, msg_id, item.error)
         })
         .collect();
 
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    broker
-        .send_command(fila_core::SchedulerCommand::Nack {
-            items,
-            reply: reply_tx,
-        })
-        .map_err(|e| match e {
-            fila_core::BrokerError::ChannelFull => {
-                (ErrorCode::ChannelFull, "scheduler overloaded".to_string())
+    if let Some(cluster) = cluster {
+        // Cluster mode: group by queue, one Raft write per queue.
+        let mut by_queue: HashMap<String, Vec<(usize, Uuid, String)>> = HashMap::new();
+        for (idx, (queue_id, msg_id, error)) in items.iter().enumerate() {
+            by_queue
+                .entry(queue_id.clone())
+                .or_default()
+                .push((idx, *msg_id, error.clone()));
+        }
+
+        let mut results: Vec<NackResultItem> = vec![
+            NackResultItem {
+                error_code: ErrorCode::Ok,
+            };
+            items.len()
+        ];
+
+        for (queue_id, queue_items) in &by_queue {
+            let cluster_items: Vec<NackItemData> = queue_items
+                .iter()
+                .map(|(_, msg_id, error)| NackItemData {
+                    queue_id: queue_id.clone(),
+                    msg_id: *msg_id,
+                    error: error.clone(),
+                })
+                .collect();
+
+            let write_result = cluster
+                .write_to_queue(
+                    queue_id,
+                    ClusterRequest::Nack {
+                        items: cluster_items,
+                    },
+                )
+                .await;
+
+            match write_result {
+                Ok(result) => {
+                    if let ClusterResponse::Error { message } = result.response {
+                        for (orig_idx, _, _) in queue_items {
+                            results[*orig_idx] = NackResultItem {
+                                error_code: ErrorCode::InternalError,
+                            };
+                        }
+                        tracing::warn!(queue = %queue_id, %message, "cluster nack error");
+                        continue;
+                    }
+
+                    if result.handled_locally {
+                        let sched_items: Vec<fila_core::broker::command::NackItem> = queue_items
+                            .iter()
+                            .map(|(_, msg_id, error)| fila_core::broker::command::NackItem {
+                                queue_id: queue_id.clone(),
+                                msg_id: *msg_id,
+                                error: error.clone(),
+                            })
+                            .collect();
+
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        broker
+                            .send_command(fila_core::SchedulerCommand::Nack {
+                                items: sched_items,
+                                reply: reply_tx,
+                            })
+                            .map_err(broker_error_to_pair)?;
+
+                        let sched_results = reply_rx.await.map_err(|_| {
+                            (
+                                ErrorCode::InternalError,
+                                "scheduler reply dropped".to_string(),
+                            )
+                        })?;
+
+                        for ((orig_idx, _, _), sched_result) in
+                            queue_items.iter().zip(sched_results.into_iter())
+                        {
+                            results[*orig_idx] = match sched_result {
+                                Ok(()) => NackResultItem {
+                                    error_code: ErrorCode::Ok,
+                                },
+                                Err(fila_core::NackError::MessageNotFound(_)) => NackResultItem {
+                                    error_code: ErrorCode::MessageNotFound,
+                                },
+                                Err(fila_core::NackError::Storage(_)) => NackResultItem {
+                                    error_code: ErrorCode::StorageError,
+                                },
+                            };
+                        }
+                    }
+                    // If forwarded, the leader already applied — results are Ok.
+                }
+                Err(e) => {
+                    let (code, _msg) = cluster_write_err_to_pair(e);
+                    for (orig_idx, _, _) in queue_items {
+                        results[*orig_idx] = NackResultItem { error_code: code };
+                    }
+                }
             }
-            fila_core::BrokerError::ChannelDisconnected => (
+        }
+
+        Ok(NackResponse { results })
+    } else {
+        // Single-node mode: direct to scheduler.
+        let sched_items: Vec<fila_core::broker::command::NackItem> = items
+            .into_iter()
+            .map(
+                |(queue_id, msg_id, error)| fila_core::broker::command::NackItem {
+                    queue_id,
+                    msg_id,
+                    error,
+                },
+            )
+            .collect();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(fila_core::SchedulerCommand::Nack {
+                items: sched_items,
+                reply: reply_tx,
+            })
+            .map_err(broker_error_to_pair)?;
+
+        let results = reply_rx.await.map_err(|_| {
+            (
                 ErrorCode::InternalError,
-                "scheduler unavailable".to_string(),
-            ),
-            other => (ErrorCode::InternalError, format!("{other}")),
+                "scheduler reply dropped".to_string(),
+            )
         })?;
 
-    let results = reply_rx.await.map_err(|_| {
-        (
-            ErrorCode::InternalError,
-            "scheduler reply dropped".to_string(),
-        )
-    })?;
+        let items: Vec<NackResultItem> = results
+            .into_iter()
+            .map(|r| match r {
+                Ok(()) => NackResultItem {
+                    error_code: ErrorCode::Ok,
+                },
+                Err(fila_core::NackError::MessageNotFound(_)) => NackResultItem {
+                    error_code: ErrorCode::MessageNotFound,
+                },
+                Err(fila_core::NackError::Storage(_)) => NackResultItem {
+                    error_code: ErrorCode::StorageError,
+                },
+            })
+            .collect();
 
-    let items: Vec<NackResultItem> = results
-        .into_iter()
-        .map(|r| match r {
-            Ok(()) => NackResultItem {
-                error_code: ErrorCode::Ok,
-            },
-            Err(fila_core::NackError::MessageNotFound(_)) => NackResultItem {
-                error_code: ErrorCode::MessageNotFound,
-            },
-            Err(fila_core::NackError::Storage(_)) => NackResultItem {
-                error_code: ErrorCode::StorageError,
-            },
-        })
-        .collect();
-
-    Ok(NackResponse { results: items })
+        Ok(NackResponse { results: items })
+    }
 }
 
 /// Handle a create queue request.
+///
+/// In cluster mode (`cluster` is `Some`), the queue is created via the meta
+/// Raft group so all nodes get the queue's Raft group. In single-node mode
+/// the request goes directly to the local scheduler.
 pub async fn handle_create_queue(
     broker: &Broker,
+    cluster: Option<&ClusterHandle>,
     req: fila_fibp::CreateQueueRequest,
 ) -> Result<fila_fibp::CreateQueueResponse, (ErrorCode, String)> {
     let visibility_timeout_ms = match req.visibility_timeout_ms {
@@ -219,88 +558,151 @@ pub async fn handle_create_queue(
         lua_memory_limit_bytes: None,
     };
 
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    broker
-        .send_command(fila_core::SchedulerCommand::CreateQueue {
-            name: req.name,
-            config,
-            reply: reply_tx,
-        })
-        .map_err(broker_error_to_pair)?;
+    if let Some(cluster) = cluster {
+        // Cluster mode: submit CreateQueueGroup to meta Raft.
+        let (all_members, _member_addrs) = cluster.meta_members();
+        let (members, preferred_leader) = select_members_and_leader(&all_members, cluster).await;
 
-    let result = reply_rx.await.map_err(|_| {
-        (
-            ErrorCode::InternalError,
-            "scheduler reply dropped".to_string(),
-        )
-    })?;
+        let resp = cluster
+            .write_to_meta(ClusterRequest::CreateQueueGroup {
+                queue_id: req.name.clone(),
+                members,
+                config,
+                preferred_leader,
+            })
+            .await
+            .map_err(cluster_write_err_to_pair)?;
 
-    match result {
-        Ok(queue_id) => Ok(fila_fibp::CreateQueueResponse {
-            error_code: ErrorCode::Ok,
-            queue_id,
-        }),
-        Err(fila_core::CreateQueueError::QueueAlreadyExists(name)) => {
-            Ok(fila_fibp::CreateQueueResponse {
-                error_code: ErrorCode::QueueAlreadyExists,
-                queue_id: name,
-            })
+        match resp {
+            ClusterResponse::CreateQueueGroup { queue_id } => Ok(fila_fibp::CreateQueueResponse {
+                error_code: ErrorCode::Ok,
+                queue_id,
+            }),
+            ClusterResponse::Error { message } => Err((ErrorCode::InternalError, message)),
+            _ => Err((
+                ErrorCode::InternalError,
+                "unexpected cluster response".to_string(),
+            )),
         }
-        Err(fila_core::CreateQueueError::LuaCompilation(msg)) => {
-            Ok(fila_fibp::CreateQueueResponse {
-                error_code: ErrorCode::LuaCompilationError,
-                queue_id: msg,
+    } else {
+        // Single-node mode: direct to scheduler.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(fila_core::SchedulerCommand::CreateQueue {
+                name: req.name,
+                config,
+                reply: reply_tx,
             })
+            .map_err(broker_error_to_pair)?;
+
+        let result = reply_rx.await.map_err(|_| {
+            (
+                ErrorCode::InternalError,
+                "scheduler reply dropped".to_string(),
+            )
+        })?;
+
+        match result {
+            Ok(queue_id) => Ok(fila_fibp::CreateQueueResponse {
+                error_code: ErrorCode::Ok,
+                queue_id,
+            }),
+            Err(fila_core::CreateQueueError::QueueAlreadyExists(name)) => {
+                Ok(fila_fibp::CreateQueueResponse {
+                    error_code: ErrorCode::QueueAlreadyExists,
+                    queue_id: name,
+                })
+            }
+            Err(fila_core::CreateQueueError::LuaCompilation(msg)) => {
+                Ok(fila_fibp::CreateQueueResponse {
+                    error_code: ErrorCode::LuaCompilationError,
+                    queue_id: msg,
+                })
+            }
+            Err(fila_core::CreateQueueError::Storage(_)) => Ok(fila_fibp::CreateQueueResponse {
+                error_code: ErrorCode::StorageError,
+                queue_id: String::new(),
+            }),
         }
-        Err(fila_core::CreateQueueError::Storage(_)) => Ok(fila_fibp::CreateQueueResponse {
-            error_code: ErrorCode::StorageError,
-            queue_id: String::new(),
-        }),
     }
 }
 
 /// Handle a delete queue request.
+///
+/// In cluster mode (`cluster` is `Some`), the queue is deleted via the meta
+/// Raft group so all nodes remove the queue's Raft group. In single-node mode
+/// the request goes directly to the local scheduler.
 pub async fn handle_delete_queue(
     broker: &Broker,
+    cluster: Option<&ClusterHandle>,
     req: fila_fibp::DeleteQueueRequest,
 ) -> Result<fila_fibp::DeleteQueueResponse, (ErrorCode, String)> {
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    broker
-        .send_command(fila_core::SchedulerCommand::DeleteQueue {
-            queue_id: req.queue,
-            reply: reply_tx,
-        })
-        .map_err(broker_error_to_pair)?;
+    if let Some(cluster) = cluster {
+        // Cluster mode: submit DeleteQueueGroup to meta Raft.
+        let resp = cluster
+            .write_to_meta(ClusterRequest::DeleteQueueGroup {
+                queue_id: req.queue,
+            })
+            .await
+            .map_err(cluster_write_err_to_pair)?;
 
-    let result = reply_rx.await.map_err(|_| {
-        (
-            ErrorCode::InternalError,
-            "scheduler reply dropped".to_string(),
-        )
-    })?;
+        match resp {
+            ClusterResponse::DeleteQueueGroup => Ok(fila_fibp::DeleteQueueResponse {
+                error_code: ErrorCode::Ok,
+            }),
+            ClusterResponse::Error { message } => Err((ErrorCode::InternalError, message)),
+            _ => Err((
+                ErrorCode::InternalError,
+                "unexpected cluster response".to_string(),
+            )),
+        }
+    } else {
+        // Single-node mode: direct to scheduler.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        broker
+            .send_command(fila_core::SchedulerCommand::DeleteQueue {
+                queue_id: req.queue,
+                reply: reply_tx,
+            })
+            .map_err(broker_error_to_pair)?;
 
-    match result {
-        Ok(()) => Ok(fila_fibp::DeleteQueueResponse {
-            error_code: ErrorCode::Ok,
-        }),
-        Err(fila_core::DeleteQueueError::QueueNotFound(_)) => Ok(fila_fibp::DeleteQueueResponse {
-            error_code: ErrorCode::QueueNotFound,
-        }),
-        Err(fila_core::DeleteQueueError::Storage(_)) => Ok(fila_fibp::DeleteQueueResponse {
-            error_code: ErrorCode::StorageError,
-        }),
+        let result = reply_rx.await.map_err(|_| {
+            (
+                ErrorCode::InternalError,
+                "scheduler reply dropped".to_string(),
+            )
+        })?;
+
+        match result {
+            Ok(()) => Ok(fila_fibp::DeleteQueueResponse {
+                error_code: ErrorCode::Ok,
+            }),
+            Err(fila_core::DeleteQueueError::QueueNotFound(_)) => {
+                Ok(fila_fibp::DeleteQueueResponse {
+                    error_code: ErrorCode::QueueNotFound,
+                })
+            }
+            Err(fila_core::DeleteQueueError::Storage(_)) => Ok(fila_fibp::DeleteQueueResponse {
+                error_code: ErrorCode::StorageError,
+            }),
+        }
     }
 }
 
 /// Handle a get stats request.
+///
+/// In cluster mode, enriches the scheduler stats with Raft leader and
+/// replication count from the queue's Raft group metrics.
 pub async fn handle_get_stats(
     broker: &Broker,
+    cluster: Option<&ClusterHandle>,
     req: fila_fibp::GetStatsRequest,
 ) -> Result<fila_fibp::GetStatsResponse, (ErrorCode, String)> {
+    let queue_name = req.queue;
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     broker
         .send_command(fila_core::SchedulerCommand::GetStats {
-            queue_id: req.queue,
+            queue_id: queue_name.clone(),
             reply: reply_tx,
         })
         .map_err(broker_error_to_pair)?;
@@ -313,36 +715,56 @@ pub async fn handle_get_stats(
     })?;
 
     match result {
-        Ok(stats) => Ok(fila_fibp::GetStatsResponse {
-            error_code: ErrorCode::Ok,
-            depth: stats.depth,
-            in_flight: stats.in_flight,
-            active_fairness_keys: stats.active_fairness_keys,
-            active_consumers: stats.active_consumers,
-            quantum: stats.quantum,
-            leader_node_id: stats.leader_node_id,
-            replication_count: stats.replication_count,
-            per_key_stats: stats
-                .per_key_stats
-                .into_iter()
-                .map(|s| fila_fibp::FairnessKeyStat {
-                    key: s.key,
-                    pending_count: s.pending_count,
-                    current_deficit: s.current_deficit,
-                    weight: s.weight,
-                })
-                .collect(),
-            per_throttle_stats: stats
-                .per_throttle_stats
-                .into_iter()
-                .map(|s| fila_fibp::ThrottleKeyStat {
-                    key: s.key,
-                    tokens: s.tokens,
-                    rate_per_second: s.rate_per_second,
-                    burst: s.burst,
-                })
-                .collect(),
-        }),
+        Ok(stats) => {
+            // Enrich with cluster info if in cluster mode.
+            let (leader_node_id, replication_count) = if let Some(cluster) = cluster {
+                cluster
+                    .multi_raft
+                    .get_raft(&queue_name)
+                    .await
+                    .map(|raft| {
+                        let metrics = raft.metrics().borrow().clone();
+                        let leader_id = metrics.current_leader.unwrap_or(0);
+                        let voters =
+                            metrics.membership_config.membership().voter_ids().count() as u32;
+                        (leader_id, voters)
+                    })
+                    .unwrap_or((0, 0))
+            } else {
+                (0, 0)
+            };
+
+            Ok(fila_fibp::GetStatsResponse {
+                error_code: ErrorCode::Ok,
+                depth: stats.depth,
+                in_flight: stats.in_flight,
+                active_fairness_keys: stats.active_fairness_keys,
+                active_consumers: stats.active_consumers,
+                quantum: stats.quantum,
+                leader_node_id,
+                replication_count,
+                per_key_stats: stats
+                    .per_key_stats
+                    .into_iter()
+                    .map(|s| fila_fibp::FairnessKeyStat {
+                        key: s.key,
+                        pending_count: s.pending_count,
+                        current_deficit: s.current_deficit,
+                        weight: s.weight,
+                    })
+                    .collect(),
+                per_throttle_stats: stats
+                    .per_throttle_stats
+                    .into_iter()
+                    .map(|s| fila_fibp::ThrottleKeyStat {
+                        key: s.key,
+                        tokens: s.tokens,
+                        rate_per_second: s.rate_per_second,
+                        burst: s.burst,
+                    })
+                    .collect(),
+            })
+        }
         Err(fila_core::StatsError::QueueNotFound(_)) => {
             Err((ErrorCode::QueueNotFound, "queue not found".to_string()))
         }
@@ -353,8 +775,12 @@ pub async fn handle_get_stats(
 }
 
 /// Handle a list queues request.
+///
+/// In cluster mode, enriches each queue with its Raft leader node ID
+/// and reports the total cluster node count.
 pub async fn handle_list_queues(
     broker: &Broker,
+    cluster: Option<&ClusterHandle>,
 ) -> Result<fila_fibp::ListQueuesResponse, (ErrorCode, String)> {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     broker
@@ -370,19 +796,37 @@ pub async fn handle_list_queues(
 
     match result {
         Ok(summaries) => {
-            let queues = summaries
-                .into_iter()
-                .map(|s| fila_fibp::QueueInfo {
+            let mut queues = Vec::with_capacity(summaries.len());
+            for s in summaries {
+                let leader_node_id = if let Some(cluster) = cluster {
+                    cluster
+                        .multi_raft
+                        .get_raft(&s.name)
+                        .await
+                        .map(|raft| raft.metrics().borrow().current_leader.unwrap_or(0))
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                queues.push(fila_fibp::QueueInfo {
                     name: s.name,
                     depth: s.depth,
                     in_flight: s.in_flight,
                     active_consumers: s.active_consumers,
-                    leader_node_id: s.leader_node_id,
+                    leader_node_id,
+                });
+            }
+
+            let cluster_node_count = cluster
+                .map(|c| {
+                    let (members, _) = c.meta_members();
+                    members.len() as u32
                 })
-                .collect();
+                .unwrap_or(0);
+
             Ok(fila_fibp::ListQueuesResponse {
                 error_code: ErrorCode::Ok,
-                cluster_node_count: 0,
+                cluster_node_count,
                 queues,
             })
         }
@@ -673,4 +1117,87 @@ fn broker_error_to_pair(e: fila_core::BrokerError) -> (ErrorCode, String) {
             (ErrorCode::InternalError, "scheduler panicked".to_string())
         }
     }
+}
+
+/// Convert a ClusterWriteError into an (ErrorCode, String) pair.
+fn cluster_write_err_to_pair(e: fila_core::ClusterWriteError) -> (ErrorCode, String) {
+    match e {
+        fila_core::ClusterWriteError::QueueGroupNotFound => (
+            ErrorCode::QueueNotFound,
+            "queue raft group not found".to_string(),
+        ),
+        fila_core::ClusterWriteError::NodeNotReady => (
+            ErrorCode::NotLeader,
+            "node not ready for this queue — retry on another node or wait".to_string(),
+        ),
+        fila_core::ClusterWriteError::NoLeader => {
+            (ErrorCode::NotLeader, "no leader available".to_string())
+        }
+        fila_core::ClusterWriteError::Raft(e) => {
+            (ErrorCode::InternalError, format!("raft error: {e}"))
+        }
+        fila_core::ClusterWriteError::Forward(e) => {
+            (ErrorCode::InternalError, format!("forward error: {e}"))
+        }
+    }
+}
+
+/// Count current queue leaderships per node across all queue Raft groups.
+async fn count_leaderships(
+    cluster: &ClusterHandle,
+    candidates: &[u64],
+) -> std::collections::HashMap<u64, usize> {
+    let groups = cluster.multi_raft.snapshot_groups().await;
+
+    let mut counts: std::collections::HashMap<u64, usize> =
+        candidates.iter().map(|&id| (id, 0)).collect();
+
+    for (_queue_id, raft) in &groups {
+        if let Some(leader) = raft.current_leader().await {
+            if let Some(count) = counts.get_mut(&leader) {
+                *count += 1;
+            }
+        }
+    }
+
+    counts
+}
+
+/// Select which nodes should participate in a new queue's Raft group,
+/// and which node should be the preferred leader.
+///
+/// When the cluster has more nodes than `replication_factor`, only the
+/// N least-loaded nodes are selected. The preferred leader is the node
+/// with the fewest leaderships among the selected members.
+async fn select_members_and_leader(
+    all_members: &[u64],
+    cluster: &ClusterHandle,
+) -> (Vec<u64>, u64) {
+    let rf = cluster.replication_factor;
+    let counts = count_leaderships(cluster, all_members).await;
+
+    // Select subset if cluster is larger than replication factor.
+    let selected: Vec<u64> = if all_members.len() > rf && rf > 0 {
+        let mut sorted: Vec<u64> = all_members.to_vec();
+        sorted.sort_by_key(|&id| {
+            let count = counts.get(&id).copied().unwrap_or(0);
+            (count, id)
+        });
+        sorted.truncate(rf);
+        sorted
+    } else {
+        all_members.to_vec()
+    };
+
+    // Preferred leader: least-loaded among selected (tie-break: lowest ID).
+    let preferred = selected
+        .iter()
+        .copied()
+        .min_by_key(|&id| {
+            let count = counts.get(&id).copied().unwrap_or(0);
+            (count, id)
+        })
+        .unwrap_or_else(|| selected.first().copied().unwrap_or(1));
+
+    (selected, preferred)
 }

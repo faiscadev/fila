@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 fila-proto.workspace = true
+fila-fibp.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 bytes.workspace = true
@@ -32,6 +33,9 @@ tonic.workspace = true
 sha2.workspace = true
 prost.workspace = true
 prost-types.workspace = true
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
 
 [dev-dependencies]
 tempfile = "3"

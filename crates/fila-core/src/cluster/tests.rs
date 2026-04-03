@@ -7,21 +7,19 @@ mod tests {
     use openraft::storage::Adaptor;
     use openraft::{BasicNode, Config, Raft};
     use tokio::time::timeout;
-    use tonic::transport::Server;
 
-    use crate::cluster::grpc_service::ClusterGrpcService;
+    use crate::cluster::binary_service::{self, ClusterBinaryService};
     use crate::cluster::multi_raft::MultiRaftManager;
     use crate::cluster::network::FilaNetworkFactory;
     use crate::cluster::store::FilaRaftStore;
     use crate::cluster::types::TypeConfig;
     use crate::storage::RocksDbEngine;
-    use fila_proto::fila_cluster_server::FilaClusterServer;
 
     struct TestNode {
         raft: Arc<Raft<TypeConfig>>,
         multi_raft: Arc<MultiRaftManager>,
-        _grpc_handle: tokio::task::JoinHandle<()>,
-        shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+        _service_handle: tokio::task::JoinHandle<()>,
+        shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
         _dir: tempfile::TempDir,
     }
 
@@ -64,33 +62,28 @@ mod tests {
             ));
 
             let broker_slot = Arc::new(std::sync::OnceLock::new());
-            let service = ClusterGrpcService::new(
+            let service = Arc::new(ClusterBinaryService::new(
                 Arc::clone(&raft),
                 Arc::clone(&multi_raft),
                 Arc::clone(&broker_slot),
                 node_id,
                 format!("127.0.0.1:{port}"),
-            );
+            ));
             let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-            let grpc_handle = tokio::spawn(async move {
-                Server::builder()
-                    .add_service(FilaClusterServer::new(service))
-                    .serve_with_shutdown(addr, async {
-                        let _ = shutdown_rx.await;
-                    })
-                    .await
-                    .unwrap();
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let service_handle = tokio::spawn(async move {
+                binary_service::run(service, listener, None, shutdown_rx).await;
             });
 
-            // Give the gRPC server a moment to bind.
+            // Give the server a moment to bind.
             tokio::time::sleep(Duration::from_millis(50)).await;
 
             Self {
                 raft,
                 multi_raft,
-                _grpc_handle: grpc_handle,
+                _service_handle: service_handle,
                 shutdown_tx: Some(shutdown_tx),
                 _dir: dir,
             }
@@ -100,7 +93,7 @@ mod tests {
             self.multi_raft.shutdown_all().await;
             let _ = self.raft.shutdown().await;
             if let Some(tx) = self.shutdown_tx.take() {
-                let _ = tx.send(());
+                let _ = tx.send(true);
             }
         }
     }
@@ -462,9 +455,9 @@ mod tests {
         broker: Arc<crate::Broker>,
         broker_storage: Arc<dyn crate::storage::StorageEngine>,
         cluster_handle: Arc<crate::ClusterHandle>,
-        _grpc_handle: tokio::task::JoinHandle<()>,
+        _service_handle: tokio::task::JoinHandle<()>,
         _event_handle: tokio::task::JoinHandle<()>,
-        shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+        shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
         _dir: tempfile::TempDir,
         _broker_dir: tempfile::TempDir,
     }
@@ -513,24 +506,19 @@ mod tests {
             ));
 
             let broker_slot = Arc::new(std::sync::OnceLock::new());
-            let service = ClusterGrpcService::new(
+            let service = Arc::new(ClusterBinaryService::new(
                 Arc::clone(&raft),
                 Arc::clone(&multi_raft),
                 Arc::clone(&broker_slot),
                 node_id,
                 format!("127.0.0.1:{port}"),
-            );
+            ));
             let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-            let grpc_handle = tokio::spawn(async move {
-                Server::builder()
-                    .add_service(FilaClusterServer::new(service))
-                    .serve_with_shutdown(addr, async {
-                        let _ = shutdown_rx.await;
-                    })
-                    .await
-                    .unwrap();
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let service_handle = tokio::spawn(async move {
+                binary_service::run(service, listener, None, shutdown_rx).await;
             });
 
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -539,7 +527,7 @@ mod tests {
                 crate::Broker::new(crate::BrokerConfig::default(), Arc::clone(&broker_db)).unwrap(),
             );
 
-            // Wire broker to cluster gRPC service for forwarded write handling.
+            // Wire broker to cluster binary service for forwarded write handling.
             let _ = broker_slot.set(Arc::clone(&broker));
 
             // Start meta event handler.
@@ -566,7 +554,7 @@ mod tests {
                 broker,
                 broker_storage: broker_db,
                 cluster_handle,
-                _grpc_handle: grpc_handle,
+                _service_handle: service_handle,
                 _event_handle: event_handle,
                 shutdown_tx: Some(shutdown_tx),
                 _dir: dir,
@@ -578,7 +566,7 @@ mod tests {
             self.multi_raft.shutdown_all().await;
             let _ = self.raft.shutdown().await;
             if let Some(tx) = self.shutdown_tx.take() {
-                let _ = tx.send(());
+                let _ = tx.send(true);
             }
         }
     }
