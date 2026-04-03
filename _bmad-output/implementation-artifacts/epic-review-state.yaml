@@ -3,7 +3,7 @@ epicNumber: 20
 startedAt: "2026-03-31T00:00:00Z"
 yoloMode: false
 mode: normal
-currentPrIndex: 3
+currentPrIndex: 4
 prChain:
   - storyId: "20.1"
     storyKey: "20-1-binary-protocol-server-hot-path-operations"
@@ -31,8 +31,8 @@ prChain:
     title: "CLI & Cluster Inter-Node Migration"
     branch: "feat/20.4-cli-cluster-migration"
     pr: 161
-    baseBranch: "feat/20.3-rust-sdk-binary-protocol"
-    status: pending
+    baseBranch: "main"
+    status: merged
   - storyId: "20.5"
     storyKey: "20-5-grpc-removal-final-benchmarks"
     title: "gRPC Removal & Final Benchmarks"

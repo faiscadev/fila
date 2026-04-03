@@ -65,3 +65,29 @@
 - ConsumeStream Drop sends CancelConsume to clean up server-side consumer
 - Delivery channel registered before Consume request with save/restore on failure
 - Every server spawn in tests must drain BOTH stdout and stderr pipes
+
+## PR #161: CLI & Cluster Inter-Node Migration
+
+### Gaps in Dev Process
+- Binary server admin handlers had no cluster awareness — create/delete queue bypassed Raft entirely
+- Binary server hot-path handlers had no write forwarding — enqueue/ack/nack went to local scheduler only
+- CLI migrated to binary protocol but all test helpers still used gRPC addresses
+- SDK delivery channel deadlock: background reader blocked on send.await, starving response frames
+- Double-consume hang: dropping a stream didn't cancel server-side consumer, second consume saw stale deliveries
+- Benchmark fairness crash was actually the delivery deadlock manifesting under load
+
+### Incorrect Decisions During Development
+- Stream enum in CLI used manual method delegation (same mistake as server and SDK — third time)
+- Bare .unwrap() in mTLS cert loading path
+- Error description leaked into message_id field in cluster enqueue error path
+- ACL permission kinds not validated in CLI
+
+### Deferred Work
+- Benchmark CI issue tracked in #166 (was actually fixed by the delivery overflow buffer)
+
+### Patterns for Future Stories
+- SDK delivery overflow buffer: try_send to channel, overflow to VecDeque, TCP reads always continue
+- Response frames (oneshots) and delivery frames (mpsc) must never share blocking paths
+- Server drains all existing consumers when new Consume arrives on same connection
+- consume() cancels existing subscription inline before starting new one
+- All CLI/test code must use binary_addr, not gRPC addr

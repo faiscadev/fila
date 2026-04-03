@@ -1,6 +1,6 @@
 # Story 20.4: CLI & Cluster Inter-Node Migration
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
