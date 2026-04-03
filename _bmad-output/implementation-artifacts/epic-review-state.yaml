@@ -1,9 +1,10 @@
 epic: "Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal"
 epicNumber: 20
 startedAt: "2026-03-31T00:00:00Z"
+completedAt: "2026-04-03T23:50:07Z"
 yoloMode: false
 mode: normal
-currentPrIndex: 4
+currentPrIndex: 5
 prChain:
   - storyId: "20.1"
     storyKey: "20-1-binary-protocol-server-hot-path-operations"
@@ -38,5 +39,5 @@ prChain:
     title: "gRPC Removal & Final Benchmarks"
     branch: "feat/20.5-grpc-removal"
     pr: 162
-    baseBranch: "feat/20.4-cli-cluster-migration"
-    status: pending
+    baseBranch: "main"
+    status: merged
