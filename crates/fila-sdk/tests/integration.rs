@@ -130,7 +130,7 @@ impl Drop for TestServer {
 }
 
 /// Create a queue via the CLI binary.
-fn create_queue_cli(grpc_addr: &str, name: &str) {
+fn create_queue_cli(addr: &str, name: &str) {
     let cli = workspace_binary("fila");
     assert!(
         cli.exists(),
@@ -138,7 +138,7 @@ fn create_queue_cli(grpc_addr: &str, name: &str) {
     );
     let output: Output = Command::new(&cli)
         .arg("--addr")
-        .arg(grpc_addr)
+        .arg(addr)
         .args(["queue", "create", name])
         .output()
         .expect("run fila CLI");
@@ -152,7 +152,7 @@ fn create_queue_cli(grpc_addr: &str, name: &str) {
 #[tokio::test]
 async fn enqueue_consume_ack_lifecycle() {
     let server = TestServer::start();
-    create_queue_cli(server.grpc_addr(), "test-lifecycle");
+    create_queue_cli(server.binary_addr(), "test-lifecycle");
 
     let client = FilaClient::connect(server.binary_addr()).await.unwrap();
     let queue = "test-lifecycle";
@@ -193,7 +193,7 @@ async fn enqueue_consume_ack_lifecycle() {
 #[tokio::test]
 async fn enqueue_consume_nack_release() {
     let server = TestServer::start();
-    create_queue_cli(server.grpc_addr(), "test-nack");
+    create_queue_cli(server.binary_addr(), "test-nack");
 
     let client = FilaClient::connect(server.binary_addr()).await.unwrap();
     let queue = "test-nack";
@@ -251,14 +251,14 @@ async fn enqueue_to_nonexistent_queue() {
 #[tokio::test]
 async fn client_drop_sends_disconnect_and_cleans_up() {
     let server = TestServer::start();
-    create_queue_cli(server.grpc_addr(), "disconnect-queue");
+    create_queue_cli(server.binary_addr(), "disconnect-queue");
 
     // Connect and start consuming so the server registers an active consumer.
     let client = FilaClient::connect(server.binary_addr()).await.unwrap();
     let _stream = client.consume("disconnect-queue").await.unwrap();
 
     // Use CLI to verify the server sees an active consumer.
-    let consumers = parse_active_consumers(&cli_inspect(server.grpc_addr(), "disconnect-queue"));
+    let consumers = parse_active_consumers(&cli_inspect(server.binary_addr(), "disconnect-queue"));
     assert_eq!(consumers, 1, "should have 1 consumer before drop");
 
     // Drop the consuming client — this should send a Disconnect frame
@@ -270,7 +270,7 @@ async fn client_drop_sends_disconnect_and_cleans_up() {
     let start = std::time::Instant::now();
     loop {
         let consumers =
-            parse_active_consumers(&cli_inspect(server.grpc_addr(), "disconnect-queue"));
+            parse_active_consumers(&cli_inspect(server.binary_addr(), "disconnect-queue"));
         if consumers == 0 {
             break;
         }
@@ -293,11 +293,11 @@ fn parse_active_consumers(output: &str) -> u32 {
 }
 
 /// Get queue inspect output via the CLI.
-fn cli_inspect(grpc_addr: &str, queue: &str) -> String {
+fn cli_inspect(addr: &str, queue: &str) -> String {
     let cli = workspace_binary("fila");
     let output: Output = Command::new(&cli)
         .arg("--addr")
-        .arg(grpc_addr)
+        .arg(addr)
         .args(["queue", "inspect", queue])
         .output()
         .expect("run fila CLI inspect");
