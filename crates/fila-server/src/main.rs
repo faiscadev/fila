@@ -36,11 +36,8 @@ fn load_config() -> BrokerConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Install the ring CryptoProvider before any TLS operations.
-    // Both `ring` and `aws-lc-rs` features are enabled in the dependency tree
-    // (tonic uses ring via tls-ring, tokio-rustls pulls both), so rustls cannot
-    // auto-detect which to use. Explicitly installing ring matches tonic's choice.
-    rustls::crypto::ring::default_provider()
+    // Install the aws-lc-rs CryptoProvider before any TLS operations.
+    rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("install rustls CryptoProvider");
 
@@ -81,11 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&storage),
                 Some(meta_event_tx),
                 tls_params.as_ref(),
-                config
-                    .server
-                    .binary_addr
-                    .as_deref()
-                    .unwrap_or(&config.server.listen_addr),
+                &config.server.listen_addr,
             )
             .await?,
         )

@@ -88,8 +88,8 @@ fn start_tls_server() -> (TestServer, String, Vec<u8>) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert!(
-        grpc_ok && binary_ok,
-        "TLS fila-server did not become reachable within 10s (grpc={grpc_ok}, binary={binary_ok})"
+        std::net::TcpStream::connect(&addr).is_ok(),
+        "TLS fila-server did not become reachable within 10s"
     );
 
     let server = TestServer::from_parts(child, addr.clone(), data_dir);

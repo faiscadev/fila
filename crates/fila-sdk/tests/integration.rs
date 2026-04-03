@@ -235,7 +235,7 @@ async fn double_consume_does_not_hang() {
         let cli = workspace_binary("fila");
         let output: Output = Command::new(&cli)
             .arg("--addr")
-            .arg(server.binary_addr())
+            .arg(server.addr())
             .args([
                 "queue",
                 "create",
@@ -252,7 +252,7 @@ async fn double_consume_does_not_hang() {
         );
     }
 
-    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
 
     // Enqueue messages
     for i in 0..3 {
@@ -298,14 +298,14 @@ async fn double_consume_does_not_hang() {
 #[tokio::test]
 async fn client_drop_sends_disconnect_and_cleans_up() {
     let server = TestServer::start();
-    create_queue_cli(server.binary_addr(), "disconnect-queue");
+    create_queue_cli(server.addr(), "disconnect-queue");
 
     // Connect and start consuming so the server registers an active consumer.
-    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
     let _stream = client.consume("disconnect-queue").await.unwrap();
 
     // Use CLI to verify the server sees an active consumer.
-    let consumers = parse_active_consumers(&cli_inspect(server.binary_addr(), "disconnect-queue"));
+    let consumers = parse_active_consumers(&cli_inspect(server.addr(), "disconnect-queue"));
     assert_eq!(consumers, 1, "should have 1 consumer before drop");
 
     // Drop the consuming client — this should send a Disconnect frame
@@ -316,8 +316,7 @@ async fn client_drop_sends_disconnect_and_cleans_up() {
     // Poll until the server processes the disconnect (with timeout).
     let start = std::time::Instant::now();
     loop {
-        let consumers =
-            parse_active_consumers(&cli_inspect(server.binary_addr(), "disconnect-queue"));
+        let consumers = parse_active_consumers(&cli_inspect(server.addr(), "disconnect-queue"));
         if consumers == 0 {
             break;
         }
