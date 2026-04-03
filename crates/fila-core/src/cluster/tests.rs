@@ -1003,7 +1003,7 @@ mod tests {
             .collect();
         assert_eq!(survivors.len(), 2);
 
-        // Kill the leader: shut down its Raft instances and gRPC server.
+        // Kill the leader: shut down its Raft instances and cluster server.
         match queue_leader_id {
             1 => {
                 node1.multi_raft.shutdown_all().await;

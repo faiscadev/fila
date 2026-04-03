@@ -20,16 +20,18 @@ async fn e2e_dlq_redrive() {
         None,
     );
 
-    let client = helpers::sdk_client(server.binary_addr()).await;
+    let enqueue_client = helpers::sdk_client(server.binary_addr()).await;
 
     // Enqueue a message
-    let msg_id = client
+    let msg_id = enqueue_client
         .enqueue("redrive-src", HashMap::new(), b"redrive-me".to_vec())
         .await
         .unwrap();
 
     // Nack until DLQ (attempts: nack→on_failure(1)→retry, nack→on_failure(2)→DLQ)
-    let mut stream = client.consume("redrive-src").await.unwrap();
+    // Use a dedicated client per consume to avoid stale consumer state.
+    let consume_client1 = helpers::sdk_client(server.binary_addr()).await;
+    let mut stream = consume_client1.consume("redrive-src").await.unwrap();
 
     // First delivery: attempt_count=0, nack → on_failure gets attempts=1 → retry
     let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
@@ -38,7 +40,7 @@ async fn e2e_dlq_redrive() {
         .unwrap()
         .unwrap();
     assert_eq!(msg.id, msg_id);
-    client
+    consume_client1
         .nack("redrive-src", &msg_id, "failing")
         .await
         .unwrap();
@@ -50,20 +52,21 @@ async fn e2e_dlq_redrive() {
         .unwrap()
         .unwrap();
     assert_eq!(msg.id, msg_id);
-    client
+    consume_client1
         .nack("redrive-src", &msg_id, "failing again")
         .await
         .unwrap();
 
-    // Drop the source stream so the scheduler knows the consumer is gone.
-    // This prevents the redriven message from being delivered to the old stream.
+    // Drop consumer — closes TCP connection which unregisters on server side.
     drop(stream);
+    drop(consume_client1);
 
-    // Give the scheduler a moment to route to DLQ and unregister the consumer
+    // Give the scheduler a moment to route to DLQ and detect disconnected consumer
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify DLQ has the message by consuming from it
-    let mut dlq_stream = client.consume("redrive-src.dlq").await.unwrap();
+    let dlq_client = helpers::sdk_client(server.binary_addr()).await;
+    let mut dlq_stream = dlq_client.consume("redrive-src.dlq").await.unwrap();
     let dlq_msg = tokio::time::timeout(Duration::from_secs(5), dlq_stream.next())
         .await
         .expect("timeout waiting for DLQ message")
@@ -72,8 +75,12 @@ async fn e2e_dlq_redrive() {
     assert_eq!(dlq_msg.id, msg_id);
 
     // Ack the DLQ message so it's no longer in-flight (redrive only moves pending messages)
-    client.ack("redrive-src.dlq", &dlq_msg.id).await.unwrap();
+    dlq_client
+        .ack("redrive-src.dlq", &dlq_msg.id)
+        .await
+        .unwrap();
     drop(dlq_stream);
+    drop(dlq_client);
 
     // Re-enqueue to DLQ for redrive (the original message was acked from DLQ above,
     // so we need a fresh message in the DLQ to redrive)
@@ -81,12 +88,14 @@ async fn e2e_dlq_redrive() {
     // The simplest approach: re-do the whole flow with a fresh message.
 
     // Enqueue a new message and drive it to DLQ
-    let msg_id2 = client
+    let msg_id2 = enqueue_client
         .enqueue("redrive-src", HashMap::new(), b"redrive-me-2".to_vec())
         .await
         .unwrap();
 
-    let mut stream2 = client.consume("redrive-src").await.unwrap();
+    // Use a fresh client to avoid stale consumer state from the first consume.
+    let client2 = helpers::sdk_client(server.binary_addr()).await;
+    let mut stream2 = client2.consume("redrive-src").await.unwrap();
     for _ in 0..2 {
         let msg = tokio::time::timeout(Duration::from_secs(5), stream2.next())
             .await
@@ -94,12 +103,13 @@ async fn e2e_dlq_redrive() {
             .unwrap()
             .unwrap();
         assert_eq!(msg.id, msg_id2);
-        client
+        client2
             .nack("redrive-src", &msg_id2, "failing")
             .await
             .unwrap();
     }
     drop(stream2);
+    drop(client2);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Now redrive via CLI — the message is pending (not in-flight) in the DLQ
@@ -112,7 +122,8 @@ async fn e2e_dlq_redrive() {
     );
 
     // Consume from source queue — message should be available with reset attempt count
-    let mut stream3 = client.consume("redrive-src").await.unwrap();
+    let consume_client3 = helpers::sdk_client(server.binary_addr()).await;
+    let mut stream3 = consume_client3.consume("redrive-src").await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(5), stream3.next())
         .await
         .expect("timeout waiting for redriven message")
@@ -127,5 +138,5 @@ async fn e2e_dlq_redrive() {
     assert_eq!(msg.payload, b"redrive-me-2");
 
     // Clean up
-    client.ack("redrive-src", &msg.id).await.unwrap();
+    consume_client3.ack("redrive-src", &msg.id).await.unwrap();
 }

@@ -97,6 +97,11 @@ pub struct ConnectOptions {
     /// API key for authenticating with the broker.
     /// When set, the key is sent in the Handshake frame during connection.
     pub api_key: Option<String>,
+    /// Capacity of the delivery channel for consume streams.
+    /// When the channel is full, deliveries overflow to an internal buffer.
+    /// Defaults to 256.
+    #[cfg(feature = "test-internals")]
+    pub delivery_buffer_size: Option<usize>,
 }
 
 impl ConnectOptions {
@@ -142,6 +147,13 @@ impl ConnectOptions {
     /// When set, the key is sent during the handshake with the broker.
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
+        self
+    }
+
+    /// Set the delivery channel buffer size (for testing backpressure behavior).
+    #[cfg(feature = "test-internals")]
+    pub fn with_delivery_buffer_size(mut self, size: usize) -> Self {
+        self.delivery_buffer_size = Some(size);
         self
     }
 }
@@ -236,6 +248,10 @@ struct FilaClientInner {
     state: Arc<Mutex<ConnectionInner>>,
     next_request_id: AtomicU32,
     cancel: CancellationToken,
+    delivery_buffer_size: usize,
+    /// Number of messages currently in the delivery overflow buffer.
+    /// Updated by the background reader (increment) and overflow flush (decrement).
+    delivery_overflow_len: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Drop for FilaClientInner {
@@ -483,11 +499,23 @@ impl FilaClient {
             stream: write_stream,
         }));
 
+        #[cfg(feature = "test-internals")]
+        let delivery_buffer_size = connect_options
+            .as_ref()
+            .and_then(|o| o.delivery_buffer_size)
+            .unwrap_or(256);
+        #[cfg(not(feature = "test-internals"))]
+        let delivery_buffer_size = 256;
+
+        let delivery_overflow_len = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
         let inner = Arc::new(FilaClientInner {
             writer: Arc::clone(&writer),
             state: Arc::clone(&state),
             next_request_id: AtomicU32::new(1),
             cancel: cancel.clone(),
+            delivery_buffer_size,
+            delivery_overflow_len: Arc::clone(&delivery_overflow_len),
         });
 
         // The background reader holds its own Arcs to state and writer, plus
@@ -495,7 +523,7 @@ impl FilaClient {
         // FilaClient clones drop, FilaClientInner::drop fires and cancels the
         // token even though the reader task is still alive.
         tokio::spawn(async move {
-            background_reader(read, state, cancel, writer).await;
+            background_reader(read, state, cancel, writer, delivery_overflow_len).await;
         });
 
         Ok(Self {
@@ -639,7 +667,7 @@ impl FilaClient {
         // Register the delivery channel BEFORE sending the Consume request so
         // early Delivery frames aren't dropped. Save the previous channel to
         // restore on failure (avoids breaking an existing active consumer).
-        let (delivery_tx, delivery_rx) = mpsc::channel(256);
+        let (delivery_tx, delivery_rx) = mpsc::channel(self.inner.delivery_buffer_size);
         let prev_delivery_tx;
         let prev_consume_request_id;
         {
@@ -736,15 +764,11 @@ impl FilaClient {
         let queue = queue.to_string();
         Box::pin(async move {
             let leader_opts = match self.connect_options {
-                Some(ref opts) => ConnectOptions {
-                    addr: leader_addr.clone(),
-                    timeout: opts.timeout,
-                    tls: opts.tls,
-                    tls_ca_cert_pem: opts.tls_ca_cert_pem.clone(),
-                    tls_client_cert_pem: opts.tls_client_cert_pem.clone(),
-                    tls_client_key_pem: opts.tls_client_key_pem.clone(),
-                    api_key: opts.api_key.clone(),
-                },
+                Some(ref opts) => {
+                    let mut leader_opts = opts.clone();
+                    leader_opts.addr = leader_addr.clone();
+                    leader_opts
+                }
                 None => ConnectOptions::new(&leader_addr),
             };
             match Self::connect_with_options(leader_opts).await {
@@ -847,6 +871,15 @@ impl FilaClient {
 
         Ok(())
     }
+
+    /// Returns the current number of messages in the delivery overflow buffer.
+    /// Only available with the `test-internals` feature.
+    #[cfg(feature = "test-internals")]
+    pub async fn delivery_internal_len(&self) -> usize {
+        self.inner
+            .delivery_overflow_len
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// Read a single frame from the stream.
@@ -888,6 +921,7 @@ async fn background_reader(
     state: Arc<Mutex<ConnectionInner>>,
     cancel: CancellationToken,
     writer: Arc<Mutex<FrameWriter>>,
+    overflow_len_counter: Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let mut buf = BytesMut::with_capacity(4096);
     let mut delivery_overflow: std::collections::VecDeque<Result<ConsumeMessage, StatusError>> =
@@ -903,21 +937,26 @@ async fn background_reader(
             if let Some(tx) = tx {
                 while let Some(item) = delivery_overflow.pop_front() {
                     match tx.try_send(item) {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            overflow_len_counter.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         Err(mpsc::error::TrySendError::Full(item)) => {
-                            // Put it back at the front and stop flushing.
                             delivery_overflow.push_front(item);
                             break;
                         }
                         Err(mpsc::error::TrySendError::Closed(_)) => {
+                            let drained = delivery_overflow.len();
                             delivery_overflow.clear();
+                            overflow_len_counter
+                                .fetch_sub(drained, std::sync::atomic::Ordering::Relaxed);
                             break;
                         }
                     }
                 }
             } else {
-                // No delivery channel — discard overflow.
+                let drained = delivery_overflow.len();
                 delivery_overflow.clear();
+                overflow_len_counter.fetch_sub(drained, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -925,7 +964,13 @@ async fn background_reader(
         loop {
             match RawFrame::decode(&mut buf) {
                 Ok(Some(frame)) => {
-                    dispatch_frame_inline(frame, &state, &mut delivery_overflow).await;
+                    dispatch_frame_inline(
+                        frame,
+                        &state,
+                        &mut delivery_overflow,
+                        &overflow_len_counter,
+                    )
+                    .await;
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -975,6 +1020,7 @@ async fn dispatch_frame_inline(
     frame: RawFrame,
     state: &Mutex<ConnectionInner>,
     delivery_overflow: &mut std::collections::VecDeque<Result<ConsumeMessage, StatusError>>,
+    overflow_len_counter: &std::sync::atomic::AtomicUsize,
 ) {
     let opcode = Opcode::from_u8(frame.opcode);
     let request_id = frame.request_id;
@@ -1004,6 +1050,8 @@ async fn dispatch_frame_inline(
                                 Ok(_) => {}
                                 Err(mpsc::error::TrySendError::Full(item)) => {
                                     delivery_overflow.push_back(item);
+                                    overflow_len_counter
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {}
                             }
@@ -1017,6 +1065,8 @@ async fn dispatch_frame_inline(
                             Ok(_) => {}
                             Err(mpsc::error::TrySendError::Full(item)) => {
                                 delivery_overflow.push_back(item);
+                                overflow_len_counter
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => {}
                         }

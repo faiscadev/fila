@@ -19,12 +19,10 @@ homepage = "https://github.com/faiscadev/fila"
 rust-version = "1.75"
 
 [workspace.dependencies]
-# gRPC + Protobuf (versions must match)
-tonic = { version = "0.14", features = ["tls-ring"] }
-tonic-prost = "0.14"
+# Protobuf (used for Raft log entry serialization)
 prost = "0.14"
 prost-types = "0.14"
-tonic-prost-build = "0.14"
+prost-build = "0.14"
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -49,9 +47,6 @@ rcgen = "0.12"
 sha2 = "0.10"
 
 tokio-stream = "0.1"
-tower = "0.5"
-http = "1"
-pin-project-lite = "0.2"
 
 fila-proto = { path = "crates/fila-proto", version = "0.1.0" }
 fila-core = { path = "crates/fila-core", version = "0.1.0" }

@@ -24,10 +24,10 @@ async fn e2e_crash_recovery() {
     }
 
     // Kill the server (simulates crash — SIGKILL, not graceful)
-    let (data_dir, grpc_port, binary_port) = server.kill_and_take_data();
+    let (data_dir, port) = server.kill_and_take_data();
 
-    // Restart on the same data directory and ports
-    let server2 = helpers::TestServer::restart_on(data_dir, grpc_port, binary_port);
+    // Restart on the same data directory and port
+    let server2 = helpers::TestServer::restart_on(data_dir, port);
     let client2 = helpers::sdk_client(server2.binary_addr()).await;
 
     // Consume from the queue — all messages should be available

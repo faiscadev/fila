@@ -1,5 +1,5 @@
 //! Binary protocol server — accepts TCP connections and dispatches FIBP frames
-//! to the broker's scheduler through the same command channel as gRPC.
+//! to the broker's scheduler through the command channel.
 
 use std::collections::HashMap;
 use std::sync::Arc;

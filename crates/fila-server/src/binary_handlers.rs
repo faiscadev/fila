@@ -1055,6 +1055,20 @@ pub fn handle_set_acl(
     broker: &Broker,
     req: fila_fibp::SetAclRequest,
 ) -> Result<fila_fibp::SetAclResponse, (ErrorCode, String)> {
+    // Validate permission kinds before applying.
+    for p in &req.permissions {
+        match p.kind.as_str() {
+            "produce" | "consume" | "admin" => {}
+            other => {
+                return Err((
+                    ErrorCode::InvalidConfigValue,
+                    format!(
+                        "invalid permission kind \"{other}\": expected produce, consume, or admin"
+                    ),
+                ));
+            }
+        }
+    }
     let permissions: Vec<(String, String)> = req
         .permissions
         .into_iter()

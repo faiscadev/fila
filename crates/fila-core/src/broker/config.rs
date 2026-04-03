@@ -32,7 +32,7 @@ pub struct ClusterConfig {
     /// When empty, this node bootstraps a new single-node cluster.
     /// When non-empty, the node joins an existing cluster by contacting these peers.
     pub peers: Vec<String>,
-    /// Listen address for intra-cluster gRPC communication (separate from client port).
+    /// Listen address for intra-cluster communication (separate from client port).
     pub bind_addr: String,
     /// Raft election timeout in milliseconds.
     pub election_timeout_ms: u64,
@@ -68,7 +68,7 @@ pub struct TlsParams {
 /// Authentication configuration. Presence in `BrokerConfig.auth` (i.e. an `[auth]` section
 /// in `fila.toml`) enables API key authentication; absence disables it entirely.
 ///
-/// When enabled, every gRPC RPC must include `authorization: Bearer <key>` metadata.
+/// When enabled, every request must include a valid API key during the connection handshake.
 /// `bootstrap_apikey` is required: it is a permanent operator key accepted without a storage
 /// lookup, enabling operators to provision the first real API key. It can also be set (or
 /// overridden) via the `FILA_BOOTSTRAP_APIKEY` environment variable.
@@ -83,14 +83,12 @@ pub struct AuthConfig {
     pub bootstrap_apikey: String,
 }
 
-/// Server configuration (listen addresses).
+/// Server configuration (listen address).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
-    /// gRPC listen address (temporary, for cluster comms until binary protocol migration).
+    /// Binary protocol (FIBP) listen address.
     pub listen_addr: String,
-    /// Binary protocol (FIBP) listen address. Defaults to None (disabled).
-    pub binary_addr: Option<String>,
 }
 
 /// Scheduler configuration (channel capacity, idle timeout, DRR quantum).
@@ -163,7 +161,6 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen_addr: "0.0.0.0:5555".to_string(),
-            binary_addr: None,
         }
     }
 }
@@ -201,7 +198,6 @@ mod tests {
     fn default_config_values() {
         let config = BrokerConfig::default();
         assert_eq!(config.server.listen_addr, "0.0.0.0:5555");
-        assert_eq!(config.server.binary_addr, None);
         assert_eq!(config.scheduler.command_channel_capacity, 10_000);
         assert_eq!(config.scheduler.idle_timeout_ms, 100);
         assert_eq!(config.scheduler.quantum, 1000);

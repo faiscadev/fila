@@ -27,29 +27,21 @@ fn workspace_binary(name: &str) -> PathBuf {
 
 struct TestServer {
     child: Option<Child>,
-    /// gRPC address (http://host:port) for CLI commands.
-    grpc_addr: String,
-    /// Binary protocol address (host:port) for SDK connections.
-    binary_addr: String,
+    /// Address (host:port) for both CLI and SDK connections.
+    addr: String,
     _data_dir: tempfile::TempDir,
 }
 
 impl TestServer {
     fn start() -> Self {
-        let grpc_port = free_port();
-        let mut binary_port = free_port();
-        while binary_port == grpc_port {
-            binary_port = free_port();
-        }
-        let grpc_addr_raw = format!("127.0.0.1:{grpc_port}");
-        let binary_addr = format!("127.0.0.1:{binary_port}");
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
         let data_dir = tempfile::tempdir().expect("create temp dir");
 
         let config_path = data_dir.path().join("fila.toml");
         let config_content = format!(
             r#"[server]
-listen_addr = "{grpc_addr_raw}"
-binary_addr = "{binary_addr}"
+listen_addr = "{addr}"
 
 [telemetry]
 otlp_endpoint = ""
@@ -80,43 +72,29 @@ otlp_endpoint = ""
         let stderr = child.stderr.take().expect("stderr");
         std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
 
-        // Poll until both ports are reachable.
+        // Poll until the port is reachable.
         let start = std::time::Instant::now();
-        let mut grpc_ok = false;
-        let mut binary_ok = false;
         while start.elapsed() < Duration::from_secs(10) {
-            if !grpc_ok && std::net::TcpStream::connect(&grpc_addr_raw).is_ok() {
-                grpc_ok = true;
-            }
-            if !binary_ok && std::net::TcpStream::connect(&binary_addr).is_ok() {
-                binary_ok = true;
-            }
-            if grpc_ok && binary_ok {
+            if std::net::TcpStream::connect(&addr).is_ok() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(
-            grpc_ok && binary_ok,
+            std::net::TcpStream::connect(&addr).is_ok(),
             "fila-server did not become reachable within 10s"
         );
 
         Self {
             child: Some(child),
-            grpc_addr: format!("http://{grpc_addr_raw}"),
-            binary_addr,
+            addr,
             _data_dir: data_dir,
         }
     }
 
-    /// gRPC address for CLI commands.
-    fn grpc_addr(&self) -> &str {
-        &self.grpc_addr
-    }
-
-    /// Binary protocol address for SDK connections.
-    fn binary_addr(&self) -> &str {
-        &self.binary_addr
+    /// Address for CLI and SDK connections.
+    fn addr(&self) -> &str {
+        &self.addr
     }
 }
 
@@ -152,9 +130,9 @@ fn create_queue_cli(addr: &str, name: &str) {
 #[tokio::test]
 async fn enqueue_consume_ack_lifecycle() {
     let server = TestServer::start();
-    create_queue_cli(server.binary_addr(), "test-lifecycle");
+    create_queue_cli(server.addr(), "test-lifecycle");
 
-    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
     let queue = "test-lifecycle";
 
     // Enqueue a message
@@ -193,9 +171,9 @@ async fn enqueue_consume_ack_lifecycle() {
 #[tokio::test]
 async fn enqueue_consume_nack_release() {
     let server = TestServer::start();
-    create_queue_cli(server.binary_addr(), "test-nack");
+    create_queue_cli(server.addr(), "test-nack");
 
-    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
     let queue = "test-nack";
 
     // Enqueue
@@ -235,7 +213,7 @@ async fn enqueue_consume_nack_release() {
 #[tokio::test]
 async fn enqueue_to_nonexistent_queue() {
     let server = TestServer::start();
-    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
 
     let err = client
         .enqueue("no-such-queue", HashMap::new(), b"data".to_vec())
@@ -257,7 +235,7 @@ async fn double_consume_does_not_hang() {
         let cli = workspace_binary("fila");
         let output: Output = Command::new(&cli)
             .arg("--addr")
-            .arg(server.binary_addr())
+            .arg(server.addr())
             .args([
                 "queue",
                 "create",
@@ -274,7 +252,7 @@ async fn double_consume_does_not_hang() {
         );
     }
 
-    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
 
     // Enqueue messages
     for i in 0..3 {
@@ -320,14 +298,14 @@ async fn double_consume_does_not_hang() {
 #[tokio::test]
 async fn client_drop_sends_disconnect_and_cleans_up() {
     let server = TestServer::start();
-    create_queue_cli(server.binary_addr(), "disconnect-queue");
+    create_queue_cli(server.addr(), "disconnect-queue");
 
     // Connect and start consuming so the server registers an active consumer.
-    let client = FilaClient::connect(server.binary_addr()).await.unwrap();
+    let client = FilaClient::connect(server.addr()).await.unwrap();
     let _stream = client.consume("disconnect-queue").await.unwrap();
 
     // Use CLI to verify the server sees an active consumer.
-    let consumers = parse_active_consumers(&cli_inspect(server.binary_addr(), "disconnect-queue"));
+    let consumers = parse_active_consumers(&cli_inspect(server.addr(), "disconnect-queue"));
     assert_eq!(consumers, 1, "should have 1 consumer before drop");
 
     // Drop the consuming client — this should send a Disconnect frame
@@ -338,8 +316,7 @@ async fn client_drop_sends_disconnect_and_cleans_up() {
     // Poll until the server processes the disconnect (with timeout).
     let start = std::time::Instant::now();
     loop {
-        let consumers =
-            parse_active_consumers(&cli_inspect(server.binary_addr(), "disconnect-queue"));
+        let consumers = parse_active_consumers(&cli_inspect(server.addr(), "disconnect-queue"));
         if consumers == 0 {
             break;
         }
