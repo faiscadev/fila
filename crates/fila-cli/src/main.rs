@@ -198,27 +198,48 @@ enum Stream {
     Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
 }
 
-impl Stream {
-    async fn read_buf(&mut self, buf: &mut BytesMut) -> std::io::Result<usize> {
-        // Ensure space for reading
-        buf.reserve(4096);
-        match self {
-            Stream::Plain(s) => s.read_buf(buf).await,
-            Stream::Tls(s) => s.read_buf(buf).await,
+impl tokio::io::AsyncRead for Stream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Plain(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            Stream::Tls(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for Stream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Stream::Plain(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            Stream::Tls(s) => std::pin::Pin::new(s).poll_write(cx, buf),
         }
     }
 
-    async fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
-        match self {
-            Stream::Plain(s) => s.write_all(data).await,
-            Stream::Tls(s) => s.write_all(data).await,
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Plain(s) => std::pin::Pin::new(s).poll_flush(cx),
+            Stream::Tls(s) => std::pin::Pin::new(s).poll_flush(cx),
         }
     }
 
-    async fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            Stream::Plain(s) => s.flush().await,
-            Stream::Tls(s) => s.flush().await,
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Plain(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            Stream::Tls(s) => std::pin::Pin::new(s).poll_shutdown(cx),
         }
     }
 }
@@ -330,7 +351,7 @@ async fn connect(
         }
 
         let mut config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
+            .with_root_certificates(root_store.clone())
             .with_no_client_auth();
 
         if let (Some(cert_path), Some(key_path)) = (tls_cert, tls_key) {
@@ -369,21 +390,7 @@ async fn connect(
                 });
 
             config = rustls::ClientConfig::builder()
-                .with_root_certificates({
-                    let mut rs = rustls::RootCertStore::empty();
-                    if let Some(ca_path) = tls_ca_cert {
-                        let ca_pem = std::fs::read(ca_path).unwrap();
-                        let ca_certs = rustls_pemfile::certs(&mut &ca_pem[..])
-                            .collect::<Result<Vec<_>, _>>()
-                            .unwrap();
-                        for cert in ca_certs {
-                            rs.add(cert).unwrap();
-                        }
-                    } else {
-                        rs.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-                    }
-                    rs
-                })
+                .with_root_certificates(root_store.clone())
                 .with_client_auth_cert(certs, key)
                 .unwrap_or_else(|e| {
                     eprintln!("Error: TLS client auth configuration failed: {e}");

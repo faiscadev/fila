@@ -139,11 +139,11 @@ pub async fn handle_enqueue(
                                 }
                             }
                         }
-                        ClusterResponse::Error { message } => {
+                        ClusterResponse::Error { message: _ } => {
                             for (orig_idx, _) in items {
                                 results[*orig_idx] = EnqueueResultItem {
                                     error_code: ErrorCode::InternalError,
-                                    message_id: message.clone(),
+                                    message_id: String::new(),
                                 };
                             }
                         }
