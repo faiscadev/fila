@@ -99,15 +99,15 @@ async fn stalled_consumer_buffers_without_deadlock() {
     eprintln!("overflow buffer size with stalled consumer: {overflow_len}");
 
     // Key assertion: the SDK didn't deadlock. We can still do operations
-    // on the same connection even though the consumer is stalled.
+    // on the SAME connection that has the stalled consumer.
     let enqueue_result = tokio::time::timeout(
         Duration::from_secs(3),
-        producer.enqueue("backpressure-q", HashMap::new(), b"after-stall".to_vec()),
+        consumer.enqueue("backpressure-q", HashMap::new(), b"after-stall".to_vec()),
     )
     .await;
     assert!(
         enqueue_result.is_ok(),
-        "enqueue should succeed even with stalled consumer (no deadlock)"
+        "enqueue on stalled consumer connection should succeed (no deadlock)"
     );
 
     drop(_stream);

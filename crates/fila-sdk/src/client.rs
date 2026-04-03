@@ -1065,6 +1065,8 @@ async fn dispatch_frame_inline(
                             Ok(_) => {}
                             Err(mpsc::error::TrySendError::Full(item)) => {
                                 delivery_overflow.push_back(item);
+                                overflow_len_counter
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => {}
                         }
