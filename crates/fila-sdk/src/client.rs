@@ -870,11 +870,6 @@ async fn read_one_frame(
     }
 }
 
-/// High-water mark for the delivery overflow buffer. When this many messages
-/// are buffered because the delivery channel is full, the reader pauses TCP
-/// reads to apply backpressure to the server.
-const DELIVERY_OVERFLOW_HIGH_WATER: usize = 512;
-
 /// Background task that reads frames from the connection and dispatches them.
 ///
 /// Delivery frames and response frames are handled differently to prevent
@@ -882,10 +877,9 @@ const DELIVERY_OVERFLOW_HIGH_WATER: usize = 512;
 /// - **Response frames** (enqueue/ack/nack results) go directly to their
 ///   oneshot channels, which never block.
 /// - **Delivery frames** go to a bounded mpsc channel. When the channel is
-///   full, deliveries are buffered in an internal overflow `VecDeque`. When
-///   the overflow exceeds `DELIVERY_OVERFLOW_HIGH_WATER`, TCP reads are
-///   paused (backpressure). This prevents both deadlock (responses always
-///   flow) and unbounded memory growth (TCP backpressure limits the server).
+///   full, deliveries are buffered in an internal overflow `VecDeque`.
+///   TCP reads always continue so response frames are never starved.
+///   The server's own delivery channel backpressure limits memory growth.
 ///
 /// Exits when the connection closes, a read error occurs, or the cancellation
 /// token is triggered (i.e. all `FilaClient` clones have been dropped).
@@ -928,11 +922,9 @@ async fn background_reader(
         }
 
         // 2. Decode frames already in the read buffer.
-        let mut decoded_any = false;
         loop {
             match RawFrame::decode(&mut buf) {
                 Ok(Some(frame)) => {
-                    decoded_any = true;
                     dispatch_frame_inline(frame, &state, &mut delivery_overflow).await;
                 }
                 Ok(None) => break,
