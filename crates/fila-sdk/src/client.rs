@@ -870,7 +870,22 @@ async fn read_one_frame(
     }
 }
 
+/// High-water mark for the delivery overflow buffer. When this many messages
+/// are buffered because the delivery channel is full, the reader pauses TCP
+/// reads to apply backpressure to the server.
+const DELIVERY_OVERFLOW_HIGH_WATER: usize = 512;
+
 /// Background task that reads frames from the connection and dispatches them.
+///
+/// Delivery frames and response frames are handled differently to prevent
+/// deadlocks:
+/// - **Response frames** (enqueue/ack/nack results) go directly to their
+///   oneshot channels, which never block.
+/// - **Delivery frames** go to a bounded mpsc channel. When the channel is
+///   full, deliveries are buffered in an internal overflow `VecDeque`. When
+///   the overflow exceeds `DELIVERY_OVERFLOW_HIGH_WATER`, TCP reads are
+///   paused (backpressure). This prevents both deadlock (responses always
+///   flow) and unbounded memory growth (TCP backpressure limits the server).
 ///
 /// Exits when the connection closes, a read error occurs, or the cancellation
 /// token is triggered (i.e. all `FilaClient` clones have been dropped).
@@ -881,12 +896,44 @@ async fn background_reader(
     writer: Arc<Mutex<FrameWriter>>,
 ) {
     let mut buf = BytesMut::with_capacity(4096);
+    let mut delivery_overflow: std::collections::VecDeque<Result<ConsumeMessage, StatusError>> =
+        std::collections::VecDeque::new();
 
     loop {
+        // 1. Try to flush overflow deliveries into the channel.
+        if !delivery_overflow.is_empty() {
+            let tx = {
+                let guard = state.lock().await;
+                guard.delivery_tx.clone()
+            };
+            if let Some(tx) = tx {
+                while let Some(item) = delivery_overflow.pop_front() {
+                    match tx.try_send(item) {
+                        Ok(_) => {}
+                        Err(mpsc::error::TrySendError::Full(item)) => {
+                            // Put it back at the front and stop flushing.
+                            delivery_overflow.push_front(item);
+                            break;
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            delivery_overflow.clear();
+                            break;
+                        }
+                    }
+                }
+            } else {
+                // No delivery channel — discard overflow.
+                delivery_overflow.clear();
+            }
+        }
+
+        // 2. Decode frames already in the read buffer.
+        let mut decoded_any = false;
         loop {
             match RawFrame::decode(&mut buf) {
                 Ok(Some(frame)) => {
-                    dispatch_frame(frame, &state).await;
+                    decoded_any = true;
+                    dispatch_frame_inline(frame, &state, &mut delivery_overflow).await;
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -896,6 +943,12 @@ async fn background_reader(
             }
         }
 
+        // 3. Read more data from TCP.
+        //
+        // We always read, even if the overflow is large. Pausing TCP reads
+        // would also block response frames (ack/nack/enqueue results) which
+        // causes deadlocks. The server's own delivery channel backpressure
+        // limits how fast it pushes messages to us.
         tokio::select! {
             result = stream.read_buf(&mut buf) => {
                 match result {
@@ -911,8 +964,6 @@ async fn background_reader(
                 }
             }
             _ = cancel.cancelled() => {
-                // Send a Disconnect frame so the server cleans up immediately
-                // instead of waiting for TCP EOF detection.
                 let disconnect = RawFrame {
                     opcode: Opcode::Disconnect as u8,
                     flags: 0,
@@ -926,59 +977,68 @@ async fn background_reader(
     }
 }
 
-/// Dispatch a received frame to the appropriate handler.
-async fn dispatch_frame(frame: RawFrame, state: &Mutex<ConnectionInner>) {
+/// Dispatch a single decoded frame. Delivery frames go to the overflow buffer
+/// (caller flushes to channel). Response frames go directly to oneshots.
+async fn dispatch_frame_inline(
+    frame: RawFrame,
+    state: &Mutex<ConnectionInner>,
+    delivery_overflow: &mut std::collections::VecDeque<Result<ConsumeMessage, StatusError>>,
+) {
     let opcode = Opcode::from_u8(frame.opcode);
     let request_id = frame.request_id;
 
     match opcode {
         Some(Opcode::Delivery) => {
-            // Clone the sender and drop the lock before sending.
-            // Use try_send (non-blocking) to avoid deadlocking the
-            // background reader when the channel is full — if the reader
-            // blocks on send, it can't process response frames for other
-            // operations (enqueue, ack) that the consumer needs to make
-            // progress and drain the channel.
+            // Try to send directly to the channel first. If full, buffer
+            // in the overflow deque — the main loop will flush it later
+            // and apply backpressure if needed.
             let tx = {
                 let guard = state.lock().await;
                 guard.delivery_tx.clone()
             };
-            if let Some(tx) = tx {
-                match DeliveryBatch::decode(frame.payload) {
-                    Ok(batch) => {
-                        for msg in batch.messages {
-                            let consume_msg = ConsumeMessage {
-                                id: msg.message_id,
-                                headers: msg.headers,
-                                payload: msg.payload,
-                                fairness_key: msg.fairness_key,
-                                attempt_count: msg.attempt_count,
-                                queue: msg.queue,
-                            };
-                            let _ = tx.try_send(Ok(consume_msg));
+            match DeliveryBatch::decode(frame.payload) {
+                Ok(batch) => {
+                    for msg in batch.messages {
+                        let consume_msg = Ok(ConsumeMessage {
+                            id: msg.message_id,
+                            headers: msg.headers,
+                            payload: msg.payload,
+                            fairness_key: msg.fairness_key,
+                            attempt_count: msg.attempt_count,
+                            queue: msg.queue,
+                        });
+                        if let Some(ref tx) = tx {
+                            match tx.try_send(consume_msg) {
+                                Ok(_) => {}
+                                Err(mpsc::error::TrySendError::Full(item)) => {
+                                    delivery_overflow.push_back(item);
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {}
+                            }
                         }
                     }
-                    Err(e) => {
-                        let _ = tx.try_send(Err(StatusError::Protocol(format!(
-                            "delivery decode error: {e}"
-                        ))));
+                }
+                Err(e) => {
+                    let err = Err(StatusError::Protocol(format!("delivery decode error: {e}")));
+                    if let Some(ref tx) = tx {
+                        match tx.try_send(err) {
+                            Ok(_) => {}
+                            Err(mpsc::error::TrySendError::Full(item)) => {
+                                delivery_overflow.push_back(item);
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {}
+                        }
                     }
                 }
             }
         }
-        Some(Opcode::Pong) => {
-            // Pong responses are silently consumed.
-        }
+        Some(Opcode::Pong) => {}
         _ => {
-            // Route response to the pending request by request_id.
+            // Response frames go directly to oneshots — never blocks.
             let mut guard = state.lock().await;
-
-            // If this is the consume request_id and it's an Error or initial Delivery,
-            // it should go through the oneshot (for the initial consume response).
             if let Some(tx) = guard.pending.remove(&request_id) {
                 let _ = tx.send(ResponseFrame::Response(frame));
             }
-            // If not found in pending, it might be an unsolicited frame — ignore.
         }
     }
 }
