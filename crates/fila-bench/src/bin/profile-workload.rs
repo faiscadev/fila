@@ -80,11 +80,11 @@ async fn main() {
 
     let server = BenchServer::start();
     let addr = server.addr().to_string();
-    let grpc_addr = server.grpc_addr().to_string();
+    let bench_addr = server.addr().to_string();
     let server_pid = server.pid().expect("server PID");
     let queue_name = "profile-queue";
 
-    create_queue_cli(&grpc_addr, queue_name);
+    create_queue_cli(&bench_addr, queue_name);
 
     eprintln!(
         "workload={} duration={}s msg_size={}B concurrency={} server_pid={} addr={}",
