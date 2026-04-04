@@ -1,8 +1,6 @@
 name: Competitive Bench
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:

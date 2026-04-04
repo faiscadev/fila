@@ -201,13 +201,13 @@ development_status:
 
   # Epic 20: Binary Protocol Server, Rust SDK & gRPC Removal
   # Full protocol migration: server, auth, Rust SDK, CLI, cluster, gRPC removal.
-  epic-20: in-progress
+  epic-20: done
   20-1-binary-protocol-server-hot-path-operations: done
   20-2-admin-operations-auth-on-binary-protocol: done
   20-3-rust-sdk-binary-protocol-client: done
   20-4-cli-cluster-inter-node-migration: done
   20-5-grpc-removal-final-benchmarks: done
-  epic-20-retrospective: optional
+  epic-20-retrospective: done
 
   # Epic 21: External SDK Migration
   # All 5 external SDKs (Go, Python, JS, Ruby, Java) on binary protocol.

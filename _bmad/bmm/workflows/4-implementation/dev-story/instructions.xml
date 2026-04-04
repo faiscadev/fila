@@ -256,6 +256,16 @@
     <critical>NEVER proceed to next task until current task/subtask is complete AND tests pass</critical>
     <critical>Execute continuously without pausing until all tasks/subtasks are complete or explicit HALT condition</critical>
     <critical>Do NOT propose to pause for review until Step 9 completion gates are satisfied</critical>
+
+    <critical>ASYNC LIFECYCLE CHECKLIST: When implementing a struct that spawns background tasks (tokio::spawn),
+    holds async channels (mpsc, oneshot), or manages long-lived connections, you MUST design the cleanup path
+    BEFORE implementing the happy path:
+    1. How does this struct shut down? (CancellationToken, Drop impl, explicit close method?)
+    2. What happens to spawned tasks on drop? (They must be cancelled or joined, not leaked)
+    3. What happens to channel senders on disconnect? (Receivers must detect closure, not hang)
+    4. If Drop needs async work, use a sync Drop that signals cancellation + spawned cleanup task
+    5. Add a test that verifies cleanup: create → use → drop → assert no leaked tasks/hanging channels
+    Document the cleanup design in a comment on the struct before writing the implementation.</critical>
   </step>
 
   <step n="6" goal="Author comprehensive tests">
@@ -285,8 +295,15 @@
     <action>Run full test suite to ensure NO regressions introduced</action>
 
     <!-- REVIEW FOLLOW-UP HANDLING -->
+    <critical>PATTERN GREP RULE: When a review finding identifies a PATTERN issue (not just a point bug in one location),
+    you MUST search the entire codebase for other instances of the same pattern before marking the fix complete.
+    Examples: "use trait impl instead of manual delegation" → grep for all manual delegation sites.
+    "missing Drop cleanup" → grep for all structs that spawn tasks or hold channels.
+    A review finding addressed in 1 of 3 locations is not addressed. Do not wait for the reviewer to find the other instances.</critical>
+
     <check if="task is review follow-up (has [AI-Review] prefix)">
       <action>Extract review item details (severity, description, related AC/file)</action>
+      <action>If the finding describes a PATTERN (not a one-off bug), grep for all instances before fixing</action>
       <action>Add to resolution tracking list: {{resolved_review_items}}</action>
 
       <!-- Mark task in Review Follow-ups section -->
