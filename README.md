@@ -2,9 +2,7 @@
 
 A message broker that makes fair scheduling and per-key throttling first-class primitives.
 
-> **Status:** Being rewritten from scratch. The design below is the target, not a
-> description of working code. Docs in `docs/` describe the intended system;
-> where they still describe the old implementation, they are being revised.
+> **Status:** Design, not working code. This describes the system being built.
 
 ## The problem
 
@@ -81,17 +79,12 @@ let id = producer.send(
 ).await?;
 ```
 
-Two things the old design got wrong, fixed here:
+`fairness_key` is a value you set, not something you reach through a script. Lua is
+there for policy you can't express as a value — deriving a key from payload size,
+consulting runtime config, computing a weight — and not as the price of entry to the
+feature the broker exists for.
 
-- **`fairness_key` is settable directly.** Previously the only way to set the
-  headline feature was to write a Lua script that read it back out of a header.
-  Lua stays for policy you can't express as a value — deriving a key from payload
-  size, consulting runtime config, dynamic weights. It is no longer the price of
-  entry.
-- **Headers are optional.** They were a mandatory positional `HashMap`, so the
-  simplest possible enqueue cost three lines.
-
-Batching is first-class, because the wire protocol was always batch-native:
+Batching is first-class, because the wire protocol is batch-native:
 
 ```rust
 let ids = producer.send_batch(messages).await?;
@@ -126,14 +119,13 @@ delivery.retry_after(Duration::from_secs(60)).await?;   // failed; retry no soon
 delivery.extend_lease(Duration::from_secs(60)).await?;  // still working
 ```
 
-`retry_after` and `extend_lease` are new, and both are load-bearing:
+`retry_after` and `extend_lease` are both load-bearing:
 
-- **Delayed retry actually happens.** The old `on_failure` hook accepted a
-  `delay_ms` and then ignored it — *"logged as a warning if > 0, delayed retry not
-  yet supported."* A queue without backoff pushes every failure into a hot retry
-  loop.
-- **Leases can be extended.** Visibility timeout was fixed per queue, so any job
-  that ran longer than the queue's timeout was simply unprocessable.
+- **`retry_after`** sets the backoff explicitly. A client holding a `Retry-After`
+  from a rate-limited upstream knows the right delay in a way the broker cannot.
+  Without backoff, one failing dependency turns into a hot retry loop.
+- **`extend_lease`** keeps a long job's lease alive. Otherwise any work outlasting
+  the queue's visibility timeout is simply unprocessable.
 
 ### Bounding in-flight work
 
@@ -150,10 +142,9 @@ let mut orders = consumer
 Unset means unlimited, which is right for a consumer that acks immediately. The
 credit is replenished as you ack.
 
-This is flow control in the protocol rather than in the socket. The old design had
-none — the client paused TCP reads once an internal buffer filled, which throttled
-the connection without ever telling the broker, so it kept producing work with
-nowhere to go.
+Flow control belongs in the protocol rather than in the socket. Throttling by
+pausing TCP reads slows the connection without telling the broker anything, so it
+keeps producing work with nowhere to put it.
 
 Batch acking, and more than one subscription per connection:
 
@@ -164,8 +155,7 @@ let orders  = consumer.subscribe("orders").await?;
 let billing = consumer.subscribe("billing").await?;   // concurrent, one connection
 ```
 
-The protocol multiplexes on request ID. The old client threw that away and
-cancelled your first subscription when you opened a second.
+The protocol multiplexes on request ID, so subscriptions are independent.
 
 ## Administering
 
@@ -208,9 +198,8 @@ admin.revoke_api_key(&key.key_id).await?;
 `Permission` is typed — `produce` / `consume` / `admin` — so an invalid kind is
 unrepresentable rather than a string the broker rejects at runtime.
 
-Administration belongs in the SDK. Previously the wire protocol exposed 28 client
-operations and the SDK exposed four; everything else was reachable only by shelling
-out to the CLI, which meant the test suite shelled out too.
+Administration belongs in the SDK. Anything reachable only by shelling out to the
+CLI is unreachable from a test, a deploy script, or an operator tool.
 
 ## Errors
 
@@ -370,10 +359,9 @@ Everything else is explanation, not contract:
 | [benchmarks.md](docs/benchmarks.md) | What is measured, why, and the targets |
 | [compatibility.md](docs/compatibility.md) | Versioning and compatibility policy |
 
-There is deliberately no hand-written API reference. That document existed because
-gRPC needed a language-neutral contract; a binary protocol plus a single SDK
-removes the reason, and a hand-maintained restatement of a type signature only
-drifts from it.
+There is deliberately no hand-written API reference. A binary protocol and a single
+SDK need no language-neutral contract document, and a hand-maintained restatement of
+a type signature only drifts from it.
 
 ## Architecture
 

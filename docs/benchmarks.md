@@ -2,13 +2,12 @@
 
 What Fila measures, why, and the targets each measurement is held to.
 
-> **No numbers here.** Measured results belonged to an implementation that no
-> longer exists. This page defines the benchmark suite — the categories, the
-> methodology, and the pass/fail targets — so results can be regenerated and
-> compared against a stated bar rather than against a remembered one.
+> **No numbers here.** This page defines the suite — the categories, the
+> methodology, and the pass/fail targets — so a result can be compared against a
+> stated bar rather than against a remembered one.
 >
-> Results are hardware-specific in any case. Run the suite on your own hardware
-> for numbers relevant to your environment.
+> Results are hardware-specific. Run the suite on your own hardware for numbers
+> relevant to your environment.
 
 ## Self-benchmarks
 

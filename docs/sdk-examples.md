@@ -4,9 +4,7 @@ Working code for the Rust SDK. The signature-level reference is rustdoc, generat
 from the source; this page is the worked examples. For the wire format underneath,
 see [protocol.md](protocol.md).
 
-> **Status:** target design, not shipped code. Fila ships one client — Rust.
-> Earlier versions shipped six; maintaining five thin ports cost more than it
-> returned, and every one of them lagged the protocol.
+> **Status:** design, not shipped code. Fila ships one client, in Rust.
 
 ## Setup
 

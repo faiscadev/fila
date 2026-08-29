@@ -1,26 +1,46 @@
 # Versioning & Compatibility Policy
 
-## Versioning
+## Release versioning
 
-Fila uses [semantic versioning](https://semver.org/) (semver) for all releases:
+Fila uses [semantic versioning](https://semver.org/):
 
-- **MAJOR** — Breaking proto/API changes. Existing SDK versions may not work.
-- **MINOR** — New features, backward compatible. Existing SDKs continue to work; new features require SDK update.
+- **MAJOR** — Breaking changes to the wire protocol or the SDK surface. Existing
+  clients may stop working.
+- **MINOR** — New features, backward compatible. Existing clients keep working;
+  using the new features requires an SDK update.
 - **PATCH** — Bug fixes only. No behavior changes.
 
-## Proto Backward Compatibility
+The broker's release version and the protocol version are independent. A MINOR
+broker release may add a protocol capability without changing the protocol version.
 
-The `fila.v1` proto package follows strict additive-only rules within a MAJOR version:
+## Protocol compatibility
 
-- New RPCs may be added
-- New fields may be added to existing messages
-- Existing fields are never removed, renamed, or retyped
-- Field numbers are never reused
+The wire protocol carries its own version, negotiated during the handshake. See
+[protocol.md](protocol.md) for the mechanism.
 
-A MAJOR version bump (e.g., v1 → v2) would introduce a new proto package (`fila.v2`) and may remove deprecated RPCs or fields.
+Within a protocol version:
 
-## Deprecation Policy
+- New fields may be appended to the end of an opcode body
+- Existing fields are never removed, reordered, or retyped
+- New opcodes may be added
+- Readers must tolerate trailing bytes they do not recognize
 
-- Features are deprecated with at least 1 MINOR version warning before removal
-- Deprecated RPCs and fields are documented in release notes and proto comments
-- Removal only occurs in a MAJOR version bump
+Changing field order or type within an opcode requires a protocol version bump.
+
+### Prefer capabilities over version bumps
+
+A protocol version bump is for **layout** changes. Behaviour that either side may or
+may not implement belongs behind a capability bit negotiated in the handshake, so it
+ships without breaking older clients.
+
+Adding a capability is always backward compatible: a peer that does not advertise
+the bit simply does not get the feature.
+
+## Deprecation policy
+
+- Features are deprecated with at least one MINOR release of warning before removal
+- Deprecated fields and opcodes are documented in release notes and in
+  [protocol.md](protocol.md)
+- Removal happens only in a MAJOR release
+- Deprecated protocol fields are never deleted from an existing opcode body; they
+  carry zero or empty values until the version that removes them

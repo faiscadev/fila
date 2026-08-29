@@ -1,6 +1,6 @@
 # Fila Binary Protocol Specification
 
-Version: 2 (draft)
+Version: 1 (draft)
 
 ## Overview
 
@@ -16,25 +16,6 @@ The protocol is designed for:
 
 The protocol replaces gRPC/HTTP2/protobuf with a purpose-built binary format
 optimized for message broker workloads.
-
-### Changes from version 1
-
-Version 1 was never deployed. Version 2 supersedes it outright; there is no v1
-compatibility path.
-
-| Change | Reason |
-|--------|--------|
-| Message IDs are 16 raw bytes, not 36-char strings | 38 → 16 bytes on every hot-path frame |
-| Admin list counts are `u32`, not `u16` | v1 could report more fairness keys than it could enumerate |
-| Enqueue carries scheduling metadata | fairness key, weight and throttle keys were reachable only through Lua |
-| Enqueue carries `delay_ms` | scheduled delivery was not expressible |
-| Nack carries `retry_after_ms` | delayed retry was specified but had no encoding |
-| `ExtendLease` / `ExtendLeaseResult` added | long jobs could not hold a lease |
-| `Credit` added; `Consume` carries initial credit | flow control lived in TCP backpressure, invisible to the peer |
-| `Delivery` carries `lease_expires_at` | clients could not tell when to extend |
-| Hot-path opcodes renumbered | `ConsumeOk` sat after `Nack` |
-| Capability bitmaps in the handshake | optional features required a version bump |
-| Server-initiated request IDs use the high bit | client and server ID spaces could collide |
 
 ## Transport Layer
 
@@ -160,11 +141,10 @@ Counts are sized to what the collection can actually hold, not uniformly:
 | Per-message headers | `u16` | Bounded by practicality; hot path, and 2 saved bytes per message matters |
 | Per-message throttle keys | `u16` | Same |
 
-Version 1 used `u16` for admin list results, which produced a spec that contradicted
-itself: `GetStatsResult` reported `active_fairness_keys` as a `u64` while capping the
-per-key breakdown at 65,535 entries. A queue could report more fairness keys than it
-could enumerate, and fairness keys are per-tenant — the cap landed squarely on the
-feature the product exists for.
+Sizing an admin list count at `u16` would cap the per-key breakdown at 65,535 while
+`active_fairness_keys` reports a `u64` — a queue able to report more fairness keys
+than it can enumerate. Fairness keys are per-tenant, so that cap would land squarely
+on the feature the broker exists for.
 
 ## Opcode Table
 
@@ -350,16 +330,16 @@ and closes.
 
 ## Flow Control
 
-Version 1 had none. The server pushed whenever messages were ready, and the only
-brake was the reader pausing TCP reads at an internal high-water mark — backpressure
-applied at the wrong layer and invisible to the sender, which kept producing work
-that had nowhere to go.
+A server that pushes whenever messages are ready needs a brake the consumer
+controls. Pausing TCP reads at an internal high-water mark is not it: that applies
+backpressure at the wrong layer and is invisible to the sender, which keeps
+producing work that has nowhere to go.
 
-Version 2 uses **credit**, granted by the consumer and spent by the server.
+Delivery is therefore governed by **credit**, granted by the consumer and spent by
+the server.
 
 - `Consume` carries an initial credit in messages. `0` means unlimited, which
-  reproduces v1 behaviour and is the right choice for a consumer that acks
-  immediately.
+  the right choice for a consumer that acks immediately.
 - The server decrements credit by one per message placed in a `Delivery` frame.
 - At zero credit the server stops delivering and holds the messages. It does **not**
   error; the subscription stays open.
@@ -549,9 +529,8 @@ interval, overriding any delay the `on_failure` hook returns. The hook still dec
 holding a `Retry-After` from a rate-limited upstream knows the correct delay in a
 way the broker cannot.
 
-Version 1 specified a `delay_ms` in the hook's return value and then discarded it,
-so every failure retried immediately. A queue without backoff turns one failing
-dependency into a hot loop.
+Without a backoff mechanism every failure retries immediately, and one failing
+dependency becomes a hot loop.
 
 ### ExtendLease (0x1B)
 
@@ -844,7 +823,7 @@ Standard metadata keys:
 |------------|-----|-------|-------------|
 | `0x0C` NotLeader | `leader_addr` | `"host:port"` | Current leader |
 | `0x09` ChannelFull | `retry_after_ms` | `"100"` | Suggested backoff |
-| `0x0D` UnsupportedVersion | `max_version` | `"2"` | Highest version supported |
+| `0x0D` UnsupportedVersion | `max_version` | `"1"` | Highest version supported |
 | `0x11` CreditExhausted | `server_credit` | `"0"` | Server's view of the balance |
 
 SDKs should expose the metadata map to callers. Unknown keys must be preserved, not
@@ -919,10 +898,18 @@ fairness settable without Lua.
 
 ### Batch Ack (1,000 messages)
 
-| Encoding | Per item | 1,000 items |
-|----------|---------:|------------:|
-| v1 — `string` message_id | 46 B | 46,000 B |
-| v2 — `uuid` message_id | 24 B | 24,000 B |
+An ack item is a queue name and an ID — there is no payload to amortize the encoding
+against, which is why the ID is 16 raw bytes.
+
+| Component | Bytes |
+|-----------|------:|
+| Queue string (2 + 6) | 8 |
+| Message ID (`uuid`) | 16 |
+| **Per item** | **24** |
+| **1,000 items** | **24,000** |
+
+Encoding the same ID as a 36-character string would cost 46 bytes per item, and
+46,000 for the batch.
 
 ### Comparison with gRPC/Protobuf
 
@@ -956,8 +943,7 @@ fairness settable without Lua.
    ignore trailing bytes they do not recognize.
 
 **Trade-off:** changing field order or type within an opcode requires a version bump.
-Version 2 spends that bump deliberately, to fix layout mistakes before there is an
-implementation to be compatible with.
+Layout is worth settling before an implementation exists to be compatible with.
 
 ## Schema Evolution
 
@@ -981,8 +967,7 @@ The handshake negotiates a version: the server picks the highest it supports tha
 ≤ the client's. If none exists it rejects with `UnsupportedVersion` and a
 `max_version` metadata entry.
 
-Version 2 is the initial version. Version 1 was drafted but never deployed, and is
-not supported.
+Version 1 is the initial version.
 
 ## Cluster Communication
 
