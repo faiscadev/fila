@@ -5,9 +5,9 @@ using the `fila-bench` harness against a multi-node cluster.
 
 ## Prerequisites
 
-- Fila server binary (3 copies, or 1 binary run 3 times with different configs)
-- `fila-bench` binary (from `crates/fila-bench`)
-- `fila` CLI binary (from `crates/fila-cli`)
+- `fila-server` binary (one binary, run three times with different configs)
+- `fila-bench` benchmark harness
+- `fila` CLI
 
 ## Setting Up a 3-Node Local Cluster
 
@@ -176,7 +176,7 @@ consensus overhead (log replication, leader forwarding).
 - **Raft overhead** adds ~1-3ms per write (log replication to majority).
   This is the cost of durability and fault tolerance.
 - **Forwarding overhead** adds latency when a client connects to a non-leader
-  node. The request is transparently forwarded to the leader via gRPC.
+  node. The request is transparently forwarded to the leader over the binary protocol.
 
 ## Notes
 

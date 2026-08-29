@@ -19,29 +19,39 @@ The `on_enqueue` hook extracts a `tenant_id` header and uses it as the fairness 
 
 ### 2. Produce messages from multiple tenants
 
-```python
-# Python SDK
-from fila import FilaClient
+```rust
+let client = FilaClient::connect("localhost:5555").await?;
+let producer = client.producer();
 
-client = FilaClient("localhost:5555")
+// Noisy tenant sends 1000 messages
+for i in 0..1000 {
+    producer.send(
+        Message::new("orders", format!("order-{i}"))
+            .header("tenant_id", "noisy-corp")
+    ).await?;
+}
 
-# Noisy tenant sends 1000 messages
-for i in range(1000):
-    client.enqueue("orders", {"tenant_id": "noisy-corp"}, f"order-{i}")
-
-# Other tenants send a few each
-for tenant in ["acme", "globex", "initech"]:
-    for i in range(10):
-        client.enqueue("orders", {"tenant_id": tenant}, f"{tenant}-order-{i}")
+// Other tenants send a few each
+for tenant in ["acme", "globex", "initech"] {
+    for i in 0..10 {
+        producer.send(
+            Message::new("orders", format!("{tenant}-order-{i}"))
+                .header("tenant_id", tenant)
+        ).await?;
+    }
+}
 ```
 
 ### 3. Consume and observe fairness
 
-```python
-stream = client.consume("orders")
-for msg in stream:
-    print(f"tenant={msg.metadata.fairness_key} id={msg.id}")
-    client.ack("orders", msg.id)
+```rust
+let mut orders = client.consumer().subscribe("orders").await?;
+
+while let Some(delivery) = orders.next().await {
+    let delivery = delivery?;
+    println!("tenant={} id={}", delivery.fairness_key(), delivery.id());
+    delivery.ack().await?;
+}
 ```
 
 Without Fila, all 1000 noisy-corp messages would be delivered first. With DRR scheduling, each tenant gets interleaved delivery — acme, globex, and initech messages arrive alongside noisy-corp's, not after.
@@ -108,28 +118,32 @@ The format is `rate,burst`. Rate is tokens per second; burst is the maximum buck
 
 ### 3. Produce messages
 
-```go
-// Go SDK
-client, _ := fila.Connect("localhost:5555")
+```rust
+let producer = client.producer();
 
 // These will be throttled to 100/s
-for i := 0; i < 500; i++ {
-    client.Enqueue(ctx, "api-calls", map[string]string{
-        "tenant":   "acme",
-        "provider": "stripe",
-    }, []byte(fmt.Sprintf("charge-%d", i)))
-}
+let charges: Vec<Message> = (0..500)
+    .map(|i| {
+        Message::new("api-calls", format!("charge-{i}"))
+            .header("tenant", "acme")
+            .header("provider", "stripe")
+    })
+    .collect();
+
+producer.send_batch(charges).await?;
 ```
 
 ### 4. Consume — the broker does the throttling
 
-```go
-stream, _ := client.Consume(ctx, "api-calls")
-for msg := range stream {
-    // Every message received is within the rate limit.
-    // No need to check limits client-side.
-    callExternalAPI(msg.Payload)
-    client.Ack(ctx, "api-calls", msg.ID)
+```rust
+let mut calls = client.consumer().subscribe("api-calls").await?;
+
+while let Some(delivery) = calls.next().await {
+    let delivery = delivery?;
+    // Every message received is already within the rate limit.
+    // No client-side limit checking, no re-enqueue loop.
+    call_external_api(delivery.payload()).await?;
+    delivery.ack().await?;
 }
 ```
 
@@ -181,26 +195,27 @@ The `on_failure` hook reads this with `fila.get("max_retries")`. Change it witho
 
 ### 3. Process messages with failure handling
 
-```javascript
-// JavaScript SDK
-const { FilaClient } = require('@anthropic/fila');
+```rust
+let mut jobs = client.consumer().subscribe("jobs").await?;
 
-async function main() {
-  const client = await FilaClient.connect('localhost:5555');
-  const stream = client.consume('jobs');
+while let Some(delivery) = jobs.next().await {
+    let delivery = delivery?;
 
-  for await (const msg of stream) {
-    try {
-      await processJob(msg.payload);
-      await client.ack('jobs', msg.id);
-    } catch (err) {
-      // Nack triggers on_failure hook — broker handles retry/DLQ
-      await client.nack('jobs', msg.id, err.message);
+    match process_job(delivery.payload()).await {
+        Ok(()) => delivery.ack().await?,
+        // Nack runs the on_failure hook — the broker decides retry vs. DLQ
+        Err(e) => delivery.nack(&e.to_string()).await?,
     }
-  }
 }
+```
 
-main().catch(console.error);
+If the client already knows how long to wait, it can say so directly instead of
+deferring to the hook's delay decision:
+
+```rust
+Err(e) if e.is_rate_limited() => {
+    delivery.retry_after(e.retry_after()).await?;
+}
 ```
 
 ### 4. Monitor and redrive

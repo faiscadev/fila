@@ -1,39 +1,69 @@
 # Configuration Reference
 
-Fila reads configuration from a TOML file. It searches for:
+Fila has three configuration layers, each with a different lifetime and audience.
+
+| Layer | Set by | Takes effect | Visible to Lua |
+|-------|--------|--------------|----------------|
+| **File** — `fila.toml` | operator, at deploy | restart | no |
+| **Environment** | orchestrator, per deployment | restart | no |
+| **Runtime store** | admin API or CLI, live | immediately | yes, `fila.get(key)` |
+
+Environment variables override the file. The runtime store is a separate namespace:
+it holds operational policy, not boot parameters, and it is the only layer Lua reads.
+
+## Conventions
+
+- **Durations are strings with units** — `"30s"`, `"10ms"`, `"5m"`. Not bare
+  integers with the unit buried in the field name; `visibility_timeout_ms = 30000`
+  cannot change units without renaming the key.
+- **Sizes are strings with units** — `"8MB"`, `"1MB"`.
+- **Every key is overridable by environment variable**, upper-cased and prefixed
+  with `FILA_`, sections joined by `_`. `[scheduler] quantum` becomes
+  `FILA_SCHEDULER_QUANTUM`.
+
+## File lookup
 
 1. `fila.toml` in the current working directory
 2. `/etc/fila/fila.toml`
 
-If no file is found, all defaults are used. The broker runs with zero configuration.
-
-## Environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FILA_DATA_DIR` | `data` | Path to the RocksDB data directory |
+If no file is found, all defaults apply. The broker runs with zero configuration.
 
 ## Full configuration
 
 ```toml
 [server]
-listen_addr = "0.0.0.0:5555"    # gRPC listen address
+listen_addr = "0.0.0.0:5555"
+
+[storage]
+data_dir = "data"
 
 [scheduler]
-command_channel_capacity = 10000 # internal command channel buffer size
-idle_timeout_ms = 100            # scheduler idle timeout between rounds (ms)
-quantum = 1000                   # DRR quantum per fairness key per round
+quantum = 1000                    # DRR credit per weight unit, per round
+command_channel_capacity = 10000  # bounded channel: protocol handlers → scheduler
+idle_timeout = "100ms"            # wait before re-checking for work when idle
+
+[queue]
+visibility_timeout = "30s"        # default lease; overridable per queue at creation
 
 [lua]
-default_timeout_ms = 10              # max script execution time (ms)
-default_memory_limit_bytes = 1048576 # max memory per script (1 MB)
-circuit_breaker_threshold = 3        # consecutive failures before circuit break
-circuit_breaker_cooldown_ms = 10000  # cooldown period after circuit break (ms)
+default_timeout = "10ms"
+memory_limit = "1MB"
+circuit_breaker_threshold = 3
+circuit_breaker_cooldown = "10s"
+
+[auth]
+enabled = false
+bootstrap_apikey = ""             # first credential; mint real keys, then remove
+
+[tls]
+cert_file = ""
+key_file = ""
+client_ca_file = ""               # set to require mTLS
 
 [telemetry]
-otlp_endpoint = "http://localhost:4317"  # OTLP gRPC endpoint (omit to disable)
-service_name = "fila"                     # OTel service name
-metrics_interval_ms = 10000              # metrics export interval (ms)
+otlp_endpoint = ""                # empty disables export
+service_name = "fila"
+metrics_interval = "10s"
 ```
 
 ## Section reference
@@ -42,38 +72,99 @@ metrics_interval_ms = 10000              # metrics export interval (ms)
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `listen_addr` | string | `"0.0.0.0:5555"` | Address and port for the gRPC server |
+| `listen_addr` | string | `"0.0.0.0:5555"` | Address and port for the binary protocol listener. |
+
+### `[storage]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `data_dir` | string | `"data"` | Directory for the embedded storage engine. Also settable as `FILA_DATA_DIR`. |
 
 ### `[scheduler]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `command_channel_capacity` | integer | `10000` | Size of the bounded channel between gRPC handlers and the scheduler loop. Increase if you see backpressure under high load. |
-| `idle_timeout_ms` | integer | `100` | How long the scheduler waits when there's no work before checking again. Lower values reduce latency at the cost of CPU. |
-| `quantum` | integer | `1000` | DRR quantum. Each fairness key gets `weight * quantum` deficit per scheduling round. Higher values mean more messages delivered per key per round (coarser interleaving). |
+| `quantum` | integer | `1000` | DRR quantum. Each fairness key receives `weight * quantum` deficit per round. Higher values deliver more per key per round, so interleaving is coarser. |
+| `command_channel_capacity` | integer | `10000` | Size of the bounded channel between protocol handlers and the scheduler loop. Raise if you observe backpressure under load. |
+| `idle_timeout` | duration | `"100ms"` | How long the scheduler waits when there is no work. Lower values cut latency and cost CPU. |
+
+### `[queue]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `visibility_timeout` | duration | `"30s"` | Default lease duration for delivered messages. A queue may override this at creation; a consumer may extend an individual lease. |
 
 ### `[lua]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `default_timeout_ms` | integer | `10` | Maximum execution time for Lua scripts. Enforced via instruction count hook (approximate). |
-| `default_memory_limit_bytes` | integer | `1048576` (1 MB) | Maximum memory a Lua script can allocate. |
-| `circuit_breaker_threshold` | integer | `3` | Number of consecutive Lua execution failures before the circuit breaker trips. When tripped, Lua hooks are bypassed and default scheduling is used. |
-| `circuit_breaker_cooldown_ms` | integer | `10000` | How long to wait after circuit breaker trips before retrying Lua execution. |
+| `default_timeout` | duration | `"10ms"` | Maximum script execution time, enforced by instruction-count hook (approximate). Overridable per queue. |
+| `memory_limit` | size | `"1MB"` | Maximum memory a script may allocate. Overridable per queue. |
+| `circuit_breaker_threshold` | integer | `3` | Consecutive Lua failures before the breaker trips. While tripped, hooks are bypassed and default scheduling applies. |
+| `circuit_breaker_cooldown` | duration | `"10s"` | How long to wait after tripping before retrying Lua execution. |
 
-### `[telemetry]`
+### `[auth]`
 
-Telemetry export is optional. When `otlp_endpoint` is omitted, the broker uses plain `tracing-subscriber` logging only.
+Authentication is disabled by default. When disabled, every connection is
+implicitly superadmin.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `otlp_endpoint` | string | (none) | OTLP gRPC endpoint for exporting traces and metrics. Example: `"http://localhost:4317"`. |
-| `service_name` | string | `"fila"` | Service name reported in OTel traces and metrics. |
-| `metrics_interval_ms` | integer | `10000` | How often metrics are exported to the OTLP endpoint. |
+| `enabled` | bool | `false` | Require an API key or client certificate on every connection. |
+| `bootstrap_apikey` | string | (none) | A single credential that acts as superadmin, for minting the first real keys. Remove it once real keys exist. |
+
+### `[tls]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `cert_file` | string | (none) | PEM server certificate. Setting this enables TLS. |
+| `key_file` | string | (none) | PEM private key for `cert_file`. |
+| `client_ca_file` | string | (none) | PEM CA bundle used to verify client certificates. Setting this requires mTLS. |
+
+### `[telemetry]`
+
+Optional. When `otlp_endpoint` is empty, the broker logs locally and exports nothing.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `otlp_endpoint` | string | (none) | OTLP endpoint for traces and metrics, e.g. `"http://localhost:4317"`. |
+| `service_name` | string | `"fila"` | Service name reported in traces and metrics. |
+| `metrics_interval` | duration | `"10s"` | Metrics export interval. |
+
+## Runtime configuration
+
+A flat key-value store, mutable while the broker runs and readable from Lua. This
+is where operational policy lives — the values you change without a deploy.
+
+```rust
+admin.set_config("throttle.provider:stripe", "100,200").await?;
+let rate = admin.get_config("throttle.provider:stripe").await?;
+let all  = admin.list_config("throttle.").await?;
+```
+
+```lua
+function on_enqueue(msg)
+  local region = fila.get("routing.default_region") or "us"
+  return { fairness_key = msg.headers["tenant"] .. ":" .. region }
+end
+```
+
+### Reserved prefixes
+
+Namespacing by prefix is a convention the tooling depends on — `list_config("throttle.")`
+returns every rate limit — so keep to it.
+
+| Prefix | Meaning | Value format |
+|--------|---------|--------------|
+| `throttle.` | Token bucket rate limit for a throttle key | `"<rate_per_second>,<burst>"` |
+
+Throttle rates live here rather than in queue configuration because a rate limit is
+a property of the resource being protected, not of the queue. Every queue whose
+messages carry `throttle_key = "provider:stripe"` shares one bucket.
 
 ## OpenTelemetry metrics
 
-When telemetry is enabled, Fila exports the following metrics:
+When telemetry is enabled, Fila exports:
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -81,7 +172,7 @@ When telemetry is enabled, Fila exports the following metrics:
 | `fila.messages.delivered` | Counter | Messages delivered to consumers |
 | `fila.messages.acked` | Counter | Messages acknowledged |
 | `fila.messages.nacked` | Counter | Messages rejected |
-| `fila.messages.expired` | Counter | Messages expired (visibility timeout) |
+| `fila.messages.expired` | Counter | Leases expired without an ack |
 | `fila.messages.dead_lettered` | Counter | Messages moved to DLQ |
 | `fila.messages.redriven` | Counter | Messages redriven from DLQ |
 | `fila.queue.depth` | Gauge | Pending messages per queue |
@@ -89,7 +180,7 @@ When telemetry is enabled, Fila exports the following metrics:
 | `fila.queue.consumers` | Gauge | Active consumers per queue |
 | `fila.queue.fairness_keys` | Gauge | Active fairness keys per queue |
 | `fila.delivery.latency` | Histogram | Time from enqueue to consumer delivery |
-| `fila.lua.executions` | Counter | Lua script executions (by hook type and outcome) |
-| `fila.throttle.limited` | Counter | Messages held due to throttle limits |
+| `fila.lua.executions` | Counter | Lua executions, by hook type and outcome |
+| `fila.throttle.limited` | Counter | Messages held by a throttle limit |
 
-All queue-scoped metrics include a `queue` attribute.
+All queue-scoped metrics carry a `queue` attribute.

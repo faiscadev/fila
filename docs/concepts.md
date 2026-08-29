@@ -33,7 +33,7 @@ Producer                      Broker                        Consumer
 ```
 
 1. **Enqueue** — producer sends a message to a queue. If the queue has an `on_enqueue` Lua script, it runs to assign scheduling metadata.
-2. **Pending** — the message is persisted in RocksDB and indexed by fairness key.
+2. **Pending** — the message is persisted to the storage engine and indexed by fairness key.
 3. **Scheduled** — the DRR scheduler picks the next fairness key and checks throttle tokens. If tokens are available, the message is delivered to a waiting consumer.
 4. **Leased** — the consumer is processing the message. A visibility timeout timer starts.
 5. **Acked** — the consumer confirms success. The message is deleted.
@@ -183,7 +183,7 @@ Redrive moves pending (non-leased) messages from the DLQ back to the original so
 
 ## Runtime configuration
 
-The broker maintains a key-value configuration store that persists across restarts. Values are accessible from Lua scripts via `fila.get(key)` and managed through the CLI or gRPC API.
+The broker maintains a key-value configuration store that persists across restarts. Values are accessible from Lua scripts via `fila.get(key)` and managed through the admin API or the CLI.
 
 ```sh
 fila config set feature:new_flow enabled
