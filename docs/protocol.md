@@ -1,39 +1,61 @@
 # Fila Binary Protocol Specification
 
-Version: 1 (draft)
+Version: 2 (draft)
 
 ## Overview
 
-Fila uses a custom binary protocol over TCP for all client-server communication. The protocol is designed for:
+Fila uses a custom binary protocol over TCP for all client-server communication.
+The protocol is designed for:
 
 - **Minimal overhead**: < 16 bytes amortized per message beyond payload in batch operations
 - **Zero-copy parsing**: Length-prefixed frames — no delimiter scanning
-- **Batch-native**: Every operation accepts multiple items; single message = batch of 1
-- **Multiplexed**: Multiple concurrent requests on a single connection via request IDs
+- **Batch-native**: Every operation accepts multiple items; a single message is a batch of 1
+- **Multiplexed**: Multiple concurrent requests on one connection via request IDs
+- **Flow-controlled**: Consumers grant delivery credit; the server never outruns them
 - **Streaming**: Server-push delivery for consume operations
 
-The protocol replaces gRPC/HTTP2/protobuf with a purpose-built binary format optimized for message broker workloads.
+The protocol replaces gRPC/HTTP2/protobuf with a purpose-built binary format
+optimized for message broker workloads.
+
+### Changes from version 1
+
+Version 1 was never deployed. Version 2 supersedes it outright; there is no v1
+compatibility path.
+
+| Change | Reason |
+|--------|--------|
+| Message IDs are 16 raw bytes, not 36-char strings | 38 → 16 bytes on every hot-path frame |
+| Admin list counts are `u32`, not `u16` | v1 could report more fairness keys than it could enumerate |
+| Enqueue carries scheduling metadata | fairness key, weight and throttle keys were reachable only through Lua |
+| Enqueue carries `delay_ms` | scheduled delivery was not expressible |
+| Nack carries `retry_after_ms` | delayed retry was specified but had no encoding |
+| `ExtendLease` / `ExtendLeaseResult` added | long jobs could not hold a lease |
+| `Credit` added; `Consume` carries initial credit | flow control lived in TCP backpressure, invisible to the peer |
+| `Delivery` carries `lease_expires_at` | clients could not tell when to extend |
+| Hot-path opcodes renumbered | `ConsumeOk` sat after `Nack` |
+| Capability bitmaps in the handshake | optional features required a version bump |
+| Server-initiated request IDs use the high bit | client and server ID spaces could collide |
 
 ## Transport Layer
 
 ### TCP Connection
 
-Clients connect to the Fila server on a configurable TCP port (default: 5555).
+Clients connect on a configurable TCP port (default: 5555).
 
 ### TLS
 
 TLS is optional and wraps the TCP connection using standard TLS 1.2+. When enabled:
 
-- Server presents its certificate during TLS handshake
-- Client optionally presents a certificate for mTLS mutual authentication
-- All subsequent protocol bytes flow over the encrypted TLS channel
-- Same certificate/key configuration as existing Fila TLS config (`tls_cert_file`, `tls_key_file`, `tls_ca_cert_file`)
+- The server presents its certificate during the TLS handshake
+- The client optionally presents a certificate for mTLS
+- All subsequent protocol bytes flow over the encrypted channel
 
-TLS negotiation happens at the transport layer before any protocol bytes are exchanged. The protocol itself is TLS-agnostic.
+TLS negotiation completes before any protocol bytes are exchanged. The protocol
+itself is TLS-agnostic.
 
 ## Frame Format
 
-All communication uses length-prefixed frames. Every frame has the same outer structure:
+All communication uses length-prefixed frames:
 
 ```
 +----------------+-------------------+
@@ -42,7 +64,8 @@ All communication uses length-prefixed frames. Every frame has the same outer st
 +----------------+-------------------+
 ```
 
-- **Frame Length**: Big-endian `u32`. The byte count of the Frame Body (not including the 4-byte length prefix itself). Maximum frame size: 16 MiB (16,777,216 bytes).
+- **Frame Length**: Big-endian `u32`. Byte count of the Frame Body, excluding the
+  length prefix itself. Maximum frame size: 16 MiB (16,777,216 bytes) by default.
 
 ### Frame Header
 
@@ -55,15 +78,36 @@ Every Frame Body starts with a fixed 6-byte header:
 +----------+----------+------------------+
 ```
 
-- **Opcode**: Identifies the operation (see Opcode Table below).
-- **Flags**: Bitfield for frame-level options.
-  - Bit 0: **CONTINUATION** — When set, this frame is a continuation of the previous frame with the same request ID and opcode. The receiver concatenates frame bodies (excluding headers) until a frame with CONTINUATION=0 arrives. See [Continuation Frames](#continuation-frames) below.
-  - Bits 1-7: Reserved (must be 0)
-- **Request ID**: Big-endian `u32`. Client-assigned identifier for correlating responses. Responses echo the request ID from the corresponding request. Server-initiated frames (ConsumeDelivery) use the request ID from the Consume subscribe request.
+- **Opcode**: Identifies the operation.
+- **Flags**: Bitfield.
+  - Bit 0: **CONTINUATION** — this frame continues the previous frame with the same
+    request ID and opcode. See [Continuation Frames](#continuation-frames).
+  - Bits 1-7: Reserved, must be 0.
+- **Request ID**: Big-endian `u32`, used to correlate responses.
+
+### Request ID Space
+
+The high bit partitions the ID space so both peers can originate requests without
+colliding:
+
+| Bit 31 | Originator | Range |
+|--------|-----------|-------|
+| `0` | Client-initiated | `0x00000001` – `0x7FFFFFFF` |
+| `1` | Server-initiated | `0x80000001` – `0xFFFFFFFF` |
+
+Request ID `0` is reserved for the handshake.
+
+A response echoes the request ID of the request it answers, so a server response to
+a client request keeps bit 31 clear. Server-*initiated* frames — an unsolicited
+`Ping`, for example — set bit 31 and the client's `Pong` echoes it.
+
+`Delivery` frames are neither: they carry the request ID of the `Consume`
+subscription that asked for them, which is client-initiated and therefore has bit 31
+clear.
 
 ### Total Frame Overhead
 
-Per frame: 4 (length) + 1 (opcode) + 1 (flags) + 4 (request ID) = **10 bytes fixed overhead**.
+4 (length) + 1 (opcode) + 1 (flags) + 4 (request ID) = **10 bytes per frame**.
 
 ## Encoding Primitives
 
@@ -78,13 +122,49 @@ All multi-byte integers are big-endian (network byte order).
 | `i64` | Big-endian signed 64-bit | 8 |
 | `f64` | Big-endian IEEE 754 double | 8 |
 | `bool` | `0x00` = false, `0x01` = true | 1 |
+| `uuid` | 16 raw bytes, big-endian (RFC 9562 byte order) | 16 |
 | `string` | `[u16 length][UTF-8 bytes]` | 2 + length |
+| `text` | `[u32 length][UTF-8 bytes]` | 4 + length |
 | `bytes` | `[u32 length][raw bytes]` | 4 + length |
-| `map<string,string>` | `[u16 count][repeated: string key, string value]` | 2 + sum of entries |
-| `string[]` | `[u16 count][repeated: string]` | 2 + sum of strings |
-| `optional<T>` | `[u8 present (0 or 1)][T if present]` | 1 or 1 + sizeof(T) |
+| `map<string,string>` | `[u16 count][repeated: string key, string value]` | 2 + entries |
+| `string[]` | `[u16 count][repeated: string]` | 2 + strings |
+| `optional<T>` | `[u8 present][T if present]` | 1, or 1 + sizeof(T) |
 
-Strings are limited to 65,535 bytes. Byte arrays use a `u32` length prefix (up to ~4 GiB). When a single value exceeds the maximum frame size, the sender uses [continuation frames](#continuation-frames) to split the data across multiple frames.
+### On identifiers
+
+Message IDs are UUIDv7 and travel as **16 raw bytes**, never as text. A UUID
+rendered as a 36-character string costs 38 bytes on the wire — 22 wasted bytes on
+every `Delivery`, `EnqueueResult`, `Ack`, `Nack` and `ExtendLease` item. Batch-acking
+1,000 messages costs 24 KB rather than 46 KB.
+
+Queue IDs and API key IDs remain `string`: they are operator-facing, appear only on
+cold paths, and are not necessarily UUIDs.
+
+### On string length
+
+`string` is capped at 65,535 bytes. This is deliberate — queue names, fairness keys
+and header values are short, and a `u32` prefix would add 2 bytes to every one of
+them on the hot path.
+
+Lua scripts use `text` (`u32`-prefixed) because they are cold-path and legitimately
+large. Any field that can exceed 64 KB uses `text` or `bytes`, never `string`.
+
+### On collection counts
+
+Counts are sized to what the collection can actually hold, not uniformly:
+
+| Collection | Count type | Why |
+|------------|-----------|-----|
+| Batch items (messages, acks, nacks) | `u32` | Bounded only by frame size |
+| Admin list results (queues, keys, config, stats) | `u32` | Unbounded — a broker may hold millions of fairness keys |
+| Per-message headers | `u16` | Bounded by practicality; hot path, and 2 saved bytes per message matters |
+| Per-message throttle keys | `u16` | Same |
+
+Version 1 used `u16` for admin list results, which produced a spec that contradicted
+itself: `GetStatsResult` reported `active_fairness_keys` as a `u64` while capping the
+per-key breakdown at 65,535 entries. A queue could report more fairness keys than it
+could enumerate, and fairness keys are per-tenant — the cap landed squarely on the
+feature the product exists for.
 
 ## Opcode Table
 
@@ -102,133 +182,207 @@ Strings are limited to 65,535 bytes. Byte arrays use a `u32` length prefix (up t
 
 | Opcode | Name | Direction | Description |
 |--------|------|-----------|-------------|
-| `0x10` | Enqueue | Client → Server | Enqueue batch of messages |
+| `0x10` | Enqueue | Client → Server | Enqueue a batch of messages |
 | `0x11` | EnqueueResult | Server → Client | Per-message enqueue results |
-| `0x12` | Consume | Client → Server | Subscribe to queue delivery |
-| `0x13` | Delivery | Server → Client | Batch of messages pushed to consumer |
-| `0x14` | CancelConsume | Client → Server | Unsubscribe from delivery |
-| `0x15` | Ack | Client → Server | Acknowledge batch of messages |
-| `0x16` | AckResult | Server → Client | Per-message ack results |
-| `0x17` | Nack | Client → Server | Negative-acknowledge batch of messages |
-| `0x18` | NackResult | Server → Client | Per-message nack results |
-| `0x19` | ConsumeOk | Server → Client | Consume subscription accepted |
+| `0x12` | Consume | Client → Server | Subscribe to delivery |
+| `0x13` | ConsumeOk | Server → Client | Subscription accepted |
+| `0x14` | Delivery | Server → Client | Batch of messages pushed to a consumer |
+| `0x15` | Credit | Client → Server | Grant additional delivery credit |
+| `0x16` | CancelConsume | Client → Server | Unsubscribe |
+| `0x17` | Ack | Client → Server | Acknowledge a batch |
+| `0x18` | AckResult | Server → Client | Per-message ack results |
+| `0x19` | Nack | Client → Server | Negative-acknowledge a batch |
+| `0x1A` | NackResult | Server → Client | Per-message nack results |
+| `0x1B` | ExtendLease | Client → Server | Extend leases on in-flight messages |
+| `0x1C` | ExtendLeaseResult | Server → Client | Per-message new expiry |
 
 ### Error Opcode (0xFE)
 
 | Opcode | Name | Direction | Description |
 |--------|------|-----------|-------------|
-| `0xFE` | Error | Server → Client | Operation error with error code and message |
+| `0xFE` | Error | Server → Client | Request-level error |
 
 ### Admin Opcodes (0xFD downward)
 
-Admin opcodes grow downward from `0xFD` so that both hot-path and admin ranges can expand independently without colliding. New admin opcodes are assigned the next lower value.
+Admin opcodes grow downward from `0xFD` so hot-path and admin ranges expand
+independently without colliding.
 
 | Opcode | Name | Direction | Description |
 |--------|------|-----------|-------------|
 | `0xFD` | CreateQueue | Client → Server | Create a queue |
-| `0xFC` | CreateQueueResult | Server → Client | Queue creation result |
+| `0xFC` | CreateQueueResult | Server → Client | Creation result |
 | `0xFB` | DeleteQueue | Client → Server | Delete a queue |
 | `0xFA` | DeleteQueueResult | Server → Client | Deletion result |
-| `0xF9` | GetStats | Client → Server | Get queue statistics |
-| `0xF8` | GetStatsResult | Server → Client | Queue statistics |
-| `0xF7` | ListQueues | Client → Server | List all queues |
+| `0xF9` | GetStats | Client → Server | Queue statistics |
+| `0xF8` | GetStatsResult | Server → Client | Statistics |
+| `0xF7` | ListQueues | Client → Server | List queues |
 | `0xF6` | ListQueuesResult | Server → Client | Queue list |
-| `0xF5` | SetConfig | Client → Server | Set runtime config key |
-| `0xF4` | SetConfigResult | Server → Client | Config set result |
-| `0xF3` | GetConfig | Client → Server | Get runtime config key |
-| `0xF2` | GetConfigResult | Server → Client | Config value |
-| `0xF1` | ListConfig | Client → Server | List config keys by prefix |
-| `0xF0` | ListConfigResult | Server → Client | Config entries |
+| `0xF5` | SetConfig | Client → Server | Set a runtime config key |
+| `0xF4` | SetConfigResult | Server → Client | Result |
+| `0xF3` | GetConfig | Client → Server | Read a runtime config key |
+| `0xF2` | GetConfigResult | Server → Client | Value |
+| `0xF1` | ListConfig | Client → Server | List config by prefix |
+| `0xF0` | ListConfigResult | Server → Client | Entries |
 | `0xEF` | Redrive | Client → Server | Redrive DLQ messages |
-| `0xEE` | RedriveResult | Server → Client | Redrive count |
+| `0xEE` | RedriveResult | Server → Client | Redriven count |
 | `0xED` | CreateApiKey | Client → Server | Create an API key |
-| `0xEC` | CreateApiKeyResult | Server → Client | API key creation result |
+| `0xEC` | CreateApiKeyResult | Server → Client | Result |
 | `0xEB` | RevokeApiKey | Client → Server | Revoke an API key |
-| `0xEA` | RevokeApiKeyResult | Server → Client | Revocation result |
-| `0xE9` | ListApiKeys | Client → Server | List all API keys |
-| `0xE8` | ListApiKeysResult | Server → Client | API key list |
-| `0xE7` | SetAcl | Client → Server | Set ACL permissions for a key |
-| `0xE6` | SetAclResult | Server → Client | ACL set result |
-| `0xE5` | GetAcl | Client → Server | Get ACL permissions for a key |
-| `0xE4` | GetAclResult | Server → Client | ACL permissions |
+| `0xEA` | RevokeApiKeyResult | Server → Client | Result |
+| `0xE9` | ListApiKeys | Client → Server | List API keys |
+| `0xE8` | ListApiKeysResult | Server → Client | Key list |
+| `0xE7` | SetAcl | Client → Server | Replace a key's permissions |
+| `0xE6` | SetAclResult | Server → Client | Result |
+| `0xE5` | GetAcl | Client → Server | Read a key's permissions |
+| `0xE4` | GetAclResult | Server → Client | Permissions |
 
-Opcodes `0x1A-0xE3` are reserved for future use. Clients must ignore frames with unknown opcodes. Servers must respond with Error (0xFE) for unknown request opcodes.
+Opcodes `0x1D`–`0x3F` and `0x60`–`0xE3` are reserved. `0x40`–`0x5F` is reserved for
+cluster inter-node opcodes; see [Cluster Communication](#cluster-communication).
+
+### Handling Unknown Opcodes
+
+Symmetric "ignore what you don't know" is wrong for responses — silently dropping an
+unrecognized reply leaves the request hanging forever. The rule depends on whether
+the frame answers something:
+
+| Situation | Behavior |
+|-----------|----------|
+| Server receives an unknown request opcode | Respond `Error` with `InvalidFrame`, keep the connection |
+| Client receives an unknown opcode whose request ID matches a **pending request** | Fail that request with `InvalidFrame`. Do not ignore it. |
+| Client receives an unknown opcode with no matching pending request | Ignore the frame. This is how server-initiated extensions stay forward-compatible. |
 
 ## Error Codes
 
-Errors are returned either via the Error frame (for request-level failures) or inline in per-item result arrays (for batch item failures).
+Errors arrive either as an `Error` frame (request-level failure) or inline in a
+per-item result array (batch item failure).
 
 | Code | Name | Description |
 |------|------|-------------|
-| `0x00` | Ok | Success (used in per-item results) |
+| `0x00` | Ok | Success (per-item results only) |
 | `0x01` | QueueNotFound | Queue does not exist |
-| `0x02` | MessageNotFound | Message ID not found or not leased |
-| `0x03` | QueueAlreadyExists | Queue with this name already exists |
-| `0x04` | LuaCompilationError | Lua script failed to compile |
-| `0x05` | StorageError | Internal storage engine failure |
+| `0x02` | MessageNotFound | Message ID not found, or its lease already ended |
+| `0x03` | QueueAlreadyExists | Queue name is taken |
+| `0x04` | LuaCompilationError | Script failed to compile |
+| `0x05` | StorageError | Storage engine failure |
 | `0x06` | NotADLQ | Queue is not a dead-letter queue |
-| `0x07` | ParentQueueNotFound | DLQ's parent queue not found |
-| `0x08` | InvalidConfigValue | Config value is invalid |
-| `0x09` | ChannelFull | Server overloaded (backpressure) |
-| `0x0A` | Unauthorized | Missing or invalid API key |
-| `0x0B` | Forbidden | Insufficient permissions (ACL) |
-| `0x0C` | NotLeader | This node is not the leader for the queue (includes leader hint) |
+| `0x07` | ParentQueueNotFound | DLQ's parent queue is missing |
+| `0x08` | InvalidConfigValue | Config value rejected |
+| `0x09` | ChannelFull | Server overloaded; back off |
+| `0x0A` | Unauthorized | Missing, invalid, expired or revoked credential |
+| `0x0B` | Forbidden | Authenticated, but the ACL denies this |
+| `0x0C` | NotLeader | Not the leader for this queue; see `leader_addr` metadata |
 | `0x0D` | UnsupportedVersion | Protocol version not supported |
-| `0x0E` | InvalidFrame | Malformed or unparseable frame |
+| `0x0E` | InvalidFrame | Malformed, oversized or unparseable frame |
 | `0x0F` | ApiKeyNotFound | API key ID does not exist |
-| `0x10` | NodeNotReady | Cluster node is not ready (no leader elected yet) |
+| `0x10` | NodeNotReady | No leader elected yet |
+| `0x11` | CreditExhausted | Delivery credit is zero; grant more |
 | `0xFF` | InternalError | Unexpected server error |
 
 ## Connection Lifecycle
 
 ### 1. TCP Connect (+ Optional TLS)
 
-Client opens a TCP connection (optionally wrapped in TLS).
-
 ### 2. Handshake
 
-The client must send a Handshake frame as the first frame after connecting (or after TLS negotiation). No other frames may be sent before the handshake completes.
+The client's first frame after connecting must be a `Handshake`. No other frame may
+precede it.
 
 **Handshake (0x01)** — Client → Server:
 
 ```
 [frame header: opcode=0x01, flags=0, request_id=0]
-[u16: protocol_version]         -- currently 1
-[optional<string>: api_key]     -- API key for authentication (absent if auth disabled)
+[u16: protocol_version]              -- highest version the client speaks
+[optional<string>: api_key]
+[u32: client_capabilities]           -- bitmap; see Capabilities
 ```
 
 **HandshakeOk (0x02)** — Server → Client:
 
 ```
 [frame header: opcode=0x02, flags=0, request_id=0]
-[u16: negotiated_version]       -- version the server will use
-[u64: node_id]                  -- server's cluster node ID (0 if single-node)
-[u32: max_frame_size]           -- server's maximum frame size in bytes (0 = default 16 MiB)
+[u16: negotiated_version]
+[u64: node_id]                       -- 0 if single-node
+[u32: max_frame_size]                -- 0 = default 16 MiB
+[u32: server_capabilities]           -- bitmap
 ```
 
-If the server rejects the handshake (unsupported version, invalid API key), it sends an Error frame and closes the connection.
+On rejection the server sends an `Error` frame and closes the connection.
+
+#### Capabilities
+
+The **active** capability set is the bitwise AND of both bitmaps. Either side may
+advertise a bit the other lacks; the feature is simply off. This lets optional
+features ship without a version bump.
+
+| Bit | Name | Meaning |
+|-----|------|---------|
+| 0 | `CREDIT_FLOW_CONTROL` | Peer honours `Credit`. When inactive, `Consume` credit is ignored and the server pushes freely. |
+| 1-31 | Reserved | Must be 0 |
+
+#### A note on the handshake's own evolution
+
+The `Handshake` frame is sent before a version is agreed, so it can never safely
+gain a field: the server does not yet know which layout to expect. The capability
+bitmap is the escape hatch — extensions go in capability-gated frames after the
+handshake, not in the handshake itself. Keep it frozen.
 
 ### 3. Request/Response
 
-After handshake, the client sends request frames and the server responds with the corresponding result frame (matched by request ID). Multiple requests can be in-flight concurrently.
+The client sends requests; the server replies with the matching result frame,
+correlated by request ID. Multiple requests may be in flight.
 
 ### 4. Consume Streaming
 
-After a Consume subscribe request, the server pushes Delivery frames whenever messages are ready. The client acks/nacks messages using normal Ack/Nack frames on the same connection. The client sends CancelConsume to stop delivery, or disconnects.
+After a `Consume` subscription the server pushes `Delivery` frames as messages
+become ready **and as credit permits**. The client acks, nacks or extends leases on
+the same connection. `CancelConsume` stops delivery.
 
 ### 5. Keepalive
 
-Either side can send Ping at any time. The receiver must respond with Pong using the same request ID. If no Pong is received within 30 seconds, the sender should close the connection.
+Either side may send `Ping` at any time; the receiver responds `Pong` echoing the
+request ID. Server-initiated pings use the server ID range (bit 31 set). If no
+`Pong` arrives within 30 seconds, close the connection.
 
 ### 6. Disconnect
 
-Either side sends Disconnect for graceful close, then closes the TCP connection. The other side should finish processing any in-flight responses and close.
+Either side sends `Disconnect`, then closes. The peer finishes in-flight responses
+and closes.
+
+## Flow Control
+
+Version 1 had none. The server pushed whenever messages were ready, and the only
+brake was the reader pausing TCP reads at an internal high-water mark — backpressure
+applied at the wrong layer and invisible to the sender, which kept producing work
+that had nowhere to go.
+
+Version 2 uses **credit**, granted by the consumer and spent by the server.
+
+- `Consume` carries an initial credit in messages. `0` means unlimited, which
+  reproduces v1 behaviour and is the right choice for a consumer that acks
+  immediately.
+- The server decrements credit by one per message placed in a `Delivery` frame.
+- At zero credit the server stops delivering and holds the messages. It does **not**
+  error; the subscription stays open.
+- The client sends `Credit` to grant more.
+
+Credit is per subscription, not per connection. A client with two subscriptions
+manages two independent credit balances.
+
+Servers must not deliver on zero credit even if messages are ready. A client that
+wants a bounded number of unacked messages sets credit to that bound and grants one
+more per ack.
+
+`CreditExhausted` (`0x11`) is never sent for a normal zero balance — it exists for
+the case where a client's own accounting has diverged from the server's, so the
+disagreement surfaces instead of hanging.
 
 ## Hot-Path Operation Frames
 
 ### Enqueue (0x10)
 
-Enqueue one or more messages. Each message specifies its target queue independently, allowing cross-queue batching in a single frame. The server applies per-queue ACL checks and routes each message to the appropriate queue (including Raft group in cluster mode). Partial success is possible — some messages may succeed while others fail.
+Each message names its own queue, so one frame may target several queues. The server
+applies per-queue ACL checks and routes each message independently, including to the
+correct Raft group in cluster mode. Partial success is normal.
 
 **Request:**
 
@@ -239,6 +393,10 @@ For each message:
   [string: queue]
   [map<string,string>: headers]
   [bytes: payload]
+  [optional<string>: fairness_key]   -- absent = queue default
+  [optional<u32>: weight]            -- absent = queue default (1)
+  [string[]: throttle_keys]          -- empty = none
+  [optional<u64>: delay_ms]          -- absent or 0 = deliverable immediately
 ```
 
 **EnqueueResult (0x11):**
@@ -247,142 +405,205 @@ For each message:
 [frame header: opcode=0x11]
 [u32: result_count]
 For each result:
-  [u8: error_code]              -- 0x00 = success
-  [string: message_id]          -- UUID string, empty if error
+  [u8: error_code]
+  [uuid: message_id]                 -- all-zero if error
 ```
 
-The order of results matches the order of messages in the request.
+Results are in request order.
+
+#### Scheduling metadata precedence
+
+`fairness_key`, `weight` and `throttle_keys` may be set directly, so the scheduler's
+defining features do not require writing a Lua script. When a queue **also** has an
+`on_enqueue` hook, the hook wins for every field it returns.
+
+This ordering is a security property, not a preference. The hook is operator-authored
+server-side policy; the client-supplied value is a claim. If clients could override
+the hook, any tenant could set `fairness_key` to another tenant's key and take their
+share of delivery bandwidth. Client-supplied values are therefore **defaults for
+queues without a hook**, and suggestions for queues with one.
+
+#### Delayed delivery
+
+`delay_ms` makes a message ineligible for delivery until that interval has elapsed.
+Delayed messages count toward queue depth and are visible to `GetStats`, but the
+scheduler will not select them. They do not consume delivery credit while waiting.
 
 ### Consume (0x12)
-
-Subscribe to message delivery from a queue.
 
 **Request:**
 
 ```
 [frame header: opcode=0x12]
 [string: queue]
+[u32: credit]                        -- initial delivery credit; 0 = unlimited
 ```
 
-If successful, the server responds with a ConsumeOk frame, then begins pushing Delivery frames. If the server is not the leader for this queue (cluster mode), it responds with an Error frame containing error code `0x0C` (NotLeader) with the leader address in the error message.
+If this node is not the leader for the queue, the server replies `Error` with
+`NotLeader` (`0x0C`) and a `leader_addr` metadata entry.
 
-### ConsumeOk (0x19)
+### ConsumeOk (0x13)
 
-Confirms a Consume subscription was accepted. Sent before any Delivery frames.
-
-**Server → Client:**
+Sent before any `Delivery` frame.
 
 ```
-[frame header: opcode=0x19]
+[frame header: opcode=0x13]
 [string: consumer_id]
 ```
 
-### Delivery (0x13)
+### Delivery (0x14)
 
-Server pushes a batch of ready messages to a consuming client. Uses the request ID from the original Consume subscribe request.
-
-**Server → Client:**
+Pushed to a consuming client, using the request ID of the `Consume` subscription.
 
 ```
-[frame header: opcode=0x13, request_id=<consume_request_id>]
+[frame header: opcode=0x14, request_id=<consume_request_id>]
 [u32: message_count]
 For each message:
-  [string: message_id]          -- UUID string
+  [uuid: message_id]
   [string: queue]
   [map<string,string>: headers]
   [bytes: payload]
   [string: fairness_key]
   [u32: weight]
   [string[]: throttle_keys]
-  [u32: attempt_count]
-  [u64: enqueued_at]            -- Unix timestamp milliseconds
-  [u64: leased_at]              -- Unix timestamp milliseconds (0 if unavailable)
+  [u32: attempt_count]               -- 1 on first delivery
+  [u64: enqueued_at]                 -- Unix ms
+  [u64: leased_at]                   -- Unix ms
+  [u64: lease_expires_at]            -- Unix ms
 ```
 
-### CancelConsume (0x14)
+`lease_expires_at` is sent because the client otherwise cannot know when to call
+`ExtendLease` — the visibility timeout is queue configuration the consumer has no
+reason to have fetched, and it may be changed by an operator mid-stream.
 
-Unsubscribe from delivery. Uses the same request ID as the original Consume request.
+### Credit (0x15)
+
+Grant additional delivery credit to an existing subscription.
 
 **Request:**
 
 ```
-[frame header: opcode=0x14, request_id=<consume_request_id>]
+[frame header: opcode=0x15, request_id=<consume_request_id>]
+[u32: additional_credit]
 ```
 
-The server stops pushing Delivery frames for this subscription. No response frame is sent.
+Credit is additive and saturates at `u32::MAX`. No response frame is sent. Sending
+`Credit` for an unknown subscription is ignored.
 
-### Ack (0x15)
-
-Acknowledge one or more messages.
-
-**Request:**
+### CancelConsume (0x16)
 
 ```
-[frame header: opcode=0x15]
-[u32: item_count]
-For each item:
-  [string: queue]
-  [string: message_id]
+[frame header: opcode=0x16, request_id=<consume_request_id>]
 ```
 
-**AckResult (0x16):**
+The server stops delivering and releases the subscription. No response frame.
 
-```
-[frame header: opcode=0x16]
-[u32: result_count]
-For each result:
-  [u8: error_code]              -- 0x00 = success, 0x02 = MessageNotFound
-```
-
-### Nack (0x17)
-
-Negative-acknowledge one or more messages.
-
-**Request:**
+### Ack (0x17)
 
 ```
 [frame header: opcode=0x17]
 [u32: item_count]
 For each item:
   [string: queue]
-  [string: message_id]
-  [string: error]               -- error description
+  [uuid: message_id]
 ```
 
-**NackResult (0x18):**
+**AckResult (0x18):**
 
 ```
 [frame header: opcode=0x18]
 [u32: result_count]
 For each result:
-  [u8: error_code]              -- 0x00 = success, 0x02 = MessageNotFound
+  [u8: error_code]                   -- 0x00 Ok, 0x02 MessageNotFound
 ```
+
+`queue` is carried per item even though `message_id` is globally unique. In cluster
+mode it routes the ack to the owning Raft group without a lookup, and it lets one
+frame ack across several queues — the same property that makes cross-queue batching
+work on `Enqueue`.
+
+### Nack (0x19)
+
+```
+[frame header: opcode=0x19]
+[u32: item_count]
+For each item:
+  [string: queue]
+  [uuid: message_id]
+  [string: error]                    -- reaches the on_failure hook as msg.error
+  [optional<u64>: retry_after_ms]    -- absent = let on_failure decide
+```
+
+**NackResult (0x1A):**
+
+```
+[frame header: opcode=0x1A]
+[u32: result_count]
+For each result:
+  [u8: error_code]                   -- 0x00 Ok, 0x02 MessageNotFound
+```
+
+When `retry_after_ms` is present the message is retried no sooner than that
+interval, overriding any delay the `on_failure` hook returns. The hook still decides
+**whether** to retry or dead-letter; the client only overrides **when**. A client
+holding a `Retry-After` from a rate-limited upstream knows the correct delay in a
+way the broker cannot.
+
+Version 1 specified a `delay_ms` in the hook's return value and then discarded it,
+so every failure retried immediately. A queue without backoff turns one failing
+dependency into a hot loop.
+
+### ExtendLease (0x1B)
+
+```
+[frame header: opcode=0x1B]
+[u32: item_count]
+For each item:
+  [string: queue]
+  [uuid: message_id]
+  [u64: extend_by_ms]                -- from now, not from current expiry
+```
+
+**ExtendLeaseResult (0x1C):**
+
+```
+[frame header: opcode=0x1C]
+[u32: result_count]
+For each result:
+  [u8: error_code]                   -- 0x00 Ok, 0x02 MessageNotFound
+  [u64: lease_expires_at]            -- new expiry, Unix ms; 0 if error
+```
+
+Extension is measured from receipt, not from the current expiry, so a client that
+heartbeats on a fixed interval cannot accumulate unbounded lease time by racing.
+
+`MessageNotFound` here means the lease already expired and the message was
+redelivered. The client should stop work: another consumer may hold it now.
 
 ## Admin Operation Frames
 
 ### CreateQueue (0xFD)
 
-**Request:**
-
 ```
 [frame header: opcode=0xFD]
 [string: name]
-[optional<string>: on_enqueue_script]
-[optional<string>: on_failure_script]
-[u64: visibility_timeout_ms]    -- 0 = server default
+[optional<text>: on_enqueue_script]
+[optional<text>: on_failure_script]
+[u64: visibility_timeout_ms]         -- 0 = server default
 ```
+
+Scripts use `text` (`u32`-prefixed) rather than `string`; a 64 KB ceiling on
+user-authored Lua is an arbitrary limit with no reason behind it.
 
 **CreateQueueResult (0xFC):**
 
 ```
 [frame header: opcode=0xFC]
 [u8: error_code]
-[string: queue_id]              -- empty if error
+[string: queue_id]                   -- empty if error
 ```
 
 ### DeleteQueue (0xFB)
-
-**Request:**
 
 ```
 [frame header: opcode=0xFB]
@@ -398,8 +619,6 @@ For each result:
 
 ### GetStats (0xF9)
 
-**Request:**
-
 ```
 [frame header: opcode=0xF9]
 [string: queue]
@@ -412,18 +631,19 @@ For each result:
 [u8: error_code]
 [u64: depth]
 [u64: in_flight]
+[u64: delayed]                       -- enqueued but not yet eligible
 [u64: active_fairness_keys]
 [u32: active_consumers]
 [u32: quantum]
-[u64: leader_node_id]           -- 0 if single-node
-[u32: replication_count]        -- 0 if single-node
-[u16: per_key_stats_count]
+[u64: leader_node_id]                -- 0 if single-node
+[u32: replication_count]             -- 0 if single-node
+[u32: per_key_stats_count]
 For each fairness key stat:
   [string: key]
   [u64: pending_count]
   [i64: current_deficit]
   [u32: weight]
-[u16: per_throttle_stats_count]
+[u32: per_throttle_stats_count]
 For each throttle key stat:
   [string: key]
   [f64: tokens]
@@ -432,8 +652,6 @@ For each throttle key stat:
 ```
 
 ### ListQueues (0xF7)
-
-**Request:**
 
 ```
 [frame header: opcode=0xF7]
@@ -444,19 +662,17 @@ For each throttle key stat:
 ```
 [frame header: opcode=0xF6]
 [u8: error_code]
-[u32: cluster_node_count]       -- 0 if single-node
-[u16: queue_count]
+[u32: cluster_node_count]            -- 0 if single-node
+[u32: queue_count]
 For each queue:
   [string: name]
   [u64: depth]
   [u64: in_flight]
   [u32: active_consumers]
-  [u64: leader_node_id]         -- 0 if single-node
+  [u64: leader_node_id]              -- 0 if single-node
 ```
 
 ### SetConfig (0xF5)
-
-**Request:**
 
 ```
 [frame header: opcode=0xF5]
@@ -473,8 +689,6 @@ For each queue:
 
 ### GetConfig (0xF3)
 
-**Request:**
-
 ```
 [frame header: opcode=0xF3]
 [string: key]
@@ -484,17 +698,15 @@ For each queue:
 
 ```
 [frame header: opcode=0xF2]
-[u8: error_code]
-[string: value]                 -- empty if error or key not found
+[u8: error_code]                     -- 0x08 InvalidConfigValue if key is unset
+[string: value]                      -- empty if error
 ```
 
 ### ListConfig (0xF1)
 
-**Request:**
-
 ```
 [frame header: opcode=0xF1]
-[string: prefix]
+[string: prefix]                     -- empty = all entries
 ```
 
 **ListConfigResult (0xF0):**
@@ -502,7 +714,7 @@ For each queue:
 ```
 [frame header: opcode=0xF0]
 [u8: error_code]
-[u16: entry_count]
+[u32: entry_count]
 For each entry:
   [string: key]
   [string: value]
@@ -510,12 +722,10 @@ For each entry:
 
 ### Redrive (0xEF)
 
-**Request:**
-
 ```
 [frame header: opcode=0xEF]
 [string: dlq_queue]
-[u64: count]
+[u64: count]                         -- 0 = all
 ```
 
 **RedriveResult (0xEE):**
@@ -526,16 +736,12 @@ For each entry:
 [u64: redriven]
 ```
 
-## Auth & ACL Operation Frames
-
 ### CreateApiKey (0xED)
-
-**Request:**
 
 ```
 [frame header: opcode=0xED]
-[string: name]                  -- human-readable label
-[u64: expires_at_ms]            -- Unix timestamp ms, 0 = no expiration
+[string: name]
+[u64: expires_at_ms]                 -- Unix ms, 0 = never
 [bool: is_superadmin]
 ```
 
@@ -544,14 +750,12 @@ For each entry:
 ```
 [frame header: opcode=0xEC]
 [u8: error_code]
-[string: key_id]                -- opaque ID for management
-[string: key]                   -- plaintext API key (returned once)
+[string: key_id]
+[string: key]                        -- plaintext secret, returned once
 [bool: is_superadmin]
 ```
 
 ### RevokeApiKey (0xEB)
-
-**Request:**
 
 ```
 [frame header: opcode=0xEB]
@@ -562,12 +766,10 @@ For each entry:
 
 ```
 [frame header: opcode=0xEA]
-[u8: error_code]                -- 0x0F = ApiKeyNotFound
+[u8: error_code]                     -- 0x0F = ApiKeyNotFound
 ```
 
 ### ListApiKeys (0xE9)
-
-**Request:**
 
 ```
 [frame header: opcode=0xE9]
@@ -578,38 +780,36 @@ For each entry:
 ```
 [frame header: opcode=0xE8]
 [u8: error_code]
-[u16: key_count]
+[u32: key_count]
 For each key:
   [string: key_id]
   [string: name]
   [u64: created_at_ms]
-  [u64: expires_at_ms]          -- 0 = no expiration
+  [u64: expires_at_ms]               -- 0 = never
   [bool: is_superadmin]
 ```
 
 ### SetAcl (0xE7)
 
-**Request:**
-
 ```
 [frame header: opcode=0xE7]
 [string: key_id]
-[u16: permission_count]
+[u32: permission_count]
 For each permission:
-  [string: kind]                -- "produce", "consume", or "admin"
-  [string: pattern]             -- queue name or wildcard ("*", "orders.*")
+  [string: kind]                     -- "produce" | "consume" | "admin"
+  [string: pattern]                  -- glob over queue names
 ```
+
+Replaces the permission set; it does not merge.
 
 **SetAclResult (0xE6):**
 
 ```
 [frame header: opcode=0xE6]
-[u8: error_code]                -- 0x0F = ApiKeyNotFound
+[u8: error_code]                     -- 0x0F ApiKeyNotFound, 0x08 invalid kind
 ```
 
 ### GetAcl (0xE5)
-
-**Request:**
 
 ```
 [frame header: opcode=0xE5]
@@ -620,10 +820,10 @@ For each permission:
 
 ```
 [frame header: opcode=0xE4]
-[u8: error_code]                -- 0x0F = ApiKeyNotFound
+[u8: error_code]                     -- 0x0F = ApiKeyNotFound
 [string: key_id]
 [bool: is_superadmin]
-[u16: permission_count]
+[u32: permission_count]
 For each permission:
   [string: kind]
   [string: pattern]
@@ -631,67 +831,61 @@ For each permission:
 
 ## Error Frame (0xFE)
 
-Used for request-level errors (as opposed to per-item errors in batch results). The request ID matches the request that caused the error.
-
 ```
-[frame header: opcode=0xFE]
+[frame header: opcode=0xFE, request_id=<failed request's ID>]
 [u8: error_code]
-[string: message]               -- human-readable error description
-[map<string,string>: metadata]  -- structured key-value pairs for programmatic error handling
+[string: message]                    -- human-readable
+[map<string,string>: metadata]       -- machine-readable context
 ```
 
-The metadata map provides machine-readable context beyond the human-readable message. Standard metadata keys by error code:
+Standard metadata keys:
 
-| Error Code | Metadata Key | Value | Description |
-|------------|-------------|-------|-------------|
-| `0x0C` NotLeader | `leader_addr` | `"host:port"` | Address of the current leader node |
-| `0x09` ChannelFull | `retry_after_ms` | `"100"` | Suggested backoff in milliseconds |
-| `0x0D` UnsupportedVersion | `max_version` | `"1"` | Highest version the server supports |
+| Error Code | Key | Value | Description |
+|------------|-----|-------|-------------|
+| `0x0C` NotLeader | `leader_addr` | `"host:port"` | Current leader |
+| `0x09` ChannelFull | `retry_after_ms` | `"100"` | Suggested backoff |
+| `0x0D` UnsupportedVersion | `max_version` | `"2"` | Highest version supported |
+| `0x11` CreditExhausted | `server_credit` | `"0"` | Server's view of the balance |
 
-SDKs should expose the metadata map to callers. Unknown metadata keys must be preserved (not discarded) for forward compatibility. The metadata map may be empty.
+SDKs should expose the metadata map to callers. Unknown keys must be preserved, not
+discarded.
 
 ## Continuation Frames
 
-The protocol supports arbitrarily large payloads and headers through frame continuation. When a message's encoded body exceeds the maximum frame size, the sender splits it across multiple frames using the CONTINUATION flag (Flags bit 0).
+Payloads and bodies larger than the maximum frame size are split with the
+CONTINUATION flag.
 
 ### How It Works
 
-1. The sender serializes the **entire operation body** — everything after the 6-byte frame header, including field counts, queue names, headers maps, payloads, and all other fields — into a byte buffer
-2. If the buffer fits in a single frame: send it normally with CONTINUATION=0
-3. If the buffer exceeds the max frame size:
-   - Send the first chunk as a normal frame with CONTINUATION=1 (same opcode, same request ID)
-   - Send subsequent chunks as continuation frames: same opcode, same request ID, CONTINUATION=1
-   - Send the final chunk with CONTINUATION=0 to signal completion
+1. The sender serializes the **entire operation body** — everything after the 6-byte
+   frame header — into one buffer.
+2. If it fits in a frame, send it with CONTINUATION=0.
+3. Otherwise, send each chunk with CONTINUATION=1, same opcode and request ID, and
+   the final chunk with CONTINUATION=0.
 
 ### Receiver Behavior
 
-When a receiver gets a frame with CONTINUATION=1, it buffers the frame body (excluding the 6-byte frame header). It continues buffering until a frame arrives with the same request ID and opcode with CONTINUATION=0, then concatenates all buffered bodies (in order) with the final frame's body. The result is parsed as a single operation body — the split point is at raw byte boundaries, so any field (headers, payload, or otherwise) may be split across frames.
+On CONTINUATION=1 the receiver buffers the body (excluding the header) and keeps
+buffering until a frame with the same request ID and opcode arrives with
+CONTINUATION=0. It concatenates the buffers in order and parses the result as one
+body.
+
+The split is at **raw byte boundaries** — any field may be cut mid-value. This is
+deliberate: the sender needs no knowledge of field structure to chunk, and the
+receiver needs none to reassemble.
 
 ### Rules
 
-- All continuation frames for a request must use the same opcode and request ID
-- The receiver may enforce a maximum total reassembled size (configurable, no protocol-level cap)
-- Interleaving: frames from different request IDs may be interleaved on the wire. The receiver tracks continuation state per request ID.
-- If a connection closes mid-continuation, the partial data is discarded
-
-### Example: Large Payload Enqueue
-
-Enqueuing a single 50 MiB message with a 16 MiB max frame size:
-
-| Frame | Flags | Size | Contents |
-|-------|-------|------|----------|
-| 1 | CONTINUATION=1 | 16 MiB | First 16 MiB of serialized Enqueue body |
-| 2 | CONTINUATION=1 | 16 MiB | Next 16 MiB |
-| 3 | CONTINUATION=1 | 16 MiB | Next 16 MiB |
-| 4 | CONTINUATION=0 | ~2 MiB | Final chunk (remainder) |
-
-The receiver reassembles frames 1-4 into the complete Enqueue body, then parses it normally.
+- All continuation frames for a request share one opcode and request ID
+- Receivers may enforce a maximum reassembled size; there is no protocol-level cap
+- Frames from different request IDs may interleave; continuation state is per request ID
+- A connection closing mid-continuation discards the partial data
 
 ## Overhead Analysis
 
-### Single Enqueue (Batch of 1)
+### Single Enqueue (batch of 1)
 
-For a 1KB message to queue "orders" with no headers:
+1 KB payload to queue `orders`, no headers, no scheduling metadata:
 
 | Component | Bytes |
 |-----------|-------|
@@ -701,100 +895,141 @@ For a 1KB message to queue "orders" with no headers:
 | Queue string (2 + 6) | 8 |
 | Headers map (count=0) | 2 |
 | Payload (4 + 1024) | 1028 |
-| **Total** | **1052** |
-| **Overhead beyond payload** | **28 bytes** |
+| fairness_key (absent) | 1 |
+| weight (absent) | 1 |
+| throttle_keys (count=0) | 2 |
+| delay_ms (absent) | 1 |
+| **Total** | **1057** |
+| **Overhead beyond payload** | **33 bytes** |
 
-### Batch Enqueue (100 Messages, Same Queue)
+The four optional scheduling fields cost 5 bytes when unused — the price of making
+fairness settable without Lua.
+
+### Batch Enqueue (100 messages, same queue)
 
 | Component | Bytes |
 |-----------|-------|
-| Frame length prefix | 4 |
-| Opcode + Flags + Request ID | 6 |
-| Message count (u32) | 4 |
-| 100x Queue string (2 + 6) | 800 |
-| 100x Headers map (count=0) | 200 |
-| 100x Payload (4 + 1024) | 102,800 |
-| **Total** | **103,814** |
-| **Per-message overhead** | **(103,814 - 102,400) / 100 = 14.14 bytes** |
+| Frame length + header + count | 14 |
+| 100x queue string | 800 |
+| 100x headers map (empty) | 200 |
+| 100x payload (4 + 1024) | 102,800 |
+| 100x scheduling fields (unused) | 500 |
+| **Total** | **104,314** |
+| **Per-message overhead** | **19.14 bytes** |
 
-Per-message overhead in batch operations: **~14 bytes** (< 16 byte NFR-P3 target).
+### Batch Ack (1,000 messages)
+
+| Encoding | Per item | 1,000 items |
+|----------|---------:|------------:|
+| v1 — `string` message_id | 46 B | 46,000 B |
+| v2 — `uuid` message_id | 24 B | 24,000 B |
 
 ### Comparison with gRPC/Protobuf
 
-| Protocol | Single 1KB Enqueue | Notes |
-|----------|--------------------|-------|
-| Fila binary | ~28 bytes overhead | Length-prefixed, no HTTP/2 |
-| gRPC/HTTP2/protobuf | ~100-200 bytes overhead | HTTP/2 HEADERS + DATA frames, protobuf field tags, HPACK |
-
-The binary protocol eliminates HTTP/2 framing (~13% of CPU per flamegraph) and protobuf encoding overhead.
+| Protocol | Single 1 KB Enqueue | Notes |
+|----------|--------------------:|-------|
+| Fila binary | ~33 bytes overhead | Length-prefixed, no HTTP/2 |
+| gRPC/HTTP2/protobuf | ~100-200 bytes | HTTP/2 HEADERS + DATA, protobuf tags, HPACK |
 
 ## Serialization Format Decision
 
 ### Options Evaluated
 
 | Format | Per-field overhead | Zero-copy | Cross-language | Schema evolution |
-|--------|--------------------|-----------|----------------|-----------------|
-| **Hand-rolled binary** | 0 (fixed layout) | Yes | Manual per SDK | Add fields at end |
-| msgpack | 1-5 bytes/field | No (decode required) | Excellent (all 6 languages) | Via key-value maps |
+|--------|--------------------|-----------|----------------|------------------|
+| **Hand-rolled binary** | 0 (fixed layout) | Yes | Manual per SDK | Append at end |
+| msgpack | 1-5 B/field | No | Excellent | Via key-value maps |
 | bincode | 0 (fixed layout) | Limited | Rust only | Poor |
-| postcard | 0-2 bytes (varint) | Limited | Rust only | Poor |
-| FlatBuffers | vtable overhead | Yes | Good (not all languages) | Via vtable |
-| Cap'n Proto | pointer overhead | Yes | Limited (no Ruby) | Via pointer evolution |
+| postcard | 0-2 B (varint) | Limited | Rust only | Poor |
+| FlatBuffers | vtable overhead | Yes | Good | Via vtable |
+| Cap'n Proto | pointer overhead | Yes | Limited | Via pointer evolution |
 
 ### Decision: Hand-Rolled Binary with Fixed Layouts
 
-**Rationale:**
+1. **Minimal overhead.** Fixed layouts mean no per-field encoding cost. Kafka, Redis
+   RESP3 and the NATS client protocol all made this choice for the same reason.
+2. **Zero-copy payloads.** `[u32 length][raw bytes]` lets a reader reference the
+   payload without copying it.
+3. **Implementable from this document alone.** Big-endian integers and
+   length-prefixed strings need no library, no schema file, no code generation.
+4. **Schema evolution by appending.** New fields go at the end of a body; readers
+   ignore trailing bytes they do not recognize.
 
-1. **Minimal overhead**: Fixed field layouts mean zero per-field encoding overhead. The Kafka protocol, Redis RESP3, and NATS client protocol all use this approach for the same reason.
-
-2. **Zero-copy payload**: Message payloads are `[u32 length][raw bytes]` — the reader knows exactly where the payload starts and can reference it without copying.
-
-3. **Cross-language implementability**: The encoding primitives (big-endian integers, length-prefixed strings/bytes) are trivial to implement in all 6 SDK languages. No external serialization library dependency.
-
-4. **Simplicity**: Each opcode has a fixed field order. No field tags, no schema files, no code generation. A developer can implement a client from this document alone.
-
-5. **Schema evolution**: New fields are appended to the end of opcode bodies. Older clients ignore trailing bytes they don't understand. The protocol version in the handshake gates which fields are present.
-
-**Trade-off**: Changes to field order or types within an opcode require a protocol version bump. This is acceptable because operations are well-defined and stable — the Fila API surface has been stable since Epic 5.
+**Trade-off:** changing field order or type within an opcode requires a version bump.
+Version 2 spends that bump deliberately, to fix layout mistakes before there is an
+implementation to be compatible with.
 
 ## Schema Evolution
 
 ### Adding Fields
 
-New fields are appended to the end of an opcode's body. Readers must accept frames with trailing bytes beyond what they expect (ignore unknown trailing data). Writers must not omit fields that were present in the version they negotiated.
+Append to the end of an opcode's body. Readers must tolerate trailing bytes they do
+not understand. Writers must not omit fields present in the negotiated version.
 
 ### Removing Fields
 
-Fields are never removed. Deprecated fields are sent with zero/empty values.
+Fields are never removed. Deprecated fields carry zero or empty values.
+
+### Optional Features
+
+Prefer a capability bit over a version bump. Versions are for layout changes;
+capabilities are for behaviour that either side may not implement.
 
 ### Protocol Versioning
 
-The handshake negotiates a protocol version. The server accepts the highest version it supports that is <= the client's requested version. If no compatible version exists, the server rejects with UnsupportedVersion.
+The handshake negotiates a version: the server picks the highest it supports that is
+≤ the client's. If none exists it rejects with `UnsupportedVersion` and a
+`max_version` metadata entry.
 
-Version 1 is the initial version defined in this document.
+Version 2 is the initial version. Version 1 was drafted but never deployed, and is
+not supported.
 
 ## Cluster Communication
 
-Cluster inter-node communication on port 5556 uses the same frame format and encoding primitives. Cluster-specific opcodes are reserved in the `0x40-0x5F` range (defined in a future cluster protocol extension). For the initial implementation, cluster nodes use the standard client opcodes for leader forwarding.
+Inter-node communication uses the same frame format and encoding primitives on a
+separate port (default 5556).
+
+Opcodes `0x40`–`0x5F` are reserved for cluster-specific operations — Raft
+AppendEntries, Vote, InstallSnapshot and their responses — to be defined when
+clustering is implemented. Until then, nodes forward client operations to the leader
+using the standard client opcodes.
+
+This is a deliberate deferral, not an omission: the cluster opcodes should be
+designed against a working single-node broker, not ahead of one.
 
 ## Implementation Notes
 
 ### Backpressure
 
-If the server's internal command channel is full, it returns error code `0x09` (ChannelFull). Clients should implement exponential backoff on this error.
+Two mechanisms, at different layers, for different problems:
+
+- **Credit** bounds how much the *server* pushes to a consumer. It is the consumer's
+  brake, and it is explicit in the protocol.
+- **`ChannelFull` (`0x09`)** signals that the server's internal command channel is
+  saturated by *inbound* work. Clients should back off exponentially, honouring
+  `retry_after_ms` when present.
+
+Neither replaces the other. Credit is the consumer's; `ChannelFull` is the producer's.
 
 ### Connection Pooling
 
-Clients may open multiple connections to the same server. Request IDs are scoped per connection (not globally unique). SDKs should default to a single connection with multiplexed requests.
+Clients may open several connections. Request IDs are per connection, not global.
+SDKs should default to one connection with multiplexed requests, and multiple
+subscriptions on it.
 
-### Consume and Ack on Same Connection
+### Consume and Ack on the Same Connection
 
-A client can subscribe to a queue (Consume) and send Ack/Nack frames on the same connection. This is the expected pattern — the consumer receives Delivery frames and acknowledges them inline. Request IDs for Ack/Nack are independent of the Consume request ID.
+Subscribing and acking on one connection is the expected pattern. Ack, Nack and
+ExtendLease request IDs are independent of the Consume request ID.
 
 ### Maximum Frame Size
 
-Individual frames are limited to a configurable maximum size (default: 16 MiB). The frame length field is u32, supporting up to ~4 GiB per frame, but the server enforces a lower limit to bound memory allocation per frame. This does **not** limit payload or header sizes — messages larger than the max frame size are transparently split using [continuation frames](#continuation-frames). The server communicates its max frame size in the `HandshakeOk` response (`max_frame_size` field, 0 = default 16 MiB). Clients must use continuation frames when the serialized operation body exceeds this limit. Servers receiving an oversized frame must respond with `InvalidFrame` (0x0E).
+Default 16 MiB, configurable, advertised in `HandshakeOk`. The length field is `u32`
+(~4 GiB), but a lower enforced limit bounds per-frame allocation. This does not limit
+payload size — larger bodies use continuation frames. A server receiving an oversized
+frame responds `InvalidFrame` (`0x0E`).
 
 ### Byte Order
 
-All multi-byte integers throughout the protocol are big-endian (network byte order). This is a deliberate choice for consistency and debuggability (matches Wireshark's default display).
+All multi-byte integers are big-endian (network byte order) — consistent, and it
+matches Wireshark's default display.

@@ -135,6 +135,26 @@ delivery.extend_lease(Duration::from_secs(60)).await?;  // still working
 - **Leases can be extended.** Visibility timeout was fixed per queue, so any job
   that ran longer than the queue's timeout was simply unprocessable.
 
+### Bounding in-flight work
+
+A subscription grants the broker **delivery credit**. The broker spends one credit
+per message and stops at zero, so a slow consumer cannot be buried:
+
+```rust
+let mut orders = consumer
+    .subscribe("orders")
+    .prefetch(100)          // at most 100 unacked at a time
+    .await?;
+```
+
+Unset means unlimited, which is right for a consumer that acks immediately. The
+credit is replenished as you ack.
+
+This is flow control in the protocol rather than in the socket. The old design had
+none — the client paused TCP reads once an internal buffer filled, which throttled
+the connection without ever telling the broker, so it kept producing work with
+nowhere to go.
+
 Batch acking, and more than one subscription per connection:
 
 ```rust
@@ -244,7 +264,7 @@ listen_addr = "0.0.0.0:5555"
 data_dir = "data"
 
 [scheduler]
-quantum = 1000              # DRR quantum, in bytes of delivery credit per round
+quantum = 1000              # DRR deficit granted per weight unit, per round
 
 [queue]
 visibility_timeout = "30s"  # default lease duration; per-queue override at creation

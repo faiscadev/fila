@@ -38,7 +38,7 @@ listen_addr = "0.0.0.0:5555"
 data_dir = "data"
 
 [scheduler]
-quantum = 1000                    # DRR credit per weight unit, per round
+quantum = 1000                    # DRR deficit granted per weight unit, per round
 command_channel_capacity = 10000  # bounded channel: protocol handlers → scheduler
 idle_timeout = "100ms"            # wait before re-checking for work when idle
 
@@ -84,7 +84,18 @@ metrics_interval = "10s"
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `quantum` | integer | `1000` | DRR quantum. Each fairness key receives `weight * quantum` deficit per round. Higher values deliver more per key per round, so interleaving is coarser. |
+| `quantum` | integer | `1000` | DRR quantum. Each fairness key receives `weight * quantum` deficit per round, and delivering a message costs one unit. Higher values deliver more per key per round, so interleaving is coarser. |
+
+Deficit is counted in **messages**, not bytes. Classic DRR counts bytes, which is
+fairer when payload sizes vary by orders of magnitude — a key sending 1 MB messages
+and a key sending 100 B messages get equal message counts here, not equal bandwidth.
+Message-counting is the right default for a work queue, where a message is a unit of
+consumer effort rather than a unit of transfer. Revisit if payload sizes turn out to
+be the thing that varies.
+
+Do not confuse this with the delivery credit a consumer grants in `Consume`: DRR
+deficit decides *which* key is served next, delivery credit decides *whether* the
+consumer can take more at all.
 | `command_channel_capacity` | integer | `10000` | Size of the bounded channel between protocol handlers and the scheduler loop. Raise if you observe backpressure under load. |
 | `idle_timeout` | duration | `"100ms"` | How long the scheduler waits when there is no work. Lower values cut latency and cost CPU. |
 
