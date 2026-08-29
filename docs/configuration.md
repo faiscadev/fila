@@ -61,7 +61,7 @@ key_file = ""
 client_ca_file = ""               # set to require mTLS
 
 [telemetry]
-otlp_endpoint = ""                # empty disables export
+otlp_endpoint = ""                # OTLP/gRPC endpoint; empty disables export
 service_name = "fila"
 metrics_interval = "10s"
 ```
@@ -125,9 +125,12 @@ implicitly superadmin.
 
 Optional. When `otlp_endpoint` is empty, the broker logs locally and exports nothing.
 
+Telemetry export is the one place gRPC still appears, and it is unrelated to Fila's
+own wire protocol — it is how OpenTelemetry collectors expect to be talked to.
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `otlp_endpoint` | string | (none) | OTLP endpoint for traces and metrics, e.g. `"http://localhost:4317"`. |
+| `otlp_endpoint` | string | (none) | OTLP/gRPC endpoint for exporting traces and metrics, e.g. `"http://localhost:4317"`. Collectors serve OTLP over gRPC on 4317 and over HTTP on 4318; Fila exports over gRPC. |
 | `service_name` | string | `"fila"` | Service name reported in traces and metrics. |
 | `metrics_interval` | duration | `"10s"` | Metrics export interval. |
 
