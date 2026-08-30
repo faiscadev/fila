@@ -377,6 +377,36 @@ The wire protocol is a hand-rolled binary protocol, specified in
 [docs/protocol.md](docs/protocol.md). It is batch-native, multiplexes concurrent
 requests over one connection, and is the only transport — there is no gRPC.
 
+### The client is sans-io
+
+The client splits in two, and this is a structural constraint rather than a
+preference:
+
+**A core with no I/O.** A state machine over bytes — feed it what arrived, ask it
+what to send. It owns the codec, request-ID correlation, handshake and capability
+negotiation, leader-redirect handling, delivery-credit accounting, and shard
+discovery and merge. No sockets, no TLS, no async runtime, no timers it owns.
+
+**An I/O shell.** Opens connections, does TLS, pumps bytes, and presents the host
+language's native idiom.
+
+Fila ships one client today, in Rust. The goal is several, and the reason to draw
+the line here is that the two halves have opposite properties. The core is the part
+that is hard to get right and identical everywhere; the shell is the part that
+should look different in every language, because idiomatic is the whole point of a
+native SDK.
+
+Reimplementing the core per language is how five SDKs end up with five different
+subtle bugs in credit accounting. Sharing an async client across languages fails a
+different way: bridging one language's runtime into another's is worst exactly where
+the value is, on long-lived server-push streams. Sans-io avoids both — the shared
+part is pure functions over bytes, which every language can call, and the I/O stays
+native.
+
+The cost is honest: sans-io is harder to write than a straightforward async client,
+and the Rust SDK pays it for SDKs that do not exist yet. It is worth paying only
+because retrofitting it later is a rewrite, not a refactor.
+
 ## License
 
 [AGPLv3](LICENSE)
