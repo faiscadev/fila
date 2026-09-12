@@ -12,12 +12,12 @@ Producer                      Broker                        Consumer
    |-- Enqueue ----------------->|                              |
    |                            |-- on_enqueue (Lua) --------->|
    |                            |   assigns fairness_key,      |
-   |                            |   weight, throttle_keys      |
+   |                            |   weight                     |
    |                            |                              |
    |                            |-- Stored (pending) --------->|
    |                            |                              |
    |                            |-- DRR scheduler picks ------>|
-   |                            |   checks throttle tokens     |
+   |                            |   checks consumer throttles  |
    |                            |                              |
    |                            |-- Consume (leased) -------->|-- Processing
    |                            |                              |
@@ -34,7 +34,7 @@ Producer                      Broker                        Consumer
 
 1. **Enqueue** — producer sends a message to a queue. If the queue has an `on_enqueue` Lua script, it runs to assign scheduling metadata.
 2. **Pending** — the message is persisted to the storage engine and indexed by fairness key.
-3. **Scheduled** — the DRR scheduler picks the next fairness key and checks throttle tokens. If tokens are available, the message is delivered to a waiting consumer.
+3. **Scheduled** — the DRR scheduler picks the next fairness key and checks the throttles declared by the queue's consumers. If every bucket the message draws from has a token, the message is delivered to a waiting consumer.
 4. **Leased** — the consumer is processing the message. A visibility timeout timer starts.
 5. **Acked** — the consumer confirms success. The message is deleted.
 6. **Nacked** — the consumer reports failure. The `on_failure` hook decides: retry (re-enqueue) or dead-letter.
@@ -64,33 +64,31 @@ Fila uses the DRR algorithm to schedule delivery across fairness groups:
 
 ## Token bucket throttling
 
-Fila supports per-key rate limiting via token bucket throttlers. Each throttle key has:
+Consumers declare the rate limits of the services they call, and the broker holds
+messages until delivering them stays within those limits. The consumer never receives a
+message it would have to reject for rate limiting.
 
-- **rate** — tokens refilled per second
-- **burst** — maximum tokens the bucket can hold
-
-When the scheduler is about to deliver a message, it checks all of the message's `throttle_keys`. If any bucket is empty, the message is held until tokens refill. The consumer never receives a message it would have to reject for rate limiting.
-
-### Setting up throttle rates
-
-Throttle rates are managed via runtime configuration:
-
-```sh
-# Allow 10 requests/second with burst of 20 for the "api" throttle key
-fila config set throttle:api:rate 10
-fila config set throttle:api:burst 20
+```rust
+let mut orders = consumer
+    .subscribe("orders")
+    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
+    .await?;
 ```
 
-Messages are assigned throttle keys in the `on_enqueue` Lua hook:
+Each throttle has:
 
-```lua
-function on_enqueue(msg)
-  return {
-    fairness_key = msg.headers["tenant"],
-    throttle_keys = { msg.headers["api_endpoint"] }
-  }
-end
-```
+- **name** — declarations with the same name, from any consumer on any queue, share one limit
+- **rate** — tokens refilled per unit of time
+- **burst** — maximum tokens a bucket holds
+- **partition** (optional) — one bucket per distinct value, read from a header, the
+  fairness key, or an attribute computed by the `attributes` hook
+
+A queue's deliveries are paced by the combined throttles of everyone subscribed to it.
+Before delivering a message, the scheduler checks every bucket the message draws from;
+if any is empty, the message stays pending.
+
+See [throttling.md](throttling.md) for partitioning, conflict rules, and how limits
+hold across a cluster.
 
 ## Lua hooks
 
@@ -108,8 +106,7 @@ function on_enqueue(msg)
 
   return {
     fairness_key = msg.headers["tenant"] or "default",
-    weight = tonumber(msg.headers["priority"]) or 1,
-    throttle_keys = { msg.headers["endpoint"] }
+    weight = tonumber(msg.headers["priority"]) or 1
   }
 end
 ```
@@ -119,7 +116,22 @@ end
 |-------|------|---------|-------------|
 | `fairness_key` | string | `"default"` | Groups the message for DRR scheduling |
 | `weight` | number | `1` | DRR weight for this fairness key |
-| `throttle_keys` | list of strings | `[]` | Token bucket keys to check before delivery |
+
+### attributes
+
+Computes named values that throttles can partition by. Runs the first time the
+scheduler considers a message, not at enqueue, and the result is remembered on the
+message:
+
+```lua
+function attributes(msg)
+  -- same msg fields as on_enqueue
+  return { account = account_for(msg.headers["customer"]) }
+end
+```
+
+Attributes always reflect the current script: when the script changes, messages not
+yet delivered are re-evaluated. See [throttling.md](throttling.md#attributes).
 
 ### on_failure
 
@@ -158,12 +170,12 @@ local limit = fila.get("rate_limit:tenant_a")  -- returns string or nil
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `lua.default_timeout_ms` | 10 | Max script execution time |
-| `lua.default_memory_limit_bytes` | 1 MB | Max memory per script |
+| `lua.default_timeout` | `"10ms"` | Max script execution time |
+| `lua.memory_limit` | `"1MB"` | Max memory per script |
 | `lua.circuit_breaker_threshold` | 3 | Consecutive failures before circuit break |
-| `lua.circuit_breaker_cooldown_ms` | 10000 | Cooldown period after circuit break |
+| `lua.circuit_breaker_cooldown` | `"10s"` | Cooldown period after circuit break |
 
-When the circuit breaker trips, Lua hooks are bypassed and messages use default scheduling (fairness_key=`"default"`, weight=1, no throttle keys). The circuit breaker resets automatically after the cooldown period.
+When the circuit breaker trips, Lua hooks are bypassed: messages use default scheduling (fairness_key=`"default"`, weight=1), and attributes are absent, so each throttle's missing-value policy applies. The circuit breaker resets automatically after the cooldown period.
 
 ## Dead letter queue
 
@@ -193,7 +205,6 @@ fila config list --prefix feature:
 
 Common use cases:
 - **Feature flags**: toggle behavior in Lua scripts without redeployment
-- **Throttle rates**: `throttle:<key>:rate` and `throttle:<key>:burst`
 - **Dynamic routing**: change fairness key assignment logic based on config values
 
 ## Visibility timeout

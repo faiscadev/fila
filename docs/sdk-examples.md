@@ -62,8 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Producing with scheduling metadata
 
-Fairness key, weight and throttle keys are values, not something you must reach
-through a Lua script to set.
+Fairness key and weight are values, not something you must reach through a Lua
+script to set.
 
 ```rust
 use fila_sdk::Message;
@@ -75,7 +75,6 @@ producer.send(
         .header("tenant", "acme")
         .fairness_key("acme")
         .weight(3)
-        .throttle_key("provider:stripe")
 ).await?;
 ```
 
@@ -85,6 +84,35 @@ Delayed delivery:
 producer.send(
     Message::new("orders", payload).delay(Duration::from_secs(30))
 ).await?;
+```
+
+## Throttling what a worker calls
+
+A worker declares the limits of the services it calls when it subscribes. The broker
+holds messages until delivering them stays within every limit, so the worker never
+needs its own rate-limiting code.
+
+```rust
+use fila_sdk::{Missing, Throttle};
+
+let mut charges = consumer
+    .subscribe("charges")
+    // everyone calling Stripe, on any queue, shares this limit
+    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
+    // and each customer gets at most 10/s of it
+    .throttle(
+        Throttle::named("stripe-per-customer")
+            .partition_by_header("customer")
+            .when_missing(Missing::SharedBucket)
+            .rate(10, Duration::from_secs(1)),
+    )
+    .await?;
+
+while let Some(delivery) = charges.next().await {
+    let delivery = delivery?;
+    stripe.charge(delivery.payload()).await?;   // already paced by the broker
+    delivery.ack().await?;
+}
 ```
 
 ## Batching
@@ -247,9 +275,6 @@ admin.create_queue(
         .visibility_timeout(Duration::from_secs(30))
         .on_enqueue(ON_ENQUEUE)
 ).await?;
-
-// Throttle rates live in runtime config, keyed by throttle key
-admin.set_config("throttle.provider:stripe", "100,150").await?;
 
 // Mint a narrowly-scoped key for a producer service
 let key = admin.create_api_key(ApiKeySpec::new("checkout-svc")).await?;

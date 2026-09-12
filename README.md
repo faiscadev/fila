@@ -11,8 +11,8 @@ Every existing broker delivers messages in FIFO order. When multiple tenants, cu
 Fila moves scheduling decisions into the broker:
 
 - **Deficit Round Robin (DRR) fair scheduling** — each fairness key gets its fair share of delivery bandwidth. No tenant starves another.
-- **Token bucket throttling** — per-key rate limits enforced at the broker, before delivery. Consumers only receive messages that are ready to process.
-- **Lua rules engine** — `on_enqueue` and `on_failure` hooks let you define scheduling policy in user-supplied Lua scripts, for the cases where static configuration isn't enough.
+- **Token bucket throttling** — consumers declare the rate limits of what they call, and the broker paces delivery to stay within them. Consumers only receive messages that are ready to process.
+- **Lua rules engine** — `on_enqueue`, `attributes` and `on_failure` hooks let you define scheduling policy in user-supplied Lua scripts, for the cases where static configuration isn't enough.
 - **Zero wasted work** — consumers never receive a message they can't act on.
 
 ## Key concepts
@@ -20,8 +20,8 @@ Fila moves scheduling decisions into the broker:
 | Concept | What it does |
 |---------|-------------|
 | **Fairness keys** | Messages are grouped by a `fairness_key`. The DRR scheduler gives each group its fair share of delivery bandwidth, in proportion to its `weight`. |
-| **Throttling** | Token bucket rate limiters keyed by `throttle_keys`. The broker holds messages until tokens are available. |
-| **Lua hooks** | `on_enqueue` derives fairness key, weight and throttle keys. `on_failure` decides retry vs. dead-letter. Both are optional. |
+| **Throttling** | Consumers declare named rate limits when subscribing, optionally partitioned per message. The broker holds messages until delivering them stays within every limit. |
+| **Lua hooks** | `on_enqueue` derives fairness key and weight. `attributes` computes values throttles can partition by. `on_failure` decides retry vs. dead-letter. All are optional. |
 | **Dead letter queue** | Messages that exhaust retries move to `<queue>.dlq`. Redrive moves them back. |
 | **Runtime config** | Key-value pairs, readable from Lua via `fila.get(key)`. Change behavior without restarting. |
 | **Leases** | Delivered messages are leased for a visibility timeout. Unacked leases expire and the message is redelivered. |
@@ -74,7 +74,6 @@ let id = producer.send(
         .header("tenant", "acme")
         .fairness_key("acme")                    // direct — Lua is not required
         .weight(3)
-        .throttle_key("provider:stripe")
         .delay(Duration::from_secs(30))          // deliver no earlier than
 ).await?;
 ```
@@ -146,6 +145,26 @@ Flow control belongs in the protocol rather than in the socket. Throttling by
 pausing TCP reads slows the connection without telling the broker anything, so it
 keeps producing work with nowhere to put it.
 
+### Throttling what you call
+
+A worker knows which rate-limited services it calls, so it declares their limits when
+it subscribes, and the broker paces delivery to stay within them:
+
+```rust
+let mut orders = consumer
+    .subscribe("orders")
+    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)))
+    .throttle(
+        Throttle::named("stripe-per-customer")
+            .partition_by_header("customer")
+            .rate(10, Duration::from_secs(1)),
+    )
+    .await?;
+```
+
+Declarations with the same name share one limit, across consumers and across queues.
+Producers know nothing about it. See [docs/throttling.md](docs/throttling.md).
+
 Batch acking, and more than one subscription per connection:
 
 ```rust
@@ -171,11 +190,11 @@ admin.create_queue(
 
 admin.delete_queue("orders").await?;
 admin.list_queues().await?;
-admin.queue_stats("orders").await?;      // depth, in-flight, per-key fairness + throttle
+admin.queue_stats("orders").await?;      // depth, in-flight, per-key fairness, active throttles
 
-admin.set_config("throttle.provider:stripe", "100,200").await?;
-admin.get_config("throttle.provider:stripe").await?;
-admin.list_config("throttle.").await?;
+admin.set_config("routing.default_region", "eu").await?;
+admin.get_config("routing.default_region").await?;
+admin.list_config("routing.").await?;
 
 admin.redrive("orders.dlq", 100).await?;
 ```
@@ -293,7 +312,7 @@ This is where operational policy lives — the values you want to change at 3am
 without a deploy.
 
 ```rust
-admin.set_config("throttle.provider:stripe", "100,200").await?;
+admin.set_config("routing.default_region", "eu").await?;
 ```
 
 ```lua
@@ -303,12 +322,7 @@ function on_enqueue(msg)
 end
 ```
 
-Throttle rates are configured here rather than at queue creation, because a rate
-limit is a property of the resource being protected, not of the queue. Any queue
-whose messages carry `throttle_key = "provider:stripe"` shares that one bucket.
-
-Namespacing by prefix is a convention the tooling relies on — `list_config("throttle.")`
-returns every rate limit — so keep it.
+Namespace keys by prefix — `list_config("routing.")` returns every key under it.
 
 ---
 
@@ -351,11 +365,12 @@ Everything else is explanation, not contract:
 | Document | What it covers |
 |----------|----------------|
 | [concepts.md](docs/concepts.md) | Fairness keys, DRR, throttling, leases, dead-lettering |
+| [throttling.md](docs/throttling.md) | Consumer-declared rate limits, partitioning, and cluster-wide enforcement |
 | [configuration.md](docs/configuration.md) | The three config layers, every key, reserved prefixes |
 | [lua-patterns.md](docs/lua-patterns.md) | Copy-paste `on_enqueue` and `on_failure` hooks |
 | [tutorials.md](docs/tutorials.md) | Guided walkthroughs of the three core use cases |
 | [sdk-examples.md](docs/sdk-examples.md) | Worked Rust examples beyond the tutorials |
-| [cluster-scaling.md](docs/cluster-scaling.md) | Raft-per-queue clustering and leader routing |
+| [clustering.md](docs/clustering.md) | Raft groups per queue, the meta group, placement, sharding |
 | [benchmarks.md](docs/benchmarks.md) | What is measured, why, and the targets |
 | [compatibility.md](docs/compatibility.md) | Versioning and compatibility policy |
 

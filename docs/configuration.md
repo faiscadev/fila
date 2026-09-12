@@ -151,9 +151,9 @@ A flat key-value store, mutable while the broker runs and readable from Lua. Thi
 is where operational policy lives — the values you change without a deploy.
 
 ```rust
-admin.set_config("throttle.provider:stripe", "100,200").await?;
-let rate = admin.get_config("throttle.provider:stripe").await?;
-let all  = admin.list_config("throttle.").await?;
+admin.set_config("routing.default_region", "eu").await?;
+let region = admin.get_config("routing.default_region").await?;
+let all    = admin.list_config("routing.").await?;
 ```
 
 ```lua
@@ -163,18 +163,13 @@ function on_enqueue(msg)
 end
 ```
 
-### Reserved prefixes
+Namespace keys by prefix: `list_config("routing.")` returns every key under it.
 
-Namespacing by prefix is a convention the tooling depends on — `list_config("throttle.")`
-returns every rate limit — so keep to it.
+Runtime configuration is replicated through the cluster's meta group, so every node —
+and every Lua hook — reads the same value. See [clustering.md](clustering.md#the-meta-group).
 
-| Prefix | Meaning | Value format |
-|--------|---------|--------------|
-| `throttle.` | Token bucket rate limit for a throttle key | `"<rate_per_second>,<burst>"` |
-
-Throttle rates live here rather than in queue configuration because a rate limit is
-a property of the resource being protected, not of the queue. Every queue whose
-messages carry `throttle_key = "provider:stripe"` shares one bucket.
+Rate limits are not runtime configuration. Consumers declare them when they subscribe;
+see [throttling.md](throttling.md).
 
 ## OpenTelemetry metrics
 

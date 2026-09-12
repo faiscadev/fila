@@ -86,79 +86,90 @@ A premium tenant with weight=3 gets 3x the delivery bandwidth of a standard tena
 
 ## Per-provider throttling
 
-**Goal:** Rate-limit outgoing API calls per external provider without wasting consumer resources.
+**Goal:** Keep calls to an external API within its rate limit, without the worker
+fetching jobs it can't perform yet.
 
-### 1. Create a queue with throttle keys
+### 1. Create a queue
 
 ```sh
-fila queue create api-calls \
+fila queue create charges \
   --on-enqueue 'function on_enqueue(msg)
-    local keys = {}
-    if msg.headers["provider"] then
-      table.insert(keys, "provider:" .. msg.headers["provider"])
-    end
-    return {
-      fairness_key = msg.headers["tenant"] or "default",
-      throttle_keys = keys
-    }
+    return { fairness_key = msg.headers["tenant"] or "default" }
   end'
 ```
 
-### 2. Set throttle rates
+The queue knows nothing about Stripe. Rate limits belong to the worker that calls it.
 
-```sh
-# Stripe: 100 requests/second, burst up to 150
-fila config set throttle.provider:stripe 100,150
-
-# SendGrid: 10 requests/second, burst up to 20
-fila config set throttle.provider:sendgrid 10,20
-```
-
-The format is `rate,burst`. Rate is tokens per second; burst is the maximum bucket capacity.
-
-### 3. Produce messages
+### 2. Produce messages
 
 ```rust
 let producer = client.producer();
 
-// These will be throttled to 100/s
 let charges: Vec<Message> = (0..500)
     .map(|i| {
-        Message::new("api-calls", format!("charge-{i}"))
+        Message::new("charges", format!("charge-{i}"))
             .header("tenant", "acme")
-            .header("provider", "stripe")
+            .header("customer", format!("cus_{}", i % 20))
     })
     .collect();
 
 producer.send_batch(charges).await?;
 ```
 
-### 4. Consume — the broker does the throttling
+Producers don't mention Stripe or any limit.
+
+### 3. Consume, declaring the limits you're bound by
 
 ```rust
-let mut calls = client.consumer().subscribe("api-calls").await?;
+let mut charges = client
+    .consumer()
+    .subscribe("charges")
+    // Stripe: 100 requests/second, burst up to 150
+    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
+    // and no customer above 10/s
+    .throttle(
+        Throttle::named("stripe-per-customer")
+            .partition_by_header("customer")
+            .rate(10, Duration::from_secs(1)),
+    )
+    .await?;
 
-while let Some(delivery) = calls.next().await {
+while let Some(delivery) = charges.next().await {
     let delivery = delivery?;
-    // Every message received is already within the rate limit.
-    // No client-side limit checking, no re-enqueue loop.
-    call_external_api(delivery.payload()).await?;
+    // Already within both limits. No client-side rate checking, no re-enqueue loop.
+    stripe.charge(delivery.payload()).await?;
     delivery.ack().await?;
 }
 ```
 
-Consumers receive messages at the provider's rate limit. No consumer-side rate checking, no wasted fetches, no re-enqueue loops.
+A message is delivered only when both `stripe` and its customer's
+`stripe-per-customer` bucket have a token. Until then it stays in the broker — no lease,
+no attempt counted.
 
-### Adjusting rates at runtime
+### 4. Share the limit with another service
 
-Change rates without restarting the broker:
+A refunds worker on a different queue also calls Stripe. It declares the same name:
 
-```sh
-# Double Stripe's rate
-fila config set throttle.provider:stripe 200,300
+```rust
+let mut refunds = client
+    .consumer()
+    .subscribe("refunds")
+    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
+    .await?;
 ```
 
-The token bucket updates immediately.
+Charges and refunds together stay within 100/s, on one node or across a cluster.
+
+### Changing a rate
+
+A rate lives in the worker's code, so changing it is a deploy. When declarations with
+the same name disagree, the strictest wins:
+
+- **Lowering** a rate takes effect as soon as the first updated worker subscribes.
+- **Raising** a rate takes effect once no worker declares the old, lower one.
+
+Both directions are safe during a rolling deploy: the limit never rises above what some
+running worker asked for.
 
 ---
 

@@ -7,7 +7,7 @@ Version: 1 (draft)
 Fila uses a custom binary protocol over TCP for all client-server communication.
 The protocol is designed for:
 
-- **Minimal overhead**: < 16 bytes amortized per message beyond payload in batch operations
+- **Minimal overhead**: about 17 bytes amortized per message beyond payload in batch operations
 - **Zero-copy parsing**: Length-prefixed frames — no delimiter scanning
 - **Batch-native**: Every operation accepts multiple items; a single message is a batch of 1
 - **Multiplexed**: Multiple concurrent requests on one connection via request IDs
@@ -139,7 +139,6 @@ Counts are sized to what the collection can actually hold, not uniformly:
 | Batch items (messages, acks, nacks) | `u32` | Bounded only by frame size |
 | Admin list results (queues, keys, config, stats) | `u32` | Unbounded — a broker may hold millions of fairness keys |
 | Per-message headers | `u16` | Bounded by practicality; hot path, and 2 saved bytes per message matters |
-| Per-message throttle keys | `u16` | Same |
 
 Sizing an admin list count at `u16` would cap the per-key breakdown at 65,535 while
 `active_fairness_keys` reports a `u64` — a queue able to report more fairness keys
@@ -216,8 +215,8 @@ independently without colliding.
 | `0xE5` | GetAcl | Client → Server | Read a key's permissions |
 | `0xE4` | GetAclResult | Server → Client | Permissions |
 
-Opcodes `0x1D`–`0x3F` and `0x60`–`0xE3` are reserved. `0x40`–`0x5F` is reserved for
-cluster inter-node opcodes; see [Cluster Communication](#cluster-communication).
+Opcodes `0x1D`–`0xE3` are reserved. Nodes talk to each other over a separate protocol
+with its own opcode space; see [Inter-node Communication](#inter-node-communication).
 
 ### Handling Unknown Opcodes
 
@@ -256,6 +255,7 @@ per-item result array (batch item failure).
 | `0x0F` | ApiKeyNotFound | API key ID does not exist |
 | `0x10` | NodeNotReady | No leader elected yet |
 | `0x11` | CreditExhausted | Delivery credit is zero; grant more |
+| `0x12` | ThrottleConflict | A throttle with this name is already declared with a different partition |
 | `0xFF` | InternalError | Unexpected server error |
 
 ## Connection Lifecycle
@@ -375,7 +375,6 @@ For each message:
   [bytes: payload]
   [optional<string>: fairness_key]   -- absent = queue default
   [optional<u32>: weight]            -- absent = queue default (1)
-  [string[]: throttle_keys]          -- empty = none
   [optional<u64>: delay_ms]          -- absent or 0 = deliverable immediately
 ```
 
@@ -393,8 +392,8 @@ Results are in request order.
 
 #### Scheduling metadata precedence
 
-`fairness_key`, `weight` and `throttle_keys` may be set directly, so the scheduler's
-defining features do not require writing a Lua script. When a queue **also** has an
+`fairness_key` and `weight` may be set directly, so the scheduler's defining feature
+does not require writing a Lua script. When a queue **also** has an
 `on_enqueue` hook, the hook wins for every field it returns.
 
 This ordering is a security property, not a preference. The hook is operator-authored
@@ -422,6 +421,15 @@ scheduler will not select them. They do not consume delivery credit while waitin
 If this node is not the leader for the queue, the server replies `Error` with
 `NotLeader` (`0x0C`) and a `leader_addr` metadata entry.
 
+#### Throttle declarations
+
+A subscription may declare throttles — named rate limits, optionally partitioned per
+message — that pace delivery for the queue. See [throttling.md](throttling.md) for the
+model.
+
+**Their encoding is not yet specified.** A declaration reusing a throttle name with a
+different partition is rejected with `ThrottleConflict` (`0x12`).
+
 ### ConsumeOk (0x13)
 
 Sent before any `Delivery` frame.
@@ -445,7 +453,6 @@ For each message:
   [bytes: payload]
   [string: fairness_key]
   [u32: weight]
-  [string[]: throttle_keys]
   [u32: attempt_count]               -- 1 on first delivery
   [u64: enqueued_at]                 -- Unix ms
   [u64: leased_at]                   -- Unix ms
@@ -568,6 +575,7 @@ redelivered. The client should stop work: another consumer may hold it now.
 [string: name]
 [optional<text>: on_enqueue_script]
 [optional<text>: on_failure_script]
+[optional<text>: attributes_script]
 [u64: visibility_timeout_ms]         -- 0 = server default
 ```
 
@@ -622,13 +630,11 @@ For each fairness key stat:
   [u64: pending_count]
   [i64: current_deficit]
   [u32: weight]
-[u32: per_throttle_stats_count]
-For each throttle key stat:
-  [string: key]
-  [f64: tokens]
-  [f64: rate_per_second]
-  [f64: burst]
 ```
+
+Throttle statistics are not yet specified. A partitioned throttle can have too many
+buckets to list, so what a queue reports about its throttles is an open question in
+[throttling.md](throttling.md#open-questions).
 
 ### ListQueues (0xF7)
 
@@ -876,12 +882,11 @@ receiver needs none to reassemble.
 | Payload (4 + 1024) | 1028 |
 | fairness_key (absent) | 1 |
 | weight (absent) | 1 |
-| throttle_keys (count=0) | 2 |
 | delay_ms (absent) | 1 |
-| **Total** | **1057** |
-| **Overhead beyond payload** | **33 bytes** |
+| **Total** | **1055** |
+| **Overhead beyond payload** | **31 bytes** |
 
-The four optional scheduling fields cost 5 bytes when unused — the price of making
+The three optional scheduling fields cost 3 bytes when unused — the price of making
 fairness settable without Lua.
 
 ### Batch Enqueue (100 messages, same queue)
@@ -892,9 +897,9 @@ fairness settable without Lua.
 | 100x queue string | 800 |
 | 100x headers map (empty) | 200 |
 | 100x payload (4 + 1024) | 102,800 |
-| 100x scheduling fields (unused) | 500 |
-| **Total** | **104,314** |
-| **Per-message overhead** | **19.14 bytes** |
+| 100x scheduling fields (unused) | 300 |
+| **Total** | **104,114** |
+| **Per-message overhead** | **17.14 bytes** |
 
 ### Batch Ack (1,000 messages)
 
@@ -915,7 +920,7 @@ Encoding the same ID as a 36-character string would cost 46 bytes per item, and
 
 | Protocol | Single 1 KB Enqueue | Notes |
 |----------|--------------------:|-------|
-| Fila binary | ~33 bytes overhead | Length-prefixed, no HTTP/2 |
+| Fila binary | ~31 bytes overhead | Length-prefixed, no HTTP/2 |
 | gRPC/HTTP2/protobuf | ~100-200 bytes | HTTP/2 HEADERS + DATA, protobuf tags, HPACK |
 
 ## Serialization Format Decision
@@ -969,18 +974,15 @@ The handshake negotiates a version: the server picks the highest it supports tha
 
 Version 1 is the initial version.
 
-## Cluster Communication
+## Inter-node Communication
 
-Inter-node communication uses the same frame format and encoding primitives on a
-separate port (default 5556).
+Nodes in a cluster talk to each other over a separate protocol, with its own opcode
+space and its own version. It shares this document's frame format and encoding
+primitives and nothing else, and it is not part of this specification.
 
-Opcodes `0x40`–`0x5F` are reserved for cluster-specific operations — Raft
-AppendEntries, Vote, InstallSnapshot and their responses — to be defined when
-clustering is implemented. Until then, nodes forward client operations to the leader
-using the standard client opcodes.
-
-This is a deliberate deferral, not an omission: the cluster opcodes should be
-designed against a working single-node broker, not ahead of one.
+The client protocol is a public contract that is never broken; the inter-node protocol
+connects nodes deployed together and may change between releases. See
+[clustering.md](clustering.md#inter-node-protocol).
 
 ## Implementation Notes
 

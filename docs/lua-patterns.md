@@ -50,58 +50,53 @@ Set weights at runtime: `fila config set weight:acme 5`
 
 ---
 
-## Provider throttling
+## Throttle partitions
 
-Rate-limit outbound calls per external API provider:
+Throttles are declared by consumers (see [throttling.md](throttling.md)). Lua's role is
+computing the values a throttle partitions by, in the queue's `attributes` hook, when
+they cannot simply be read from a header or the fairness key.
+
+`attributes` runs the first time the scheduler considers a message, and always
+reflects the current script.
+
+### Derived customer account
+
+Several customer IDs map to one billing account, and the downstream limit is per
+account:
 
 ```lua
-function on_enqueue(msg)
-  local keys = {}
-  if msg.headers["provider"] then
-    table.insert(keys, "provider:" .. msg.headers["provider"])
+function attributes(msg)
+  local customer = msg.headers["customer"]
+  if not customer then
+    return {}   -- attribute absent: the throttle's missing-value policy applies
   end
-
-  return {
-    fairness_key = msg.headers["tenant"] or "default",
-    throttle_keys = keys
-  }
+  return { account = fila.get("account:" .. customer) or customer }
 end
 ```
 
-Set rates: `fila config set throttle.provider:stripe 100,200`
+```rust
+consumer
+    .subscribe("charges")
+    .throttle(
+        Throttle::named("stripe-per-account")
+            .partition_by_attribute("account")
+            .rate(10, Duration::from_secs(1)),
+    )
+    .await?;
+```
 
-### Multi-dimensional throttling
-
-Throttle by both provider and tenant (composite key):
+### Region from a composite header
 
 ```lua
-function on_enqueue(msg)
-  local tenant = msg.headers["tenant"] or "default"
-  local provider = msg.headers["provider"]
-
-  local keys = {}
-  if provider then
-    -- Global provider limit
-    table.insert(keys, "provider:" .. provider)
-    -- Per-tenant-per-provider limit
-    table.insert(keys, "tenant-provider:" .. tenant .. ":" .. provider)
-  end
-
-  return {
-    fairness_key = tenant,
-    throttle_keys = keys
-  }
+function attributes(msg)
+  -- "eu-west-1:acme" -> "eu-west-1"
+  local target = msg.headers["target"] or ""
+  return { region = target:match("^([^:]+)") }
 end
 ```
 
-```sh
-# Global: Stripe allows 1000 req/s total
-fila config set throttle.provider:stripe 1000,1500
-
-# Per-tenant: each tenant gets at most 100 req/s to Stripe
-fila config set throttle.tenant-provider:acme:stripe 100,150
-fila config set throttle.tenant-provider:globex:stripe 100,150
-```
+A nil value means the attribute is absent, and the throttle's missing-value policy
+applies.
 
 ---
 
@@ -193,16 +188,9 @@ function on_enqueue(msg)
   local region = msg.headers["region"] or "default"
 
   return {
-    fairness_key = "region:" .. region,
-    throttle_keys = { "region:" .. region }
+    fairness_key = "region:" .. region
   }
 end
-```
-
-```sh
-# Rate limit per region
-fila config set throttle.region:us-east 500,750
-fila config set throttle.region:eu-west 300,450
 ```
 
 ### Conditional dead-letter by error type
