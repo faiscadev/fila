@@ -709,7 +709,6 @@ For each effective limit:
 [key: key]
 [u8: when_key_missing]               -- 0 = shared bucket, 1 = unthrottled
 [u32: declaring_subscribers]
-[u8: enforcement]                    -- 0 = soft state, 1 = recorded grants
 ```
 
 Individual buckets are never listed here; see `GetThrottleStats`.

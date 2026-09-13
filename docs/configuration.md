@@ -59,7 +59,6 @@ key_file = ""
 client_ca_file = ""               # set to require mTLS
 
 [throttle]
-max_failover_pause = "10s"        # longer windows record grants through consensus
 min_lease = "20ms"                # shortest token lease; longer suits clusters spanning regions
 
 [telemetry]
@@ -138,8 +137,7 @@ Cluster-wide throttle enforcement. See [throttling.md](throttling.md#enforcement
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `max_failover_pause` | duration | `"10s"` | Throttles whose longest window is at most this long keep grants as soft state: after the enforcing node fails over, their deliveries pause for about one window. Throttles with longer windows record grants through the meta group and pause only for the election. |
-| `min_lease` | duration | `"20ms"` | The shortest time a queue leader may hold leased tokens. It must exceed a round trip to the enforcing node; clusters spanning regions need more. Shorter leases raise the sustained ceiling of short windows, N / (W + lease). |
+| `min_lease` | duration | `"20ms"` | The shortest time a queue leader may hold leased tokens. It must exceed a round trip to the enforcing node; clusters spanning regions need more. Shorter leases raise the sustained ceiling of short windows, N / (W + lease), and shorten the pause after the enforcing node fails over. |
 
 ### `[telemetry]`
 

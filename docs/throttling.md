@@ -260,8 +260,6 @@ an hourly limit, an hour. Two rules keep grants close to what is actually delive
   drops, or the backlog drains. The leader invalidates the tokens first and then returns
   them, so a returned token can never also be spent, and a returned token stops counting.
   Returns are best effort: a lost return only wastes allowance, never exceeds a limit.
-  Returns need not be recorded for recorded windows; after a failover an unrecorded
-  return is simply counted, which is conservative.
 
 Granting together relies on every bucket of a delivery being on one grantor, which holds
 while the grantor role runs on the meta group leader. If grantors are later split across
@@ -282,7 +280,8 @@ The guarantee depends on each of these holding exactly:
    check must be a quorum round trip (Raft's ReadIndex) — **never a clock-based lease
    read**, which assumes clocks agree more closely than this guarantee does.
 4. **A new grantor does not grant until it can account for every token that might still
-   be spent** — by waiting, or from recorded grants. See [Failover](#failover).
+   be spent** — by waiting *h* and rebuilding counts from the queues. See
+   [Failover](#failover).
 
 ### Why it holds
 
@@ -295,35 +294,54 @@ for a limit of 100 per second with a 20ms lease.
 
 ### Failover
 
-A window limit depends on recent history — how many deliveries are already inside the
-window — so a new grantor must know it or wait for it to pass. Which applies is decided
-per throttle by its longest window and the broker's `throttle.max_failover_pause`
-(default 10s; see [configuration.md](configuration.md#throttle)):
+A window limit depends on recent history — how many deliveries are already inside each
+bucket's window — so a new grantor must know it before granting. That history lives with
+the queues, not with the grantor:
 
-| Longest window | Enforcement | Throttled delivery after grantor failover |
-|----------------|-------------|------------------------------------------|
-| Up to `max_failover_pause` | Grants are soft state. The new grantor waits **W + h**, plus a margin for clock drift, before its first grant. | Pauses for the election plus about W |
-| Longer | **Grants are recorded** through the meta group. A grant is handed out only after it is committed, and a grantor that has lost leadership cannot commit. The new grantor resumes from the committed grants. | Pauses only for the election |
+- **Every delivery records the throttle buckets it drew from.** On a queue with
+  `Committed` delivery durability, the record is committed with the delivery.
+- **Queue leaders keep per-bucket delivery counts** for each throttle's longest window, as
+  part of the queue's state.
 
-**Why waiting works.** A leadership check proves the grantor was leader when its probes
-went out, not that it still is when it hands tokens out; a grantor can be deposed in
-between. That gap is closed by rule 1: every token answers a request sent *before* the
-check, and expires within *h* of that request, so every token the previous grantor issued
-is spent or expired within *h* of a moment before the new grantor's election. A new
-grantor granting only after a further *W + h* ensures that any window containing a new
-delivery starts after every old one.
+A new grantor:
 
-Recorded grants need no such argument: they are committed through the meta group before
-they are handed out, and a deposed grantor cannot commit.
+1. **Waits *h***, plus a margin for clock drift. After that, every token the previous
+   grantor issued has either been spent — and so recorded by the queue that spent it — or
+   expired.
+2. **Gathers counts from every queue leader**: for each bucket, how many deliveries and how
+   long ago, measured on that leader's own clock. Travel time makes a delivery look more
+   recent than it was, which is the conservative direction.
+3. **Resumes granting** against those counts.
 
-**Why recording is affordable for long windows.** A lease's length costs throughput in
-proportion to *h / W*, so long windows can use long leases and need few lease requests —
-and therefore few recorded writes. Recording one grant also covers the throttle's shorter
-limits, so none of them pause either.
+Throttled delivery pauses for the election, *h*, and the gathering — not for a window.
+Grantor state is soft in every case: it is rebuilt from the queues and never passes
+through the meta group. Leases can therefore stay short for every window.
 
-Queues with `Committed` delivery durability commit their deliveries, which could let a
-new grantor rebuild recent history instead of recording grants
-([clustering.md](clustering.md#delivery-durability)). That is not yet part of this design.
+**Why waiting *h* is enough.** A leadership check proves the grantor was leader when its
+probes went out, not that it still is when it hands tokens out; a grantor can be deposed
+in between. Rule 1 closes that gap: every token answers a request sent *before* the check
+and expires within *h* of that request, so every token the previous grantor issued is
+spent or expired within *h* of a moment before the new grantor's election. Anything spent
+is a recorded delivery, so the counts gathered afterwards include it.
+
+Returned tokens need no special handling: history is rebuilt from deliveries, and a
+returned token was never delivered.
+
+#### When a queue's history is unavailable
+
+| Situation | What the new grantor does |
+|-----------|---------------------------|
+| A queue has no leader when counts are gathered | Waits for that queue's election |
+| A queue's leader crashed too | Its successor has the committed deliveries but cannot tell how long ago they happened without trusting clocks, so they count as having happened at the takeover. Allowance is reduced for up to a window; delivery does not pause. |
+| A `Fast` queue's leader crashed along with the grantor | That queue's recent deliveries are gone. The throttles its consumers declare as they reconnect pause for their longest window; other throttles are unaffected. |
+
+#### Future: throttles used by a single queue
+
+When every declaration of a throttle is on one unsharded queue, its counts could live in
+that queue's Raft group and be checked in the same commit as its deliveries: exact, with
+no leases, and failover only as long as the queue's own election. It would require
+handing state between the queue and the grantor as other queues start or stop declaring
+the name, so it is not part of the design today.
 
 ### Limit changes
 
@@ -351,7 +369,7 @@ my limit set right.
   `delayed` and `unclassified`.
 - **Active throttles** — for each throttle currently declared on the queue: name,
   effective limits after combining every declaration, key, missing-key policy, how many
-  subscribers declare it, and whether its grants are soft state or recorded.
+  subscribers declare it.
 
 ### Throttle stats
 
@@ -359,7 +377,7 @@ Across every queue where a throttle is active:
 
 ```rust
 let stripe = admin.throttle_stats("stripe-per-customer", TopBuckets(10)).await?;
-// effective limits, key, missing-key policy, enforcement
+// effective limits, key, missing-key policy
 // queues where it is active
 // active_buckets     — buckets with deliveries still inside the window
 // buckets_at_limit   — buckets with no room right now
