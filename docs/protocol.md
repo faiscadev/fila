@@ -256,6 +256,9 @@ per-item result array (batch item failure).
 | `0x10` | NodeNotReady | No leader elected yet |
 | `0x11` | CreditExhausted | Delivery credit is zero; grant more |
 | `0x12` | ThrottleConflict | A throttle with this name is already declared with a different partition |
+| `0x13` | ScriptError | The queue's `on_enqueue` script failed on this message; retrying the same message will not help |
+| `0x14` | ScriptTimeout | The queue's `on_enqueue` script timed out on this message; retrying may help |
+| `0x15` | OrderingKeyMissing | The message has no value for the queue's ordering key, and the queue rejects such messages |
 | `0xFF` | InternalError | Unexpected server error |
 
 ## Connection Lifecycle
@@ -390,6 +393,12 @@ For each result:
 
 Results are in request order.
 
+A message can be rejected individually: `ScriptError` or `ScriptTimeout` when the queue
+rejects messages its script fails on, `OrderingKeyMissing` when it is an ordered queue
+that rejects messages without a key. On a queue that parks script failures, the message
+is accepted and a message ID is returned. See
+[concepts.md](concepts.md#when-on_enqueue-fails).
+
 #### Scheduling metadata precedence
 
 `fairness_key` and `weight` may be set directly, so the scheduler's defining feature
@@ -407,6 +416,9 @@ queues without a hook**, and suggestions for queues with one.
 `delay_ms` makes a message ineligible for delivery until that interval has elapsed.
 Delayed messages count toward queue depth and are visible to `GetStats`, but the
 scheduler will not select them. They do not consume delivery credit while waiting.
+
+On an ordered queue, a delayed message holds its ordering group: nothing behind it in
+the group is delivered first. See [ordering.md](ordering.md#delayed-messages).
 
 ### Consume (0x12)
 
@@ -536,6 +548,8 @@ interval, overriding any delay the `on_failure` hook returns. The hook still dec
 holding a `Retry-After` from a rate-limited upstream knows the correct delay in a
 way the broker cannot.
 
+On an ordered queue, the retrying message holds its ordering group for the delay.
+
 Without a backoff mechanism every failure retries immediately, and one failing
 dependency becomes a hot loop.
 
@@ -575,12 +589,16 @@ redelivered. The client should stop work: another consumer may hold it now.
 [string: name]
 [optional<text>: on_enqueue_script]
 [optional<text>: on_failure_script]
-[optional<text>: attributes_script]
 [u64: visibility_timeout_ms]         -- 0 = server default
 ```
 
 Scripts use `text` (`u32`-prefixed) rather than `string`; a 64 KB ceiling on
 user-authored Lua is an arbitrary limit with no reason behind it.
+
+**Not yet specified:** the encoding of the ordering key and its missing-key policy
+([ordering.md](ordering.md)), and of the script failure policy with its optional
+dead-letter threshold ([concepts.md](concepts.md#when-on_enqueue-fails)). All are fixed
+at creation.
 
 **CreateQueueResult (0xFC):**
 
@@ -619,6 +637,8 @@ user-authored Lua is an arbitrary limit with no reason behind it.
 [u64: depth]
 [u64: in_flight]
 [u64: delayed]                       -- enqueued but not yet eligible
+[u64: unclassified]                  -- parked after a script failure
+[u64: oldest_unclassified_at]        -- Unix ms; 0 if none
 [u64: active_fairness_keys]
 [u32: active_consumers]
 [u32: quantum]

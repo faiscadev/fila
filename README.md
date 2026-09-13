@@ -12,7 +12,7 @@ Fila moves scheduling decisions into the broker:
 
 - **Deficit Round Robin (DRR) fair scheduling** — each fairness key gets its fair share of delivery bandwidth. No tenant starves another.
 - **Token bucket throttling** — consumers declare the rate limits of what they call, and the broker paces delivery to stay within them. Consumers only receive messages that are ready to process.
-- **Lua rules engine** — `on_enqueue`, `attributes` and `on_failure` hooks let you define scheduling policy in user-supplied Lua scripts, for the cases where static configuration isn't enough.
+- **Lua rules engine** — `on_enqueue` and `on_failure` hooks let you define scheduling policy in user-supplied Lua scripts, for the cases where static configuration isn't enough.
 - **Zero wasted work** — consumers never receive a message they can't act on.
 
 ## Key concepts
@@ -21,7 +21,8 @@ Fila moves scheduling decisions into the broker:
 |---------|-------------|
 | **Fairness keys** | Messages are grouped by a `fairness_key`. The DRR scheduler gives each group its fair share of delivery bandwidth, in proportion to its `weight`. |
 | **Throttling** | Consumers declare named rate limits when subscribing, optionally partitioned per message. The broker holds messages until delivering them stays within every limit. |
-| **Lua hooks** | `on_enqueue` derives fairness key and weight. `attributes` computes values throttles can partition by. `on_failure` decides retry vs. dead-letter. All are optional. |
+| **Lua hooks** | `on_enqueue` derives fairness key, weight, and attributes that throttles and ordering can use. `on_failure` decides retry vs. dead-letter. Both are optional. |
+| **Ordering** | Off by default. A queue can ask for arrival order overall or per ordering key, with at most one message per group in flight. |
 | **Dead letter queue** | Messages that exhaust retries move to `<queue>.dlq`. Redrive moves them back. |
 | **Runtime config** | Key-value pairs, readable from Lua via `fila.get(key)`. Change behavior without restarting. |
 | **Leases** | Delivered messages are leased for a visibility timeout. Unacked leases expire and the message is redelivered. |
@@ -188,6 +189,11 @@ admin.create_queue(
         .on_failure(script)
 ).await?;
 
+admin.create_queue(
+    QueueSpec::new("account-events")
+        .ordered_by([Key::header("account")])     // in order per account
+).await?;
+
 admin.delete_queue("orders").await?;
 admin.list_queues().await?;
 admin.queue_stats("orders").await?;      // depth, in-flight, per-key fairness, active throttles
@@ -279,8 +285,7 @@ visibility_timeout = "30s"  # default lease duration; per-queue override at crea
 
 [lua]
 default_timeout = "10ms"
-memory_limit = "8MB"
-circuit_breaker_threshold = 3
+memory_limit = "1MB"
 
 [auth]
 enabled = false
@@ -300,7 +305,7 @@ Two conventions worth holding to:
 - **Durations are strings with units** (`"30s"`, `"10ms"`), not bare integers with
   the unit hidden in the field name. `visibility_timeout_ms = 30000` puts the unit
   in the identifier, where it cannot be changed without renaming the field.
-- **Sizes are strings with units** (`"8MB"`), for the same reason.
+- **Sizes are strings with units** (`"1MB"`), for the same reason.
 
 Every key is overridable by environment variable, upper-cased and prefixed:
 `[scheduler] quantum` → `FILA_SCHEDULER_QUANTUM`.
@@ -366,6 +371,7 @@ Everything else is explanation, not contract:
 |----------|----------------|
 | [concepts.md](docs/concepts.md) | Fairness keys, DRR, throttling, leases, dead-lettering |
 | [throttling.md](docs/throttling.md) | Consumer-declared rate limits, partitioning, and cluster-wide enforcement |
+| [ordering.md](docs/ordering.md) | Ordered queues, ordering groups, and how order interacts with fairness and throttling |
 | [configuration.md](docs/configuration.md) | The three config layers, every key, reserved prefixes |
 | [lua-patterns.md](docs/lua-patterns.md) | Copy-paste `on_enqueue` and `on_failure` hooks |
 | [tutorials.md](docs/tutorials.md) | Guided walkthroughs of the three core use cases |

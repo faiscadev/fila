@@ -105,16 +105,18 @@ with it. It is **added to** the per-queue model, never a replacement for it: a s
 queue is split across groups of its own, and unrelated queues never share a group.
 
 - Sharding is **opt-in, per queue**. A queue that does not need it pays nothing.
-- **The user chooses the shard key**, and in doing so chooses between two guarantees:
+- **The user chooses the shard key**, and the choice affects fairness:
 
-  > Shard by the fairness key to keep per-key ordering, at the cost of exact fairness.
-  > Shard by anything else to keep fairness, at the cost of per-key ordering.
+  > Shard by a key independent of the fairness key to keep fairness exact. Shard by the
+  > fairness key and each shard balances only the fairness keys that landed in it.
 
-  Sharding by fairness key means each tenant's messages live in one shard, and each
-  shard balances only the tenants that landed in it. Sharding by an independent key
-  spreads every tenant across all shards, so each shard's scheduler sees every tenant
-  and the combined result stays fair, but one tenant's messages no longer arrive in
-  order.
+  Sharding by an independent key spreads every tenant across all shards, so each
+  shard's scheduler sees every tenant and the combined result stays fair. Sharding by
+  fairness key puts each tenant in one shard, so a tenant competes only with the tenants
+  that share its shard.
+
+- **An ordered queue's shard key must be part of its ordering key**, so that every
+  message of an ordering group lives in the same shard. See [ordering.md](ordering.md).
 
 - A consumer of a sharded queue receives from every shard's leader. Merging those
   streams happens in the client, in the shared sans-io core, so every SDK inherits one
@@ -150,8 +152,8 @@ The inter-node protocol is not yet specified.
 
 - **What replicates.** Whether leases are replicated state or held only by the queue
   leader, and what happens to in-flight messages when a leader changes. A nack with
-  `retry_after` changes message state and must replicate; whether lease extension does
-  depends on the lease decision.
+  `retry_after` and the classification of a parked message change message state and
+  must replicate; whether lease extension does depends on the lease decision.
 - **Routing.** Which node serves which request: forwarding writes to a queue's leader,
   redirecting consumers with `NotLeader` and `leader_addr`, which node answers queue
   statistics, and how quickly a revoked API key must stop working on every node.

@@ -9,7 +9,7 @@ Assign each tenant its own fairness group so the DRR scheduler gives equal deliv
 ```lua
 function on_enqueue(msg)
   return {
-    fairness_key = msg.headers["tenant_id"] or "default"
+    fairness_key = msg.headers["tenant_id"]   -- nil: the message joins the unkeyed group
   }
 end
 ```
@@ -26,7 +26,7 @@ function on_enqueue(msg)
   if tier == "enterprise" then weight = 5 end
 
   return {
-    fairness_key = msg.headers["tenant_id"] or "default",
+    fairness_key = msg.headers["tenant_id"],
     weight = weight
   }
 end
@@ -53,11 +53,11 @@ Set weights at runtime: `fila config set weight:acme 5`
 ## Throttle partitions
 
 Throttles are declared by consumers (see [throttling.md](throttling.md)). Lua's role is
-computing the values a throttle partitions by, in the queue's `attributes` hook, when
-they cannot simply be read from a header or the fairness key.
+computing the values a throttle partitions by, returned as `attributes` from
+`on_enqueue`, when they cannot simply be read from a header or the fairness key.
 
-`attributes` runs the first time the scheduler considers a message, and always
-reflects the current script.
+Attributes are computed once, at enqueue, and stored with the message. Changing the
+script affects messages enqueued afterwards.
 
 ### Derived customer account
 
@@ -65,12 +65,12 @@ Several customer IDs map to one billing account, and the downstream limit is per
 account:
 
 ```lua
-function attributes(msg)
+function on_enqueue(msg)
   local customer = msg.headers["customer"]
   if not customer then
     return {}   -- attribute absent: the throttle's missing-value policy applies
   end
-  return { account = fila.get("account:" .. customer) or customer }
+  return { attributes = { account = fila.get("account:" .. customer) or customer } }
 end
 ```
 
@@ -88,10 +88,10 @@ consumer
 ### Region from a composite header
 
 ```lua
-function attributes(msg)
+function on_enqueue(msg)
   -- "eu-west-1:acme" -> "eu-west-1"
   local target = msg.headers["target"] or ""
-  return { region = target:match("^([^:]+)") }
+  return { attributes = { region = target:match("^([^:]+)") } }
 end
 ```
 

@@ -1,6 +1,6 @@
 # Tutorials
 
-Step-by-step guides for common Fila use cases. Each tutorial assumes you have a running broker (see [quickstart](../README.md#quickstart)).
+Step-by-step guides for common Fila use cases. Each tutorial assumes a running broker.
 
 ## Multi-tenant fair scheduling
 
@@ -11,7 +11,7 @@ Step-by-step guides for common Fila use cases. Each tutorial assumes you have a 
 ```sh
 fila queue create orders \
   --on-enqueue 'function on_enqueue(msg)
-    return { fairness_key = msg.headers["tenant_id"] or "default" }
+    return { fairness_key = msg.headers["tenant_id"] }
   end'
 ```
 
@@ -74,7 +74,7 @@ fila queue create orders \
     local weights = { premium = 3, standard = 1 }
     local tier = msg.headers["tier"] or "standard"
     return {
-      fairness_key = msg.headers["tenant_id"] or "default",
+      fairness_key = msg.headers["tenant_id"],
       weight = weights[tier] or 1
     }
   end'
@@ -94,7 +94,7 @@ fetching jobs it can't perform yet.
 ```sh
 fila queue create charges \
   --on-enqueue 'function on_enqueue(msg)
-    return { fairness_key = msg.headers["tenant"] or "default" }
+    return { fairness_key = msg.headers["tenant"] }
   end'
 ```
 
@@ -182,7 +182,7 @@ running worker asked for.
 ```sh
 fila queue create jobs \
   --on-enqueue 'function on_enqueue(msg)
-    return { fairness_key = msg.headers["job_type"] or "default" }
+    return { fairness_key = msg.headers["job_type"] }
   end' \
   --on-failure 'function on_failure(msg)
     local max_attempts = tonumber(fila.get("max_retries") or "5")

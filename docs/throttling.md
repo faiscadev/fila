@@ -92,56 +92,40 @@ Throttle::named("stripe-per-customer")
 
 The safe option is the default, so it is what you get by not choosing.
 
+**`Unthrottled` can be bypassed by producers.** A producer that omits the header, or
+sends a message the script returns no attribute for, skips the limit. Choose it only
+where messages without the value genuinely do not use the throttled resource.
+
 ## Attributes
 
 When a partition value has to be derived rather than read — parsed out of a header,
-looked up in runtime config, combined from several fields — a queue's `attributes`
-Lua hook computes it:
+looked up in runtime config, combined from several fields — the queue's `on_enqueue`
+script returns it as an attribute:
 
 ```lua
-function attributes(msg)
-  return { account = account_for(msg.headers["customer"]) }
+function on_enqueue(msg)
+  return {
+    fairness_key = msg.headers["tenant"],
+    attributes = { account = account_for(msg.headers["customer"]) },
+  }
 end
 ```
 
-The hook belongs to the queue, so the rule is written by whoever owns the queue.
+The script belongs to the queue, so the rule is written by whoever owns the queue.
 Consumers refer to an attribute by name; producers are unaware of it.
 
-### When attributes are computed
+Attributes are computed **once, at enqueue**, stored with the message and never
+recomputed. A change to the script applies to messages enqueued afterwards. Messages
+already queued keep the attributes they were given, and a message enqueued before the
+script produced an attribute does not have it, so the throttle's missing-value policy
+applies.
 
-Attributes are computed **the first time the scheduler considers a message**, not at
-enqueue. The result is remembered on the message, so the hook runs once per message
-regardless of how many scheduling rounds the message waits through.
+Declaring a new partitioned throttle on a queue with a backlog works without running the
+script again: partition values come from what is already stored — headers, fairness
+keys and attributes.
 
-The split follows one rule — compute a value when it is first needed:
-
-- **`fairness_key` and `weight` are computed at enqueue** by `on_enqueue`. They decide
-  where a message sits, so they must be known on arrival.
-- **Attributes are computed at delivery.** They only matter when deciding whether to
-  deliver.
-
-### Attributes always reflect the current script
-
-A remembered result records the script version that produced it. When the script
-changes, results from older versions are recomputed at the next check.
-
-- Adding an `attributes` hook to a queue with a backlog works: existing messages are
-  evaluated when the scheduler reaches them.
-- Fixing a bug in the hook applies to the backlog, not only to new messages.
-
-### Costs
-
-- Remembered results live in the queue leader's memory, not in storage. After a
-  leader change they are recomputed, so a hook reading runtime config that changed in
-  between can place a message in a different bucket. This affects only which bucket
-  paces the message, never whether it is delivered.
-- The hook runs on the scheduler thread, so a slow script delays delivery for every
-  queue on that leader. The Lua timeout and circuit breaker apply as they do to
-  `on_enqueue`.
-- A script change invalidates every remembered result at once; the backlog is
-  re-evaluated as it is delivered.
-- While the Lua circuit breaker is tripped, hooks are bypassed and attributes are
-  absent, so the throttle's missing-value policy applies.
+If the script fails on a message, the queue's script failure policy applies. See
+[concepts.md](concepts.md#when-on_enqueue-fails).
 
 ## Which deliveries a throttle paces
 
@@ -178,6 +162,10 @@ from has a token.
 
 - If any bucket is empty, the message stays pending, untouched. No lease, no attempt.
 - Tokens are consumed only after the message is successfully handed to a consumer.
+- A message waiting on a bucket holds back nothing else on a queue without ordering,
+  and only its own ordering group on an ordered queue. See [ordering.md](ordering.md).
+- **A large backlog waiting on one empty bucket must not slow delivery of messages that
+  draw from other buckets.** One customer's backlog cannot delay another customer.
 
 ## Bucket lifetime
 
@@ -272,10 +260,6 @@ pauses.
 
 ## Open questions
 
-- **Head-of-line blocking.** The scheduler considers the front message of each
-  fairness key's line. When the partition differs from the fairness key, one empty
-  bucket at the front holds up messages behind it that belong to other buckets.
-  Looking past a blocked message keeps throughput but breaks per-key ordering.
 - **Default burst and choosing *h*.** Rule 2 requires B ≥ R·h. Small bursts force a
   small *h*, approaching network round-trip time and multiplying lease requests. Needs
   a rule: derive *h*, require a minimum burst, or handle small bursts differently.

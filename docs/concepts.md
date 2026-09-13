@@ -32,7 +32,7 @@ Producer                      Broker                        Consumer
    |                            |   re-enqueue if not acked    |
 ```
 
-1. **Enqueue** — producer sends a message to a queue. If the queue has an `on_enqueue` Lua script, it runs to assign scheduling metadata.
+1. **Enqueue** — producer sends a message to a queue. If the queue has an `on_enqueue` Lua script, it runs to assign fairness key, weight and attributes. If the script fails, the queue's script failure policy decides what happens to the message.
 2. **Pending** — the message is persisted to the storage engine and indexed by fairness key.
 3. **Scheduled** — the DRR scheduler picks the next fairness key and checks the throttles declared by the queue's consumers. If every bucket the message draws from has a token, the message is delivered to a waiting consumer.
 4. **Leased** — the consumer is processing the message. A visibility timeout timer starts.
@@ -42,7 +42,9 @@ Producer                      Broker                        Consumer
 
 ## Fairness groups
 
-Every message belongs to a **fairness group** identified by its `fairness_key`. The key is assigned during enqueue — either by an `on_enqueue` Lua script or defaulting to `"default"`.
+Every message belongs to a **fairness group** identified by its `fairness_key`. The key is set by the producer or assigned by the queue's `on_enqueue` script; when both are present, the script wins.
+
+A message with no fairness key joins the **unkeyed group**. It is a reserved group that no real key can collide with — a tenant named `default` is not the unkeyed group. A queue that never uses fairness keys is simply one group.
 
 Common fairness key strategies:
 - **Per-tenant**: `msg.headers["tenant_id"]` — prevents one tenant from monopolizing the queue
@@ -105,33 +107,23 @@ function on_enqueue(msg)
   -- msg.queue         — queue name
 
   return {
-    fairness_key = msg.headers["tenant"] or "default",
-    weight = tonumber(msg.headers["priority"]) or 1
+    fairness_key = msg.headers["tenant"],
+    weight = tonumber(msg.headers["priority"]) or 1,
+    attributes = { account = msg.headers["account"] }
   }
 end
 ```
 
 **Return fields:**
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `fairness_key` | string | `"default"` | Groups the message for DRR scheduling |
+| Field | Type | When absent | Description |
+|-------|------|-------------|-------------|
+| `fairness_key` | string | the producer's value, or the unkeyed group | Groups the message for DRR scheduling |
 | `weight` | number | `1` | DRR weight for this fairness key |
+| `attributes` | table of strings | no attributes | Named values that throttles can partition by and ordering keys can include |
 
-### attributes
-
-Computes named values that throttles can partition by. Runs the first time the
-scheduler considers a message, not at enqueue, and the result is remembered on the
-message:
-
-```lua
-function attributes(msg)
-  -- same msg fields as on_enqueue
-  return { account = account_for(msg.headers["customer"]) }
-end
-```
-
-Attributes always reflect the current script: when the script changes, messages not
-yet delivered are re-evaluated. See [throttling.md](throttling.md#attributes).
+`on_enqueue` runs **once per message, at enqueue**, and its results are stored with the
+message. They are never recomputed: changing the script affects messages enqueued after
+the change, not the backlog.
 
 ### on_failure
 
@@ -172,10 +164,58 @@ local limit = fila.get("rate_limit:tenant_a")  -- returns string or nil
 |---------|---------|-------------|
 | `lua.default_timeout` | `"10ms"` | Max script execution time |
 | `lua.memory_limit` | `"1MB"` | Max memory per script |
-| `lua.circuit_breaker_threshold` | 3 | Consecutive failures before circuit break |
-| `lua.circuit_breaker_cooldown` | `"10s"` | Cooldown period after circuit break |
 
-When the circuit breaker trips, Lua hooks are bypassed: messages use default scheduling (fairness_key=`"default"`, weight=1), and attributes are absent, so each throttle's missing-value policy applies. The circuit breaker resets automatically after the cooldown period.
+**A slow or failing script on one queue must not affect delivery on any other queue.**
+A script that times out on every message slows its own queue and applies backpressure to
+that queue's producers; other queues are unaffected.
+
+### When `on_enqueue` fails
+
+A script error or timeout on a message is handled by the queue's **script failure
+policy**, chosen at creation:
+
+```rust
+QueueSpec::new("orders")
+    .on_enqueue(SCRIPT)
+    .when_script_fails(ScriptFailure::Reject)            // default
+    // .when_script_fails(ScriptFailure::Park { dead_letter_after: Some(10) })
+```
+
+| Policy | Effect |
+|--------|--------|
+| `Reject` (default) | The enqueue fails and nothing is stored. The error says whether retrying can help: a timeout may pass, a script error on the same input will not. |
+| `Park` | The message is stored as **unclassified** and the script is retried later. |
+
+There is no option to accept the message with default values. Falling back to defaults
+would let a producer change how its messages are scheduled by making the script fail —
+escaping its fairness group, gaining weight, or skipping a partitioned throttle.
+
+#### Parked messages
+
+- Classification is retried when the queue's script changes, and periodically with
+  backoff for failures that can pass on their own, such as timeouts.
+- A parked message was never placed in a fairness or ordering group, so classifying it
+  with a newer script is safe.
+- **On an ordered queue, delivery stops at the first unclassified message.** It could
+  belong to any group, so nothing that arrived after it can be delivered safely. On a
+  queue without ordering, only the parked messages wait.
+- `dead_letter_after` optionally moves a message to the dead-letter queue after that
+  many failed classification attempts. An admin operation dead-letters unclassified
+  messages on demand. Either way the message is kept, not dropped.
+- Queue stats report the number of unclassified messages and when the oldest arrived.
+  On an ordered queue, that is how long delivery has been stopped.
+
+### When `on_failure` fails
+
+The message is retried, as if the script had returned `{ action = "retry" }`. On an
+ordered queue the retry holds the message's group.
+
+## Ordering
+
+Queues make no promise about delivery order unless they ask for it. An ordered queue
+delivers each **ordering group** — messages sharing values for the ordering key — in
+arrival order, with at most one message per group in flight. See
+[ordering.md](ordering.md).
 
 ## Dead letter queue
 

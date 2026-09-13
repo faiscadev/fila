@@ -48,8 +48,6 @@ visibility_timeout = "30s"        # default lease; overridable per queue at crea
 [lua]
 default_timeout = "10ms"
 memory_limit = "1MB"
-circuit_breaker_threshold = 3
-circuit_breaker_cooldown = "10s"
 
 [auth]
 enabled = false
@@ -111,8 +109,6 @@ consumer can take more at all.
 |-----|------|---------|-------------|
 | `default_timeout` | duration | `"10ms"` | Maximum script execution time, enforced by instruction-count hook (approximate). Overridable per queue. |
 | `memory_limit` | size | `"1MB"` | Maximum memory a script may allocate. Overridable per queue. |
-| `circuit_breaker_threshold` | integer | `3` | Consecutive Lua failures before the breaker trips. While tripped, hooks are bypassed and default scheduling applies. |
-| `circuit_breaker_cooldown` | duration | `"10s"` | How long to wait after tripping before retrying Lua execution. |
 
 ### `[auth]`
 
