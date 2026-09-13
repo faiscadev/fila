@@ -65,6 +65,9 @@ enqueue delays follow one rule:
 
 On a whole-queue ordered queue, a delayed message holds the entire queue.
 
+An enqueue delay is measured from `enqueued_at`, so a message redriven from the
+dead-letter queue before its delay has elapsed still holds its group for the remainder.
+
 ## Example
 
 Queue `account-events`, ordered by `account`, with `Unordered` for messages that have no

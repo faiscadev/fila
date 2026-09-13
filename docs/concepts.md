@@ -134,7 +134,8 @@ dead-letter:
 function on_failure(msg)
   -- msg.headers   — table of string key-value pairs
   -- msg.id        — message UUID
-  -- msg.attempts  — deliveries so far, including this one
+  -- msg.attempts  — deliveries so far, including this one; reset by redrive
+  -- msg.redrives  — how many times the message has been redriven from the DLQ
   -- msg.queue     — queue name
   -- msg.reason    — "nack" or "lease_expired"
   -- msg.error     — error description from the nack; empty when the lease expired
@@ -289,7 +290,47 @@ fila queue inspect orders.dlq
 fila redrive orders.dlq --count 10
 ```
 
-Redrive moves pending (non-leased) messages from the DLQ back to the original source queue, where they go through the normal enqueue flow again.
+Redrive moves pending (non-leased) messages from the DLQ back to its parent queue. People
+redrive once the cause of the failures is fixed, so a redriven message gets a fresh start:
+
+- **Attempts reset** to zero, so the message has its full retry budget again.
+- **The redrive count increases.** `on_failure` sees it as `msg.redrives`, and deliveries
+  carry it, so a script can leave a message dead-lettered once it has already been
+  redriven several times.
+- **The message ID stays the same**, so a message can be traced across redrives.
+- **It re-enters as a new arrival**, behind messages already in the queue, and keeps its
+  original `enqueued_at`. On an ordered queue it joins the back of its group.
+- **Its enqueue delay still holds.** A message is not delivered before `enqueued_at +
+  delay`; redriven after that time it is deliverable at once, redriven before it waits
+  for the remainder. Retry delays do not carry over.
+
+#### Reclassification
+
+Each redrive chooses whether `on_enqueue` runs again:
+
+```rust
+admin.redrive("orders.dlq", 100, Reclassify::All).await?;          // default
+admin.redrive("orders.dlq", 100, Reclassify::Unclassified).await?;
+admin.redrive("orders.dlq", 100, Reclassify::None).await?;
+```
+
+| Mode | Classified messages | Unclassified messages |
+|------|---------------------|-----------------------|
+| `All` (default) | The current script runs again: new fairness key, weight and attributes | The current script runs |
+| `Unclassified` | Keep their stored classification | The current script runs |
+| `None` | Keep their stored classification | Not redriven; they stay in the DLQ |
+
+Re-running the script is safe for ordering here, unlike on a live backlog: a dead-lettered
+message left its ordering group, so it returns as a new arrival rather than moving between
+groups while they have messages in flight. Unclassified messages — dead-lettered after
+their script kept failing under `Park` — have no classification at all, which is why
+`None` leaves them behind.
+
+If the script fails during a redrive, the queue's script failure policy applies: under
+`Reject` the message stays in the DLQ, under `Park` it is parked in the parent queue.
+
+The result reports what stayed behind as well as what moved — messages left unclassified
+under `None`, and messages the script rejected — so a partial redrive is never silent.
 
 ## Runtime configuration
 

@@ -204,7 +204,7 @@ admin.set_config("routing.default_region", "eu").await?;
 admin.get_config("routing.default_region").await?;
 admin.list_config("routing.").await?;
 
-admin.redrive("orders.dlq", 100).await?;
+admin.redrive("orders.dlq", 100, Reclassify::All).await?;   // re-run on_enqueue on redriven messages
 ```
 
 Auth and ACLs are the same handle:
@@ -348,7 +348,8 @@ fila config set <key> <value>   Set a runtime config key
 fila config get <key>           Read a runtime config key
 fila config list [--prefix p]   List runtime config
 
-fila redrive <dlq> --count N    Move messages from a DLQ back to its parent
+fila redrive <dlq> --count N [--reclassify all|unclassified|none]
+                                Move messages from a DLQ back to its parent
 
 fila auth create --name <n>     Mint an API key
 fila auth revoke <key-id>       Revoke an API key

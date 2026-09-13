@@ -414,7 +414,8 @@ queues without a hook**, and suggestions for queues with one.
 
 #### Delayed delivery
 
-`delay_ms` makes a message ineligible for delivery until that interval has elapsed.
+`delay_ms` makes a message ineligible for delivery before `enqueued_at + delay_ms`. That
+not-before time survives a redrive; retry delays do not.
 Delayed messages count toward queue depth and are visible to `GetStats`, but the
 scheduler will not select them. They do not consume delivery credit while waiting.
 
@@ -466,7 +467,8 @@ For each message:
   [bytes: payload]
   [string: fairness_key]
   [u32: weight]
-  [u32: attempt_count]               -- 1 on first delivery
+  [u32: attempt_count]               -- 1 on first delivery; reset by redrive
+  [u32: redrive_count]               -- times redriven from the dead-letter queue
   [u64: enqueued_at]                 -- Unix ms
   [u64: leased_at]                   -- Unix ms
   [u64: lease_expires_at]            -- Unix ms
@@ -737,6 +739,7 @@ For each entry:
 [frame header: opcode=0xEF]
 [string: dlq_queue]
 [u64: count]                         -- 0 = all
+[u8: reclassify]                     -- 0 = all, 1 = unclassified only, 2 = none
 ```
 
 **RedriveResult (0xEE):**
@@ -745,7 +748,12 @@ For each entry:
 [frame header: opcode=0xEE]
 [u8: error_code]
 [u64: redriven]
+[u64: left_unclassified]             -- stayed in the DLQ: unclassified, reclassify = none
+[u64: rejected_by_script]            -- stayed in the DLQ: script failed under Reject
 ```
+
+Redriven messages keep their message ID, reset their attempt count, and keep their enqueue
+not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 
 ### CreateApiKey (0xED)
 
