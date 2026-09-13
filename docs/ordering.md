@@ -48,7 +48,10 @@ It follows that:
 
 - A **nack that retries** holds the group until that message succeeds or is dead-lettered.
 - A nack with **`retry_after`** holds the group for the delay.
-- An **expired lease** redelivers the same message before anything behind it.
+- An **expired lease** is a failed attempt. Unless it is dead-lettered, the same message
+  is redelivered before anything behind it.
+- A **dead-lettered** message leaves its group, and the group continues without it.
+  Redriving it later places it after messages that arrived in the meantime.
 - **Throughput is bounded by the number of active groups.** An ordered queue with one
   group — `.ordered()` — processes one message at a time, however many consumers it has.
 

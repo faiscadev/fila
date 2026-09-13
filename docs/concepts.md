@@ -37,8 +37,8 @@ Producer                      Broker                        Consumer
 3. **Scheduled** — the DRR scheduler picks the next fairness key and checks the throttles declared by the queue's consumers. If every bucket the message draws from has a token, the message is delivered to a waiting consumer.
 4. **Leased** — the consumer is processing the message. A visibility timeout timer starts.
 5. **Acked** — the consumer confirms success. The message is deleted.
-6. **Nacked** — the consumer reports failure. The `on_failure` hook decides: retry (re-enqueue) or dead-letter.
-7. **Expired** — if the visibility timeout fires before ack/nack, the message is automatically re-enqueued.
+6. **Nacked** — the consumer reports failure. The `on_failure` hook, or the queue's retry policy, decides: retry or dead-letter.
+7. **Expired** — the visibility timeout fires before an ack or nack. This is a failed attempt too, and is decided the same way as a nack.
 
 ## Fairness groups
 
@@ -127,18 +127,20 @@ the change, not the backlog.
 
 ### on_failure
 
-Runs when a consumer nacks a message. Decides retry vs. dead-letter:
+Runs on every failed attempt — a nack, or a lease that expired — and decides retry vs.
+dead-letter:
 
 ```lua
 function on_failure(msg)
   -- msg.headers   — table of string key-value pairs
   -- msg.id        — message UUID
-  -- msg.attempts  — current attempt count
+  -- msg.attempts  — deliveries so far, including this one
   -- msg.queue     — queue name
-  -- msg.error     — error description from the nack
+  -- msg.reason    — "nack" or "lease_expired"
+  -- msg.error     — error description from the nack; empty when the lease expired
 
-  if msg.attempts >= 3 then
-    return { action = "dlq" }
+  if msg.reason == "lease_expired" and msg.attempts >= 2 then
+    return { action = "dlq" }   -- it keeps crashing workers
   end
   return { action = "retry", delay_ms = 1000 * msg.attempts }
 end
@@ -147,8 +149,12 @@ end
 **Return fields:**
 | Field | Type | Description |
 |-------|------|-------------|
-| `action` | `"retry"` or `"dlq"` | Whether to re-enqueue or dead-letter |
-| `delay_ms` | number (optional) | Delay before re-enqueue (retry only) |
+| `action` | `"retry"` or `"dlq"` | Whether to retry or dead-letter |
+| `delay_ms` | number (optional) | Delay before the retry is delivered (retry only) |
+
+When the script runs successfully, **its decision is final**. The queue's retry policy does
+not limit it: a script can retry more times than `max_attempts`, dead-letter earlier, or
+retry forever. See [Retries](#retries).
 
 ### Lua API
 
@@ -207,8 +213,11 @@ escaping its fairness group, gaining weight, or skipping a partitioned throttle.
 
 ### When `on_failure` fails
 
-The message is retried, as if the script had returned `{ action = "retry" }`. On an
-ordered queue the retry holds the message's group.
+The queue's retry policy decides, exactly as if the queue had no `on_failure` script.
+
+Falling back to the policy is safe here in a way that falling back to defaults at enqueue
+is not: it changes only how many times a message is retried, never where it is scheduled
+or how much delivery share it gets. Making the script fail gains a producer nothing.
 
 ## Ordering
 
@@ -217,9 +226,58 @@ delivers each **ordering group** — messages sharing values for the ordering ke
 arrival order, with at most one message per group in flight. See
 [ordering.md](ordering.md).
 
+## Retries
+
+A delivery **fails** when the consumer nacks it or its lease expires. Every failure is an
+attempt, and the next step is decided in this order:
+
+1. If the queue has an `on_failure` script and it runs successfully, the script decides.
+2. Otherwise — no script, or the script failed — the queue's **retry policy** decides.
+
+### Retry policy
+
+```rust
+QueueSpec::new("orders")
+    .retry(
+        RetryPolicy::new()
+            .max_attempts(4)
+            .backoff(Backoff::exponential(Duration::from_secs(1)).max(Duration::from_secs(60))),
+    )
+```
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `max_attempts` | `4` | Total deliveries before the message is dead-lettered — the first delivery and three retries |
+| `backoff` | exponential from 1s, capped at 1m | Delay before each retry is delivered |
+
+A queue without an explicit policy uses the defaults, so every queue has a limit unless an
+`on_failure` script decides otherwise.
+
+Retries are delayed by default because immediate retries turn one failing dependency into
+a hot loop.
+
+### Retry details
+
+- **Expired leases count.** A message that crashes its worker is never nacked, so without
+  counting expiry it would be redelivered forever.
+- **`retry_after` on a nack** overrides the backoff delay for that retry, and still counts
+  as an attempt.
+- **On an ordered queue**, a retrying message holds its ordering group until it succeeds or
+  is dead-lettered. See [ordering.md](ordering.md).
+
 ## Dead letter queue
 
-Messages that exhaust retries (when `on_failure` returns `{ action = "dlq" }`) are moved to a dead letter queue named `<queue>.dlq`. For example, messages dead-lettered from `orders` go to `orders.dlq`.
+**Every queue has a dead-letter queue**, created with it and named `<queue>.dlq`. Messages
+go there when `on_failure` returns `{ action = "dlq" }` or the retry policy's attempts are
+exhausted. For example, messages dead-lettered from `orders` go to `orders.dlq`.
+
+- The `.dlq` suffix is reserved. A queue named `x.dlq` cannot be created directly.
+- A dead-letter queue has no dead-letter queue of its own. A message that fails while
+  being consumed from a dead-letter queue returns to it, delayed by backoff; the attempt
+  limit does not apply there.
+- On an ordered queue, a dead-lettered message leaves its ordering group, and the group
+  continues without it. Redriving it later places it after messages that arrived in the
+  meantime.
 
 ### Inspecting and redriving
 
@@ -254,7 +312,7 @@ When a consumer receives a message via `Consume`, the message is "leased" for a 
 - The message is not delivered to other consumers
 - A timer tracks the lease expiry
 
-If the consumer does not `Ack` or `Nack` the message before the timeout expires, the message is automatically re-enqueued and becomes available for delivery again. This prevents messages from being lost when consumers crash.
+If the consumer does not `Ack` or `Nack` the message before the timeout expires, the attempt has failed. It counts toward the retry limit and is decided like a nack — by `on_failure` with `msg.reason = "lease_expired"`, or by the retry policy — so a message is not lost when its consumer crashes, and a message that keeps crashing consumers is eventually dead-lettered.
 
 The default visibility timeout is set per-queue at creation:
 

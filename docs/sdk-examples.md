@@ -156,7 +156,7 @@ while let Some(delivery) = jobs.next().await {
             delivery.retry_after(backoff).await?;
         }
         Err(e) => {
-            // on_failure decides whether this dead-letters
+            // on_failure, or the retry policy, decides whether this dead-letters
             delivery.nack(&e.to_string()).await?;
         }
     }

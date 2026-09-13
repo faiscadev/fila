@@ -177,6 +177,10 @@ running worker asked for.
 
 **Goal:** Retry failed messages with increasing delays, then dead-letter after max attempts.
 
+A fixed limit with exponential backoff is what every queue's retry policy does already,
+with no script (see [concepts](concepts.md#retry-policy)). This tutorial uses `on_failure`
+to make the limit changeable at runtime and different per job type.
+
 ### 1. Create a queue with retry logic
 
 ```sh

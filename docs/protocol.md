@@ -259,6 +259,7 @@ per-item result array (batch item failure).
 | `0x13` | ScriptError | The queue's `on_enqueue` script failed on this message; retrying the same message will not help |
 | `0x14` | ScriptTimeout | The queue's `on_enqueue` script timed out on this message; retrying may help |
 | `0x15` | OrderingKeyMissing | The message has no value for the queue's ordering key, and the queue rejects such messages |
+| `0x16` | ReservedQueueName | Queue names ending in `.dlq` are reserved for dead-letter queues |
 | `0xFF` | InternalError | Unexpected server error |
 
 ## Connection Lifecycle
@@ -543,7 +544,8 @@ For each result:
 ```
 
 When `retry_after_ms` is present the message is retried no sooner than that
-interval, overriding any delay the `on_failure` hook returns. The hook still decides
+interval, overriding any delay the `on_failure` hook or the retry policy's backoff would
+apply. The retry still counts as an attempt. The hook still decides
 **whether** to retry or dead-letter; the client only overrides **when**. A client
 holding a `Retry-After` from a rate-limited upstream knows the correct delay in a
 way the broker cannot.
@@ -595,10 +597,14 @@ redelivered. The client should stop work: another consumer may hold it now.
 Scripts use `text` (`u32`-prefixed) rather than `string`; a 64 KB ceiling on
 user-authored Lua is an arbitrary limit with no reason behind it.
 
+Creating a queue also creates its dead-letter queue, `<name>.dlq`. A name ending in `.dlq`
+is rejected with `ReservedQueueName` (`0x16`).
+
 **Not yet specified:** the encoding of the ordering key and its missing-key policy
-([ordering.md](ordering.md)), and of the script failure policy with its optional
-dead-letter threshold ([concepts.md](concepts.md#when-on_enqueue-fails)). All are fixed
-at creation.
+([ordering.md](ordering.md)), of the script failure policy with its optional dead-letter
+threshold ([concepts.md](concepts.md#when-on_enqueue-fails)), and of the retry policy
+([concepts.md](concepts.md#retry-policy)). The ordering key and the script failure policy
+are fixed at creation.
 
 **CreateQueueResult (0xFC):**
 

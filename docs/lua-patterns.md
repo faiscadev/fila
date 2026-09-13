@@ -102,6 +102,11 @@ applies.
 
 ## Exponential backoff retry
 
+A fixed attempt limit with exponential backoff doesn't need a script — it's what the
+queue's [retry policy](concepts.md#retry-policy) does by default. Use `on_failure` when the
+decision depends on the message, the error, or runtime config. When the script runs, its
+decision is final: `max_attempts` does not limit it.
+
 Retry with increasing delays, dead-letter after max attempts:
 
 ```lua
@@ -190,6 +195,24 @@ function on_enqueue(msg)
   return {
     fairness_key = "region:" .. region
   }
+end
+```
+
+### Worker crashes vs. errors
+
+An expired lease reaches `on_failure` with `msg.reason = "lease_expired"`. A message that
+keeps crashing workers is likely poison; one that returns errors may just be waiting on a
+dependency:
+
+```lua
+function on_failure(msg)
+  if msg.reason == "lease_expired" and msg.attempts >= 2 then
+    return { action = "dlq" }
+  end
+  if msg.attempts >= 10 then
+    return { action = "dlq" }
+  end
+  return { action = "retry", delay_ms = math.min(1000 * (2 ^ (msg.attempts - 1)), 60000) }
 end
 ```
 
