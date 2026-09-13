@@ -26,7 +26,7 @@ Fila moves scheduling decisions into the broker:
 | **Retries** | A nack or an expired lease is a failed attempt. The queue's `on_failure` script decides what happens next; without one, a retry policy does — by default 3 deliveries with exponential backoff. |
 | **Dead letter queue** | Every queue has one, named `<queue>.dlq`. Messages that exhaust retries move there. Redrive moves them back. |
 | **Runtime config** | Key-value pairs, readable from Lua via `fila.get(key)`. Change behavior without restarting. |
-| **Leases** | Delivered messages are leased for a visibility timeout. A lease that expires unacked counts as a failed attempt. |
+| **Leases** | Delivered messages are leased for a visibility timeout. A lease that expires unacked counts as a failed attempt. In a cluster, leases and acks are committed before taking effect, or — per queue, for speed — kept on the leader. |
 
 See [docs/concepts.md](docs/concepts.md) for the model in depth and
 [docs/lua-patterns.md](docs/lua-patterns.md) for hook recipes.
@@ -411,8 +411,8 @@ preference:
 
 **A core with no I/O.** A state machine over bytes — feed it what arrived, ask it
 what to send. It owns the codec, request-ID correlation, handshake and capability
-negotiation, leader-redirect handling, delivery-credit accounting, and shard
-discovery and merge. No sockets, no TLS, no async runtime, no timers it owns.
+negotiation, leader-redirect handling, retrying pending acknowledgements after a leader
+change, delivery-credit accounting, and shard discovery and merge. No sockets, no TLS, no async runtime, no timers it owns.
 
 **An I/O shell.** Opens connections, does TLS, pumps bytes, and presents the host
 language's native idiom.

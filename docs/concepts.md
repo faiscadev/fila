@@ -349,6 +349,20 @@ Common use cases:
 - **Feature flags**: toggle behavior in Lua scripts without redeployment
 - **Dynamic routing**: change fairness key assignment logic based on config values
 
+## Delivery durability
+
+In a cluster, each queue chooses whether its leases and acks are committed before they
+take effect:
+
+- **`Committed`** (default) — a leader crash loses nothing, and a successful ack means the
+  message is never delivered again. Costs a commit round trip before messages go out.
+- **`Fast`** — leases stay on the leader and acks succeed before commit. After a crash,
+  in-flight and recently acked messages may be delivered again, after a short reclaim
+  grace period in which reconnecting consumers can still ack or extend.
+
+Planned leadership changes carry leases over for every queue. See
+[clustering.md](clustering.md#what-replicates).
+
 ## Visibility timeout
 
 When a consumer receives a message via `Consume`, the message is "leased" for a configurable duration (set per-queue at creation time via `visibility_timeout_ms`). During this lease:

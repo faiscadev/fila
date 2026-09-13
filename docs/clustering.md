@@ -68,7 +68,7 @@ intended failure mode.
 |-------|----------------|
 | Messages | The queue's own group |
 | Throttle grant state | The throttle grantor — soft state, except grants for long windows, which are recorded in the meta group; see [throttling.md](throttling.md#failover) |
-| Leases | Undecided; see open questions |
+| Leases and acks | The queue's own group, per its delivery durability — see [What replicates](#what-replicates) |
 
 ### The throttle grantor
 
@@ -133,6 +133,83 @@ Two rules keep sharding an addition rather than a rewrite:
 - **Every replicated log entry carries its queue name**, even while a group holds one
   queue and the name looks redundant.
 
+## What replicates
+
+A change to a queue counts once its Raft group has committed it. Whether a piece of state
+must be committed first comes down to what breaks if a leader crash loses it.
+
+| State | Committed | Why |
+|-------|-----------|-----|
+| Enqueued messages, with their classification | Before the producer receives a message ID | An accepted message must not disappear |
+| Nacks, `retry_after`, not-before times | Yes | Losing them retries at once — a hot loop, and an ordering group released early |
+| Attempt and redrive counts | Yes | Otherwise a message can exceed `max_attempts` by bouncing across failovers |
+| Parking and later classification | Yes | Message state other nodes must agree on |
+| Leases and acks | Depends on the queue's delivery durability | See below |
+| Fairness scheduler state | No | Rebuilt by a new leader; fairness is briefly approximate |
+| Subscriptions and delivery credit | No | Belong to connections; consumers reconnect |
+
+### Delivery durability
+
+Each queue chooses how its leases and acks are handled:
+
+```rust
+QueueSpec::new("emails").delivery_durability(DeliveryDurability::Fast)   // default: Committed
+```
+
+| | `Committed` (default) | `Fast` |
+|-|-----------------------|--------|
+| Leases | Committed before the message leaves the leader | Held by the leader only |
+| Acks | Succeed after commit | Replicated, but succeed without waiting |
+| After a leader crash | Nothing is lost | In-flight and recently acked messages may be delivered again |
+
+#### `Committed`
+
+- Deliveries are committed before messages leave the leader, **batched per scheduling
+  pass** — one write for many deliveries — so the cost is a commit round trip of latency,
+  not a write per message. Lease extensions are committed the same way.
+- A successful ack means the message is never delivered again.
+- A new leader knows every lease. It cannot know how much of a lease has already elapsed
+  without trusting node clocks to agree, so it **restarts each in-flight lease at its full
+  duration**. A crashed consumer's messages may be redelivered up to one visibility timeout
+  later than otherwise, never earlier.
+
+#### `Fast`
+
+- Leases are held by the leader only, and acks succeed before they are committed.
+- **On an ordered queue, acks still wait for commit.** A lost ack there would reprocess a
+  message after the messages behind it, breaking the order itself.
+- On a crash: messages in flight, and messages acked but not yet committed, can be
+  delivered again; the attempt in flight is not counted; extensions of in-flight leases
+  are lost.
+
+#### Recovering a `Fast` queue after a crash
+
+- Clients retry their pending acks, nacks and lease extensions against the new leader.
+  This belongs to the shared client core, so every SDK does it.
+- For the queue's **reclaim grace** — 5 seconds by default, configurable per queue:
+  - an ack or nack resolves its message;
+  - an `ExtendLease` for a lease the new leader does not know **re-establishes the lease**
+    for that consumer, so long-running jobs that heartbeat are protected.
+- During the grace period, only messages that existed before the new leader took over
+  are held — on an ordered queue, only ordering groups containing such a message. Messages
+  enqueued after the takeover are delivered normally.
+- When the grace period ends, unresolved messages from before the takeover are delivered
+  again.
+
+A job that runs longer than the grace period without extending its lease is delivered
+again. Such a job must extend its lease anyway to outlive the visibility timeout.
+
+On an ordered queue, one exception to "at most one message per group in flight" remains:
+a group's head message can be processed twice at once if its worker is alive but cannot
+reach the new leader within the grace period.
+
+### Controlled handovers
+
+When leadership moves on purpose — a rolling upgrade, rebalancing, removing a node — the
+old leader stops delivering, commits its in-flight leases, and then transfers leadership.
+This applies to every queue, so a `Fast` queue loses nothing in a planned handover. The
+pause is a single commit.
+
 ## Inter-node protocol
 
 Nodes talk to each other over a protocol **separate from the client protocol**, with
@@ -152,14 +229,9 @@ The inter-node protocol is not yet specified.
 
 ## Open decisions
 
-- **What replicates.** Whether leases are replicated state or held only by the queue
-  leader, and what happens to in-flight messages when a leader changes. A nack with
-  `retry_after` and the classification of a parked message change message state and
-  must replicate; whether lease extension does depends on the lease decision.
 - **Routing.** Which node serves which request: forwarding writes to a queue's leader,
   redirecting consumers with `NotLeader` and `leader_addr`, which node answers queue and
-  throttle
-  statistics, and how quickly a revoked API key must stop working on every node.
+  throttle statistics, and how quickly a revoked API key must stop working on every node.
 - **Rebalancing.** Moving leadership after failover, when nodes join, and when load is
   uneven. Placement today is decided only at queue creation.
 - **Membership and upgrades.** Adding and removing nodes, bootstrapping a cluster,

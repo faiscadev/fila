@@ -52,6 +52,10 @@ It follows that:
   is redelivered before anything behind it.
 - A **dead-lettered** message leaves its group, and the group continues without it.
   Redriving it later places it after messages that arrived in the meantime.
+- On a queue with **`Fast` delivery durability**, a group's head message can be processed
+  twice at once after a leader crash, if its worker is alive but cannot reach the new
+  leader within the reclaim grace period. See
+  [clustering.md](clustering.md#delivery-durability).
 - **Throughput is bounded by the number of active groups.** An ordered queue with one
   group — `.ordered()` — processes one message at a time, however many consumers it has.
 

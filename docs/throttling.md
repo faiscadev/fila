@@ -321,9 +321,9 @@ proportion to *h / W*, so long windows can use long leases and need few lease re
 and therefore few recorded writes. Recording one grant also covers the throttle's shorter
 limits, so none of them pause either.
 
-A queue leader's delivery records surviving failover, if they do, would let a new grantor
-rebuild recent history without recording grants. That depends on what the cluster
-replicates, which is still open ([clustering.md](clustering.md#open-decisions)).
+Queues with `Committed` delivery durability commit their deliveries, which could let a
+new grantor rebuild recent history instead of recording grants
+([clustering.md](clustering.md#delivery-durability)). That is not yet part of this design.
 
 ### Limit changes
 

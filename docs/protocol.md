@@ -504,6 +504,9 @@ For each message:
 `ExtendLease` — the visibility timeout is queue configuration the consumer has no
 reason to have fetched, and it may be changed by an operator mid-stream.
 
+It is a lower bound: a leader change can restart a lease at its full duration, and never
+shortens one. See [clustering.md](clustering.md#delivery-durability).
+
 ### Credit (0x15)
 
 Grant additional delivery credit to an existing subscription.
@@ -610,6 +613,10 @@ heartbeats on a fixed interval cannot accumulate unbounded lease time by racing.
 `MessageNotFound` here means the lease already expired and the message was
 redelivered. The client should stop work: another consumer may hold it now.
 
+On a queue with `Fast` delivery durability, an `ExtendLease` for a lease the leader does
+not know, received during the reclaim grace period after a crash, re-establishes the
+lease for that consumer instead of failing.
+
 ## Admin Operation Frames
 
 ### CreateQueue (0xFD)
@@ -630,9 +637,10 @@ is rejected with `ReservedQueueName` (`0x16`).
 
 **Not yet specified:** the encoding of the ordering key and its missing-key policy
 ([ordering.md](ordering.md)), of the script failure policy with its optional dead-letter
-threshold ([concepts.md](concepts.md#when-on_enqueue-fails)), and of the retry policy
-([concepts.md](concepts.md#retry-policy)). The ordering key and the script failure policy
-are fixed at creation.
+threshold ([concepts.md](concepts.md#when-on_enqueue-fails)), of the retry policy
+([concepts.md](concepts.md#retry-policy)), and of delivery durability with its reclaim
+grace ([clustering.md](clustering.md#delivery-durability)). The ordering key and the
+script failure policy are fixed at creation.
 
 **CreateQueueResult (0xFC):**
 
