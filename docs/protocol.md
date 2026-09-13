@@ -1174,7 +1174,9 @@ Which node handles each request is described in
 [clustering.md](clustering.md#routing). **Not yet specified:** how responses carry the
 leader of each queue so clients can send to it directly, the routing lookup that returns
 queue leaders and shards, and the error a node returns when it cannot confirm its
-authentication state is current.
+authentication state is current. Nor are the cluster operations described in
+[clustering.md](clustering.md#operator-control): draining a node, moving a queue's leader,
+pausing and disabling rebalancing, and reporting rebalancing state.
 
 ### Consume and Ack on the Same Connection
 

@@ -42,6 +42,7 @@ enough to afford consensus:
 | Queue registry | Which queues exist, their configuration (scripts, visibility timeout), group members and preferred leader |
 | Runtime configuration | The key-value store Lua reads with `fila.get()` |
 | API keys and ACLs | Read on every request, on every node |
+| Rebalancing state | Whether automatic rebalancing is enabled, and any pause and when it ends |
 
 These live in **one** group. They are small and rarely written; splitting them would
 add elections and heartbeats, introduce partial-failure states such as authentication
@@ -97,7 +98,77 @@ When a queue is created, the cluster chooses its group automatically:
   group is formed from that many least-loaded nodes.
 - Operators do not place queues manually.
 
-This decides initial placement only. Rebalancing is an open question.
+A new queue has no load yet, so initial placement counts leaderships. Where queues go
+afterwards is rebalancing's job.
+
+## Rebalancing
+
+Nothing about failover moves leadership back. After a node restarts — say, for an
+upgrade — the queues it led stay with the survivors, and after a few rolling upgrades one
+node can lead nearly everything. Rebalancing moves queues so load stays spread.
+
+### Two kinds of move
+
+| | Leadership move | Replica move |
+|-|-----------------|--------------|
+| What changes | Which member of a queue's group leads | Which nodes are members |
+| Cost | A controlled handover: one commit, then the queue's consumers redirect | Copying the queue's state to a new node |
+| Used for | Spreading load | Spreading storage |
+
+Rebalancing makes load-driven moves of both kinds. Replacing the replicas of a node that
+has left, to restore the replication factor, is a membership concern, not rebalancing.
+
+### What balanced means
+
+**Load, not leadership count.** A queue's load is its recent enqueue and delivery volume,
+in messages and bytes, smoothed over minutes. With tens of queues of very different sizes,
+one busy queue can outweigh ten quiet ones, so counting leaderships alone says little.
+Leadership count breaks ties.
+
+The meta group leader also runs the throttle grantor, and that work counts as load on its
+node like any queue's, so rebalancing avoids stacking busy queues there.
+
+A sharded queue's shards are separate groups and are balanced like queues.
+
+### When moves happen
+
+- **When a node joins or rejoins**, leaders move to it gradually.
+- **When imbalance is sustained** — a periodic check acts only if imbalance stays above a
+  threshold for several minutes. Short spikes are ignored.
+- **Never in reaction to a failover itself.** Survivors take over immediately; rebalancing
+  waits for the cluster to be stable.
+
+### Limits
+
+Every move redirects a queue's consumers, whose streams and credit restart, so rebalancing
+is deliberately conservative:
+
+- **One move at a time per node.**
+- **A cooldown per queue**, so the same queue is not moved back and forth.
+- **A minimum benefit**: a move is skipped unless it improves balance by more than a
+  threshold. A slightly uneven cluster is better than a constantly shuffling one.
+- **Replica moves add before they remove**, so a queue never has fewer replicas than its
+  replication factor during a move.
+
+### Operator control
+
+| Operation | Effect |
+|-----------|--------|
+| **Drain a node** | Moves every leader off a node, through controlled handovers, before maintenance. Queues lose nothing, including `Fast` queues. |
+| **Move a queue's leader** | Moves one queue's leadership to a chosen member. |
+| **Pause rebalancing** | Stops automatic moves **for a given duration**, after which they resume on their own — so a pause left behind after an incident cannot quietly become permanent. |
+| **Disable rebalancing** | Stops automatic moves until re-enabled. For operators who manage placement themselves. |
+
+Pause and disable are cluster-wide state kept in the meta group, so every node agrees and
+they survive a meta leader failover. Cluster stats show whether rebalancing is enabled,
+paused, or disabled, and when a pause ends.
+
+Moving a leader pins nothing: automatic rebalancing, when enabled, may move the queue again
+later.
+
+While rebalancing is paused or disabled, only automatic load-driven moves stop. Failover
+still hands leadership to a surviving member, lost replicas are still replaced, drains and
+leader moves still work, and new queues are still placed automatically.
 
 ## Sharding
 
@@ -269,11 +340,9 @@ The inter-node protocol is not yet specified.
 
 ## Open decisions
 
-- **Rebalancing.** Moving leadership after failover, when nodes join, and when load is
-  uneven. Placement today is decided only at queue creation.
-- **Membership and upgrades.** Adding and removing nodes, bootstrapping a cluster,
-  rolling upgrades, and a versioned format for replicated log entries so that adding a
-  field never breaks replay of existing entries.
+- **Membership and upgrades.** Adding and removing nodes, replacing the replicas of a node
+  that has left, bootstrapping a cluster, rolling upgrades, and a versioned format for
+  replicated log entries so that adding a field never breaks replay of existing entries.
 - **Sharding details.** How acks reach the shard holding a message when the shard key
   is not derivable from the message ID, how clients discover shards and their leaders,
   and whether shard placement should balance by fairness weight.
