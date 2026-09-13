@@ -223,6 +223,15 @@ Falling back to the policy is safe here in a way that falling back to defaults a
 is not: it changes only how many times a message is retried, never where it is scheduled
 or how much delivery share it gets. Making the script fail gains a producer nothing.
 
+## Deduplication
+
+Off by default. A producer can give a message an idempotency key, or a queue can define
+what makes two messages duplicates — a key over headers, the fairness key, attributes, the
+idempotency key, or hashes of the payload and headers. A duplicate is not enqueued again;
+the enqueue succeeds with the original message's ID. A key is remembered while its message
+is in the queue or its dead-letter queue, and for a window after it leaves (10 minutes by
+default). See [deduplication.md](deduplication.md).
+
 ## Ordering
 
 Queues make no promise about delivery order unless they ask for it. An ordered queue

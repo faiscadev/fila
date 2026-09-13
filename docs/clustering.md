@@ -118,6 +118,8 @@ queue is split across groups of its own, and unrelated queues never share a grou
 
 - **An ordered queue's shard key must be part of its ordering key**, so that every
   message of an ordering group lives in the same shard. See [ordering.md](ordering.md).
+- **A deduplicating queue's shard key must be part of its dedup key**, so that duplicates
+  meet in the same shard. See [deduplication.md](deduplication.md).
 
 - A consumer of a sharded queue receives from every shard's leader. Merging those
   streams happens in the client, in the shared sans-io core, so every SDK inherits one
@@ -143,6 +145,7 @@ must be committed first comes down to what breaks if a leader crash loses it.
 | Nacks, `retry_after`, not-before times | Yes | Losing them retries at once — a hot loop, and an ordering group released early |
 | Attempt and redrive counts | Yes | Otherwise a message can exceed `max_attempts` by bouncing across failovers |
 | Parking and later classification | Yes | Message state other nodes must agree on |
+| Deduplication keys | With the message they belong to | A failover retry is exactly what deduplication exists for |
 | Leases and acks | Depends on the queue's delivery durability | See below |
 | Fairness scheduler state | No | Rebuilt by a new leader; fairness is briefly approximate |
 | Subscriptions and delivery credit | No | Belong to connections; consumers reconnect |
@@ -209,6 +212,44 @@ old leader stops delivering, commits its in-flight leases, and then transfers le
 This applies to every queue, so a `Fast` queue loses nothing in a planned handover. The
 pause is a single commit.
 
+## Routing
+
+Every queue has a leader, possibly on a different node from other queues, and the meta
+group has its own. Routing decides which node handles each request.
+
+| Request | Handled by |
+|---------|------------|
+| Enqueue | **Any node.** A node forwards messages for queues it does not lead to their leaders and returns one combined result. Responses tell the client which node leads each queue, so the client sends there directly afterwards. |
+| Consume, ack, nack, extend lease | **The queue's leader.** Any other node answers `NotLeader` with `leader_addr`, and the client connects to the leader. Acks, nacks and extensions travel on the connection of the subscription that delivered the message. |
+| Admin writes | Any node, forwarded to the meta leader |
+| Queue stats | Forwarded to the queue's leader, the only node with live scheduler state |
+| Throttle stats | Forwarded to the throttle grantor, which gathers waiting counts from queue leaders |
+| Queue list, runtime config, API keys, ACLs | **Linearizable:** forwarded to the meta leader, which confirms its leadership before answering. Creating a queue and then listing queues always shows it. |
+| Routing lookup | Any node, from its copy of the meta group |
+
+- **Forwarding is the fallback, not the steady state.** Producers never need to know the
+  cluster's layout, and the client core learns leaders so that steady-state traffic goes
+  straight to them.
+- **Consumer streams are never proxied.** A proxy would add a network hop to every delivery
+  and make consumers depend on an intermediate node staying up.
+- **A client holds one connection per node it needs.** A consumer of three queues led from
+  three nodes keeps three connections, each multiplexing its subscriptions.
+- **The routing lookup** returns each queue's leader address — and, for sharded queues, its
+  shards — from the answering node's copy of the meta group. It may be slightly stale; a
+  stale answer leads to a `NotLeader` redirect, never to a wrong result.
+
+### How quickly authentication changes apply
+
+Every node checks API keys and ACLs against its own copy of the meta group, on every
+request. A revocation normally reaches every node as fast as the meta group replicates.
+
+- **A node that cannot confirm it is current fails closed.** If it has not confirmed that it
+  is caught up with the meta leader within a bound of a few seconds, it rejects
+  authenticated requests as unavailable. A node cut off from the cluster therefore cannot go
+  on honouring a revoked key.
+- **Applying a revocation ends the key's open subscriptions.** Deliveries are pushed rather
+  than requested, so a per-request check alone would never stop them.
+
 ## Inter-node protocol
 
 Nodes talk to each other over a protocol **separate from the client protocol**, with
@@ -228,9 +269,6 @@ The inter-node protocol is not yet specified.
 
 ## Open decisions
 
-- **Routing.** Which node serves which request: forwarding writes to a queue's leader,
-  redirecting consumers with `NotLeader` and `leader_addr`, which node answers queue and
-  throttle statistics, and how quickly a revoked API key must stop working on every node.
 - **Rebalancing.** Moving leadership after failover, when nodes join, and when load is
   uneven. Placement today is decided only at queue creation.
 - **Membership and upgrades.** Adding and removing nodes, bootstrapping a cluster,

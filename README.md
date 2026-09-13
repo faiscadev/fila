@@ -22,6 +22,7 @@ Fila moves scheduling decisions into the broker:
 | **Fairness keys** | Messages are grouped by a `fairness_key`. The DRR scheduler gives each group its fair share of delivery bandwidth, in proportion to its `weight`. |
 | **Throttling** | Consumers declare named limits — at most N deliveries in any window — when subscribing, optionally keyed per message. The broker holds messages until delivering them stays within every limit. |
 | **Lua hooks** | `on_enqueue` derives fairness key, weight, and attributes that throttles and ordering can use. `on_failure` decides retry vs. dead-letter. Both are optional. |
+| **Deduplication** | Off by default. A producer's idempotency key, or a key the queue defines, keeps a retried enqueue from creating a second copy. |
 | **Ordering** | Off by default. A queue can ask for arrival order overall or per ordering key, with at most one message per group in flight. |
 | **Retries** | A nack or an expired lease is a failed attempt. The queue's `on_failure` script decides what happens next; without one, a retry policy does — by default 3 deliveries with exponential backoff. |
 | **Dead letter queue** | Every queue has one, named `<queue>.dlq`. Messages that exhaust retries move there. Redrive moves them back. |
@@ -76,6 +77,7 @@ let id = producer.send(
         .header("tenant", "acme")
         .fairness_key("acme")                    // direct — Lua is not required
         .weight(3)
+        .idempotency_key("order-123")            // a retry won't enqueue a second copy
         .delay(Duration::from_secs(30))          // deliver no earlier than
 ).await?;
 ```
@@ -377,6 +379,7 @@ Everything else is explanation, not contract:
 |----------|----------------|
 | [concepts.md](docs/concepts.md) | Fairness keys, DRR, throttling, leases, dead-lettering |
 | [throttling.md](docs/throttling.md) | Consumer-declared rate limits, partitioning, and cluster-wide enforcement |
+| [deduplication.md](docs/deduplication.md) | Idempotency keys, queue-defined dedup keys, and how long keys are remembered |
 | [ordering.md](docs/ordering.md) | Ordered queues, ordering groups, and how order interacts with fairness and throttling |
 | [configuration.md](docs/configuration.md) | The three config layers, every key, reserved prefixes |
 | [lua-patterns.md](docs/lua-patterns.md) | Copy-paste `on_enqueue` and `on_failure` hooks |

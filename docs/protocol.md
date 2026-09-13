@@ -7,7 +7,7 @@ Version: 1 (draft)
 Fila uses a custom binary protocol over TCP for all client-server communication.
 The protocol is designed for:
 
-- **Minimal overhead**: about 17 bytes amortized per message beyond payload in batch operations
+- **Minimal overhead**: about 18 bytes amortized per message beyond payload in batch operations
 - **Zero-copy parsing**: Length-prefixed frames — no delimiter scanning
 - **Batch-native**: Every operation accepts multiple items; a single message is a batch of 1
 - **Multiplexed**: Multiple concurrent requests on one connection via request IDs
@@ -112,10 +112,19 @@ All multi-byte integers are big-endian (network byte order).
 | `optional<T>` | `[u8 present][T if present]` | 1, or 1 + sizeof(T) |
 | `key` | `[u16 part_count][repeated: u8 kind, string name]` | 2 + parts |
 
-A **`key`** names message properties that together identify a group — an ordering group
-or a throttle bucket. Each part's `kind` is `0` for a header, `1` for the fairness key, or
-`2` for an attribute returned by `on_enqueue`; `name` is the header or attribute name, and
-empty for the fairness key. A `part_count` of 0 means no key.
+A **`key`** names message properties that together identify a group — an ordering group,
+a throttle bucket, or a set of duplicates. Each part's `kind` is:
+
+| Kind | Part | `name` |
+|------|------|--------|
+| `0` | A header | The header name |
+| `1` | The fairness key | Empty |
+| `2` | An attribute returned by `on_enqueue` | The attribute name |
+| `3` | The producer's idempotency key | Empty |
+| `4` | A hash of the payload | Empty |
+| `5` | A hash of every header | Empty |
+
+Kinds `3`–`5` are valid only in deduplication keys. A `part_count` of 0 means no key.
 
 ### On identifiers
 
@@ -392,6 +401,7 @@ For each message:
   [optional<string>: fairness_key]   -- absent = queue default
   [optional<u32>: weight]            -- absent = queue default (1)
   [optional<u64>: delay_ms]          -- absent or 0 = deliverable immediately
+  [optional<string>: idempotency_key]
 ```
 
 **EnqueueResult (0x11):**
@@ -401,10 +411,15 @@ For each message:
 [u32: result_count]
 For each result:
   [u8: error_code]
-  [uuid: message_id]                 -- all-zero if error
+  [uuid: message_id]                 -- all-zero if error; the original's ID for a duplicate
+  [bool: duplicate]                  -- matched a remembered deduplication key; nothing was enqueued
 ```
 
 Results are in request order.
+
+A message whose deduplication key matches one the queue still remembers is not enqueued
+again: its result is `Ok` with the original message's ID and `duplicate` set. See
+[deduplication.md](deduplication.md).
 
 A message can be rejected individually: `ScriptError` or `ScriptTimeout` when the queue
 rejects messages its script fails on, `OrderingKeyMissing` when it is an ordered queue
@@ -638,7 +653,8 @@ is rejected with `ReservedQueueName` (`0x16`).
 **Not yet specified:** the encoding of the ordering key and its missing-key policy
 ([ordering.md](ordering.md)), of the script failure policy with its optional dead-letter
 threshold ([concepts.md](concepts.md#when-on_enqueue-fails)), of the retry policy
-([concepts.md](concepts.md#retry-policy)), and of delivery durability with its reclaim
+([concepts.md](concepts.md#retry-policy)), of the dedup key and window ([deduplication.md](deduplication.md)), and of delivery
+durability with its reclaim
 grace ([clustering.md](clustering.md#delivery-durability)). The ordering key and the
 script failure policy are fixed at creation.
 
@@ -1030,10 +1046,11 @@ receiver needs none to reassemble.
 | fairness_key (absent) | 1 |
 | weight (absent) | 1 |
 | delay_ms (absent) | 1 |
-| **Total** | **1055** |
-| **Overhead beyond payload** | **31 bytes** |
+| idempotency_key (absent) | 1 |
+| **Total** | **1056** |
+| **Overhead beyond payload** | **32 bytes** |
 
-The three optional scheduling fields cost 3 bytes when unused — the price of making
+The four optional fields cost 4 bytes when unused — the price of making
 fairness settable without Lua.
 
 ### Batch Enqueue (100 messages, same queue)
@@ -1044,9 +1061,9 @@ fairness settable without Lua.
 | 100x queue string | 800 |
 | 100x headers map (empty) | 200 |
 | 100x payload (4 + 1024) | 102,800 |
-| 100x scheduling fields (unused) | 300 |
-| **Total** | **104,114** |
-| **Per-message overhead** | **17.14 bytes** |
+| 100x optional fields (unused) | 400 |
+| **Total** | **104,214** |
+| **Per-message overhead** | **18.14 bytes** |
 
 ### Batch Ack (1,000 messages)
 
@@ -1067,7 +1084,7 @@ Encoding the same ID as a 36-character string would cost 46 bytes per item, and
 
 | Protocol | Single 1 KB Enqueue | Notes |
 |----------|--------------------:|-------|
-| Fila binary | ~31 bytes overhead | Length-prefixed, no HTTP/2 |
+| Fila binary | ~32 bytes overhead | Length-prefixed, no HTTP/2 |
 | gRPC/HTTP2/protobuf | ~100-200 bytes | HTTP/2 HEADERS + DATA, protobuf tags, HPACK |
 
 ## Serialization Format Decision
@@ -1148,8 +1165,16 @@ Neither replaces the other. Credit is the consumer's; `ChannelFull` is the produ
 ### Connection Pooling
 
 Clients may open several connections. Request IDs are per connection, not global.
-SDKs should default to one connection with multiplexed requests, and multiple
+SDKs should default to one connection per node, with multiplexed requests and multiple
 subscriptions on it.
+
+### Clusters
+
+Which node handles each request is described in
+[clustering.md](clustering.md#routing). **Not yet specified:** how responses carry the
+leader of each queue so clients can send to it directly, the routing lookup that returns
+queue leaders and shards, and the error a node returns when it cannot confirm its
+authentication state is current.
 
 ### Consume and Ack on the Same Connection
 
