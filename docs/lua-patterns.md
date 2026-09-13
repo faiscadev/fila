@@ -50,11 +50,12 @@ Set weights at runtime: `fila config set weight:acme 5`
 
 ---
 
-## Throttle partitions
+## Throttle keys
 
 Throttles are declared by consumers (see [throttling.md](throttling.md)). Lua's role is
-computing the values a throttle partitions by, returned as `attributes` from
-`on_enqueue`, when they cannot simply be read from a header or the fairness key.
+computing the values a throttle is keyed by, returned as `attributes` from `on_enqueue`,
+when they cannot simply be read from a header or the fairness key — including setting
+an attribute only on the messages a throttle should apply to.
 
 Attributes are computed once, at enqueue, and stored with the message. Changing the
 script affects messages enqueued afterwards.
@@ -68,7 +69,7 @@ account:
 function on_enqueue(msg)
   local customer = msg.headers["customer"]
   if not customer then
-    return {}   -- attribute absent: the throttle's missing-value policy applies
+    return {}   -- attribute absent: the throttle's missing-key policy applies
   end
   return { attributes = { account = fila.get("account:" .. customer) or customer } }
 end
@@ -79,8 +80,8 @@ consumer
     .subscribe("charges")
     .throttle(
         Throttle::named("stripe-per-account")
-            .partition_by_attribute("account")
-            .rate(10, Duration::from_secs(1)),
+            .key([Key::attribute("account")])
+            .limit(10, Duration::from_secs(1)),
     )
     .await?;
 ```
@@ -95,7 +96,7 @@ function on_enqueue(msg)
 end
 ```
 
-A nil value means the attribute is absent, and the throttle's missing-value policy
+A nil value means the attribute is absent, and the throttle's missing-key policy
 applies.
 
 ---

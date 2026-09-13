@@ -93,18 +93,19 @@ holds messages until delivering them stays within every limit, so the worker nev
 needs its own rate-limiting code.
 
 ```rust
-use fila_sdk::{Missing, Throttle};
+use fila_sdk::{Key, Missing, Throttle};
 
 let mut charges = consumer
     .subscribe("charges")
-    // everyone calling Stripe, on any queue, shares this limit
-    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
-    // and each customer gets at most 10/s of it
+    // everyone calling Stripe, on any queue, shares this limit — with headroom
+    // below Stripe's documented 100 per second
+    .throttle(Throttle::named("stripe").limit(90, Duration::from_secs(1)))
+    // and each customer gets at most 10 in any second
     .throttle(
         Throttle::named("stripe-per-customer")
-            .partition_by_header("customer")
-            .when_missing(Missing::SharedBucket)
-            .rate(10, Duration::from_secs(1)),
+            .key([Key::header("customer")])
+            .when_key_missing(Missing::SharedBucket)
+            .limit(10, Duration::from_secs(1)),
     )
     .await?;
 

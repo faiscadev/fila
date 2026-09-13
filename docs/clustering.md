@@ -67,15 +67,17 @@ intended failure mode.
 | State | Where it lives |
 |-------|----------------|
 | Messages | The queue's own group |
-| Throttle token state | The throttle grantor — soft state, not replicated; see [throttling.md](throttling.md) |
+| Throttle grant state | The throttle grantor — soft state, except grants for long windows, which are recorded in the meta group; see [throttling.md](throttling.md#failover) |
 | Leases | Undecided; see open questions |
 
 ### The throttle grantor
 
 The node enforcing cluster-wide throttle limits is a role, not a group. It runs on
 the meta group leader and is located by throttle name, so grantors can move to groups
-of their own — spread across nodes — without a design change. It needs leadership,
-not a replicated log. The full mechanism is in [throttling.md](throttling.md).
+of their own — spread across nodes — without a design change. For short windows it
+needs only leadership; for windows longer than `throttle.max_failover_pause`, its grants
+are recorded through the meta group so a failover does not have to wait out the window.
+The full mechanism is in [throttling.md](throttling.md).
 
 ## Dead-letter queues
 

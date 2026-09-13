@@ -58,6 +58,10 @@ cert_file = ""
 key_file = ""
 client_ca_file = ""               # set to require mTLS
 
+[throttle]
+max_failover_pause = "10s"        # longer windows record grants through consensus
+min_lease = "20ms"                # shortest token lease; longer suits clusters spanning regions
+
 [telemetry]
 otlp_endpoint = ""                # OTLP/gRPC endpoint; empty disables export
 service_name = "fila"
@@ -127,6 +131,15 @@ implicitly superadmin.
 | `cert_file` | string | (none) | PEM server certificate. Setting this enables TLS. |
 | `key_file` | string | (none) | PEM private key for `cert_file`. |
 | `client_ca_file` | string | (none) | PEM CA bundle used to verify client certificates. Setting this requires mTLS. |
+
+### `[throttle]`
+
+Cluster-wide throttle enforcement. See [throttling.md](throttling.md#enforcement-in-a-cluster).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_failover_pause` | duration | `"10s"` | Throttles whose longest window is at most this long keep grants as soft state: after the enforcing node fails over, their deliveries pause for about one window. Throttles with longer windows record grants through the meta group and pause only for the election. |
+| `min_lease` | duration | `"20ms"` | The shortest time a queue leader may hold leased tokens. It must exceed a round trip to the enforcing node; clusters spanning regions need more. Shorter leases raise the sustained ceiling of short windows, N / (W + lease). |
 
 ### `[telemetry]`
 

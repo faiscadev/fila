@@ -255,7 +255,7 @@ per-item result array (batch item failure).
 | `0x0F` | ApiKeyNotFound | API key ID does not exist |
 | `0x10` | NodeNotReady | No leader elected yet |
 | `0x11` | CreditExhausted | Delivery credit is zero; grant more |
-| `0x12` | ThrottleConflict | A throttle with this name is already declared with a different partition |
+| `0x12` | ThrottleConflict | A throttle with this name is already declared with a different key |
 | `0x13` | ScriptError | The queue's `on_enqueue` script failed on this message; retrying the same message will not help |
 | `0x14` | ScriptTimeout | The queue's `on_enqueue` script timed out on this message; retrying may help |
 | `0x15` | OrderingKeyMissing | The message has no value for the queue's ordering key, and the queue rejects such messages |
@@ -437,12 +437,13 @@ If this node is not the leader for the queue, the server replies `Error` with
 
 #### Throttle declarations
 
-A subscription may declare throttles — named rate limits, optionally partitioned per
+A subscription may declare throttles — named limits, optionally keyed per
 message — that pace delivery for the queue. See [throttling.md](throttling.md) for the
 model.
 
 **Their encoding is not yet specified.** A declaration reusing a throttle name with a
-different partition is rejected with `ThrottleConflict` (`0x12`).
+different key is rejected with `ThrottleConflict` (`0x12`), and so is a declaration
+containing a limit that can never apply.
 
 ### ConsumeOk (0x13)
 
@@ -660,7 +661,7 @@ For each fairness key stat:
   [u32: weight]
 ```
 
-Throttle statistics are not yet specified. A partitioned throttle can have too many
+Throttle statistics are not yet specified. A keyed throttle can have too many
 buckets to list, so what a queue reports about its throttles is an open question in
 [throttling.md](throttling.md#open-questions).
 

@@ -64,33 +64,36 @@ Fila uses the DRR algorithm to schedule delivery across fairness groups:
 
 **Weights**: A key with weight=3 gets 3x the deficit of a key with weight=1, so it receives ~3x the delivery bandwidth. Use weights for priority lanes.
 
-## Token bucket throttling
+## Throttling
 
-Consumers declare the rate limits of the services they call, and the broker holds
-messages until delivering them stays within those limits. The consumer never receives a
-message it would have to reject for rate limiting.
+Consumers declare the limits of the services they call, and the broker holds messages
+until delivering them stays within those limits. The consumer never receives a message
+it would have to reject for rate limiting.
 
 ```rust
 let mut orders = consumer
     .subscribe("orders")
-    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
+    .throttle(
+        Throttle::named("stripe-per-customer")
+            .key([Key::header("customer")])
+            .limit(10, Duration::from_secs(1)),
+    )
     .await?;
 ```
 
 Each throttle has:
 
 - **name** — declarations with the same name, from any consumer on any queue, share one limit
-- **rate** — tokens refilled per unit of time
-- **burst** — maximum tokens a bucket holds
-- **partition** (optional) — one bucket per distinct value, read from a header, the
-  fairness key, or an attribute computed by the `attributes` hook
+- **limits** — one or more `limit(N, W)`: at most N deliveries in any window of length W
+- **key** (optional) — one bucket per distinct combination of headers, fairness key and
+  attributes; messages missing the key share a bucket or are left unthrottled
 
-A queue's deliveries are paced by the combined throttles of everyone subscribed to it.
-Before delivering a message, the scheduler checks every bucket the message draws from;
-if any is empty, the message stays pending.
+A throttle applies to every message in the queue that has its key, whichever consumer
+receives it. Before delivering a message, the scheduler checks every bucket the message
+draws from; if any is full, the message stays pending.
 
-See [throttling.md](throttling.md) for partitioning, conflict rules, and how limits
-hold across a cluster.
+See [throttling.md](throttling.md) for keys, conflict rules, and how limits hold across
+a cluster.
 
 ## Lua hooks
 
@@ -119,7 +122,7 @@ end
 |-------|------|-------------|-------------|
 | `fairness_key` | string | the producer's value, or the unkeyed group | Groups the message for DRR scheduling |
 | `weight` | number | `1` | DRR weight for this fairness key |
-| `attributes` | table of strings | no attributes | Named values that throttles can partition by and ordering keys can include |
+| `attributes` | table of strings | no attributes | Named values that throttle keys and ordering keys can include |
 
 `on_enqueue` runs **once per message, at enqueue**, and its results are stored with the
 message. They are never recomputed: changing the script affects messages enqueued after
@@ -195,7 +198,7 @@ QueueSpec::new("orders")
 
 There is no option to accept the message with default values. Falling back to defaults
 would let a producer change how its messages are scheduled by making the script fail —
-escaping its fairness group, gaining weight, or skipping a partitioned throttle.
+escaping its fairness group, gaining weight, or skipping a keyed throttle.
 
 #### Parked messages
 

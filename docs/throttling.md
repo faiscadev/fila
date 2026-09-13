@@ -16,6 +16,11 @@ counted, no retry is burned.
 producer ──enqueue──> Fila ──deliver (paced)──> worker ──call──> rate-limited API
 ```
 
+The broker's advantage over a worker simply waiting is that it can **skip a message
+that cannot go and deliver one that can**. That depends on throttles covering some
+messages and not others, or splitting them into separate buckets — see
+[Keys](#keys).
+
 ## Consumers declare throttles
 
 A throttle is declared by the consumer, when it subscribes:
@@ -23,250 +28,291 @@ A throttle is declared by the consumer, when it subscribes:
 ```rust
 let mut orders = consumer
     .subscribe("orders")
-    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
+    .throttle(Throttle::named("stripe").limit(100, Duration::from_secs(1)))
     .await?;
 ```
 
 The consumer is the right owner because it is the code that knows what it calls.
-Producers do not tag messages with throttle information and know nothing about
-downstream limits. Moving from one provider to another means redeploying workers;
-producers and already-enqueued messages are unaffected.
+Producers know nothing about downstream limits. Moving from one provider to another
+means redeploying workers; producers and already-enqueued messages are unaffected.
 
-## Anatomy of a throttle
+Declarations with the same name — from any consumer, on any queue — share one limit.
+Two services calling Stripe from different queues both declare `stripe` and together
+stay within it.
 
-| Part | Meaning |
-|------|---------|
-| **Name** | Identifies the limit. Every declaration with the same name, from any consumer on any queue, draws from the same limit. |
-| **Rate** | Tokens added per unit of time. |
-| **Burst** | Maximum tokens a bucket holds. |
-| **Partition** | Optional. Splits the limit into one bucket per distinct value. |
+## Limits
 
-Without a partition, a throttle is one bucket. With one, a bucket is identified by
-`name + partition value`, and each message draws from the bucket for its own value.
-
-### Sharing by name
-
-Two services calling Stripe from different queues both declare `stripe`, and together
-they are held to one limit. Nothing needs to be coordinated through producers or
-queue configuration — only the name.
-
-## Partitioning
-
-A throttle can be partitioned by a value read from each message:
+A limit is a cap over a sliding window:
 
 ```rust
-// 10/s per customer, customer read from each message's headers
+Throttle::named("stripe").limit(100, Duration::from_secs(1))
+```
+
+> **At most N deliveries in any window of length W.**
+
+Up to N may go out at once. Nothing more goes out until those leave the window, and
+capacity comes back exactly as it was used, W later. A quiet period does not use up any
+allowance.
+
+### Several limits
+
+A throttle can carry several limits, and a message is delivered only if it fits all of
+them. A longer limit caps the total; a shorter one caps how concentrated it can be:
+
+```rust
+Throttle::named("stripe")
+    .limit(60, Duration::from_secs(60))   // at most 60 per minute
+    .limit(20, Duration::from_secs(1))    // and at most 20 in any second
+```
+
+With these, `10, 20, 10, 5, 5, 1, 1, 1, 1, 1, 5` in consecutive seconds is allowed: no
+second exceeds 20 and the total is 60. Nothing more goes out until the first of those
+deliveries is a minute old.
+
+A declaration containing a limit that can never apply is rejected, since it is almost
+certainly a mistake:
+
+| Declaration | Why a limit never applies |
+|-------------|---------------------------|
+| 60 per minute, 100 per second | At most 60 can ever go in a second |
+| 20 per second, 2,000 per minute | 20 per second allows at most 1,200 per minute |
+
+This applies within one declaration only. Different consumers declaring different limits
+under one name is normal — see [Conflicting declarations](#conflicting-declarations).
+
+## Keys
+
+A throttle can have a **key**, a combination of message properties: headers, the
+fairness key, or attributes returned by `on_enqueue`. Messages with the same key values
+share a bucket; each bucket is held to the throttle's limits separately.
+
+```rust
+// 10/s per customer
 Throttle::named("stripe-per-customer")
-    .partition_by_header("customer")
-    .rate(10, Duration::from_secs(1))
+    .key([Key::header("customer")])
+    .limit(10, Duration::from_secs(1))
 
 // per tenant, using the fairness key
 Throttle::named("reports-per-tenant")
-    .partition_by_fairness_key()
-    .rate(2, Duration::from_secs(1))
-
-// by a value computed in Lua (see Attributes)
-Throttle::named("stripe-per-account")
-    .partition_by_attribute("account")
-    .rate(10, Duration::from_secs(1))
+    .key([Key::fairness_key()])
+    .limit(2, Duration::from_secs(1))
 ```
 
-A message may be subject to several throttles, and must have a token in every bucket
-it draws from before it is delivered.
+A throttle without a key is one bucket for every message it applies to.
 
-### Messages without a partition value
+Keys work the same way as ordering keys ([ordering.md](ordering.md)): a key defines
+groups, and a message missing the key is handled by a policy.
 
-What happens to a message that lacks the value is part of the declaration:
+### Messages without the key
 
 ```rust
 Throttle::named("stripe-per-customer")
-    .partition_by_header("customer")
-    .when_missing(Missing::SharedBucket)   // default
-    // .when_missing(Missing::Unthrottled)
+    .key([Key::header("customer")])
+    .when_key_missing(Missing::SharedBucket)   // default
+    // .when_key_missing(Missing::Unthrottled)
 ```
 
 | Policy | Effect |
 |--------|--------|
-| `SharedBucket` (default) | All messages lacking the value share one bucket. Safe: a producer that forgets the header shows up as one slow bucket rather than an unthrottled stream. |
-| `Unthrottled` | Messages lacking the value are not subject to this throttle. |
+| `SharedBucket` (default) | Every message lacking the key shares one bucket. Safe: a producer that forgets the header shows up as one slow bucket rather than an unthrottled stream. |
+| `Unthrottled` | Messages lacking the key are not subject to this throttle. |
 
-The safe option is the default, so it is what you get by not choosing.
+### Throttling only some of a queue's messages
 
-**`Unthrottled` can be bypassed by producers.** A producer that omits the header, or
-sends a message the script returns no attribute for, skips the limit. Choose it only
-where messages without the value genuinely do not use the throttled resource.
-
-## Attributes
-
-When a partition value has to be derived rather than read — parsed out of a header,
-looked up in runtime config, combined from several fields — the queue's `on_enqueue`
-script returns it as an attribute:
+`Unthrottled` is how a queue mixing different kinds of work keeps the rest flowing. The
+queue's `on_enqueue` script sets an attribute only on messages that use the resource:
 
 ```lua
 function on_enqueue(msg)
-  return {
-    fairness_key = msg.headers["tenant"],
-    attributes = { account = account_for(msg.headers["customer"]) },
-  }
+  local attrs = {}
+  if msg.headers["job_type"] == "charge" then
+    attrs.stripe_account = msg.headers["account"]
+  end
+  return { attributes = attrs }
 end
 ```
 
-The script belongs to the queue, so the rule is written by whoever owns the queue.
-Consumers refer to an attribute by name; producers are unaware of it.
+```rust
+Throttle::named("stripe-per-account")
+    .key([Key::attribute("stripe_account")])
+    .when_key_missing(Missing::Unthrottled)
+    .limit(10, Duration::from_secs(1))
+```
 
-Attributes are computed **once, at enqueue**, stored with the message and never
-recomputed. A change to the script applies to messages enqueued afterwards. Messages
-already queued keep the attributes they were given, and a message enqueued before the
-script produced an attribute does not have it, so the throttle's missing-value policy
-applies.
+Email jobs in the same queue have no `stripe_account`, never touch the throttle, and are
+delivered while Stripe's buckets are empty.
 
-Declaring a new partitioned throttle on a queue with a backlog works without running the
-script again: partition values come from what is already stored — headers, fairness
-keys and attributes.
+- **Use one attribute per resource** — `stripe_account`, `sendgrid_domain`. A shared
+  attribute such as `provider` would put every provider's messages under one throttle,
+  with one limit.
+- **Keys built from headers can be bypassed by producers.** A producer that omits the
+  header avoids a throttle whose missing-key policy is `Unthrottled`. Keys built from
+  attributes are computed by the queue's script and cannot be bypassed that way.
 
-If the script fails on a message, the queue's script failure policy applies. See
-[concepts.md](concepts.md#when-on_enqueue-fails).
+Attributes are computed once, at enqueue, and stored with the message. A new keyed
+throttle on a queue with a backlog uses the stored headers, fairness keys and attributes
+without running the script again. See [concepts.md](concepts.md#lua-hooks).
 
-## Which deliveries a throttle paces
+## Which messages a throttle applies to
 
-A throttle applies to **the whole queue**: a queue's deliveries are paced by the
-combined throttles declared by everyone currently subscribed to it.
+A throttle declared by any current subscriber of a queue applies to **every message in
+that queue that has its key** — or to every message, when it has no key or its
+missing-key policy is `SharedBucket` — no matter which consumer receives the message.
 
-Consumers of a queue compete for its messages — each message goes to exactly one of
-them — so they all perform the same job. Consumers on one queue declaring different
-throttles is therefore almost always a deployment in progress or a mistake, not a
-design:
+Consumers of a queue compete for its messages, so they all perform the same job, and
+consumers declaring different throttles on one queue is almost always a deployment in
+progress or a mistake:
 
-- **A rolling deploy adding a throttle.** New workers declare it, old workers do not
-  yet, but old workers call the same API. Applying the throttle to the whole queue
-  protects the deploy from the first new worker onward.
+- **A rolling deploy adding a throttle.** New workers declare it, old workers do not yet,
+  but old workers call the same API. The throttle applies from the first new worker
+  onward, whoever receives the message.
 - **A missing declaration.** One service forgot it. The queue is still protected.
 
-The cost: a consumer that genuinely does not call the throttled resource is paced
-anyway when it shares a queue with one that does. Give it its own queue. Queue stats
-show a queue's active throttles, so the pacing is never unexplained.
-
-A throttle stays in effect while at least one subscriber of the queue declares it.
+A throttle stays in effect while at least one subscriber of the queue declares it. Queue
+stats show a queue's active throttles, so pacing is never unexplained.
 
 ## Conflicting declarations
 
-| Situation | Outcome |
-|-----------|---------|
-| Same name, different rate or burst | **The strictest wins.** The effective values are shown in stats. A rolling deploy that lowers a limit takes effect as soon as the first new worker subscribes. |
-| Same name, different partition | **The subscription is rejected** with `ThrottleConflict`. One name identifies one set of buckets; two partitionings under one name is a naming mistake. |
+| Same name, but different… | Outcome |
+|---------------------------|---------|
+| Limits | **Every declared limit applies** — the strictest combination. A rolling deploy that lowers a limit takes effect as soon as the first updated worker subscribes; one that raises it takes effect once no running worker declares the old value. |
+| Missing-key policy | **The strictest wins:** `SharedBucket`. |
+| Key | **The subscription is rejected** with `ThrottleConflict`. One name identifies one set of buckets. |
 
 ## Scheduling
 
-Before delivering a message, the scheduler checks that every bucket the message draws
-from has a token.
+Before delivering a message, the scheduler checks that every throttle bucket the message
+draws from allows one more delivery.
 
-- If any bucket is empty, the message stays pending, untouched. No lease, no attempt.
-- Tokens are consumed only after the message is successfully handed to a consumer.
-- A message waiting on a bucket holds back nothing else on a queue without ordering,
-  and only its own ordering group on an ordered queue. See [ordering.md](ordering.md).
-- **A large backlog waiting on one empty bucket must not slow delivery of messages that
-  draw from other buckets.** One customer's backlog cannot delay another customer.
+- If any does not, the message stays pending, untouched. No lease, no attempt.
+- A delivery is counted only once the message is handed to a consumer.
+- A waiting message holds back nothing else on a queue without ordering, and only its
+  own ordering group on an ordered queue. See [ordering.md](ordering.md).
+- **A large backlog waiting on one bucket must not slow delivery of messages that draw
+  from other buckets.** One customer's backlog cannot delay another customer.
 
 ## Bucket lifetime
 
-A bucket is evicted once it has refilled to full. A full bucket is indistinguishable
-from a new one, so evicting it loses nothing, and a partly-empty bucket is never
-evicted, so eviction cannot hand out a free burst. There is no separate grace period.
+A bucket's only state is the deliveries still inside its longest window. A bucket with
+none is indistinguishable from a new one and can be evicted; a bucket with deliveries
+still in the window is kept.
 
-This keeps high-cardinality partitions — one bucket per customer — bounded by the
-number of *recently active* values rather than by every value ever seen.
+This keeps keyed throttles — one bucket per customer — bounded by the number of
+*recently active* key values rather than every value ever seen.
 
 ## The guarantee
 
-For every bucket, cluster-wide:
+For every limit of every bucket, cluster-wide:
 
-> In any window of length *t*, at most **B + R·t** deliveries,
-
-where *R* is the rate and *B* the burst.
+> **At most N deliveries in any window of length W.**
 
 It holds across queue leaders on different nodes and across failover of the node
-enforcing it, assuming node clocks measure elapsed time with bounded drift. Clocks do
-not need to agree on the time of day.
+enforcing it, assuming node clocks measure elapsed time with bounded drift. Clocks do not
+need to agree on the time of day.
 
 ### What it covers
 
-The guarantee is on **deliveries**, not on calls the downstream receives. A worker may
-call the API some time after receiving a message, calls from several workers can
-bunch together, and a redelivered message draws another token. Downstream traffic
-tracks the delivery rate closely but not exactly, which is why a real limit should be
-declared with some headroom.
+The guarantee is on **deliveries**, not on calls the downstream receives:
+
+- A worker calls the API some time after receiving a message, and calls from workers
+  with uneven processing time can bunch together.
+- A worker retrying a call internally makes calls Fila never sees. A redelivered message
+  does count as another delivery.
+- Traffic to the same API that does not go through Fila is not counted.
+- A limit on **concurrent** requests is a different constraint, controlled by consumer
+  credit (`prefetch`), not by a throttle.
+
+When declaring a provider's limit, leave headroom below it — `limit(90, 1s)` for a
+documented 100 per second.
 
 ## Enforcement in a cluster
 
 Queues sharing a throttle can have leaders on different nodes, and delivery happens on
-each queue's leader. Enforcement must hold one limit across all of them without a
-network call on the delivery path.
+each queue's leader. Enforcement must hold one limit across all of them without a network
+call on the delivery path.
 
 ### Grantor and leases
 
-One node acts as the **grantor**, holding the real bucket state. Queue leaders lease
-tokens from it in batches and spend them locally, so delivery itself never waits on
-the network.
+One node acts as the **grantor**, holding the authoritative count for each bucket. Queue
+leaders lease **tokens** — each permission for one delivery — in batches and spend them
+locally, so delivery itself never waits on the network.
 
-- The grantor role runs on the meta group leader. It is located by throttle name, so
-  grantors can later move to their own groups without changing the design.
-- The grantor needs to be a leader; it does not need a replicated log. Nothing about
-  throttle state goes through consensus.
-- **Declarations are soft state.** Leaders send their subscribers' declarations with
-  each lease request. The grantor derives the effective rate — strictest wins — from
-  the requests it receives, and rebuilds this state from requests after a failover.
+- The grantor role runs on the meta group leader and is located by throttle name, so
+  grantors can later move to groups of their own without changing the design.
+- **Declarations are soft state.** Leaders send their subscribers' declarations with each
+  lease request. The grantor derives the effective limits, keys and policies from the
+  requests it receives, and rebuilds them from requests after a failover.
 
 ### The rules
 
 The guarantee depends on each of these holding exactly:
 
-1. **Leased tokens expire after *h*.** Expiry is measured from when the leader *sent
-   the request*, not from when the grant arrived. A grant delayed in the network
-   therefore cannot outlive its bound.
-2. **The grantor runs its bucket with burst B − R·h.** This absorbs the slack that
-   expiry introduces. It requires B ≥ R·h.
+1. **Leased tokens expire after *h*,** measured from when the leader *sent the request*,
+   not from when the grant arrived. A grant delayed in the network cannot outlive its
+   bound.
+2. **For each limit, the grantor grants at most N tokens in any window of length W + h.**
+   This absorbs the slack expiry introduces.
 3. **The grantor confirms it is still leader before granting**, with a quorum check,
    after the requests it answers have arrived. One check covers a batch of requests.
-4. **A new grantor waits *h*, plus a margin for clock drift, before its first grant,
-   and starts every bucket empty.** By then every token issued by the previous grantor
-   has expired, and starting empty prevents a burst from each side of the failover
-   landing in one window.
+4. **A new grantor does not grant until it can account for every token that might still
+   be spent** — by waiting, or from recorded grants. See [Failover](#failover).
 
 ### Why it holds
 
-A token spent at time *s* was granted at some *g* with *g ≤ s ≤ g + h*, by rules 1 and
-3. So tokens spent in a window *[x, x + t]* were granted in *[x − h, x + t]*, a window
-of length *t + h*. The grantor's bucket admits at most *(B − R·h) + R·(t + h)* grants
-in such a window, which is *B + R·t*.
+A token spent at time *s* was granted at some *g* with *g ≤ s ≤ g + h*, by rules 1 and 3.
+Tokens spent in a window *[x, x + W]* were therefore granted in *[x − h, x + W]*, a window
+of length *W + h*, and rule 2 allows at most N grants in it.
 
-Across a failover, rules 3 and 4 ensure the old grantor's tokens have all expired
-before the new grantor issues any, and the new grantor's empty start means the two
-sides together still fit the bound.
+The cost is a sustained ceiling of *N / (W + h)* rather than *N / W*: about 98 per second
+for a limit of 100 per second with a 20ms lease.
 
-### Rate changes
+### Failover
 
-The guarantee is measured against the rate in effect when tokens were granted. When a
-stricter declaration lowers a rate, tokens already leased at the old rate can still be
-spent, so the lower rate is fully in effect within *h*. There is no stall.
+A window limit depends on recent history — how many deliveries are already inside the
+window — so a new grantor must know it or wait for it to pass. Which applies is decided
+per throttle by its longest window and the broker's `throttle.max_failover_pause`
+(default 10s; see [configuration.md](configuration.md#throttle)):
+
+| Longest window | Enforcement | Throttled delivery after grantor failover |
+|----------------|-------------|------------------------------------------|
+| Up to `max_failover_pause` | Grants are soft state. The new grantor waits **W + h**, plus a margin for clock drift, before its first grant. | Pauses for the election plus about W |
+| Longer | **Grants are recorded** through the meta group. A grant is handed out only after it is committed, and a grantor that has lost leadership cannot commit. The new grantor resumes from the committed grants. | Pauses only for the election |
+
+**Why waiting works.** The previous grantor's last grants were issued after its last
+successful leadership check, which precedes the new grantor's election, so every token it
+issued is spent or expired within *h* of that election. A new grantor granting only after
+a further *W* ensures that any window containing a new delivery starts after every old
+one.
+
+**Why recording is affordable for long windows.** A lease's length costs throughput in
+proportion to *h / W*, so long windows can use long leases and need few lease requests —
+and therefore few recorded writes. Recording one grant also covers the throttle's shorter
+limits, so none of them pause either.
+
+A queue leader's delivery records surviving failover, if they do, would let a new grantor
+rebuild recent history without recording grants. That depends on what the cluster
+replicates, which is still open ([clustering.md](clustering.md#open-decisions)).
+
+### Limit changes
+
+The guarantee is measured against the limits in effect when tokens were granted. When a
+stricter declaration lowers a limit, deliveries already inside the window stay counted,
+so the lower limit is fully in effect within *W + h*. There is no stall.
 
 ### Availability
 
-When the grantor is lost, deliveries paced by its throttles pause for the election
-plus *h*. Unthrottled deliveries continue.
+When the grantor is lost, deliveries paced by its throttles pause as described above.
+Unthrottled deliveries continue.
 
-This is a property of the guarantee rather than of the design: while nodes cannot
-reach each other, a system either pauses or risks exceeding the limit. A strict limit
-pauses.
+This is a property of the guarantee rather than of the design: while nodes cannot reach
+each other, a system either pauses or risks exceeding the limit. A strict limit pauses.
 
 ## Open questions
 
-- **Default burst and choosing *h*.** Rule 2 requires B ≥ R·h. Small bursts force a
-  small *h*, approaching network round-trip time and multiplying lease requests. Needs
-  a rule: derive *h*, require a minimum burst, or handle small bursts differently.
-- **Messages drawing from several buckets.** A token leased from one bucket while
-  another is empty expires unused. Safe, but it wastes capacity under contention.
-  Accept, or reserve across buckets together.
-- **Stats.** Partitioned throttles can have millions of buckets, so stats cannot list
-  every one. What a queue's stats show for throttles is undecided.
+- **Messages drawing from several buckets.** A token leased from one bucket while another
+  is exhausted expires unused. Safe, but it wastes capacity under contention. Accept, or
+  reserve across buckets together.
+- **Stats.** Keyed throttles can have millions of buckets, so stats cannot list every one.
+  What a queue's stats show for throttles is undecided.
 - **Wire encoding** of throttle declarations in `Consume`.
 - **Verify** that openraft exposes the leadership check rule 3 relies on.

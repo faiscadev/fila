@@ -11,7 +11,7 @@ Every existing broker delivers messages in FIFO order. When multiple tenants, cu
 Fila moves scheduling decisions into the broker:
 
 - **Deficit Round Robin (DRR) fair scheduling** — each fairness key gets its fair share of delivery bandwidth. No tenant starves another.
-- **Token bucket throttling** — consumers declare the rate limits of what they call, and the broker paces delivery to stay within them. Consumers only receive messages that are ready to process.
+- **Throttling** — consumers declare the rate limits of what they call, and the broker holds messages until delivering them stays within those limits. Consumers only receive messages that are ready to process.
 - **Lua rules engine** — `on_enqueue` and `on_failure` hooks let you define scheduling policy in user-supplied Lua scripts, for the cases where static configuration isn't enough.
 - **Zero wasted work** — consumers never receive a message they can't act on.
 
@@ -20,7 +20,7 @@ Fila moves scheduling decisions into the broker:
 | Concept | What it does |
 |---------|-------------|
 | **Fairness keys** | Messages are grouped by a `fairness_key`. The DRR scheduler gives each group its fair share of delivery bandwidth, in proportion to its `weight`. |
-| **Throttling** | Consumers declare named rate limits when subscribing, optionally partitioned per message. The broker holds messages until delivering them stays within every limit. |
+| **Throttling** | Consumers declare named limits — at most N deliveries in any window — when subscribing, optionally keyed per message. The broker holds messages until delivering them stays within every limit. |
 | **Lua hooks** | `on_enqueue` derives fairness key, weight, and attributes that throttles and ordering can use. `on_failure` decides retry vs. dead-letter. Both are optional. |
 | **Ordering** | Off by default. A queue can ask for arrival order overall or per ordering key, with at most one message per group in flight. |
 | **Retries** | A nack or an expired lease is a failed attempt. The queue's `on_failure` script decides what happens next; without one, a retry policy does — by default 3 deliveries with exponential backoff. |
@@ -155,17 +155,18 @@ it subscribes, and the broker paces delivery to stay within them:
 ```rust
 let mut orders = consumer
     .subscribe("orders")
-    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)))
+    .throttle(Throttle::named("stripe").limit(100, Duration::from_secs(1)))
     .throttle(
         Throttle::named("stripe-per-customer")
-            .partition_by_header("customer")
-            .rate(10, Duration::from_secs(1)),
+            .key([Key::header("customer")])
+            .limit(10, Duration::from_secs(1)),
     )
     .await?;
 ```
 
-Declarations with the same name share one limit, across consumers and across queues.
-Producers know nothing about it. See [docs/throttling.md](docs/throttling.md).
+A limit means at most N deliveries in any window of that length. Declarations with the
+same name share one limit, across consumers and across queues. Producers know nothing
+about it. See [docs/throttling.md](docs/throttling.md).
 
 Batch acking, and more than one subscription per connection:
 

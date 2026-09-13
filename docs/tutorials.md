@@ -124,13 +124,13 @@ Producers don't mention Stripe or any limit.
 let mut charges = client
     .consumer()
     .subscribe("charges")
-    // Stripe: 100 requests/second, burst up to 150
-    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
-    // and no customer above 10/s
+    // Stripe allows 100 requests/second; leave some headroom
+    .throttle(Throttle::named("stripe").limit(90, Duration::from_secs(1)))
+    // and no customer above 10 in any second
     .throttle(
         Throttle::named("stripe-per-customer")
-            .partition_by_header("customer")
-            .rate(10, Duration::from_secs(1)),
+            .key([Key::header("customer")])
+            .limit(10, Duration::from_secs(1)),
     )
     .await?;
 
@@ -143,8 +143,12 @@ while let Some(delivery) = charges.next().await {
 ```
 
 A message is delivered only when both `stripe` and its customer's
-`stripe-per-customer` bucket have a token. Until then it stays in the broker — no lease,
-no attempt counted.
+`stripe-per-customer` bucket have room. Until then it stays in the broker — no lease, no
+attempt counted.
+
+Headroom matters because the limit is on deliveries, not on the calls Stripe receives:
+workers call some time after receiving a message, and any Stripe traffic that doesn't go
+through Fila counts against the same account.
 
 ### 4. Share the limit with another service
 
@@ -154,19 +158,20 @@ A refunds worker on a different queue also calls Stripe. It declares the same na
 let mut refunds = client
     .consumer()
     .subscribe("refunds")
-    .throttle(Throttle::named("stripe").rate(100, Duration::from_secs(1)).burst(150))
+    .throttle(Throttle::named("stripe").limit(90, Duration::from_secs(1)))
     .await?;
 ```
 
-Charges and refunds together stay within 100/s, on one node or across a cluster.
+Charges and refunds together stay within 90 in any second, on one node or across a
+cluster.
 
-### Changing a rate
+### Changing a limit
 
-A rate lives in the worker's code, so changing it is a deploy. When declarations with
-the same name disagree, the strictest wins:
+A limit lives in the worker's code, so changing it is a deploy. When declarations with
+the same name disagree, every declared limit applies:
 
-- **Lowering** a rate takes effect as soon as the first updated worker subscribes.
-- **Raising** a rate takes effect once no worker declares the old, lower one.
+- **Lowering** a limit takes effect as soon as the first updated worker subscribes.
+- **Raising** a limit takes effect once no worker declares the old, lower one.
 
 Both directions are safe during a rolling deploy: the limit never rises above what some
 running worker asked for.
