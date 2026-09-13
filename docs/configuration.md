@@ -199,6 +199,11 @@ When telemetry is enabled, Fila exports:
 | `fila.queue.fairness_keys` | Gauge | Active fairness keys per queue |
 | `fila.delivery.latency` | Histogram | Time from enqueue to consumer delivery |
 | `fila.lua.executions` | Counter | Lua executions, by hook type and outcome |
+| `fila.queue.throttled` | Gauge | Messages pending because a throttle bucket has no room |
 | `fila.throttle.limited` | Counter | Messages held by a throttle limit |
+| `fila.throttle.active_buckets` | Gauge | Buckets with deliveries inside the window |
+| `fila.throttle.buckets_at_limit` | Gauge | Buckets with no room |
+| `fila.throttle.waiting` | Gauge | Messages held by the throttle |
+| `fila.throttle.tokens_expired` | Counter | Leased tokens that expired unused |
 
-All queue-scoped metrics carry a `queue` attribute.
+All queue-scoped metrics carry a `queue` attribute. Throttle metrics carry a `throttle` attribute with the throttle's name — never a key value, which would create one series per customer.

@@ -200,6 +200,7 @@ admin.create_queue(
 admin.delete_queue("orders").await?;
 admin.list_queues().await?;
 admin.queue_stats("orders").await?;      // depth, in-flight, per-key fairness, active throttles
+admin.throttle_stats("stripe-per-customer", TopBuckets(10)).await?;   // buckets at limit, most-waiting keys
 
 admin.set_config("routing.default_region", "eu").await?;
 admin.get_config("routing.default_region").await?;
@@ -344,6 +345,7 @@ fila queue create <name>        Create a queue
 fila queue delete <name>        Delete a queue
 fila queue list                 List queues
 fila queue inspect <name>       Depth, in-flight, per-key fairness and throttle state
+fila throttle inspect <name>    Effective limits, busiest buckets, messages waiting
 
 fila config set <key> <value>   Set a runtime config key
 fila config get <key>           Read a runtime config key

@@ -1,6 +1,6 @@
 # Throttling
 
-> **Status:** design, not working code. Open questions are listed at the end.
+> **Status:** design, not working code.
 
 ## What it is for
 
@@ -185,7 +185,9 @@ Before delivering a message, the scheduler checks that every throttle bucket the
 draws from allows one more delivery.
 
 - If any does not, the message stays pending, untouched. No lease, no attempt.
-- A delivery is counted only once the message is handed to a consumer.
+- Allowance is counted when tokens are granted. Tokens a queue leader cannot use are
+  returned, so what stays counted is what was delivered. See
+  [Granting without waste](#granting-without-waste).
 - A waiting message holds back nothing else on a queue without ordering, and only its
   own ordering group on an ordered queue. See [ordering.md](ordering.md).
 - **A large backlog waiting on one bucket must not slow delivery of messages that draw
@@ -243,6 +245,29 @@ locally, so delivery itself never waits on the network.
   lease request. The grantor derives the effective limits, keys and policies from the
   requests it receives, and rebuilds them from requests after a failover.
 
+### Granting without waste
+
+The grantor counts a token against a limit when it is **granted**, and cannot know it
+went unused. An unused token therefore uses up allowance for the rest of the window — for
+an hourly limit, an hour. Two rules keep grants close to what is actually delivered:
+
+- **A delivery's tokens are granted together or not at all.** A leader requests
+  deliveries, each naming every bucket it draws from — `stripe` plus one customer's
+  `stripe-per-customer` bucket — and the grantor grants a delivery only when all of them
+  have room, counting them at once. No token is granted for a delivery another bucket
+  would block.
+- **Leaders return tokens they will not use** — when a consumer disconnects, its credit
+  drops, or the backlog drains. The leader invalidates the tokens first and then returns
+  them, so a returned token can never also be spent, and a returned token stops counting.
+  Returns are best effort: a lost return only wastes allowance, never exceeds a limit.
+  Returns need not be recorded for recorded windows; after a failover an unrecorded
+  return is simply counted, which is conservative.
+
+Granting together relies on every bucket of a delivery being on one grantor, which holds
+while the grantor role runs on the meta group leader. If grantors are later split across
+groups, throttles used together must share a grantor, or deliveries spanning grantors fall
+back to returns alone.
+
 ### The rules
 
 The guarantee depends on each of these holding exactly:
@@ -253,7 +278,9 @@ The guarantee depends on each of these holding exactly:
 2. **For each limit, the grantor grants at most N tokens in any window of length W + h.**
    This absorbs the slack expiry introduces.
 3. **The grantor confirms it is still leader before granting**, with a quorum check,
-   after the requests it answers have arrived. One check covers a batch of requests.
+   after the requests it answers have arrived. One check covers a batch of requests. The
+   check must be a quorum round trip (Raft's ReadIndex) — **never a clock-based lease
+   read**, which assumes clocks agree more closely than this guarantee does.
 4. **A new grantor does not grant until it can account for every token that might still
    be spent** — by waiting, or from recorded grants. See [Failover](#failover).
 
@@ -278,11 +305,16 @@ per throttle by its longest window and the broker's `throttle.max_failover_pause
 | Up to `max_failover_pause` | Grants are soft state. The new grantor waits **W + h**, plus a margin for clock drift, before its first grant. | Pauses for the election plus about W |
 | Longer | **Grants are recorded** through the meta group. A grant is handed out only after it is committed, and a grantor that has lost leadership cannot commit. The new grantor resumes from the committed grants. | Pauses only for the election |
 
-**Why waiting works.** The previous grantor's last grants were issued after its last
-successful leadership check, which precedes the new grantor's election, so every token it
-issued is spent or expired within *h* of that election. A new grantor granting only after
-a further *W* ensures that any window containing a new delivery starts after every old
-one.
+**Why waiting works.** A leadership check proves the grantor was leader when its probes
+went out, not that it still is when it hands tokens out; a grantor can be deposed in
+between. That gap is closed by rule 1: every token answers a request sent *before* the
+check, and expires within *h* of that request, so every token the previous grantor issued
+is spent or expired within *h* of a moment before the new grantor's election. A new
+grantor granting only after a further *W + h* ensures that any window containing a new
+delivery starts after every old one.
+
+Recorded grants need no such argument: they are committed through the meta group before
+they are handed out, and a deposed grantor cannot commit.
 
 **Why recording is affordable for long windows.** A lease's length costs throughput in
 proportion to *h / W*, so long windows can use long leases and need few lease requests —
@@ -307,12 +339,52 @@ Unthrottled deliveries continue.
 This is a property of the guarantee rather than of the design: while nodes cannot reach
 each other, a system either pauses or risks exceeding the limit. A strict limit pauses.
 
-## Open questions
+## Stats
 
-- **Messages drawing from several buckets.** A token leased from one bucket while another
-  is exhausted expires unused. Safe, but it wastes capacity under contention. Accept, or
-  reserve across buckets together.
-- **Stats.** Keyed throttles can have millions of buckets, so stats cannot list every one.
-  What a queue's stats show for throttles is undecided.
-- **Wire encoding** of throttle declarations in `Consume`.
-- **Verify** that openraft exposes the leadership check rule 3 relies on.
+A keyed throttle can have millions of buckets, so stats never list them all. They answer
+three questions: is a throttle holding my queue, which key values are being held, and is
+my limit set right.
+
+### Queue stats
+
+- **`throttled`** — messages pending because a throttle bucket has no room, alongside
+  `delayed` and `unclassified`.
+- **Active throttles** — for each throttle currently declared on the queue: name,
+  effective limits after combining every declaration, key, missing-key policy, how many
+  subscribers declare it, and whether its grants are soft state or recorded.
+
+### Throttle stats
+
+Across every queue where a throttle is active:
+
+```rust
+let stripe = admin.throttle_stats("stripe-per-customer", TopBuckets(10)).await?;
+// effective limits, key, missing-key policy, enforcement
+// queues where it is active
+// active_buckets     — buckets with deliveries still inside the window
+// buckets_at_limit   — buckets with no room right now
+// waiting            — messages held by this throttle
+// top_buckets        — the 10 with the most messages waiting
+
+let acme = admin.throttle_bucket("stripe-per-customer", ["acme"]).await?;
+// deliveries counted against each limit, messages waiting, when room next frees up
+```
+
+`TopBuckets` defaults to 10. An unkeyed throttle has one bucket, reported directly.
+
+### Metrics
+
+Throttle metrics carry the throttle's **name, never a key value** — a label per customer
+would explode metrics storage. Individual buckets are inspected through the admin API.
+
+| Metric | Type | Meaning |
+|--------|------|---------|
+| `fila.throttle.limited` | Counter | Messages held by a throttle limit |
+| `fila.throttle.active_buckets` | Gauge | Buckets with deliveries inside the window |
+| `fila.throttle.buckets_at_limit` | Gauge | Buckets with no room |
+| `fila.throttle.waiting` | Gauge | Messages held by the throttle |
+| `fila.throttle.tokens_expired` | Counter | Leased tokens that expired unused — steady growth means grants are outrunning deliveries |
+
+Which node answers a stats request is part of routing, still open in
+[clustering.md](clustering.md#open-decisions): throttle counts live with the grantor,
+and waiting messages with each queue's leader.

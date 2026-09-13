@@ -110,6 +110,12 @@ All multi-byte integers are big-endian (network byte order).
 | `map<string,string>` | `[u16 count][repeated: string key, string value]` | 2 + entries |
 | `string[]` | `[u16 count][repeated: string]` | 2 + strings |
 | `optional<T>` | `[u8 present][T if present]` | 1, or 1 + sizeof(T) |
+| `key` | `[u16 part_count][repeated: u8 kind, string name]` | 2 + parts |
+
+A **`key`** names message properties that together identify a group — an ordering group
+or a throttle bucket. Each part's `kind` is `0` for a header, `1` for the fairness key, or
+`2` for an attribute returned by `on_enqueue`; `name` is the header or attribute name, and
+empty for the fairness key. A `part_count` of 0 means no key.
 
 ### On identifiers
 
@@ -214,8 +220,12 @@ independently without colliding.
 | `0xE6` | SetAclResult | Server → Client | Result |
 | `0xE5` | GetAcl | Client → Server | Read a key's permissions |
 | `0xE4` | GetAclResult | Server → Client | Permissions |
+| `0xE3` | GetThrottleStats | Client → Server | Statistics for one throttle |
+| `0xE2` | GetThrottleStatsResult | Server → Client | Throttle statistics |
+| `0xE1` | GetThrottleBucket | Client → Server | Statistics for one throttle bucket |
+| `0xE0` | GetThrottleBucketResult | Server → Client | Bucket statistics |
 
-Opcodes `0x1D`–`0xE3` are reserved. Nodes talk to each other over a separate protocol
+Opcodes `0x1D`–`0xDF` are reserved. Nodes talk to each other over a separate protocol
 with its own opcode space; see [Inter-node Communication](#inter-node-communication).
 
 ### Handling Unknown Opcodes
@@ -255,11 +265,13 @@ per-item result array (batch item failure).
 | `0x0F` | ApiKeyNotFound | API key ID does not exist |
 | `0x10` | NodeNotReady | No leader elected yet |
 | `0x11` | CreditExhausted | Delivery credit is zero; grant more |
-| `0x12` | ThrottleConflict | A throttle with this name is already declared with a different key |
+| `0x12` | ThrottleConflict | A throttle with this name is already declared by other subscribers with a different key |
 | `0x13` | ScriptError | The queue's `on_enqueue` script failed on this message; retrying the same message will not help |
 | `0x14` | ScriptTimeout | The queue's `on_enqueue` script timed out on this message; retrying may help |
 | `0x15` | OrderingKeyMissing | The message has no value for the queue's ordering key, and the queue rejects such messages |
 | `0x16` | ReservedQueueName | Queue names ending in `.dlq` are reserved for dead-letter queues |
+| `0x17` | InvalidThrottle | A throttle declaration is malformed: no limits, a zero limit or window, an empty name, a name repeated within one subscription, or a limit that can never apply |
+| `0x18` | ThrottleNotFound | No current subscriber declares a throttle with this name |
 | `0xFF` | InternalError | Unexpected server error |
 
 ## Connection Lifecycle
@@ -430,6 +442,15 @@ the group is delivered first. See [ordering.md](ordering.md#delayed-messages).
 [frame header: opcode=0x12]
 [string: queue]
 [u32: credit]                        -- initial delivery credit; 0 = unlimited
+[u16: throttle_count]
+For each throttle:
+  [string: name]
+  [u16: limit_count]                 -- at least 1
+  For each limit:
+    [u64: max_deliveries]            -- N
+    [u64: window_ms]                 -- W
+  [key: key]                         -- part_count 0 = one bucket for all messages
+  [u8: when_key_missing]             -- 0 = shared bucket, 1 = unthrottled
 ```
 
 If this node is not the leader for the queue, the server replies `Error` with
@@ -437,13 +458,17 @@ If this node is not the leader for the queue, the server replies `Error` with
 
 #### Throttle declarations
 
-A subscription may declare throttles — named limits, optionally keyed per
-message — that pace delivery for the queue. See [throttling.md](throttling.md) for the
-model.
+A subscription may declare throttles: named limits of at most `max_deliveries` in any
+sliding window of `window_ms`, optionally keyed per message. See
+[throttling.md](throttling.md) for the model.
 
-**Their encoding is not yet specified.** A declaration reusing a throttle name with a
-different key is rejected with `ThrottleConflict` (`0x12`), and so is a declaration
-containing a limit that can never apply.
+The whole `Consume` fails with an `Error` frame if a declaration is malformed
+(`InvalidThrottle`, `0x17`) or uses a name already declared by other subscribers with a
+different key (`ThrottleConflict`, `0x12`). Declarations cannot be changed on a live
+subscription; changing them means subscribing again.
+
+`max_deliveries` is a `u64` because it is a limit rather than a collection count, and the
+cost is paid once per subscription.
 
 ### ConsumeOk (0x13)
 
@@ -648,6 +673,7 @@ are fixed at creation.
 [u64: delayed]                       -- enqueued but not yet eligible
 [u64: unclassified]                  -- parked after a script failure
 [u64: oldest_unclassified_at]        -- Unix ms; 0 if none
+[u64: throttled]                     -- pending because a throttle bucket has no room
 [u64: active_fairness_keys]
 [u32: active_consumers]
 [u32: quantum]
@@ -659,11 +685,26 @@ For each fairness key stat:
   [u64: pending_count]
   [i64: current_deficit]
   [u32: weight]
+[u32: active_throttle_count]
+For each throttle active on the queue:
+  [throttle_summary]
 ```
 
-Throttle statistics are not yet specified. A keyed throttle can have too many
-buckets to list, so what a queue reports about its throttles is an open question in
-[throttling.md](throttling.md#open-questions).
+A `throttle_summary`, shared with `GetThrottleStatsResult`:
+
+```
+[string: name]
+[u16: limit_count]
+For each effective limit:
+  [u64: max_deliveries]
+  [u64: window_ms]
+[key: key]
+[u8: when_key_missing]               -- 0 = shared bucket, 1 = unthrottled
+[u32: declaring_subscribers]
+[u8: enforcement]                    -- 0 = soft state, 1 = recorded grants
+```
+
+Individual buckets are never listed here; see `GetThrottleStats`.
 
 ### ListQueues (0xF7)
 
@@ -848,6 +889,70 @@ For each permission:
   [string: kind]
   [string: pattern]
 ```
+
+### GetThrottleStats (0xE3)
+
+```
+[frame header: opcode=0xE3]
+[string: name]
+[u32: top_buckets]                   -- how many of the most-waiting buckets to include
+```
+
+**GetThrottleStatsResult (0xE2):**
+
+```
+[frame header: opcode=0xE2]
+[u8: error_code]                     -- 0x18 = ThrottleNotFound
+[throttle_summary]                   -- declaring_subscribers counts every queue
+[u32: queue_count]
+For each queue where the throttle is active:
+  [string: queue]
+[u64: active_buckets]                -- buckets with deliveries inside the window
+[u64: buckets_at_limit]              -- buckets with no room now
+[u64: waiting]                       -- messages held by this throttle, across queues
+[u32: bucket_count]
+For each of the most-waiting buckets, most waiting first:
+  [bucket_stats]
+```
+
+A `bucket_stats`:
+
+```
+[u8: bucket_kind]                    -- 0 = keyed or unkeyed, 1 = shared bucket for messages missing the key
+[u16: value_count]                   -- one value per key part; 0 for an unkeyed or shared bucket
+For each value:
+  [string: value]
+[u16: limit_count]
+For each effective limit, in the order of throttle_summary:
+  [u64: counted]                     -- deliveries and unexpired grants inside the window
+[u64: waiting]
+[u64: next_room_at]                  -- Unix ms when a delivery next fits every limit; 0 = now
+```
+
+`counted` includes tokens granted but not yet spent or returned, because that is what the
+limit is enforced against.
+
+### GetThrottleBucket (0xE1)
+
+```
+[frame header: opcode=0xE1]
+[string: name]
+[u8: bucket_kind]                    -- as in bucket_stats
+[u16: value_count]
+For each value:
+  [string: value]
+```
+
+**GetThrottleBucketResult (0xE0):**
+
+```
+[frame header: opcode=0xE0]
+[u8: error_code]                     -- 0x18 = ThrottleNotFound
+[bucket_stats]
+```
+
+A bucket with no deliveries inside its window is reported with every `counted` at 0 and
+`next_room_at` 0, whether or not it has been evicted.
 
 ## Error Frame (0xFE)
 

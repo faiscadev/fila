@@ -157,7 +157,8 @@ The inter-node protocol is not yet specified.
   `retry_after` and the classification of a parked message change message state and
   must replicate; whether lease extension does depends on the lease decision.
 - **Routing.** Which node serves which request: forwarding writes to a queue's leader,
-  redirecting consumers with `NotLeader` and `leader_addr`, which node answers queue
+  redirecting consumers with `NotLeader` and `leader_addr`, which node answers queue and
+  throttle
   statistics, and how quickly a revoked API key must stop working on every node.
 - **Rebalancing.** Moving leadership after failover, when nodes join, and when load is
   uneven. Placement today is decided only at queue creation.
