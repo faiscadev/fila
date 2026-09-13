@@ -23,7 +23,7 @@ Fila moves scheduling decisions into the broker:
 | **Throttling** | Consumers declare named rate limits when subscribing, optionally partitioned per message. The broker holds messages until delivering them stays within every limit. |
 | **Lua hooks** | `on_enqueue` derives fairness key, weight, and attributes that throttles and ordering can use. `on_failure` decides retry vs. dead-letter. Both are optional. |
 | **Ordering** | Off by default. A queue can ask for arrival order overall or per ordering key, with at most one message per group in flight. |
-| **Retries** | A nack or an expired lease is a failed attempt. The queue's `on_failure` script decides what happens next; without one, a retry policy does — by default 4 attempts with exponential backoff. |
+| **Retries** | A nack or an expired lease is a failed attempt. The queue's `on_failure` script decides what happens next; without one, a retry policy does — by default 3 deliveries with exponential backoff. |
 | **Dead letter queue** | Every queue has one, named `<queue>.dlq`. Messages that exhaust retries move there. Redrive moves them back. |
 | **Runtime config** | Key-value pairs, readable from Lua via `fila.get(key)`. Change behavior without restarting. |
 | **Leases** | Delivered messages are leased for a visibility timeout. A lease that expires unacked counts as a failed attempt. |

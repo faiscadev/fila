@@ -240,14 +240,14 @@ attempt, and the next step is decided in this order:
 QueueSpec::new("orders")
     .retry(
         RetryPolicy::new()
-            .max_attempts(4)
+            .max_attempts(3)
             .backoff(Backoff::exponential(Duration::from_secs(1)).max(Duration::from_secs(60))),
     )
 ```
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
-| `max_attempts` | `4` | Total deliveries before the message is dead-lettered — the first delivery and three retries |
+| `max_attempts` | `3` | Total deliveries before the message is dead-lettered — the first delivery and two retries |
 | `backoff` | exponential from 1s, capped at 1m | Delay before each retry is delivered |
 
 A queue without an explicit policy uses the defaults, so every queue has a limit unless an
