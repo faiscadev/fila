@@ -233,8 +233,20 @@ independently without colliding.
 | `0xE2` | GetThrottleStatsResult | Server → Client | Throttle statistics |
 | `0xE1` | GetThrottleBucket | Client → Server | Statistics for one throttle bucket |
 | `0xE0` | GetThrottleBucketResult | Server → Client | Bucket statistics |
+| `0xDF` | UpdateQueue | Client → Server | Change a queue's mutable settings |
+| `0xDE` | UpdateQueueResult | Server → Client | Result |
+| `0xDD` | GetRoutes | Client → Server | Which node leads each queue |
+| `0xDC` | GetRoutesResult | Server → Client | Leaders, and shards when sharded |
+| `0xDB` | DrainNode | Client → Server | Move every leader off a node, or cancel |
+| `0xDA` | DrainNodeResult | Server → Client | Result |
+| `0xD9` | MoveQueueLeader | Client → Server | Move one queue's leadership |
+| `0xD8` | MoveQueueLeaderResult | Server → Client | Result |
+| `0xD7` | SetRebalancing | Client → Server | Enable, pause or disable rebalancing |
+| `0xD6` | SetRebalancingResult | Server → Client | Result |
+| `0xD5` | GetClusterStatus | Client → Server | Nodes, meta leader, rebalancing state |
+| `0xD4` | GetClusterStatusResult | Server → Client | Cluster status |
 
-Opcodes `0x1D`–`0xDF` are reserved. Nodes talk to each other over a separate protocol
+Opcodes `0x1D`–`0xD3` are reserved. Nodes talk to each other over a separate protocol
 with its own opcode space; see [Inter-node Communication](#inter-node-communication).
 
 ### Handling Unknown Opcodes
@@ -281,6 +293,9 @@ per-item result array (batch item failure).
 | `0x16` | ReservedQueueName | Queue names ending in `.dlq` are reserved for dead-letter queues |
 | `0x17` | InvalidThrottle | A throttle declaration is malformed: no limits, a zero limit or window, an empty name, a name repeated within one subscription, or a limit that can never apply |
 | `0x18` | ThrottleNotFound | No current subscriber declares a throttle with this name |
+| `0x19` | AuthStateStale | This node cannot confirm its API keys and ACLs are current, and refuses to answer on stale state |
+| `0x1A` | ImmutableSetting | An `UpdateQueue` tried to change a setting that is fixed at creation |
+| `0x1B` | NodeNotFound | No node in the cluster has this ID |
 | `0xFF` | InternalError | Unexpected server error |
 
 ## Connection Lifecycle
@@ -413,7 +428,17 @@ For each result:
   [u8: error_code]
   [uuid: message_id]                 -- all-zero if error; the original's ID for a duplicate
   [bool: duplicate]                  -- matched a remembered deduplication key; nothing was enqueued
+[u16: route_hint_count]
+For each hint:
+  [string: queue]
+  [u64: leader_node_id]
+  [string: leader_addr]
 ```
+
+A **route hint** is sent for each queue in the batch that this node does not lead and
+therefore forwarded. Clients cache hints and send later messages for those queues straight
+to their leaders; forwarding stays available for when a hint is stale. See
+[clustering.md](clustering.md#routing).
 
 Results are in request order.
 
@@ -642,6 +667,31 @@ lease for that consumer instead of failing.
 [optional<text>: on_enqueue_script]
 [optional<text>: on_failure_script]
 [u64: visibility_timeout_ms]         -- 0 = server default
+
+-- ordering ([ordering.md](ordering.md))
+[u8: ordering]                       -- 0 = none, 1 = the whole queue is one group,
+                                     --   2 = grouped by ordering_key
+[key: ordering_key]                  -- empty unless ordering = 2
+[u8: when_ordering_key_missing]      -- 0 = reject, 1 = unordered; ordering = 2 only
+
+-- deduplication ([deduplication.md](deduplication.md))
+[key: dedup_key]                     -- part_count 0 = no queue-defined key
+[u64: dedup_window_ms]               -- 0 = server default
+
+-- script failures ([concepts.md](concepts.md#when-on_enqueue-fails))
+[u8: script_failure]                 -- 0 = reject, 1 = park
+[u32: park_dead_letter_after]        -- parked classification attempts before dead-lettering;
+                                     --   0 = never
+
+-- retries ([concepts.md](concepts.md#retry-policy))
+[u32: max_attempts]                  -- 0 = server default
+[u8: backoff]                        -- 0 = server default, 1 = none, 2 = fixed, 3 = exponential
+[u64: backoff_initial_ms]            -- 0 = server default
+[u64: backoff_max_ms]                -- 0 = server default; exponential only
+
+-- delivery durability ([clustering.md](clustering.md#delivery-durability))
+[u8: delivery_durability]            -- 0 = committed, 1 = fast
+[u64: reclaim_grace_ms]              -- 0 = server default; fast queues only
 ```
 
 Scripts use `text` (`u32`-prefixed) rather than `string`; a 64 KB ceiling on
@@ -650,13 +700,8 @@ user-authored Lua is an arbitrary limit with no reason behind it.
 Creating a queue also creates its dead-letter queue, `<name>.dlq`. A name ending in `.dlq`
 is rejected with `ReservedQueueName` (`0x16`).
 
-**Not yet specified:** the encoding of the ordering key and its missing-key policy
-([ordering.md](ordering.md)), of the script failure policy with its optional dead-letter
-threshold ([concepts.md](concepts.md#when-on_enqueue-fails)), of the retry policy
-([concepts.md](concepts.md#retry-policy)), of the dedup key and window ([deduplication.md](deduplication.md)), and of delivery
-durability with its reclaim
-grace ([clustering.md](clustering.md#delivery-durability)). The ordering key and the
-script failure policy are fixed at creation.
+Zero means "use the broker's configured default" for every duration and count here, so a
+client that wants defaults sends zeros rather than having to know them.
 
 **CreateQueueResult (0xFC):**
 
@@ -665,6 +710,46 @@ script failure policy are fixed at creation.
 [u8: error_code]
 [string: queue_id]                   -- empty if error
 ```
+
+### UpdateQueue (0xDF)
+
+Changes a queue's mutable settings. Every field is optional; those left absent are
+unchanged.
+
+```
+[frame header: opcode=0xDF]
+[string: queue]
+[u8: on_enqueue_change]              -- 0 = unchanged, 1 = set, 2 = remove
+[text: on_enqueue_script]            -- empty unless on_enqueue_change = 1
+[u8: on_failure_change]              -- 0 = unchanged, 1 = set, 2 = remove
+[text: on_failure_script]            -- empty unless on_failure_change = 1
+[optional<u64>: visibility_timeout_ms]
+[optional<u64>: dedup_window_ms]
+[optional<u32>: max_attempts]
+[optional<u8>: backoff]
+[optional<u64>: backoff_initial_ms]
+[optional<u64>: backoff_max_ms]
+[optional<u8>: delivery_durability]
+[optional<u64>: reclaim_grace_ms]
+[optional<u32>: park_dead_letter_after]
+```
+
+**UpdateQueueResult (0xDE):**
+
+```
+[frame header: opcode=0xDE]
+[u8: error_code]                     -- 0x01 QueueNotFound, 0x04 LuaCompilationError,
+                                     --   0x1A ImmutableSetting
+```
+
+**Fixed at creation**, and therefore not in this frame: the ordering key with its
+missing-key policy, the dedup key, and the script failure policy. Redefining ordering
+groups or duplicate identity over a live backlog cannot preserve either guarantee. A
+client that tries anyway gets `ImmutableSetting` (`0x1A`).
+
+Changing a script affects messages enqueued afterwards; messages already queued keep the
+classification they were given ([concepts.md](concepts.md#lua-hooks)). Parked messages are
+reclassified with the new script ([concepts.md](concepts.md#when-on_enqueue-fails)).
 
 ### DeleteQueue (0xFB)
 
@@ -977,6 +1062,112 @@ For each value:
 A bucket with no deliveries inside its window is reported with every `counted` at 0 and
 `next_room_at` 0, whether or not it has been evicted.
 
+### GetRoutes (0xDD)
+
+```
+[frame header: opcode=0xDD]
+[u32: queue_count]                   -- 0 = every queue
+For each:
+  [string: queue]
+```
+
+**GetRoutesResult (0xDC):**
+
+```
+[frame header: opcode=0xDC]
+[u8: error_code]
+[u32: entry_count]
+For each queue:
+  [string: queue]
+  [u64: leader_node_id]              -- 0 if this node does not know
+  [string: leader_addr]              -- empty if this node does not know
+  [u32: shard_count]                 -- 0 = not sharded
+  For each shard:
+    [u32: shard_index]
+    [u64: leader_node_id]
+    [string: leader_addr]
+```
+
+Any node answers from its own copy of the meta group, so an answer may be slightly stale.
+A stale answer costs a `NotLeader` redirect, never a wrong result.
+
+### DrainNode (0xDB)
+
+```
+[frame header: opcode=0xDB]
+[u64: node_id]
+[bool: drain]                        -- false cancels an ongoing drain
+```
+
+**DrainNodeResult (0xDA):**
+
+```
+[frame header: opcode=0xDA]
+[u8: error_code]                     -- 0x1B = NodeNotFound
+```
+
+Draining moves every leadership off the node through controlled handovers, so that the
+node can be stopped without a queue losing in-flight leases.
+
+### MoveQueueLeader (0xD9)
+
+```
+[frame header: opcode=0xD9]
+[string: queue]
+[u64: target_node_id]                -- must be a member of the queue's group
+```
+
+**MoveQueueLeaderResult (0xD8):**
+
+```
+[frame header: opcode=0xD8]
+[u8: error_code]                     -- 0x01 QueueNotFound,
+                                     --   0x1B NodeNotFound: unknown, or not a member
+```
+
+A move pins nothing. Automatic rebalancing, when enabled, may move the queue again later.
+
+### SetRebalancing (0xD7)
+
+```
+[frame header: opcode=0xD7]
+[u8: mode]                           -- 0 = enabled, 1 = paused, 2 = disabled
+[u64: pause_ms]                      -- mode 1 only; how long the pause lasts
+```
+
+**SetRebalancingResult (0xD6):**
+
+```
+[frame header: opcode=0xD6]
+[u8: error_code]
+```
+
+A pause always has a duration and resumes on its own; disabling lasts until rebalancing is
+enabled again. Both are cluster-wide state in the meta group. See
+[clustering.md](clustering.md#operator-control).
+
+### GetClusterStatus (0xD5)
+
+```
+[frame header: opcode=0xD5]
+```
+
+**GetClusterStatusResult (0xD4):**
+
+```
+[frame header: opcode=0xD4]
+[u8: error_code]
+[u64: meta_leader_node_id]
+[u8: rebalancing]                    -- 0 = enabled, 1 = paused, 2 = disabled
+[u64: rebalancing_pause_ends_at]     -- Unix ms; 0 unless paused
+[u32: node_count]
+For each node:
+  [u64: node_id]
+  [string: addr]
+  [u8: state]                        -- 0 = up, 1 = unreachable, 2 = draining
+  [u32: queue_leaderships]
+```
+
 ## Error Frame (0xFE)
 
 ```
@@ -1171,12 +1362,13 @@ subscriptions on it.
 ### Clusters
 
 Which node handles each request is described in
-[clustering.md](clustering.md#routing). **Not yet specified:** how responses carry the
-leader of each queue so clients can send to it directly, the routing lookup that returns
-queue leaders and shards, and the error a node returns when it cannot confirm its
-authentication state is current. Nor are the cluster operations described in
-[clustering.md](clustering.md#operator-control): draining a node, moving a queue's leader,
-pausing and disabling rebalancing, and reporting rebalancing state.
+[clustering.md](clustering.md#routing). Clients reach any node and are steered from there:
+`NotLeader` (`0x0C`) redirects a consumer to a queue's leader, `EnqueueResult` carries
+route hints, and `GetRoutes` (`0xDD`) answers where queues live.
+
+A node that cannot confirm its API keys and ACLs are current refuses authenticated requests
+with `AuthStateStale` (`0x19`) rather than answering from state that may have missed a
+revocation. Clients should retry against another node.
 
 ### Consume and Ack on the Same Connection
 

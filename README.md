@@ -347,7 +347,13 @@ fila queue create <name>        Create a queue
 fila queue delete <name>        Delete a queue
 fila queue list                 List queues
 fila queue inspect <name>       Depth, in-flight, per-key fairness and throttle state
+fila queue update <name> ...    Change a queue's mutable settings
 fila throttle inspect <name>    Effective limits, busiest buckets, messages waiting
+
+fila cluster status             Nodes, meta leader, rebalancing state
+fila cluster drain <node>       Move every leader off a node before maintenance
+fila cluster move <queue> <node>  Move one queue's leadership
+fila cluster rebalance <enable|pause <duration>|disable>
 
 fila config set <key> <value>   Set a runtime config key
 fila config get <key>           Read a runtime config key
