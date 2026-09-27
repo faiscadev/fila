@@ -406,8 +406,10 @@ processes commands from a channel and makes every scheduling decision without
 locks. Protocol handlers and consumer delivery run on the async runtime's thread
 pool and reach the scheduler through bounded channels.
 
-Messages are persisted to an embedded key-value store behind a storage trait, so
-the engine is a choice rather than an assumption. Crash recovery runs at startup.
+Messages are persisted through a storage trait, and the engine behind it is Fila's own.
+It starts deliberately naive — an append-only log with an in-memory index — so that the
+trait's contract is settled first: durability before an enqueue is acknowledged, atomic
+groups of mutations, and ordered range scans. Crash recovery runs at startup.
 
 The wire protocol is a hand-rolled binary protocol, specified in
 [docs/protocol.md](docs/protocol.md). It is batch-native, multiplexes concurrent
