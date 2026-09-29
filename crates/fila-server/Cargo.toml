@@ -1,0 +1,12 @@
+[package]
+name = "fila-server"
+description = "The Fila broker: serves the wire protocol over TCP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+fila-broker = { workspace = true }
+fila-codec = { workspace = true }

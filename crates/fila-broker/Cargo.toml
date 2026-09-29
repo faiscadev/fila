@@ -1,0 +1,10 @@
+[package]
+name = "fila-broker"
+description = "Fila's broker engine: queues, scheduling, storage and message lifecycle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
