@@ -37,11 +37,13 @@ pub enum Decoded {
     Invalid(FrameError),
 }
 
+const CONTINUATION: u8 = 0b0000_0001;
+const RESERVED: u8 = 0b1111_1110;
+
 fn validate_flags(flags: u8) -> Option<FlagsError> {
-    if flags == 0b0000_0001 {
-        // continuation is not implemented yet
+    if flags & CONTINUATION != 0 {
         Some(FlagsError::ContinuationUnsupported)
-    } else if flags != 0b0000_0000 {
+    } else if flags & RESERVED != 0 {
         Some(FlagsError::ReservedSet { flags })
     } else {
         None
@@ -49,7 +51,7 @@ fn validate_flags(flags: u8) -> Option<FlagsError> {
 }
 
 fn extract_frame_header(buf: &[u8]) -> Result<FrameHeader, FlagsError> {
-    let buf_frame = &buf[4..];
+    let buf_frame = &buf[LENGTH_PREFIX_LEN..];
     let opcode = u8::from_be_bytes([buf_frame[0]]);
     let flags = u8::from_be_bytes([buf_frame[1]]);
 
@@ -66,10 +68,19 @@ fn extract_frame(buf: &[u8]) -> Result<Frame, FlagsError> {
     Ok(Frame { header })
 }
 
+/// Bytes of big-endian `u32` length prefix in front of every frame.
+const LENGTH_PREFIX_LEN: usize = 4;
+
+/// Bytes of header at the start of every frame body: opcode, flags, request id.
+const FRAME_HEADER_LEN: usize = 6;
+
+/// A frame body carries at least its header, so this is the smallest legal prefix.
+const MIN_FRAME_BODY_LEN: u32 = FRAME_HEADER_LEN as u32;
+
 const MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16; // 16 MiB
 
 pub fn decode(buf: &[u8]) -> Decoded {
-    if buf.len() < 4 {
+    if buf.len() < LENGTH_PREFIX_LEN {
         return Decoded::Incomplete;
     }
 
@@ -79,11 +90,11 @@ pub fn decode(buf: &[u8]) -> Decoded {
         return Decoded::Invalid(FrameError::LengthAboveMaximum { length: frame_len });
     }
 
-    if frame_len < 6 {
+    if frame_len < MIN_FRAME_BODY_LEN {
         return Decoded::Invalid(FrameError::LengthBelowHeader { length: frame_len });
     }
 
-    if buf.len() < (frame_len as usize) + 4 {
+    if buf.len() < (frame_len as usize) + LENGTH_PREFIX_LEN {
         return Decoded::Incomplete;
     }
 
@@ -92,7 +103,7 @@ pub fn decode(buf: &[u8]) -> Decoded {
         Ok(frame) => Decoded::Success {
             frame,
             length: frame_len,
-            consumed: (frame_len + 4) as usize,
+            consumed: frame_len as usize + LENGTH_PREFIX_LEN,
         },
         Err(err) => Decoded::Invalid(FrameError::Flags(err)),
     }
@@ -100,32 +111,16 @@ pub fn decode(buf: &[u8]) -> Decoded {
 
 fn encode_u8(value: u8, buf: &mut [u8]) -> Option<usize> {
     let as_bytes = value.to_be_bytes();
-    if buf.len() < as_bytes.len() {
-        return None;
-    }
-
-    let mut cursor = 0;
-    for byte in as_bytes {
-        buf[cursor] = byte;
-        cursor += 1;
-    }
-
-    Some(cursor)
+    let len = as_bytes.len();
+    buf.get_mut(..len)?.copy_from_slice(&as_bytes);
+    Some(as_bytes.len())
 }
 
 fn encode_u32(value: u32, buf: &mut [u8]) -> Option<usize> {
     let as_bytes = value.to_be_bytes();
-    if buf.len() < as_bytes.len() {
-        return None;
-    }
-
-    let mut cursor = 0;
-    for byte in as_bytes {
-        buf[cursor] = byte;
-        cursor += 1;
-    }
-
-    Some(cursor)
+    let len = as_bytes.len();
+    buf.get_mut(..len)?.copy_from_slice(&as_bytes);
+    Some(as_bytes.len())
 }
 
 fn encode_frame_header(frame_header: &FrameHeader, buf: &mut [u8]) -> Option<usize> {
@@ -144,14 +139,14 @@ fn encode_frame_header(frame_header: &FrameHeader, buf: &mut [u8]) -> Option<usi
 // return None if buf cant fit frame
 pub fn encode(frame: &Frame, buf: &mut [u8]) -> Option<usize> {
     // starts at 4 to offset the length
-    let mut cursor = 4;
+    let mut cursor = LENGTH_PREFIX_LEN;
     if buf.len() < cursor {
         return None;
     }
 
     cursor += encode_frame_header(&frame.header, &mut buf[cursor..])?;
 
-    let frame_length = (cursor - 4) as u32;
+    let frame_length = (cursor - LENGTH_PREFIX_LEN) as u32;
     encode_u32(frame_length, &mut buf[..])?;
 
     Some(cursor)
@@ -307,9 +302,8 @@ mod tests {
 
     #[test]
     fn encode_never_emits_a_frame_decode_rejects() {
-        // `length` is derived from the body, but encode takes it as input and
-        // writes it verbatim, so a caller can hand over a prefix that disagrees
-        // with the bytes that follow.
+        // Whatever encode emits, decode has to accept: the two halves are one
+        // codec, so a prefix encode writes must agree with the bytes after it.
         let frame = Frame {
             header: FrameHeader {
                 opcode: 0x03,
@@ -318,12 +312,11 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        if let Some(written) = encode(&frame, &mut out) {
-            assert!(
-                matches!(decode(&out[..written]), Decoded::Success { .. }),
-                "encode emitted {written} bytes that its own decode will not accept"
-            );
-        }
+        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        assert!(
+            matches!(decode(&out[..written]), Decoded::Success { .. }),
+            "encode emitted {written} bytes that its own decode will not accept"
+        );
     }
 
     #[test]
@@ -358,5 +351,18 @@ mod tests {
             matches!(decode(&buf), Decoded::Incomplete),
             "a body of exactly the maximum is legal, so decode should ask for more bytes"
         );
+    }
+
+    #[test]
+    fn continuation_combined_with_a_reserved_bit_reports_continuation() {
+        // Bit 0 says continuation, which is a feature we have not built; bits 1-7
+        // are not flags at all. When both are set the continuation is the more
+        // specific fact, and the one a peer can act on.
+        let mut buf = PING;
+        buf[5] = 0b0000_0011;
+        assert!(matches!(
+            decode(&buf),
+            Decoded::Invalid(FrameError::Flags(FlagsError::ContinuationUnsupported))
+        ));
     }
 }
