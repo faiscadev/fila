@@ -104,13 +104,13 @@ All multi-byte integers are big-endian (network byte order).
 | `f64` | Big-endian IEEE 754 double | 8 |
 | `bool` | `0x00` = false, `0x01` = true | 1 |
 | `uuid` | 16 raw bytes, big-endian (RFC 9562 byte order) | 16 |
-| `string` | `[u16 length][UTF-8 bytes]` | 2 + length |
-| `text` | `[u32 length][UTF-8 bytes]` | 4 + length |
+| `string8` | `[u8 length][UTF-8 bytes]` | 1 + length |
+| `string32` | `[u32 length][UTF-8 bytes]` | 4 + length |
 | `bytes` | `[u32 length][raw bytes]` | 4 + length |
-| `map<string,string>` | `[u16 count][repeated: string key, string value]` | 2 + entries |
-| `string[]` | `[u16 count][repeated: string]` | 2 + strings |
+| `map<string8,string8>` | `[u16 count][repeated: string8 key, string8 value]` | 2 + entries |
+| `string8[]` | `[u16 count][repeated: string8]` | 2 + strings |
 | `optional<T>` | `[u8 present][T if present]` | 1, or 1 + sizeof(T) |
-| `key` | `[u16 part_count][repeated: u8 kind, string name]` | 2 + parts |
+| `key` | `[u16 part_count][repeated: u8 kind, string8 name]` | 2 + parts |
 
 A **`key`** names message properties that together identify a group — an ordering group,
 a throttle bucket, or a set of duplicates. Each part's `kind` is:
@@ -129,21 +129,43 @@ Kinds `3`–`5` are valid only in deduplication keys. A `part_count` of 0 means 
 ### On identifiers
 
 Message IDs are UUIDv7 and travel as **16 raw bytes**, never as text. A UUID
-rendered as a 36-character string costs 38 bytes on the wire — 22 wasted bytes on
+rendered as a 36-character string costs 37 bytes on the wire — 21 wasted bytes on
 every `Delivery`, `EnqueueResult`, `Ack`, `Nack` and `ExtendLease` item. Batch-acking
-1,000 messages costs 24 KB rather than 46 KB.
+1,000 messages costs 23 KB rather than 44 KB.
 
-Queue IDs and API key IDs remain `string`: they are operator-facing, appear only on
+Queue IDs and API key IDs remain `string8`: they are operator-facing, appear only on
 cold paths, and are not necessarily UUIDs.
 
 ### On string length
 
-`string` is capped at 65,535 bytes. This is deliberate — queue names, fairness keys
-and header values are short, and a `u32` prefix would add 2 bytes to every one of
-them on the hot path.
+There are two string types, named for the width of their length prefix so that nobody
+has to remember which is larger.
 
-Lua scripts use `text` (`u32`-prefixed) because they are cold-path and legitimately
-large. Any field that can exceed 64 KB uses `text` or `bytes`, never `string`.
+**`string8` carries identifiers and labels** — queue names, fairness keys, API keys,
+config and header keys and values, patterns, addresses. Every one of them is a name or
+a short value, so a 255-byte ceiling is ample and the 1-byte prefix keeps it off the
+hot path's budget. Two fields are user-supplied and therefore the only places the
+ceiling can realistically be met: **header values** and **runtime config values**. A
+header carries routing metadata — a W3C `traceparent` is 55 bytes, a tenant id a
+dozen — and anything larger belongs in the payload.
+
+**`string32` carries UTF-8 text that is not an identifier**, which today means Lua
+scripts. The width is not a capability: the 4 GiB a `u32` could describe is never the
+operative limit, because a frame is capped long before that and a reassembled body is
+capped by the receiver. It is simply the type for text that needs more than 255 bytes,
+on a cold path where four prefix bytes cost nothing.
+
+Bounding `string8` at 255 bytes also bounds the handshake. A `Handshake` frame can
+never gain a field — see [A note on the handshake's own evolution](#a-note-on-the-handshakes-own-evolution) —
+so its length is fully determined, and the longest legal one is:
+
+```
+4 prefix + 6 header + 2 version + (1 present + 1 length + 255 api_key) + 4 capabilities = 273 bytes
+```
+
+A server can therefore refuse an unauthenticated peer's first frame on the length
+prefix alone, before allocating for it. That bound falls out of the protocol rather
+than out of a tuning knob.
 
 ### On collection counts
 
@@ -312,9 +334,16 @@ precede it.
 ```
 [frame header: opcode=0x01, flags=0, request_id=0]
 [u16: protocol_version]              -- highest version the client speaks
-[optional<string>: api_key]
+[optional<string8>: api_key]
 [u32: client_capabilities]           -- bitmap; see Capabilities
 ```
+
+**This is the one frame that rejects trailing bytes.** Everywhere else a reader
+tolerates bytes it does not recognise, because that is how a field is added later. The
+handshake can never gain a field, so there is nothing to tolerate: a body longer than
+its fields is malformed, and the frame is capped at 273 bytes. A server reads the
+length prefix of a connection's first frame and refuses anything larger before
+allocating for it.
 
 **HandshakeOk (0x02)** — Server → Client:
 
@@ -410,13 +439,13 @@ correct Raft group in cluster mode. Partial success is normal.
 [frame header: opcode=0x10]
 [u32: message_count]
 For each message:
-  [string: queue]
-  [map<string,string>: headers]
+  [string8: queue]
+  [map<string8,string8>: headers]
   [bytes: payload]
-  [optional<string>: fairness_key]   -- absent = queue default
+  [optional<string8>: fairness_key]   -- absent = queue default
   [optional<u32>: weight]            -- absent = queue default (1)
   [optional<u64>: delay_ms]          -- absent or 0 = deliverable immediately
-  [optional<string>: idempotency_key]
+  [optional<string8>: idempotency_key]
 ```
 
 **EnqueueResult (0x11):**
@@ -430,9 +459,9 @@ For each result:
   [bool: duplicate]                  -- matched a remembered deduplication key; nothing was enqueued
 [u16: route_hint_count]
 For each hint:
-  [string: queue]
+  [string8: queue]
   [u64: leader_node_id]
-  [string: leader_addr]
+  [string8: leader_addr]
 ```
 
 A **route hint** is sent for each queue in the batch that this node does not lead and
@@ -480,11 +509,11 @@ the group is delivered first. See [ordering.md](ordering.md#delayed-messages).
 
 ```
 [frame header: opcode=0x12]
-[string: queue]
+[string8: queue]
 [u32: credit]                        -- initial delivery credit; 0 = unlimited
 [u16: throttle_count]
 For each throttle:
-  [string: name]
+  [string8: name]
   [u16: limit_count]                 -- at least 1
   For each limit:
     [u64: max_deliveries]            -- N
@@ -516,7 +545,7 @@ Sent before any `Delivery` frame.
 
 ```
 [frame header: opcode=0x13]
-[string: consumer_id]
+[string8: consumer_id]
 ```
 
 ### Delivery (0x14)
@@ -528,10 +557,10 @@ Pushed to a consuming client, using the request ID of the `Consume` subscription
 [u32: message_count]
 For each message:
   [uuid: message_id]
-  [string: queue]
-  [map<string,string>: headers]
+  [string8: queue]
+  [map<string8,string8>: headers]
   [bytes: payload]
-  [string: fairness_key]
+  [string8: fairness_key]
   [u32: weight]
   [u32: attempt_count]               -- 1 on first delivery; reset by redrive
   [u32: redrive_count]               -- times redriven from the dead-letter queue
@@ -575,7 +604,7 @@ The server stops delivering and releases the subscription. No response frame.
 [frame header: opcode=0x17]
 [u32: item_count]
 For each item:
-  [string: queue]
+  [string8: queue]
   [uuid: message_id]
 ```
 
@@ -599,9 +628,9 @@ work on `Enqueue`.
 [frame header: opcode=0x19]
 [u32: item_count]
 For each item:
-  [string: queue]
+  [string8: queue]
   [uuid: message_id]
-  [string: error]                    -- reaches the on_failure hook as msg.error
+  [string8: error]                    -- reaches the on_failure hook as msg.error
   [optional<u64>: retry_after_ms]    -- absent = let on_failure decide
 ```
 
@@ -632,7 +661,7 @@ dependency becomes a hot loop.
 [frame header: opcode=0x1B]
 [u32: item_count]
 For each item:
-  [string: queue]
+  [string8: queue]
   [uuid: message_id]
   [u64: extend_by_ms]                -- from now, not from current expiry
 ```
@@ -663,9 +692,9 @@ lease for that consumer instead of failing.
 
 ```
 [frame header: opcode=0xFD]
-[string: name]
-[optional<text>: on_enqueue_script]
-[optional<text>: on_failure_script]
+[string8: name]
+[optional<string32>: on_enqueue_script]
+[optional<string32>: on_failure_script]
 [u64: visibility_timeout_ms]         -- 0 = server default
 
 -- ordering ([ordering.md](ordering.md))
@@ -694,8 +723,8 @@ lease for that consumer instead of failing.
 [u64: reclaim_grace_ms]              -- 0 = server default; fast queues only
 ```
 
-Scripts use `text` (`u32`-prefixed) rather than `string`; a 64 KB ceiling on
-user-authored Lua is an arbitrary limit with no reason behind it.
+Scripts use `string32` rather than `string8`: 255 bytes is nowhere near enough for
+user-authored Lua, and the four prefix bytes cost nothing on a cold path.
 
 Creating a queue also creates its dead-letter queue, `<name>.dlq`. A name ending in `.dlq`
 is rejected with `ReservedQueueName` (`0x16`).
@@ -708,7 +737,7 @@ client that wants defaults sends zeros rather than having to know them.
 ```
 [frame header: opcode=0xFC]
 [u8: error_code]
-[string: queue_id]                   -- empty if error
+[string8: queue_id]                   -- empty if error
 ```
 
 ### UpdateQueue (0xDF)
@@ -718,11 +747,11 @@ unchanged.
 
 ```
 [frame header: opcode=0xDF]
-[string: queue]
+[string8: queue]
 [u8: on_enqueue_change]              -- 0 = unchanged, 1 = set, 2 = remove
-[text: on_enqueue_script]            -- empty unless on_enqueue_change = 1
+[string32: on_enqueue_script]            -- empty unless on_enqueue_change = 1
 [u8: on_failure_change]              -- 0 = unchanged, 1 = set, 2 = remove
-[text: on_failure_script]            -- empty unless on_failure_change = 1
+[string32: on_failure_script]            -- empty unless on_failure_change = 1
 [optional<u64>: visibility_timeout_ms]
 [optional<u64>: dedup_window_ms]
 [optional<u32>: max_attempts]
@@ -755,7 +784,7 @@ reclassified with the new script ([concepts.md](concepts.md#when-on_enqueue-fail
 
 ```
 [frame header: opcode=0xFB]
-[string: queue]
+[string8: queue]
 ```
 
 **DeleteQueueResult (0xFA):**
@@ -769,7 +798,7 @@ reclassified with the new script ([concepts.md](concepts.md#when-on_enqueue-fail
 
 ```
 [frame header: opcode=0xF9]
-[string: queue]
+[string8: queue]
 ```
 
 **GetStatsResult (0xF8):**
@@ -790,7 +819,7 @@ reclassified with the new script ([concepts.md](concepts.md#when-on_enqueue-fail
 [u32: replication_count]             -- 0 if single-node
 [u32: per_key_stats_count]
 For each fairness key stat:
-  [string: key]
+  [string8: key]
   [u64: pending_count]
   [i64: current_deficit]
   [u32: weight]
@@ -802,7 +831,7 @@ For each throttle active on the queue:
 A `throttle_summary`, shared with `GetThrottleStatsResult`:
 
 ```
-[string: name]
+[string8: name]
 [u16: limit_count]
 For each effective limit:
   [u64: max_deliveries]
@@ -828,7 +857,7 @@ Individual buckets are never listed here; see `GetThrottleStats`.
 [u32: cluster_node_count]            -- 0 if single-node
 [u32: queue_count]
 For each queue:
-  [string: name]
+  [string8: name]
   [u64: depth]
   [u64: in_flight]
   [u32: active_consumers]
@@ -839,8 +868,8 @@ For each queue:
 
 ```
 [frame header: opcode=0xF5]
-[string: key]
-[string: value]
+[string8: key]
+[string8: value]
 ```
 
 **SetConfigResult (0xF4):**
@@ -854,7 +883,7 @@ For each queue:
 
 ```
 [frame header: opcode=0xF3]
-[string: key]
+[string8: key]
 ```
 
 **GetConfigResult (0xF2):**
@@ -862,14 +891,14 @@ For each queue:
 ```
 [frame header: opcode=0xF2]
 [u8: error_code]                     -- 0x08 InvalidConfigValue if key is unset
-[string: value]                      -- empty if error
+[string8: value]                      -- empty if error
 ```
 
 ### ListConfig (0xF1)
 
 ```
 [frame header: opcode=0xF1]
-[string: prefix]                     -- empty = all entries
+[string8: prefix]                     -- empty = all entries
 ```
 
 **ListConfigResult (0xF0):**
@@ -879,15 +908,15 @@ For each queue:
 [u8: error_code]
 [u32: entry_count]
 For each entry:
-  [string: key]
-  [string: value]
+  [string8: key]
+  [string8: value]
 ```
 
 ### Redrive (0xEF)
 
 ```
 [frame header: opcode=0xEF]
-[string: dlq_queue]
+[string8: dlq_queue]
 [u64: count]                         -- 0 = all
 [u8: reclassify]                     -- 0 = all, 1 = unclassified only, 2 = none
 ```
@@ -909,7 +938,7 @@ not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 
 ```
 [frame header: opcode=0xED]
-[string: name]
+[string8: name]
 [u64: expires_at_ms]                 -- Unix ms, 0 = never
 [bool: is_superadmin]
 ```
@@ -919,8 +948,8 @@ not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 ```
 [frame header: opcode=0xEC]
 [u8: error_code]
-[string: key_id]
-[string: key]                        -- plaintext secret, returned once
+[string8: key_id]
+[string8: key]                        -- plaintext secret, returned once
 [bool: is_superadmin]
 ```
 
@@ -928,7 +957,7 @@ not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 
 ```
 [frame header: opcode=0xEB]
-[string: key_id]
+[string8: key_id]
 ```
 
 **RevokeApiKeyResult (0xEA):**
@@ -951,8 +980,8 @@ not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 [u8: error_code]
 [u32: key_count]
 For each key:
-  [string: key_id]
-  [string: name]
+  [string8: key_id]
+  [string8: name]
   [u64: created_at_ms]
   [u64: expires_at_ms]               -- 0 = never
   [bool: is_superadmin]
@@ -962,11 +991,11 @@ For each key:
 
 ```
 [frame header: opcode=0xE7]
-[string: key_id]
+[string8: key_id]
 [u32: permission_count]
 For each permission:
-  [string: kind]                     -- "produce" | "consume" | "admin"
-  [string: pattern]                  -- glob over queue names
+  [string8: kind]                     -- "produce" | "consume" | "admin"
+  [string8: pattern]                  -- glob over queue names
 ```
 
 Replaces the permission set; it does not merge.
@@ -982,7 +1011,7 @@ Replaces the permission set; it does not merge.
 
 ```
 [frame header: opcode=0xE5]
-[string: key_id]
+[string8: key_id]
 ```
 
 **GetAclResult (0xE4):**
@@ -990,19 +1019,19 @@ Replaces the permission set; it does not merge.
 ```
 [frame header: opcode=0xE4]
 [u8: error_code]                     -- 0x0F = ApiKeyNotFound
-[string: key_id]
+[string8: key_id]
 [bool: is_superadmin]
 [u32: permission_count]
 For each permission:
-  [string: kind]
-  [string: pattern]
+  [string8: kind]
+  [string8: pattern]
 ```
 
 ### GetThrottleStats (0xE3)
 
 ```
 [frame header: opcode=0xE3]
-[string: name]
+[string8: name]
 [u32: top_buckets]                   -- how many of the most-waiting buckets to include
 ```
 
@@ -1014,7 +1043,7 @@ For each permission:
 [throttle_summary]                   -- declaring_subscribers counts every queue
 [u32: queue_count]
 For each queue where the throttle is active:
-  [string: queue]
+  [string8: queue]
 [u64: active_buckets]                -- buckets with deliveries inside the window
 [u64: buckets_at_limit]              -- buckets with no room now
 [u64: waiting]                       -- messages held by this throttle, across queues
@@ -1029,7 +1058,7 @@ A `bucket_stats`:
 [u8: bucket_kind]                    -- 0 = keyed or unkeyed, 1 = shared bucket for messages missing the key
 [u16: value_count]                   -- one value per key part; 0 for an unkeyed or shared bucket
 For each value:
-  [string: value]
+  [string8: value]
 [u16: limit_count]
 For each effective limit, in the order of throttle_summary:
   [u64: counted]                     -- deliveries and unexpired grants inside the window
@@ -1044,11 +1073,11 @@ limit is enforced against.
 
 ```
 [frame header: opcode=0xE1]
-[string: name]
+[string8: name]
 [u8: bucket_kind]                    -- as in bucket_stats
 [u16: value_count]
 For each value:
-  [string: value]
+  [string8: value]
 ```
 
 **GetThrottleBucketResult (0xE0):**
@@ -1068,7 +1097,7 @@ A bucket with no deliveries inside its window is reported with every `counted` a
 [frame header: opcode=0xDD]
 [u32: queue_count]                   -- 0 = every queue
 For each:
-  [string: queue]
+  [string8: queue]
 ```
 
 **GetRoutesResult (0xDC):**
@@ -1078,14 +1107,14 @@ For each:
 [u8: error_code]
 [u32: entry_count]
 For each queue:
-  [string: queue]
+  [string8: queue]
   [u64: leader_node_id]              -- 0 if this node does not know
-  [string: leader_addr]              -- empty if this node does not know
+  [string8: leader_addr]              -- empty if this node does not know
   [u32: shard_count]                 -- 0 = not sharded
   For each shard:
     [u32: shard_index]
     [u64: leader_node_id]
-    [string: leader_addr]
+    [string8: leader_addr]
 ```
 
 Any node answers from its own copy of the meta group, so an answer may be slightly stale.
@@ -1113,7 +1142,7 @@ node can be stopped without a queue losing in-flight leases.
 
 ```
 [frame header: opcode=0xD9]
-[string: queue]
+[string8: queue]
 [u64: target_node_id]                -- must be a member of the queue's group
 ```
 
@@ -1163,7 +1192,7 @@ enabled again. Both are cluster-wide state in the meta group. See
 [u32: node_count]
 For each node:
   [u64: node_id]
-  [string: addr]
+  [string8: addr]
   [u8: state]                        -- 0 = up, 1 = unreachable, 2 = draining
   [u32: queue_leaderships]
 ```
@@ -1173,8 +1202,8 @@ For each node:
 ```
 [frame header: opcode=0xFE, request_id=<failed request's ID>]
 [u8: error_code]
-[string: message]                    -- human-readable
-[map<string,string>: metadata]       -- machine-readable context
+[string8: message]                    -- human-readable
+[map<string8,string8>: metadata]       -- machine-readable context
 ```
 
 Standard metadata keys:
@@ -1231,15 +1260,15 @@ receiver needs none to reassemble.
 | Frame length prefix | 4 |
 | Opcode + Flags + Request ID | 6 |
 | Message count (u32) | 4 |
-| Queue string (2 + 6) | 8 |
+| Queue string8 (1 + 6) | 7 |
 | Headers map (count=0) | 2 |
 | Payload (4 + 1024) | 1028 |
 | fairness_key (absent) | 1 |
 | weight (absent) | 1 |
 | delay_ms (absent) | 1 |
 | idempotency_key (absent) | 1 |
-| **Total** | **1056** |
-| **Overhead beyond payload** | **32 bytes** |
+| **Total** | **1055** |
+| **Overhead beyond payload** | **31 bytes** |
 
 The four optional fields cost 4 bytes when unused — the price of making
 fairness settable without Lua.
@@ -1249,12 +1278,12 @@ fairness settable without Lua.
 | Component | Bytes |
 |-----------|-------|
 | Frame length + header + count | 14 |
-| 100x queue string | 800 |
+| 100x queue string8 | 700 |
 | 100x headers map (empty) | 200 |
 | 100x payload (4 + 1024) | 102,800 |
 | 100x optional fields (unused) | 400 |
-| **Total** | **104,214** |
-| **Per-message overhead** | **18.14 bytes** |
+| **Total** | **104,114** |
+| **Per-message overhead** | **17.14 bytes** |
 
 ### Batch Ack (1,000 messages)
 
@@ -1263,19 +1292,19 @@ against, which is why the ID is 16 raw bytes.
 
 | Component | Bytes |
 |-----------|------:|
-| Queue string (2 + 6) | 8 |
+| Queue string8 (1 + 6) | 7 |
 | Message ID (`uuid`) | 16 |
-| **Per item** | **24** |
-| **1,000 items** | **24,000** |
+| **Per item** | **23** |
+| **1,000 items** | **23,000** |
 
-Encoding the same ID as a 36-character string would cost 46 bytes per item, and
-46,000 for the batch.
+Encoding the same ID as a 36-character string would cost 44 bytes per item, and
+44,000 for the batch.
 
 ### Comparison with gRPC/Protobuf
 
 | Protocol | Single 1 KB Enqueue | Notes |
 |----------|--------------------:|-------|
-| Fila binary | ~32 bytes overhead | Length-prefixed, no HTTP/2 |
+| Fila binary | ~31 bytes overhead | Length-prefixed, no HTTP/2 |
 | gRPC/HTTP2/protobuf | ~100-200 bytes | HTTP/2 HEADERS + DATA, protobuf tags, HPACK |
 
 ## Serialization Format Decision
@@ -1381,6 +1410,11 @@ Default 16 MiB, configurable, advertised in `HandshakeOk`. The length field is `
 (~4 GiB), but a lower enforced limit bounds per-frame allocation. This does not limit
 payload size — larger bodies use continuation frames. A server receiving an oversized
 frame responds `InvalidFrame` (`0x0E`).
+
+**Before a connection has handshaked, the limit is 273 bytes** — the longest legal
+`Handshake` — not the configured maximum. Everything about the handshake is processed
+before the peer is authenticated, so the work an unauthenticated peer can ask for is
+bounded by the protocol rather than by configuration.
 
 ### Byte Order
 
