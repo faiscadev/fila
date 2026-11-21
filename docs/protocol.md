@@ -337,8 +337,8 @@ precede it.
 
 ```
 [frame header: opcode=0x01, flags=0, request_id=0]
-[u16: max_version]                   -- highest version the client speaks
-[u16: min_version]                   -- lowest version it will accept
+[u16: min_version]                   -- lowest version the client will accept
+[u16: max_version]                   -- highest version it speaks
 [optional<string8>: api_key]
 [u32: client_capabilities]           -- bitmap; see Capabilities
 ```
@@ -414,7 +414,7 @@ capability is how a peer that has not implemented reassembly declines to receive
 
 #### A note on the handshake's own evolution
 
-The first four bytes of the body are `[u16 max_version][u16 min_version]`, and
+The first four bytes of the body are `[u16 min_version][u16 max_version]`, and
 **their offsets never change in any version of this protocol**. That is what lets a
 reader decide whether it knows a handshake before parsing one: four bytes in, it either
 finds a version it shares with the sender or answers with the range it supports. A
@@ -1484,7 +1484,7 @@ of the protocol:
 
 - the **`u32` length prefix**, read on every frame including the first
 - the **6-byte frame header of both handshake frames**
-- the **offsets of `max_version` and `min_version`** — the first four bytes of the
+- the **offsets of `min_version` and `max_version`** — the first four bytes of the
   handshake body
 
 A version may redefine the frame header for frames sent *after* negotiation, provided
@@ -1553,7 +1553,7 @@ this specification. **Version 1's limit is 4 KiB**, against a longest legal `Han
 of 275 bytes; the rest is headroom.
 
 A reader decides this from the first **fourteen bytes** — length prefix, frame header,
-`max_version`, `min_version` — and never buffers more than that until it has them. Those
+`min_version`, `max_version` — and never buffers more than that until it has them. Those
 bytes name the sender's version range, so a server applies the limit of the version it
 is about to negotiate, and a peer that declares version 1 while sending a megabyte is
 refused on version 1's limit.
