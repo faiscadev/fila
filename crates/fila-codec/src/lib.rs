@@ -3,7 +3,7 @@
 extern crate alloc;
 
 mod string8;
-pub use string8::{String8, TooLong};
+pub use string8::{String8, TooLongError};
 
 use core::str::Utf8Error;
 
@@ -43,7 +43,7 @@ pub enum FlagsError {
 pub enum HeaderError {
     Flags(FlagsError),
     Opcode(OpcodeError),
-    RequestIdMissing,
+    MissingRequestId,
 }
 
 impl TryFrom<u8> for Opcode {
@@ -117,10 +117,11 @@ pub struct Handshake {
 
 #[derive(Debug, PartialEq)]
 pub enum HandshakeError {
-    MissingMinProtocolVersion,
-    MissingMaxProtocolVersion,
-    MissingApiKeyPresenceFlag,
-    InvalidApiKey(String8Error),
+    MissingMinVersion,
+    MissingMaxVersion,
+    MissingApiKey,
+    InvalidApiKeyPresenceFlag(u8),
+    InvalidApiKey(String8DecodeError),
     MissingClientCapabilities,
 }
 
@@ -159,9 +160,8 @@ pub struct Reader<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum String8Error {
+pub enum String8DecodeError {
     Truncated { declared: u8, available: usize },
-    InvalidPresenceFlag(u8),
     InvalidUtf8(Utf8Error),
 }
 
@@ -230,30 +230,32 @@ impl<'a> Reader<'a> {
             return Err(HeaderError::Flags(err));
         }
 
-        let request_id = self.u32().ok_or(HeaderError::RequestIdMissing)?;
+        let request_id = self.u32().ok_or(HeaderError::MissingRequestId)?;
 
         Ok(FrameHeader { opcode, request_id })
     }
 
-    fn optional_string8(&mut self) -> Option<Result<Option<String8>, String8Error>> {
-        if self.pos >= self.buf.len() {
-            return None;
-        }
+    /// Reads the `[u8 present]` byte that opens an `optional<T>`.
+    ///
+    /// `Err` carries the byte itself. The protocol defines 0 and 1 and nothing else, and
+    /// this byte decides how the bytes behind it are read, so an undefined value cannot
+    /// be guessed at. The fault belongs to the `optional` wrapper rather than to `T`,
+    /// which is why the byte is read on its own.
+    fn presence_flag(&mut self) -> Option<Result<bool, u8>> {
+        let byte = self.u8()?;
+        Some(match byte {
+            0 => Ok(false),
+            1 => Ok(true),
+            other => Err(other),
+        })
+    }
 
-        if self.buf[self.pos] != 0 && self.buf[self.pos] != 1 {
-            return Some(Err(String8Error::InvalidPresenceFlag(self.buf[self.pos])));
-        }
-
-        let is_present = self.buf[self.pos] == 1;
-        self.pos += 1;
-
-        if !is_present {
-            return Some(Ok(None));
-        }
-
+    /// Reads a `string8`: `[u8 length][UTF-8 bytes]`.
+    fn string8(&mut self) -> Option<Result<String8, String8DecodeError>> {
         let len = self.u8()? as usize;
+
         if self.pos + len > self.buf.len() {
-            return Some(Err(String8Error::Truncated {
+            return Some(Err(String8DecodeError::Truncated {
                 declared: len as u8,
                 available: self.buf.len() - self.pos,
             }));
@@ -262,24 +264,25 @@ impl<'a> Reader<'a> {
         let string_bytes = &self.buf[self.pos..self.pos + len];
         self.pos += len;
 
-        Some(
-            String8::from_wire(string_bytes)
-                .map(Some)
-                .map_err(String8Error::InvalidUtf8),
-        )
+        Some(String8::from_wire(string_bytes).map_err(String8DecodeError::InvalidUtf8))
     }
 
     fn handshake(&mut self) -> Result<Handshake, HandshakeError> {
-        let min_version = self
-            .u16()
-            .ok_or(HandshakeError::MissingMinProtocolVersion)?;
-        let max_version = self
-            .u16()
-            .ok_or(HandshakeError::MissingMaxProtocolVersion)?;
-        let api_key = self
-            .optional_string8()
-            .ok_or(HandshakeError::MissingApiKeyPresenceFlag)?
-            .map_err(HandshakeError::InvalidApiKey)?;
+        let min_version = self.u16().ok_or(HandshakeError::MissingMinVersion)?;
+        let max_version = self.u16().ok_or(HandshakeError::MissingMaxVersion)?;
+        let api_key = if self
+            .presence_flag()
+            .ok_or(HandshakeError::MissingApiKey)?
+            .map_err(HandshakeError::InvalidApiKeyPresenceFlag)?
+        {
+            Some(
+                self.string8()
+                    .ok_or(HandshakeError::MissingApiKey)?
+                    .map_err(HandshakeError::InvalidApiKey)?,
+            )
+        } else {
+            None
+        };
         let client_capabilities = self
             .u32()
             .ok_or(HandshakeError::MissingClientCapabilities)?;
@@ -438,16 +441,27 @@ impl<'a> Writer<'a> {
         Some(())
     }
 
+    /// Writes the `[u8 present]` byte that opens an `optional<T>`.
+    fn presence_flag(&mut self, present: bool) -> Option<()> {
+        self.u8(u8::from(present))
+    }
+
+    /// Writes a `string8`: `[u8 length][UTF-8 bytes]`.
+    ///
+    /// The only cast of a length to its prefix width, and `String8`'s constructors are
+    /// what make it lossless.
+    fn string8(&mut self, value: &String8) -> Option<()> {
+        self.u8(value.wire_len())?;
+        self.bytes(value.as_bytes())
+    }
+
     fn optional_string8(&mut self, value: &Option<String8>) -> Option<()> {
         match value {
             Some(s) => {
-                self.u8(1u8)?;
-                // The only cast of a length to its prefix width, and `String8`'s
-                // constructors are what make it lossless.
-                self.u8(s.wire_len())?;
-                self.bytes(s.as_bytes())
+                self.presence_flag(true)?;
+                self.string8(s)
             }
-            None => self.u8(0u8),
+            None => self.presence_flag(false),
         }
     }
 
@@ -808,7 +822,7 @@ mod tests {
         assert_eq!(
             decode(&buf),
             Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::InvalidApiKey(String8Error::Truncated {
+                HandshakeError::InvalidApiKey(String8DecodeError::Truncated {
                     declared: 255,
                     available: 5,
                 })
@@ -1065,7 +1079,7 @@ mod tests {
         assert_eq!(
             decode(&buf),
             Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::MissingMinProtocolVersion
+                HandshakeError::MissingMinVersion
             )))
         );
     }

@@ -9,12 +9,12 @@ pub struct String8(String);
 
 /// A string too long for a one-byte length prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TooLong {
+pub struct TooLongError {
     len: usize,
     value: String,
 }
 
-impl TooLong {
+impl TooLongError {
     /// The length that was refused, in bytes.
     pub fn len(&self) -> usize {
         self.len
@@ -32,7 +32,7 @@ impl TooLong {
     }
 }
 
-impl fmt::Display for TooLong {
+impl fmt::Display for TooLongError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -43,7 +43,7 @@ impl fmt::Display for TooLong {
     }
 }
 
-impl core::error::Error for TooLong {}
+impl core::error::Error for TooLongError {}
 
 impl String8 {
     pub const MAX_LEN: usize = u8::MAX as usize;
@@ -68,7 +68,7 @@ impl String8 {
     /// only way left to fail is UTF-8.
     ///
     /// A decoder reading a `string8` cannot produce more than [`Self::MAX_LEN`] bytes,
-    /// so [`Self::from_utf8`]'s `TooLong` arm is unreachable there. Taking this
+    /// so [`Self::from_utf8`]'s `TooLongError` arm is unreachable there. Taking this
     /// constructor instead keeps that impossible case out of the decoder's error tree.
     pub(crate) fn from_wire(bytes: &[u8]) -> Result<Self, core::str::Utf8Error> {
         debug_assert!(
@@ -81,12 +81,12 @@ impl String8 {
 }
 
 impl TryFrom<String> for String8 {
-    type Error = TooLong;
+    type Error = TooLongError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let len = value.len();
         if len > Self::MAX_LEN {
-            Err(TooLong { len, value })
+            Err(TooLongError { len, value })
         } else {
             Ok(Self(value))
         }
@@ -94,7 +94,7 @@ impl TryFrom<String> for String8 {
 }
 
 impl TryFrom<&str> for String8 {
-    type Error = TooLong;
+    type Error = TooLongError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::try_from(String::from(value))
