@@ -1,92 +1,42 @@
+//! Fila's wire protocol: frames in, frames out, and no I/O.
+//!
+//! See docs/protocol.md. A frame is a `u32` length followed by a body, and the body
+//! opens with a 6-byte header naming the operation.
+
 #![no_std]
 
 extern crate alloc;
 
+mod frame;
+mod handshake;
+mod reader;
 mod string8;
+mod writer;
+
+pub use frame::{
+    BodyError, FlagsError, Frame, FrameBody, FrameError, FrameHeader, HeaderError, Opcode,
+    OpcodeError,
+};
+pub use handshake::{Handshake, HandshakeError, HandshakeOk, HandshakeOkError};
+pub use reader::{Reader, String8DecodeError};
 pub use string8::{String8, TooLongError};
+pub use writer::Writer;
 
-use core::str::Utf8Error;
+/// Bytes of big-endian `u32` length prefix in front of every frame.
+pub(crate) const LENGTH_PREFIX_LEN: usize = 4;
 
-use thiserror::Error;
+/// Bytes of header at the start of every frame body: opcode, flags, request id.
+pub(crate) const FRAME_HEADER_LEN: usize = 6;
 
-#[derive(PartialEq, Debug, Copy, Clone)]
-pub enum Opcode {
-    Handshake = 0x01,   // 0x01
-    HandshakeOk = 0x02, // 0x02
-    Ping = 0x03,        // 0x03
-}
+/// A frame body carries at least its header, so this is the smallest legal prefix.
+pub(crate) const MIN_FRAME_BODY_LEN: u32 = FRAME_HEADER_LEN as u32;
 
-impl From<Opcode> for u8 {
-    fn from(opcode: Opcode) -> Self {
-        opcode as u8
-    }
-}
+// TODO(#172): this limit is per connection, not per protocol - default 16 MiB,
+// configurable, advertised in HandshakeOk, and 4 KiB before a handshake completes. It
+// belongs to the caller, which is also what lets `encode` refuse a body above it.
+pub(crate) const MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16;
 
-#[derive(Debug, PartialEq)]
-pub struct FrameHeader {
-    pub opcode: Opcode,
-    pub request_id: u32,
-}
-
-#[derive(Debug, PartialEq, Error)]
-pub enum OpcodeError {
-    #[error("no opcode byte")]
-    Missing,
-    #[error("unknown opcode {0:#04x}")]
-    Invalid(u8),
-}
-
-#[derive(Debug, PartialEq, Error)]
-pub enum FlagsError {
-    #[error("no flags byte")]
-    Missing,
-    #[error("continuation frames are not supported")]
-    ContinuationUnsupported,
-    #[error("reserved flag bits set in {flags:#010b}")]
-    ReservedSet { flags: u8 },
-}
-
-#[derive(Debug, PartialEq, Error)]
-pub enum HeaderError {
-    #[error("flags: {0}")]
-    Flags(#[from] FlagsError),
-    #[error("opcode: {0}")]
-    Opcode(#[from] OpcodeError),
-    #[error("no request id")]
-    MissingRequestId,
-}
-
-impl TryFrom<u8> for Opcode {
-    type Error = OpcodeError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0x01 => Ok(Self::Handshake),
-            0x02 => Ok(Self::HandshakeOk),
-            0x03 => Ok(Self::Ping),
-            v => Err(OpcodeError::Invalid(v)),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Error)]
-pub enum FrameError {
-    #[error("frame header: {0}")]
-    Header(#[from] HeaderError),
-    #[error(
-        "declared length {length} is below the {}-byte frame header",
-        FRAME_HEADER_LEN
-    )]
-    LengthBelowHeader { length: u32 },
-    #[error(
-        "declared length {length} is above the maximum of {}",
-        MAX_FRAME_BODY_LEN
-    )]
-    LengthAboveMaximum { length: u32 },
-    #[error("frame body: {0}")]
-    Body(#[from] BodyError),
-}
-
+/// What a buffer held when `decode` looked at it.
 #[derive(Debug, PartialEq)]
 pub enum Decoded {
     Success {
@@ -94,297 +44,13 @@ pub enum Decoded {
         length: u32,
         consumed: usize,
     },
+    /// The declared frame has not arrived in full. More bytes may change this answer.
     Incomplete,
+    /// The declared frame arrived and does not add up. More bytes will not help.
     Invalid(FrameError),
 }
 
-const CONTINUATION: u8 = 0b0000_0001;
-const RESERVED: u8 = 0b1111_1110;
-
-fn validate_flags(flags: u8) -> Option<FlagsError> {
-    if flags & CONTINUATION != 0 {
-        Some(FlagsError::ContinuationUnsupported)
-    } else if flags & RESERVED != 0 {
-        Some(FlagsError::ReservedSet { flags })
-    } else {
-        None
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Frame {
-    pub request_id: u32,
-    pub body: FrameBody,
-}
-
-impl Frame {
-    pub fn opcode(&self) -> Opcode {
-        match &self.body {
-            FrameBody::Handshake(_) => Opcode::Handshake,
-            FrameBody::HandshakeOk(_) => Opcode::HandshakeOk,
-            FrameBody::Ping => Opcode::Ping,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Handshake {
-    pub min_version: u16,
-    pub max_version: u16,
-    pub api_key: Option<String8>,
-    pub client_capabilities: u32,
-}
-
-#[derive(Debug, PartialEq, Error)]
-pub enum HandshakeError {
-    #[error("no min_version")]
-    MissingMinVersion,
-    #[error("no max_version")]
-    MissingMaxVersion,
-    #[error("body ended inside the api key")]
-    MissingApiKey,
-    #[error("api key presence flag is {0}, which is neither 0 nor 1")]
-    InvalidApiKeyPresenceFlag(u8),
-    #[error("api key: {0}")]
-    InvalidApiKey(#[from] String8DecodeError),
-    #[error("no client_capabilities")]
-    MissingClientCapabilities,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct HandshakeOk {
-    pub negotiated_version: u16,
-    pub node_id: u64,        // 0 if single-node
-    pub max_frame_size: u32, // 0 = default 16 MiB
-    pub server_capabilities: u32,
-}
-
-#[derive(Debug, PartialEq, Error)]
-pub enum HandshakeOkError {
-    #[error("no negotiated_version")]
-    MissingNegotiatedVersion,
-    #[error("no node_id")]
-    MissingNodeId,
-    #[error("no max_frame_size")]
-    MissingMaxFrameSize,
-    #[error("no server_capabilities")]
-    MissingServerCapabilities,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum FrameBody {
-    Handshake(Handshake),
-    HandshakeOk(HandshakeOk),
-    Ping,
-}
-
-#[derive(Debug, PartialEq, Error)]
-pub enum BodyError {
-    #[error("handshake: {0}")]
-    Handshake(#[from] HandshakeError),
-    #[error("handshake-ok: {0}")]
-    HandshakeOk(#[from] HandshakeOkError),
-}
-
-pub struct Reader<'a> {
-    buf: &'a [u8],
-    pos: usize,
-}
-
-#[derive(Debug, PartialEq, Error)]
-pub enum String8DecodeError {
-    #[error("declares {declared} bytes with {available} left in the body")]
-    Truncated { declared: u8, available: usize },
-    #[error("not utf-8: {0}")]
-    InvalidUtf8(#[from] Utf8Error),
-}
-
-impl<'a> Reader<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0 }
-    }
-
-    fn u8(&mut self) -> Option<u8> {
-        if self.pos + 1 > self.buf.len() {
-            return None;
-        }
-        let value = self.buf[self.pos];
-        self.pos += 1;
-        Some(value)
-    }
-
-    fn u16(&mut self) -> Option<u16> {
-        if self.pos + 2 > self.buf.len() {
-            return None;
-        }
-        let value = u16::from_be_bytes([self.buf[self.pos], self.buf[self.pos + 1]]);
-        self.pos += 2;
-        Some(value)
-    }
-
-    fn u32(&mut self) -> Option<u32> {
-        if self.pos + 4 > self.buf.len() {
-            return None;
-        }
-        let value = u32::from_be_bytes([
-            self.buf[self.pos],
-            self.buf[self.pos + 1],
-            self.buf[self.pos + 2],
-            self.buf[self.pos + 3],
-        ]);
-        self.pos += 4;
-        Some(value)
-    }
-
-    fn u64(&mut self) -> Option<u64> {
-        if self.pos + 8 > self.buf.len() {
-            return None;
-        }
-        let value = u64::from_be_bytes([
-            self.buf[self.pos],
-            self.buf[self.pos + 1],
-            self.buf[self.pos + 2],
-            self.buf[self.pos + 3],
-            self.buf[self.pos + 4],
-            self.buf[self.pos + 5],
-            self.buf[self.pos + 6],
-            self.buf[self.pos + 7],
-        ]);
-        self.pos += 8;
-        Some(value)
-    }
-
-    fn frame_header(&mut self) -> Result<FrameHeader, HeaderError> {
-        let opcode = self.u8().ok_or(OpcodeError::Missing)?;
-        let opcode: Opcode = opcode.try_into()?;
-
-        // we don't support any flags yet, so just validate none are set
-        let flags = self.u8().ok_or(FlagsError::Missing)?;
-        if let Some(err) = validate_flags(flags) {
-            return Err(err.into());
-        }
-
-        let request_id = self.u32().ok_or(HeaderError::MissingRequestId)?;
-
-        Ok(FrameHeader { opcode, request_id })
-    }
-
-    /// Reads the `[u8 present]` byte that opens an `optional<T>`.
-    ///
-    /// `Err` carries the byte itself. The protocol defines 0 and 1 and nothing else, and
-    /// this byte decides how the bytes behind it are read, so an undefined value cannot
-    /// be guessed at. The fault belongs to the `optional` wrapper rather than to `T`,
-    /// which is why the byte is read on its own.
-    fn presence_flag(&mut self) -> Option<Result<bool, u8>> {
-        let byte = self.u8()?;
-        Some(match byte {
-            0 => Ok(false),
-            1 => Ok(true),
-            other => Err(other),
-        })
-    }
-
-    /// Reads a `string8`: `[u8 length][UTF-8 bytes]`.
-    fn string8(&mut self) -> Option<Result<String8, String8DecodeError>> {
-        let len = self.u8()? as usize;
-
-        if self.pos + len > self.buf.len() {
-            return Some(Err(String8DecodeError::Truncated {
-                declared: len as u8,
-                available: self.buf.len() - self.pos,
-            }));
-        }
-
-        let string_bytes = &self.buf[self.pos..self.pos + len];
-        self.pos += len;
-
-        Some(String8::from_wire(string_bytes).map_err(String8DecodeError::InvalidUtf8))
-    }
-
-    fn handshake(&mut self) -> Result<Handshake, HandshakeError> {
-        let min_version = self.u16().ok_or(HandshakeError::MissingMinVersion)?;
-        let max_version = self.u16().ok_or(HandshakeError::MissingMaxVersion)?;
-        let api_key = if self
-            .presence_flag()
-            .ok_or(HandshakeError::MissingApiKey)?
-            .map_err(HandshakeError::InvalidApiKeyPresenceFlag)?
-        {
-            Some(
-                self.string8()
-                    .ok_or(HandshakeError::MissingApiKey)?
-                    .map_err(HandshakeError::InvalidApiKey)?,
-            )
-        } else {
-            None
-        };
-        let client_capabilities = self
-            .u32()
-            .ok_or(HandshakeError::MissingClientCapabilities)?;
-
-        Ok(Handshake {
-            min_version,
-            max_version,
-            api_key,
-            client_capabilities,
-        })
-    }
-
-    fn handshake_ok(&mut self) -> Result<HandshakeOk, HandshakeOkError> {
-        let negotiated_version = self
-            .u16()
-            .ok_or(HandshakeOkError::MissingNegotiatedVersion)?;
-        let node_id = self.u64().ok_or(HandshakeOkError::MissingNodeId)?;
-        let max_frame_size = self.u32().ok_or(HandshakeOkError::MissingMaxFrameSize)?;
-        let server_capabilities = self
-            .u32()
-            .ok_or(HandshakeOkError::MissingServerCapabilities)?;
-
-        Ok(HandshakeOk {
-            negotiated_version,
-            node_id,
-            max_frame_size,
-            server_capabilities,
-        })
-    }
-
-    fn frame(&mut self) -> Result<Frame, FrameError> {
-        let frame_header = self.frame_header()?;
-
-        match frame_header.opcode {
-            Opcode::Handshake => {
-                let handshake = self.handshake().map_err(BodyError::Handshake)?;
-                Ok(Frame {
-                    request_id: frame_header.request_id,
-                    body: FrameBody::Handshake(handshake),
-                })
-            }
-            Opcode::HandshakeOk => {
-                let handshake_ok = self.handshake_ok().map_err(BodyError::HandshakeOk)?;
-
-                Ok(Frame {
-                    request_id: frame_header.request_id,
-                    body: FrameBody::HandshakeOk(handshake_ok),
-                })
-            }
-            Opcode::Ping => Ok(Frame {
-                request_id: frame_header.request_id,
-                body: FrameBody::Ping,
-            }),
-        }
-    }
-}
-
-/// Bytes of big-endian `u32` length prefix in front of every frame.
-const LENGTH_PREFIX_LEN: usize = 4;
-
-/// Bytes of header at the start of every frame body: opcode, flags, request id.
-const FRAME_HEADER_LEN: usize = 6;
-
-/// A frame body carries at least its header, so this is the smallest legal prefix.
-const MIN_FRAME_BODY_LEN: u32 = FRAME_HEADER_LEN as u32;
-
-const MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16; // 16 MiB
-
+/// Reads the frame at the front of `buf`.
 pub fn decode(buf: &[u8]) -> Decoded {
     if buf.len() < LENGTH_PREFIX_LEN {
         return Decoded::Incomplete;
@@ -404,10 +70,11 @@ pub fn decode(buf: &[u8]) -> Decoded {
         return Decoded::Incomplete;
     }
 
-    let buf = &buf[LENGTH_PREFIX_LEN..(frame_len as usize) + LENGTH_PREFIX_LEN];
-    let mut reader = Reader::new(buf);
-    let frame = reader.frame();
-    match frame {
+    // Bounded by its own declared length, so a body cannot read into the frame behind it.
+    let body = &buf[LENGTH_PREFIX_LEN..(frame_len as usize) + LENGTH_PREFIX_LEN];
+    let mut reader = Reader::new(body);
+
+    match Frame::read(&mut reader) {
         Ok(frame) => Decoded::Success {
             frame,
             length: frame_len,
@@ -417,128 +84,14 @@ pub fn decode(buf: &[u8]) -> Decoded {
     }
 }
 
-pub struct Writer<'a> {
-    buf: &'a mut [u8],
-    pos: usize,
-}
-
-impl<'a> Writer<'a> {
-    pub fn new(buf: &'a mut [u8]) -> Self {
-        Self { buf, pos: 0 }
-    }
-
-    pub fn pos(&self) -> usize {
-        self.pos
-    }
-
-    fn bytes(&mut self, bytes: &[u8]) -> Option<()> {
-        self.buf
-            .get_mut(self.pos..self.pos + bytes.len())?
-            .copy_from_slice(bytes);
-        self.pos += bytes.len();
-        Some(())
-    }
-
-    fn u8(&mut self, value: impl Into<u8>) -> Option<()> {
-        self.bytes(&value.into().to_be_bytes())
-    }
-
-    fn u16(&mut self, value: impl Into<u16>) -> Option<()> {
-        self.bytes(&value.into().to_be_bytes())
-    }
-
-    fn u32(&mut self, value: impl Into<u32>) -> Option<()> {
-        self.bytes(&value.into().to_be_bytes())
-    }
-
-    fn u64(&mut self, value: impl Into<u64>) -> Option<()> {
-        self.bytes(&value.into().to_be_bytes())
-    }
-
-    fn length_prefixed<F>(&mut self, f: F) -> Option<()>
-    where
-        F: FnOnce(&mut Self) -> Option<()>,
-    {
-        let slot = self.pos;
-        self.u32(0u32)?;
-
-        f(self)?;
-
-        let len = u32::try_from(self.pos - slot - LENGTH_PREFIX_LEN).ok()?;
-        self.buf
-            .get_mut(slot..slot + LENGTH_PREFIX_LEN)?
-            .copy_from_slice(&len.to_be_bytes());
-        Some(())
-    }
-
-    /// Writes the `[u8 present]` byte that opens an `optional<T>`.
-    fn presence_flag(&mut self, present: bool) -> Option<()> {
-        self.u8(u8::from(present))
-    }
-
-    /// Writes a `string8`: `[u8 length][UTF-8 bytes]`.
-    ///
-    /// The only cast of a length to its prefix width, and `String8`'s constructors are
-    /// what make it lossless.
-    fn string8(&mut self, value: &String8) -> Option<()> {
-        self.u8(value.wire_len())?;
-        self.bytes(value.as_bytes())
-    }
-
-    fn optional_string8(&mut self, value: &Option<String8>) -> Option<()> {
-        match value {
-            Some(s) => {
-                self.presence_flag(true)?;
-                self.string8(s)
-            }
-            None => self.presence_flag(false),
-        }
-    }
-
-    fn frame_header(&mut self, frame_header: &FrameHeader) -> Option<()> {
-        self.u8(frame_header.opcode)?;
-        self.u8(0b0000_0000u8)?; // flags: continuation is not implemented
-        self.u32(frame_header.request_id)
-    }
-
-    fn handshake(&mut self, handshake: &Handshake) -> Option<()> {
-        self.u16(handshake.min_version)?;
-        self.u16(handshake.max_version)?;
-        self.optional_string8(&handshake.api_key)?;
-        self.u32(handshake.client_capabilities)
-    }
-
-    fn handshake_ok(&mut self, handshake_ok: &HandshakeOk) -> Option<()> {
-        self.u16(handshake_ok.negotiated_version)?;
-        self.u64(handshake_ok.node_id)?;
-        self.u32(handshake_ok.max_frame_size)?;
-        self.u32(handshake_ok.server_capabilities)
-    }
-
-    fn frame_body(&mut self, body: &FrameBody) -> Option<()> {
-        match body {
-            FrameBody::Handshake(handshake) => self.handshake(handshake),
-            FrameBody::HandshakeOk(handshake_ok) => self.handshake_ok(handshake_ok),
-            FrameBody::Ping => Some(()),
-        }
-    }
-
-    fn frame(&mut self, frame: &Frame) -> Option<()> {
-        let header = FrameHeader {
-            opcode: frame.opcode(),
-            request_id: frame.request_id,
-        };
-
-        self.length_prefixed(|w| {
-            w.frame_header(&header)?;
-            w.frame_body(&frame.body)
-        })
-    }
-}
-
+/// Writes `frame` into `buf` and returns how many bytes it took.
+///
+/// `None` means `buf` could not fit the frame. The buffer may have been written to
+/// before that was discovered, so its contents are unspecified unless this returns
+/// `Some`.
 pub fn encode(frame: &Frame, buf: &mut [u8]) -> Option<usize> {
     let mut writer = Writer::new(buf);
-    writer.frame(frame)?;
+    frame.write(&mut writer)?;
     Some(writer.pos())
 }
 
