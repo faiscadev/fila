@@ -63,7 +63,11 @@ Every Frame Body starts with a fixed 6-byte header:
 - **Flags**: Bitfield.
   - Bit 0: **CONTINUATION** — this frame continues the previous frame with the same
     request ID and opcode. See [Continuation Frames](#continuation-frames).
-  - Bits 1-7: Reserved, must be 0.
+  - Bits 1-7: Reserved, must be 0. A reader **rejects** a frame that sets one rather
+    than ignoring it: a flag changes how the frame itself is read, so misparsing a body
+    is worse than refusing it. A reserved bit is therefore also where an extended header
+    would be announced — gated by a capability, so neither side ever sets it against a
+    peer that would refuse the frame.
 - **Request ID**: Big-endian `u32`, used to correlate responses.
 
 ### Request ID Space
@@ -104,13 +108,13 @@ All multi-byte integers are big-endian (network byte order).
 | `f64` | Big-endian IEEE 754 double | 8 |
 | `bool` | `0x00` = false, `0x01` = true | 1 |
 | `uuid` | 16 raw bytes, big-endian (RFC 9562 byte order) | 16 |
-| `string` | `[u16 length][UTF-8 bytes]` | 2 + length |
-| `text` | `[u32 length][UTF-8 bytes]` | 4 + length |
+| `string8` | `[u8 length][UTF-8 bytes]` | 1 + length |
+| `string32` | `[u32 length][UTF-8 bytes]` | 4 + length |
 | `bytes` | `[u32 length][raw bytes]` | 4 + length |
-| `map<string,string>` | `[u16 count][repeated: string key, string value]` | 2 + entries |
-| `string[]` | `[u16 count][repeated: string]` | 2 + strings |
+| `map<string8,string8>` | `[u16 count][repeated: string8 key, string8 value]` | 2 + entries |
+| `string8[]` | `[u16 count][repeated: string8]` | 2 + strings |
 | `optional<T>` | `[u8 present][T if present]` | 1, or 1 + sizeof(T) |
-| `key` | `[u16 part_count][repeated: u8 kind, string name]` | 2 + parts |
+| `key` | `[u16 part_count][repeated: u8 kind, string8 name]` | 2 + parts |
 
 A **`key`** names message properties that together identify a group — an ordering group,
 a throttle bucket, or a set of duplicates. Each part's `kind` is:
@@ -129,21 +133,43 @@ Kinds `3`–`5` are valid only in deduplication keys. A `part_count` of 0 means 
 ### On identifiers
 
 Message IDs are UUIDv7 and travel as **16 raw bytes**, never as text. A UUID
-rendered as a 36-character string costs 38 bytes on the wire — 22 wasted bytes on
+rendered as a 36-character string costs 37 bytes on the wire — 21 wasted bytes on
 every `Delivery`, `EnqueueResult`, `Ack`, `Nack` and `ExtendLease` item. Batch-acking
-1,000 messages costs 24 KB rather than 46 KB.
+1,000 messages costs 23 KB rather than 44 KB.
 
-Queue IDs and API key IDs remain `string`: they are operator-facing, appear only on
+Queue IDs and API key IDs remain `string8`: they are operator-facing, appear only on
 cold paths, and are not necessarily UUIDs.
 
 ### On string length
 
-`string` is capped at 65,535 bytes. This is deliberate — queue names, fairness keys
-and header values are short, and a `u32` prefix would add 2 bytes to every one of
-them on the hot path.
+There are two string types, named for the width of their length prefix so that nobody
+has to remember which is larger.
 
-Lua scripts use `text` (`u32`-prefixed) because they are cold-path and legitimately
-large. Any field that can exceed 64 KB uses `text` or `bytes`, never `string`.
+**`string8` carries identifiers and labels** — queue names, fairness keys, API keys,
+config and header keys and values, patterns, addresses. Every one of them is a name or
+a short value, so a 255-byte ceiling is ample and the 1-byte prefix keeps it off the
+hot path's budget. Two fields are user-supplied and therefore the only places the
+ceiling can realistically be met: **header values** and **runtime config values**. A
+header carries routing metadata — a W3C `traceparent` is 55 bytes, a tenant id a
+dozen — and anything larger belongs in the payload.
+
+**`string32` carries UTF-8 text that is not an identifier**, which today means Lua
+scripts. The width is not a capability: the 4 GiB a `u32` could describe is never the
+operative limit, because a frame is capped long before that and a reassembled body is
+capped by the receiver. It is simply the type for text that needs more than 255 bytes,
+on a cold path where four prefix bytes cost nothing.
+
+Bounding `string8` at 255 bytes also bounds the handshake. Version 1's longest legal
+`Handshake` is:
+
+```
+4 prefix + 6 header + 4 versions + (1 present + 1 length + 255 api_key) + 4 capabilities = 275 bytes
+```
+
+The limit a server enforces before a handshake is **4 KiB for version 1**, not 275 —
+see [Maximum Frame Size](#maximum-frame-size). What matters is the distance from 16 MiB;
+the headroom above version 1's own maximum keeps a server from refusing a layout it
+could otherwise have negotiated down.
 
 ### On collection counts
 
@@ -311,10 +337,19 @@ precede it.
 
 ```
 [frame header: opcode=0x01, flags=0, request_id=0]
-[u16: protocol_version]              -- highest version the client speaks
-[optional<string>: api_key]
+[u16: max_version]                   -- highest version the client speaks
+[u16: min_version]                   -- lowest version it will accept
+[optional<string8>: api_key]
 [u32: client_capabilities]           -- bitmap; see Capabilities
 ```
+
+Trailing bytes are tolerated here as everywhere else, which is how this frame gains a
+field: a newer client appends one, an older server skips it. The sender learns whether
+it was actually read from the capability bit it set to announce it — an ignored field
+and an understood one are otherwise indistinguishable. What bounds an unauthenticated
+peer is the size limit in [Maximum Frame Size](#maximum-frame-size), not a rule about
+extra bytes; refusing them would buy nothing and close the cheapest way this frame has
+to change.
 
 **HandshakeOk (0x02)** — Server → Client:
 
@@ -337,14 +372,64 @@ features ship without a version bump.
 | Bit | Name | Meaning |
 |-----|------|---------|
 | 0 | `CREDIT_FLOW_CONTROL` | Peer honours `Credit`. When inactive, `Consume` credit is ignored and the server pushes freely. |
-| 1-31 | Reserved | Must be 0 |
+| 1-31 | Unassigned | Ignored |
+
+**An unassigned bit is ignored, never rejected.** A reader that refuses a bitmap it
+does not fully recognise makes every later feature unshippable: a newer client could
+not handshake with an older server, which is the one case the AND exists to handle. A
+bit is a peer's claim about itself, and disregarding a claim costs the reader nothing.
+
+This is the opposite of the rule for reserved [frame flags](#frame-header), which are
+rejected. The two are distinguished in [Flags and capabilities](#flags-and-capabilities).
+
+A retired capability's bit is never reused; it stays spent, as a deprecated field does.
+When the 31 are gone, a bit announcing an extended capabilities frame buys more.
+
+#### Flags and capabilities
+
+Both are bitfields, and they answer different questions. A flag describes **this
+frame**; a capability describes **this peer**.
+
+| | Flags | Capabilities |
+|---|---|---|
+| Where | the 6-byte frame header | the handshake body |
+| Width | `u8`, on every frame | `u32`, once per connection |
+| Scope | that one frame | the whole connection |
+| Set by | the sender, unilaterally | both sides; the active set is the AND |
+| An unknown bit | is rejected | is ignored |
+| Cost | 1 byte per frame | 4 bytes per connection |
+
+`CONTINUATION` is a flag because whether a frame is a fragment differs frame to frame,
+and a reader that misreads it stitches the body wrong. `CREDIT_FLOW_CONTROL` is a
+capability because it is a standing fact about a peer, and learning it means hearing
+from the other side.
+
+Neither substitutes for the other. A flag cannot be negotiated: the sender asserts it
+and learns nothing about whether the receiver copes. A capability cannot vary per
+frame: it is agreed once, so it can say "I am able to fragment" but never "this frame
+is a fragment".
+
+A feature may need both, and continuation will. The flag marks each fragment; a
+capability is how a peer that has not implemented reassembly declines to receive any.
 
 #### A note on the handshake's own evolution
 
-The `Handshake` frame is sent before a version is agreed, so it can never safely
-gain a field: the server does not yet know which layout to expect. The capability
-bitmap is the escape hatch — extensions go in capability-gated frames after the
-handshake, not in the handshake itself. Keep it frozen.
+The first four bytes of the body are `[u16 max_version][u16 min_version]`, and
+**their offsets never change in any version of this protocol**. That is what lets a
+reader decide whether it knows a handshake before parsing one: four bytes in, it either
+finds a version it shares with the sender or answers with the range it supports. A
+reader meeting a layout from some later version still gets both numbers out of it.
+
+So this frame evolves like any other, with one extra cost. Appending a field is free —
+an older peer skips the trailing bytes, and a capability bit announcing the field tells
+the sender whether it was read. Removing, retyping or reordering a field needs a new
+version, and for this frame alone that costs a reconnect on every skew: a reader
+without version *N*'s layout cannot parse a version *N* body, so it can only reply with
+its range and close. Every other frame is negotiated before it is sent and pays
+nothing.
+
+Prefer a capability bit regardless. This is the frame every connection pays for and
+every SDK writes first.
 
 ### 3. Request/Response
 
@@ -410,13 +495,13 @@ correct Raft group in cluster mode. Partial success is normal.
 [frame header: opcode=0x10]
 [u32: message_count]
 For each message:
-  [string: queue]
-  [map<string,string>: headers]
+  [string8: queue]
+  [map<string8,string8>: headers]
   [bytes: payload]
-  [optional<string>: fairness_key]   -- absent = queue default
+  [optional<string8>: fairness_key]   -- absent = queue default
   [optional<u32>: weight]            -- absent = queue default (1)
   [optional<u64>: delay_ms]          -- absent or 0 = deliverable immediately
-  [optional<string>: idempotency_key]
+  [optional<string8>: idempotency_key]
 ```
 
 **EnqueueResult (0x11):**
@@ -430,9 +515,9 @@ For each result:
   [bool: duplicate]                  -- matched a remembered deduplication key; nothing was enqueued
 [u16: route_hint_count]
 For each hint:
-  [string: queue]
+  [string8: queue]
   [u64: leader_node_id]
-  [string: leader_addr]
+  [string8: leader_addr]
 ```
 
 A **route hint** is sent for each queue in the batch that this node does not lead and
@@ -480,11 +565,11 @@ the group is delivered first. See [ordering.md](ordering.md#delayed-messages).
 
 ```
 [frame header: opcode=0x12]
-[string: queue]
+[string8: queue]
 [u32: credit]                        -- initial delivery credit; 0 = unlimited
 [u16: throttle_count]
 For each throttle:
-  [string: name]
+  [string8: name]
   [u16: limit_count]                 -- at least 1
   For each limit:
     [u64: max_deliveries]            -- N
@@ -516,7 +601,7 @@ Sent before any `Delivery` frame.
 
 ```
 [frame header: opcode=0x13]
-[string: consumer_id]
+[string8: consumer_id]
 ```
 
 ### Delivery (0x14)
@@ -528,10 +613,10 @@ Pushed to a consuming client, using the request ID of the `Consume` subscription
 [u32: message_count]
 For each message:
   [uuid: message_id]
-  [string: queue]
-  [map<string,string>: headers]
+  [string8: queue]
+  [map<string8,string8>: headers]
   [bytes: payload]
-  [string: fairness_key]
+  [string8: fairness_key]
   [u32: weight]
   [u32: attempt_count]               -- 1 on first delivery; reset by redrive
   [u32: redrive_count]               -- times redriven from the dead-letter queue
@@ -575,7 +660,7 @@ The server stops delivering and releases the subscription. No response frame.
 [frame header: opcode=0x17]
 [u32: item_count]
 For each item:
-  [string: queue]
+  [string8: queue]
   [uuid: message_id]
 ```
 
@@ -599,9 +684,9 @@ work on `Enqueue`.
 [frame header: opcode=0x19]
 [u32: item_count]
 For each item:
-  [string: queue]
+  [string8: queue]
   [uuid: message_id]
-  [string: error]                    -- reaches the on_failure hook as msg.error
+  [string8: error]                    -- reaches the on_failure hook as msg.error
   [optional<u64>: retry_after_ms]    -- absent = let on_failure decide
 ```
 
@@ -632,7 +717,7 @@ dependency becomes a hot loop.
 [frame header: opcode=0x1B]
 [u32: item_count]
 For each item:
-  [string: queue]
+  [string8: queue]
   [uuid: message_id]
   [u64: extend_by_ms]                -- from now, not from current expiry
 ```
@@ -663,9 +748,9 @@ lease for that consumer instead of failing.
 
 ```
 [frame header: opcode=0xFD]
-[string: name]
-[optional<text>: on_enqueue_script]
-[optional<text>: on_failure_script]
+[string8: name]
+[optional<string32>: on_enqueue_script]
+[optional<string32>: on_failure_script]
 [u64: visibility_timeout_ms]         -- 0 = server default
 
 -- ordering ([ordering.md](ordering.md))
@@ -694,8 +779,8 @@ lease for that consumer instead of failing.
 [u64: reclaim_grace_ms]              -- 0 = server default; fast queues only
 ```
 
-Scripts use `text` (`u32`-prefixed) rather than `string`; a 64 KB ceiling on
-user-authored Lua is an arbitrary limit with no reason behind it.
+Scripts use `string32` rather than `string8`: 255 bytes is nowhere near enough for
+user-authored Lua, and the four prefix bytes cost nothing on a cold path.
 
 Creating a queue also creates its dead-letter queue, `<name>.dlq`. A name ending in `.dlq`
 is rejected with `ReservedQueueName` (`0x16`).
@@ -708,7 +793,7 @@ client that wants defaults sends zeros rather than having to know them.
 ```
 [frame header: opcode=0xFC]
 [u8: error_code]
-[string: queue_id]                   -- empty if error
+[string8: queue_id]                   -- empty if error
 ```
 
 ### UpdateQueue (0xDF)
@@ -718,11 +803,11 @@ unchanged.
 
 ```
 [frame header: opcode=0xDF]
-[string: queue]
+[string8: queue]
 [u8: on_enqueue_change]              -- 0 = unchanged, 1 = set, 2 = remove
-[text: on_enqueue_script]            -- empty unless on_enqueue_change = 1
+[string32: on_enqueue_script]            -- empty unless on_enqueue_change = 1
 [u8: on_failure_change]              -- 0 = unchanged, 1 = set, 2 = remove
-[text: on_failure_script]            -- empty unless on_failure_change = 1
+[string32: on_failure_script]            -- empty unless on_failure_change = 1
 [optional<u64>: visibility_timeout_ms]
 [optional<u64>: dedup_window_ms]
 [optional<u32>: max_attempts]
@@ -755,7 +840,7 @@ reclassified with the new script ([concepts.md](concepts.md#when-on_enqueue-fail
 
 ```
 [frame header: opcode=0xFB]
-[string: queue]
+[string8: queue]
 ```
 
 **DeleteQueueResult (0xFA):**
@@ -769,7 +854,7 @@ reclassified with the new script ([concepts.md](concepts.md#when-on_enqueue-fail
 
 ```
 [frame header: opcode=0xF9]
-[string: queue]
+[string8: queue]
 ```
 
 **GetStatsResult (0xF8):**
@@ -790,7 +875,7 @@ reclassified with the new script ([concepts.md](concepts.md#when-on_enqueue-fail
 [u32: replication_count]             -- 0 if single-node
 [u32: per_key_stats_count]
 For each fairness key stat:
-  [string: key]
+  [string8: key]
   [u64: pending_count]
   [i64: current_deficit]
   [u32: weight]
@@ -802,7 +887,7 @@ For each throttle active on the queue:
 A `throttle_summary`, shared with `GetThrottleStatsResult`:
 
 ```
-[string: name]
+[string8: name]
 [u16: limit_count]
 For each effective limit:
   [u64: max_deliveries]
@@ -828,7 +913,7 @@ Individual buckets are never listed here; see `GetThrottleStats`.
 [u32: cluster_node_count]            -- 0 if single-node
 [u32: queue_count]
 For each queue:
-  [string: name]
+  [string8: name]
   [u64: depth]
   [u64: in_flight]
   [u32: active_consumers]
@@ -839,8 +924,8 @@ For each queue:
 
 ```
 [frame header: opcode=0xF5]
-[string: key]
-[string: value]
+[string8: key]
+[string8: value]
 ```
 
 **SetConfigResult (0xF4):**
@@ -854,7 +939,7 @@ For each queue:
 
 ```
 [frame header: opcode=0xF3]
-[string: key]
+[string8: key]
 ```
 
 **GetConfigResult (0xF2):**
@@ -862,14 +947,14 @@ For each queue:
 ```
 [frame header: opcode=0xF2]
 [u8: error_code]                     -- 0x08 InvalidConfigValue if key is unset
-[string: value]                      -- empty if error
+[string8: value]                      -- empty if error
 ```
 
 ### ListConfig (0xF1)
 
 ```
 [frame header: opcode=0xF1]
-[string: prefix]                     -- empty = all entries
+[string8: prefix]                     -- empty = all entries
 ```
 
 **ListConfigResult (0xF0):**
@@ -879,15 +964,15 @@ For each queue:
 [u8: error_code]
 [u32: entry_count]
 For each entry:
-  [string: key]
-  [string: value]
+  [string8: key]
+  [string8: value]
 ```
 
 ### Redrive (0xEF)
 
 ```
 [frame header: opcode=0xEF]
-[string: dlq_queue]
+[string8: dlq_queue]
 [u64: count]                         -- 0 = all
 [u8: reclassify]                     -- 0 = all, 1 = unclassified only, 2 = none
 ```
@@ -909,7 +994,7 @@ not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 
 ```
 [frame header: opcode=0xED]
-[string: name]
+[string8: name]
 [u64: expires_at_ms]                 -- Unix ms, 0 = never
 [bool: is_superadmin]
 ```
@@ -919,8 +1004,8 @@ not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 ```
 [frame header: opcode=0xEC]
 [u8: error_code]
-[string: key_id]
-[string: key]                        -- plaintext secret, returned once
+[string8: key_id]
+[string8: key]                        -- plaintext secret, returned once
 [bool: is_superadmin]
 ```
 
@@ -928,7 +1013,7 @@ not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 
 ```
 [frame header: opcode=0xEB]
-[string: key_id]
+[string8: key_id]
 ```
 
 **RevokeApiKeyResult (0xEA):**
@@ -951,8 +1036,8 @@ not-before time. See [concepts.md](concepts.md#inspecting-and-redriving).
 [u8: error_code]
 [u32: key_count]
 For each key:
-  [string: key_id]
-  [string: name]
+  [string8: key_id]
+  [string8: name]
   [u64: created_at_ms]
   [u64: expires_at_ms]               -- 0 = never
   [bool: is_superadmin]
@@ -962,11 +1047,11 @@ For each key:
 
 ```
 [frame header: opcode=0xE7]
-[string: key_id]
+[string8: key_id]
 [u32: permission_count]
 For each permission:
-  [string: kind]                     -- "produce" | "consume" | "admin"
-  [string: pattern]                  -- glob over queue names
+  [string8: kind]                     -- "produce" | "consume" | "admin"
+  [string8: pattern]                  -- glob over queue names
 ```
 
 Replaces the permission set; it does not merge.
@@ -982,7 +1067,7 @@ Replaces the permission set; it does not merge.
 
 ```
 [frame header: opcode=0xE5]
-[string: key_id]
+[string8: key_id]
 ```
 
 **GetAclResult (0xE4):**
@@ -990,19 +1075,19 @@ Replaces the permission set; it does not merge.
 ```
 [frame header: opcode=0xE4]
 [u8: error_code]                     -- 0x0F = ApiKeyNotFound
-[string: key_id]
+[string8: key_id]
 [bool: is_superadmin]
 [u32: permission_count]
 For each permission:
-  [string: kind]
-  [string: pattern]
+  [string8: kind]
+  [string8: pattern]
 ```
 
 ### GetThrottleStats (0xE3)
 
 ```
 [frame header: opcode=0xE3]
-[string: name]
+[string8: name]
 [u32: top_buckets]                   -- how many of the most-waiting buckets to include
 ```
 
@@ -1014,7 +1099,7 @@ For each permission:
 [throttle_summary]                   -- declaring_subscribers counts every queue
 [u32: queue_count]
 For each queue where the throttle is active:
-  [string: queue]
+  [string8: queue]
 [u64: active_buckets]                -- buckets with deliveries inside the window
 [u64: buckets_at_limit]              -- buckets with no room now
 [u64: waiting]                       -- messages held by this throttle, across queues
@@ -1029,7 +1114,7 @@ A `bucket_stats`:
 [u8: bucket_kind]                    -- 0 = keyed or unkeyed, 1 = shared bucket for messages missing the key
 [u16: value_count]                   -- one value per key part; 0 for an unkeyed or shared bucket
 For each value:
-  [string: value]
+  [string8: value]
 [u16: limit_count]
 For each effective limit, in the order of throttle_summary:
   [u64: counted]                     -- deliveries and unexpired grants inside the window
@@ -1044,11 +1129,11 @@ limit is enforced against.
 
 ```
 [frame header: opcode=0xE1]
-[string: name]
+[string8: name]
 [u8: bucket_kind]                    -- as in bucket_stats
 [u16: value_count]
 For each value:
-  [string: value]
+  [string8: value]
 ```
 
 **GetThrottleBucketResult (0xE0):**
@@ -1068,7 +1153,7 @@ A bucket with no deliveries inside its window is reported with every `counted` a
 [frame header: opcode=0xDD]
 [u32: queue_count]                   -- 0 = every queue
 For each:
-  [string: queue]
+  [string8: queue]
 ```
 
 **GetRoutesResult (0xDC):**
@@ -1078,14 +1163,14 @@ For each:
 [u8: error_code]
 [u32: entry_count]
 For each queue:
-  [string: queue]
+  [string8: queue]
   [u64: leader_node_id]              -- 0 if this node does not know
-  [string: leader_addr]              -- empty if this node does not know
+  [string8: leader_addr]              -- empty if this node does not know
   [u32: shard_count]                 -- 0 = not sharded
   For each shard:
     [u32: shard_index]
     [u64: leader_node_id]
-    [string: leader_addr]
+    [string8: leader_addr]
 ```
 
 Any node answers from its own copy of the meta group, so an answer may be slightly stale.
@@ -1113,7 +1198,7 @@ node can be stopped without a queue losing in-flight leases.
 
 ```
 [frame header: opcode=0xD9]
-[string: queue]
+[string8: queue]
 [u64: target_node_id]                -- must be a member of the queue's group
 ```
 
@@ -1163,7 +1248,7 @@ enabled again. Both are cluster-wide state in the meta group. See
 [u32: node_count]
 For each node:
   [u64: node_id]
-  [string: addr]
+  [string8: addr]
   [u8: state]                        -- 0 = up, 1 = unreachable, 2 = draining
   [u32: queue_leaderships]
 ```
@@ -1173,8 +1258,8 @@ For each node:
 ```
 [frame header: opcode=0xFE, request_id=<failed request's ID>]
 [u8: error_code]
-[string: message]                    -- human-readable
-[map<string,string>: metadata]       -- machine-readable context
+[string8: message]                    -- human-readable
+[map<string8,string8>: metadata]       -- machine-readable context
 ```
 
 Standard metadata keys:
@@ -1183,6 +1268,7 @@ Standard metadata keys:
 |------------|-----|-------|-------------|
 | `0x0C` NotLeader | `leader_addr` | `"host:port"` | Current leader |
 | `0x09` ChannelFull | `retry_after_ms` | `"100"` | Suggested backoff |
+| `0x0D` UnsupportedVersion | `min_version` | `"1"` | Lowest version still accepted |
 | `0x0D` UnsupportedVersion | `max_version` | `"1"` | Highest version supported |
 | `0x11` CreditExhausted | `server_credit` | `"0"` | Server's view of the balance |
 
@@ -1219,6 +1305,10 @@ receiver needs none to reassemble.
 - Receivers may enforce a maximum reassembled size; there is no protocol-level cap
 - Frames from different request IDs may interleave; continuation state is per request ID
 - A connection closing mid-continuation discards the partial data
+- Fragmenting to a peer needs its agreement, so continuation is a capability as well as
+  a flag. The flag marks each fragment; the capability is how a peer that has not
+  implemented reassembly declines to receive any. A flag cannot carry that, being set
+  on a frame already in flight. See [Flags and capabilities](#flags-and-capabilities).
 
 ## Overhead Analysis
 
@@ -1231,15 +1321,15 @@ receiver needs none to reassemble.
 | Frame length prefix | 4 |
 | Opcode + Flags + Request ID | 6 |
 | Message count (u32) | 4 |
-| Queue string (2 + 6) | 8 |
+| Queue string8 (1 + 6) | 7 |
 | Headers map (count=0) | 2 |
 | Payload (4 + 1024) | 1028 |
 | fairness_key (absent) | 1 |
 | weight (absent) | 1 |
 | delay_ms (absent) | 1 |
 | idempotency_key (absent) | 1 |
-| **Total** | **1056** |
-| **Overhead beyond payload** | **32 bytes** |
+| **Total** | **1055** |
+| **Overhead beyond payload** | **31 bytes** |
 
 The four optional fields cost 4 bytes when unused — the price of making
 fairness settable without Lua.
@@ -1249,12 +1339,12 @@ fairness settable without Lua.
 | Component | Bytes |
 |-----------|-------|
 | Frame length + header + count | 14 |
-| 100x queue string | 800 |
+| 100x queue string8 | 700 |
 | 100x headers map (empty) | 200 |
 | 100x payload (4 + 1024) | 102,800 |
 | 100x optional fields (unused) | 400 |
-| **Total** | **104,214** |
-| **Per-message overhead** | **18.14 bytes** |
+| **Total** | **104,114** |
+| **Per-message overhead** | **17.14 bytes** |
 
 ### Batch Ack (1,000 messages)
 
@@ -1263,19 +1353,19 @@ against, which is why the ID is 16 raw bytes.
 
 | Component | Bytes |
 |-----------|------:|
-| Queue string (2 + 6) | 8 |
+| Queue string8 (1 + 6) | 7 |
 | Message ID (`uuid`) | 16 |
-| **Per item** | **24** |
-| **1,000 items** | **24,000** |
+| **Per item** | **23** |
+| **1,000 items** | **23,000** |
 
-Encoding the same ID as a 36-character string would cost 46 bytes per item, and
-46,000 for the batch.
+Encoding the same ID as a 36-character string would cost 44 bytes per item, and
+44,000 for the batch.
 
 ### Comparison with gRPC/Protobuf
 
 | Protocol | Single 1 KB Enqueue | Notes |
 |----------|--------------------:|-------|
-| Fila binary | ~32 bytes overhead | Length-prefixed, no HTTP/2 |
+| Fila binary | ~31 bytes overhead | Length-prefixed, no HTTP/2 |
 | gRPC/HTTP2/protobuf | ~100-200 bytes | HTTP/2 HEADERS + DATA, protobuf tags, HPACK |
 
 ## Serialization Format Decision
@@ -1307,27 +1397,101 @@ Layout is worth settling before an implementation exists to be compatible with.
 
 ## Schema Evolution
 
-### Adding Fields
+### What needs a new version
 
-Append to the end of an opcode's body. Readers must tolerate trailing bytes they do
-not understand. Writers must not omit fields present in the negotiated version.
+Two rules, by scope:
 
-### Removing Fields
+| Scope | Allowed |
+|-------|---------|
+| Within a version | Append fields at the end. Never remove, retype or reorder. |
+| Across a version bump | Any layout change, including removal and retyping. |
 
-Fields are never removed. Deprecated fields carry zero or empty values.
+Appending is safe because a reader tolerates trailing bytes it does not understand: an
+older peer skips the new field, while a writer must not omit a field present in the
+negotiated version. Removing or retyping changes how **existing** bytes are read, so an
+older peer would misparse them.
 
-### Optional Features
+That is the whole test — not whether a feature is optional, but whether **an older
+reader parsing older bytes still gets the right answer**. Appending always passes it.
+Nor does a sender that cannot proceed without a feature need a version: it advertises a
+capability, finds the bit absent in `HandshakeOk`, and closes the connection itself.
 
-Prefer a capability bit over a version bump. Versions are for layout changes;
-capabilities are for behaviour that either side may not implement.
+Deprecated fields are never removed within a version; they carry zero or empty values.
+
+### Prefer a capability
+
+Versions are for layout changes; capabilities are for behaviour either side may not
+implement. Versions are **ordered** — version 3 implies 2 implies 1 — so an optional
+feature placed in a version forces every implementation to build it just to claim the
+number. Capabilities are **orthogonal**: 31 independent switches, any combination
+legal, and client and server upgrade in either order with no coordination.
+
+| Change | Path | New version? |
+|--------|------|-------------|
+| Add optional behaviour | a capability bit | no |
+| Add a field | a capability bit announcing it, and the field appended | no |
+| Redefine an existing field | a capability bit that changes its reading | no |
+| Remove, retype or reorder a field | the new version's layout | yes |
 
 ### Protocol Versioning
 
-The handshake negotiates a version: the server picks the highest it supports that is
-≤ the client's. If none exists it rejects with `UnsupportedVersion` and a
-`max_version` metadata entry.
+Both sides have a range, and both state it. A client sends the highest version it
+speaks and the lowest it will accept; the server negotiates within the intersection:
+
+```
+intersection = [ max(client_min, server_min), min(client_max, server_max) ]
+```
+
+The server picks the top of that range. `HandshakeOk` carries it as
+`negotiated_version`, and it governs every later frame on the connection.
+
+If the intersection is empty the server replies `UnsupportedVersion` carrying **both**
+`min_version` and `max_version`, then closes.
+
+Both ends need their floor on the wire. Without the **client's**, a server would pick
+the highest version the client speaks without knowing whether the client still accepts
+it, send `HandshakeOk`, and consider the connection established — while the client, for
+which that version is too old, hangs up on a connection the server believes it has.
+Without the **server's** in the error, a server that had dropped version 1 could only
+answer a version-1 client with `max_version=3`, which does not say that 1 is refused;
+the client would retry at 1 indefinitely instead of reporting that it is too old to
+connect.
+
+A client also checks that `negotiated_version` falls within the range it offered, and
+closes if it does not. A correct server cannot pick outside it, so this guards against
+a broken or hostile one rather than forming part of the negotiation.
+
+A client told to use a lower version retries on a new connection, and should remember
+the answer per endpoint, so skew costs one reconnect per client process rather than one
+per connection.
 
 Version 1 is the initial version.
+
+### Dropping a version
+
+1. The server adds the new version beside the old and advertises the higher maximum.
+   Existing clients keep negotiating the old one and notice nothing.
+2. Updated clients offer the new version. A server that lacks it answers with its range
+   and those clients fall back.
+3. When nothing needs the old version, the server raises its minimum. A client too old
+   to connect then receives `UnsupportedVersion` naming the range, and that refusal is
+   the deprecation notice.
+
+### What no version can change
+
+Three things are read before any version is known, and are therefore fixed for the life
+of the protocol:
+
+- the **`u32` length prefix**, read on every frame including the first
+- the **6-byte frame header of both handshake frames**
+- the **offsets of `max_version` and `min_version`** — the first four bytes of the
+  handshake body
+
+A version may redefine the frame header for frames sent *after* negotiation, provided
+the handshake exchange itself keeps version 1's header — the client reads
+`negotiated_version` out of `HandshakeOk`, so that frame cannot already depend on it.
+New opcodes need none of this: an unknown opcode is answered `InvalidFrame` with the
+connection intact.
 
 ## Inter-node Communication
 
@@ -1381,6 +1545,28 @@ Default 16 MiB, configurable, advertised in `HandshakeOk`. The length field is `
 (~4 GiB), but a lower enforced limit bounds per-frame allocation. This does not limit
 payload size — larger bodies use continuation frames. A server receiving an oversized
 frame responds `InvalidFrame` (`0x0E`).
+
+**Before a connection has handshaked, the limit belongs to the protocol version rather
+than to configuration.** Everything about the handshake is processed before the peer is
+authenticated, so what an unauthenticated peer can make a server buffer is fixed by
+this specification. **Version 1's limit is 4 KiB**, against a longest legal `Handshake`
+of 275 bytes; the rest is headroom.
+
+A reader decides this from the first **fourteen bytes** — length prefix, frame header,
+`max_version`, `min_version` — and never buffers more than that until it has them. Those
+bytes name the sender's version range, so a server applies the limit of the version it
+is about to negotiate, and a peer that declares version 1 while sending a megabyte is
+refused on version 1's limit.
+
+A first frame whose length prefix exceeds the applicable limit is still **answered, not
+dropped**: the server replies `UnsupportedVersion` with the range it supports and
+closes, without buffering the frame. So a later version may define a handshake larger
+than 4 KiB and an older server need not honour it — it reads fourteen bytes, negotiates
+down or refuses, and a client newer than the server it reached learns what to retry
+with instead of seeing a socket close for no stated reason.
+
+A version's limit must stay small enough that an unauthenticated connection is cheap.
+The distance that matters is from the configured frame maximum, not from 275 bytes.
 
 ### Byte Order
 
