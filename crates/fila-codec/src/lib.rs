@@ -49,9 +49,9 @@ pub enum FlagsError {
 #[derive(Debug, PartialEq, Error)]
 pub enum HeaderError {
     #[error("flags: {0}")]
-    Flags(#[source] FlagsError),
+    Flags(#[from] FlagsError),
     #[error("opcode: {0}")]
-    Opcode(#[source] OpcodeError),
+    Opcode(#[from] OpcodeError),
     #[error("no request id")]
     MissingRequestId,
 }
@@ -72,7 +72,7 @@ impl TryFrom<u8> for Opcode {
 #[derive(Debug, PartialEq, Error)]
 pub enum FrameError {
     #[error("frame header: {0}")]
-    Header(#[source] HeaderError),
+    Header(#[from] HeaderError),
     #[error(
         "declared length {length} is below the {}-byte frame header",
         FRAME_HEADER_LEN
@@ -84,7 +84,7 @@ pub enum FrameError {
     )]
     LengthAboveMaximum { length: u32 },
     #[error("frame body: {0}")]
-    Body(#[source] BodyError),
+    Body(#[from] BodyError),
 }
 
 #[derive(Debug, PartialEq)]
@@ -146,7 +146,7 @@ pub enum HandshakeError {
     #[error("api key presence flag is {0}, which is neither 0 nor 1")]
     InvalidApiKeyPresenceFlag(u8),
     #[error("api key: {0}")]
-    InvalidApiKey(#[source] String8DecodeError),
+    InvalidApiKey(#[from] String8DecodeError),
     #[error("no client_capabilities")]
     MissingClientCapabilities,
 }
@@ -181,9 +181,9 @@ pub enum FrameBody {
 #[derive(Debug, PartialEq, Error)]
 pub enum BodyError {
     #[error("handshake: {0}")]
-    Handshake(#[source] HandshakeError),
+    Handshake(#[from] HandshakeError),
     #[error("handshake-ok: {0}")]
-    HandshakeOk(#[source] HandshakeOkError),
+    HandshakeOk(#[from] HandshakeOkError),
 }
 
 pub struct Reader<'a> {
@@ -196,7 +196,7 @@ pub enum String8DecodeError {
     #[error("declares {declared} bytes with {available} left in the body")]
     Truncated { declared: u8, available: usize },
     #[error("not utf-8: {0}")]
-    InvalidUtf8(#[source] Utf8Error),
+    InvalidUtf8(#[from] Utf8Error),
 }
 
 impl<'a> Reader<'a> {
@@ -255,13 +255,13 @@ impl<'a> Reader<'a> {
     }
 
     fn frame_header(&mut self) -> Result<FrameHeader, HeaderError> {
-        let opcode = self.u8().ok_or(HeaderError::Opcode(OpcodeError::Missing))?;
-        let opcode = opcode.try_into().map_err(HeaderError::Opcode)?;
+        let opcode = self.u8().ok_or(OpcodeError::Missing)?;
+        let opcode: Opcode = opcode.try_into()?;
 
         // we don't support any flags yet, so just validate none are set
-        let flags = self.u8().ok_or(HeaderError::Flags(FlagsError::Missing))?;
+        let flags = self.u8().ok_or(FlagsError::Missing)?;
         if let Some(err) = validate_flags(flags) {
-            return Err(HeaderError::Flags(err));
+            return Err(err.into());
         }
 
         let request_id = self.u32().ok_or(HeaderError::MissingRequestId)?;
@@ -348,22 +348,18 @@ impl<'a> Reader<'a> {
     }
 
     fn frame(&mut self) -> Result<Frame, FrameError> {
-        let frame_header = self.frame_header().map_err(FrameError::Header)?;
+        let frame_header = self.frame_header()?;
 
         match frame_header.opcode {
             Opcode::Handshake => {
-                let handshake = self
-                    .handshake()
-                    .map_err(|e| FrameError::Body(BodyError::Handshake(e)))?;
+                let handshake = self.handshake().map_err(BodyError::Handshake)?;
                 Ok(Frame {
                     request_id: frame_header.request_id,
                     body: FrameBody::Handshake(handshake),
                 })
             }
             Opcode::HandshakeOk => {
-                let handshake_ok = self
-                    .handshake_ok()
-                    .map_err(|e| FrameError::Body(BodyError::HandshakeOk(e)))?;
+                let handshake_ok = self.handshake_ok().map_err(BodyError::HandshakeOk)?;
 
                 Ok(Frame {
                     request_id: frame_header.request_id,
