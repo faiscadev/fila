@@ -14,13 +14,14 @@ mod string8;
 mod writer;
 
 pub use frame::{
-    BodyError, FlagsError, Frame, FrameBody, FrameError, FrameHeader, HeaderError, Opcode,
-    OpcodeError,
+    BodyError, FlagsError, Frame, FrameBody, FrameError, HeaderError, Opcode, OpcodeError,
 };
 pub use handshake::{Handshake, HandshakeError, HandshakeOk, HandshakeOkError};
-pub use reader::{Reader, String8DecodeError};
+pub use reader::String8DecodeError;
 pub use string8::{String8, TooLongError};
-pub use writer::Writer;
+
+pub(crate) use reader::Reader;
+pub(crate) use writer::Writer;
 
 /// Bytes of big-endian `u32` length prefix in front of every frame.
 pub(crate) const LENGTH_PREFIX_LEN: usize = 4;
@@ -32,8 +33,9 @@ pub(crate) const FRAME_HEADER_LEN: usize = 6;
 pub(crate) const MIN_FRAME_BODY_LEN: u32 = FRAME_HEADER_LEN as u32;
 
 // TODO(#172): this limit is per connection, not per protocol - default 16 MiB,
-// configurable, advertised in HandshakeOk, and 4 KiB before a handshake completes. It
-// belongs to the caller, which is also what lets `encode` refuse a body above it.
+// configurable, advertised in HandshakeOk, and 4 KiB before a handshake completes, so it
+// belongs to the caller. Note that `encode` does not check it at all today: once a frame
+// can carry a payload, it will be able to emit one `decode` rejects.
 pub(crate) const MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16;
 
 /// What a buffer held when `decode` looked at it.
@@ -506,10 +508,10 @@ mod tests {
 
     #[test]
     fn the_handshake_carries_a_version_range() {
-        // protocol.md, "Handshake (0x01)": the body opens with the highest version the
-        // client speaks and the lowest it will accept. Both are fixed at these offsets
-        // for the life of the protocol, so a reader can answer a handshake whose layout
-        // it does not know.
+        // protocol.md, "Handshake (0x01)": the body opens with the lowest version the
+        // client will accept and then the highest it speaks. Both are fixed at these
+        // offsets for the life of the protocol, so a reader can answer a handshake whose
+        // layout it does not know.
         //
         // body = opcode(1) flags(1) request_id(4) min(2) max(2)
         //        absent api_key(1) capabilities(4) = 15
