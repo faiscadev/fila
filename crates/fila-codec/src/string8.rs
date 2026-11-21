@@ -2,13 +2,15 @@ use core::fmt;
 use core::ops::Deref;
 
 use alloc::string::String;
+use thiserror::Error;
 
 /// A UTF-8 string that fits a `string8` on the wire: at most 255 bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct String8(String);
 
 /// A string too long for a one-byte length prefix.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{len} bytes exceeds the {} a string8 can describe", String8::MAX_LEN)]
 pub struct TooLongError {
     len: usize,
     value: String,
@@ -31,19 +33,6 @@ impl TooLongError {
         self.value
     }
 }
-
-impl fmt::Display for TooLongError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} bytes exceeds the {} a string8 can describe",
-            self.len,
-            String8::MAX_LEN
-        )
-    }
-}
-
-impl core::error::Error for TooLongError {}
 
 impl String8 {
     pub const MAX_LEN: usize = u8::MAX as usize;

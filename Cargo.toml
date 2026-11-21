@@ -10,6 +10,11 @@ rust-version = "1.85"
 license = "AGPL-3.0-only"
 repository = "https://github.com/faiscadev/fila"
 
+[workspace.dependencies.thiserror]
+version = "2.0.21"
+# fila-codec is no_std, so the derive implements core::error::Error
+default-features = false
+
 [workspace.dependencies.fila-broker]
 path = "crates/fila-broker"
 version = "0.1.0"

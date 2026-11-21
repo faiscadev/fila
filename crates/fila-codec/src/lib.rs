@@ -7,6 +7,8 @@ pub use string8::{String8, TooLongError};
 
 use core::str::Utf8Error;
 
+use thiserror::Error;
+
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Opcode {
     Handshake = 0x01,   // 0x01
@@ -26,23 +28,31 @@ pub struct FrameHeader {
     pub request_id: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum OpcodeError {
+    #[error("no opcode byte")]
     Missing,
+    #[error("unknown opcode {0:#04x}")]
     Invalid(u8),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum FlagsError {
+    #[error("no flags byte")]
     Missing,
+    #[error("continuation frames are not supported")]
     ContinuationUnsupported,
+    #[error("reserved flag bits set in {flags:#010b}")]
     ReservedSet { flags: u8 },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum HeaderError {
-    Flags(FlagsError),
-    Opcode(OpcodeError),
+    #[error("flags: {0}")]
+    Flags(#[source] FlagsError),
+    #[error("opcode: {0}")]
+    Opcode(#[source] OpcodeError),
+    #[error("no request id")]
     MissingRequestId,
 }
 
@@ -59,12 +69,22 @@ impl TryFrom<u8> for Opcode {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum FrameError {
-    Header(HeaderError),
+    #[error("frame header: {0}")]
+    Header(#[source] HeaderError),
+    #[error(
+        "declared length {length} is below the {}-byte frame header",
+        FRAME_HEADER_LEN
+    )]
     LengthBelowHeader { length: u32 },
+    #[error(
+        "declared length {length} is above the maximum of {}",
+        MAX_FRAME_BODY_LEN
+    )]
     LengthAboveMaximum { length: u32 },
-    Body(BodyError),
+    #[error("frame body: {0}")]
+    Body(#[source] BodyError),
 }
 
 #[derive(Debug, PartialEq)]
@@ -115,13 +135,19 @@ pub struct Handshake {
     pub client_capabilities: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum HandshakeError {
+    #[error("no min_version")]
     MissingMinVersion,
+    #[error("no max_version")]
     MissingMaxVersion,
+    #[error("body ended inside the api key")]
     MissingApiKey,
+    #[error("api key presence flag is {0}, which is neither 0 nor 1")]
     InvalidApiKeyPresenceFlag(u8),
-    InvalidApiKey(String8DecodeError),
+    #[error("api key: {0}")]
+    InvalidApiKey(#[source] String8DecodeError),
+    #[error("no client_capabilities")]
     MissingClientCapabilities,
 }
 
@@ -133,11 +159,15 @@ pub struct HandshakeOk {
     pub server_capabilities: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum HandshakeOkError {
+    #[error("no negotiated_version")]
     MissingNegotiatedVersion,
+    #[error("no node_id")]
     MissingNodeId,
+    #[error("no max_frame_size")]
     MissingMaxFrameSize,
+    #[error("no server_capabilities")]
     MissingServerCapabilities,
 }
 
@@ -148,10 +178,12 @@ pub enum FrameBody {
     Ping,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum BodyError {
-    Handshake(HandshakeError),
-    HandshakeOk(HandshakeOkError),
+    #[error("handshake: {0}")]
+    Handshake(#[source] HandshakeError),
+    #[error("handshake-ok: {0}")]
+    HandshakeOk(#[source] HandshakeOkError),
 }
 
 pub struct Reader<'a> {
@@ -159,10 +191,12 @@ pub struct Reader<'a> {
     pos: usize,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Error)]
 pub enum String8DecodeError {
+    #[error("declares {declared} bytes with {available} left in the body")]
     Truncated { declared: u8, available: usize },
-    InvalidUtf8(Utf8Error),
+    #[error("not utf-8: {0}")]
+    InvalidUtf8(#[source] Utf8Error),
 }
 
 impl<'a> Reader<'a> {
@@ -1288,5 +1322,38 @@ mod tests {
             ),
             other => panic!("expected the ping behind it, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_error_reads_as_the_path_to_the_byte_that_failed() {
+        // Each level prefixes the one below it, so one line says where in the frame the
+        // fault is. This is what a server puts in an `Error` frame's `message`.
+        let Decoded::Invalid(err) = decode(&TRUNCATED_STRING) else {
+            panic!("expected an invalid frame");
+        };
+        assert_eq!(
+            alloc::format!("{err}"),
+            "frame body: handshake: api key: declares 255 bytes with 1 left in the body"
+        );
+    }
+
+    #[test]
+    fn an_error_chains_to_its_cause() {
+        // Display carries the whole path, and `source` still exposes each level, so a
+        // caller can match on a cause instead of reading a string.
+        let Decoded::Invalid(err) = decode(&TRUNCATED_STRING) else {
+            panic!("expected an invalid frame");
+        };
+
+        let mut depth = 0;
+        let mut cause = core::error::Error::source(&err);
+        while let Some(err) = cause {
+            depth += 1;
+            cause = err.source();
+        }
+        assert_eq!(
+            depth, 3,
+            "FrameError -> BodyError -> HandshakeError -> String8DecodeError"
+        );
     }
 }
