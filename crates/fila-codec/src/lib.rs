@@ -7,12 +7,14 @@
 
 extern crate alloc;
 
+mod enqueue;
 mod frame;
 mod handshake;
 mod reader;
 mod string8;
 mod writer;
 
+pub use enqueue::{Enqueue, EnqueueError};
 pub use frame::{
     BodyError, FlagsError, Frame, FrameBody, FrameError, HeaderError, Opcode, OpcodeError,
 };
