@@ -166,7 +166,7 @@ Bounding `string8` at 255 bytes also bounds the handshake. Version 1's longest l
 4 prefix + 6 header + 4 versions + (1 present + 1 length + 255 api_key) + 4 capabilities = 275 bytes
 ```
 
-The limit a server enforces before a handshake is **1 KiB for version 1**, not 275 —
+The limit a server enforces before a handshake is **4 KiB for version 1**, not 275 —
 see [Maximum Frame Size](#maximum-frame-size). What matters is the distance from 16 MiB;
 the headroom above version 1's own maximum keeps a server from refusing a layout it
 could otherwise have negotiated down.
@@ -1549,7 +1549,7 @@ frame responds `InvalidFrame` (`0x0E`).
 **Before a connection has handshaked, the limit belongs to the protocol version rather
 than to configuration.** Everything about the handshake is processed before the peer is
 authenticated, so what an unauthenticated peer can make a server buffer is fixed by
-this specification. **Version 1's limit is 1 KiB**, against a longest legal `Handshake`
+this specification. **Version 1's limit is 4 KiB**, against a longest legal `Handshake`
 of 275 bytes; the rest is headroom.
 
 A reader decides this from the first **fourteen bytes** — length prefix, frame header,
@@ -1561,7 +1561,7 @@ refused on version 1's limit.
 A first frame whose length prefix exceeds the applicable limit is still **answered, not
 dropped**: the server replies `UnsupportedVersion` with the range it supports and
 closes, without buffering the frame. So a later version may define a handshake larger
-than 1 KiB and an older server need not honour it — it reads fourteen bytes, negotiates
+than 4 KiB and an older server need not honour it — it reads fourteen bytes, negotiates
 down or refuses, and a client newer than the server it reached learns what to retry
 with instead of seeing a socket close for no stated reason.
 
