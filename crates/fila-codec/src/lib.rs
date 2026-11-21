@@ -384,138 +384,118 @@ pub fn decode(buf: &[u8]) -> Decoded {
     }
 }
 
-fn encode_u8(value: impl Into<u8>, buf: &mut [u8]) -> Option<usize> {
-    let value: u8 = value.into();
-    let as_bytes = value.to_be_bytes();
-    let len = as_bytes.len();
-    buf.get_mut(..len)?.copy_from_slice(&as_bytes);
-    Some(as_bytes.len())
+pub struct Writer<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
 }
 
-fn encode_u32(value: impl Into<u32>, buf: &mut [u8]) -> Option<usize> {
-    let value = value.into();
-    let as_bytes = value.to_be_bytes();
-    let len = as_bytes.len();
-    buf.get_mut(..len)?.copy_from_slice(&as_bytes);
-    Some(as_bytes.len())
-}
+impl<'a> Writer<'a> {
+    pub fn new(buf: &'a mut [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
 
-fn encode_frame_header(frame_header: &FrameHeader, buf: &mut [u8]) -> Option<usize> {
-    let mut cursor = 0;
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
 
-    cursor += encode_u8(frame_header.opcode, &mut buf[cursor..])?;
+    fn bytes(&mut self, bytes: &[u8]) -> Option<()> {
+        self.buf
+            .get_mut(self.pos..self.pos + bytes.len())?
+            .copy_from_slice(bytes);
+        self.pos += bytes.len();
+        Some(())
+    }
 
-    let flags = 0b0000_0000;
-    cursor += encode_u8(flags, &mut buf[cursor..])?;
+    fn u8(&mut self, value: impl Into<u8>) -> Option<()> {
+        self.bytes(&value.into().to_be_bytes())
+    }
 
-    cursor += encode_u32(frame_header.request_id, &mut buf[cursor..])?;
+    fn u16(&mut self, value: impl Into<u16>) -> Option<()> {
+        self.bytes(&value.into().to_be_bytes())
+    }
 
-    Some(cursor)
-}
+    fn u32(&mut self, value: impl Into<u32>) -> Option<()> {
+        self.bytes(&value.into().to_be_bytes())
+    }
 
-fn encode_u16(value: impl Into<u16>, buf: &mut [u8]) -> Option<usize> {
-    let value = value.into();
-    let as_bytes = value.to_be_bytes();
-    let len = as_bytes.len();
-    buf.get_mut(..len)?.copy_from_slice(&as_bytes);
-    Some(as_bytes.len())
-}
+    fn u64(&mut self, value: impl Into<u64>) -> Option<()> {
+        self.bytes(&value.into().to_be_bytes())
+    }
 
-fn encode_u64(value: impl Into<u64>, buf: &mut [u8]) -> Option<usize> {
-    let value = value.into();
-    let as_bytes = value.to_be_bytes();
-    let len = as_bytes.len();
-    buf.get_mut(..len)?.copy_from_slice(&as_bytes);
-    Some(as_bytes.len())
-}
+    fn length_prefixed<F>(&mut self, f: F) -> Option<()>
+    where
+        F: FnOnce(&mut Self) -> Option<()>,
+    {
+        let slot = self.pos;
+        self.u32(0u32)?;
 
-fn encode_optional_string(value: &Option<String8>, buf: &mut [u8]) -> Option<usize> {
-    let mut cursor = 0;
+        f(self)?;
 
-    match value {
-        Some(s) => {
-            cursor += encode_u8(1u8, &mut buf[cursor..])?;
-            let s_bytes = s.as_bytes();
-            let s_len = s_bytes.len() as u8;
-            cursor += encode_u8(s_len, &mut buf[cursor..])?;
-            buf.get_mut(cursor..cursor + s_len as usize)?
-                .copy_from_slice(s_bytes);
-            cursor += s_len as usize;
-        }
-        None => {
-            cursor += encode_u8(0u8, &mut buf[cursor..])?;
+        let len = u32::try_from(self.pos - slot - LENGTH_PREFIX_LEN).ok()?;
+        self.buf
+            .get_mut(slot..slot + LENGTH_PREFIX_LEN)?
+            .copy_from_slice(&len.to_be_bytes());
+        Some(())
+    }
+
+    fn optional_string8(&mut self, value: &Option<String8>) -> Option<()> {
+        match value {
+            Some(s) => {
+                self.u8(1u8)?;
+                // The only cast of a length to its prefix width, and `String8`'s
+                // constructors are what make it lossless.
+                self.u8(s.wire_len())?;
+                self.bytes(s.as_bytes())
+            }
+            None => self.u8(0u8),
         }
     }
 
-    Some(cursor)
-}
-
-fn encode_handshake(handshake: &Handshake, buf: &mut [u8]) -> Option<usize> {
-    let mut cursor = 0;
-
-    cursor += encode_u16(handshake.min_version, &mut buf[cursor..])?;
-    cursor += encode_u16(handshake.max_version, &mut buf[cursor..])?;
-    cursor += encode_optional_string(&handshake.api_key, &mut buf[cursor..])?;
-    cursor += encode_u32(handshake.client_capabilities, &mut buf[cursor..])?;
-
-    Some(cursor)
-}
-
-fn encode_handshake_ok(handshake_ok: &HandshakeOk, buf: &mut [u8]) -> Option<usize> {
-    let mut cursor = 0;
-
-    cursor += encode_u16(handshake_ok.negotiated_version, &mut buf[cursor..])?;
-    cursor += encode_u64(handshake_ok.node_id, &mut buf[cursor..])?;
-    cursor += encode_u32(handshake_ok.max_frame_size, &mut buf[cursor..])?;
-    cursor += encode_u32(handshake_ok.server_capabilities, &mut buf[cursor..])?;
-
-    Some(cursor)
-}
-
-fn encode_frame_body(body: &FrameBody, buf: &mut [u8]) -> Option<usize> {
-    let mut cursor = 0;
-
-    match body {
-        FrameBody::Handshake(handshake) => {
-            cursor += encode_handshake(handshake, &mut buf[cursor..])?;
-        }
-        FrameBody::HandshakeOk(handshake_ok) => {
-            cursor += encode_handshake_ok(handshake_ok, &mut buf[cursor..])?;
-        }
-        FrameBody::Ping => {}
+    fn frame_header(&mut self, frame_header: &FrameHeader) -> Option<()> {
+        self.u8(frame_header.opcode)?;
+        self.u8(0b0000_0000u8)?; // flags: continuation is not implemented
+        self.u32(frame_header.request_id)
     }
 
-    Some(cursor)
+    fn handshake(&mut self, handshake: &Handshake) -> Option<()> {
+        self.u16(handshake.min_version)?;
+        self.u16(handshake.max_version)?;
+        self.optional_string8(&handshake.api_key)?;
+        self.u32(handshake.client_capabilities)
+    }
+
+    fn handshake_ok(&mut self, handshake_ok: &HandshakeOk) -> Option<()> {
+        self.u16(handshake_ok.negotiated_version)?;
+        self.u64(handshake_ok.node_id)?;
+        self.u32(handshake_ok.max_frame_size)?;
+        self.u32(handshake_ok.server_capabilities)
+    }
+
+    fn frame_body(&mut self, body: &FrameBody) -> Option<()> {
+        match body {
+            FrameBody::Handshake(handshake) => self.handshake(handshake),
+            FrameBody::HandshakeOk(handshake_ok) => self.handshake_ok(handshake_ok),
+            FrameBody::Ping => Some(()),
+        }
+    }
+
+    fn frame(&mut self, frame: &Frame) -> Option<()> {
+        let header = FrameHeader {
+            opcode: frame.opcode(),
+            request_id: frame.request_id,
+        };
+
+        self.length_prefixed(|w| {
+            w.frame_header(&header)?;
+            w.frame_body(&frame.body)
+        })
+    }
 }
 
-fn encode_frame(frame: &Frame, buf: &mut [u8]) -> Option<usize> {
-    let mut cursor = 0;
-
-    let frame_header = FrameHeader {
-        opcode: frame.opcode(),
-        request_id: frame.request_id,
-    };
-    cursor += encode_frame_header(&frame_header, &mut buf[cursor..])?;
-
-    cursor += encode_frame_body(&frame.body, &mut buf[cursor..])?;
-
-    Some(cursor)
-}
-
-// return None if buf can't fit frame
 pub fn encode(frame: &Frame, buf: &mut [u8]) -> Option<usize> {
-    // starts at 4 to offset the length
-    let mut cursor = LENGTH_PREFIX_LEN;
-    if buf.len() < cursor {
-        return None;
-    }
-
-    cursor += encode_frame(frame, &mut buf[cursor..])?;
-
-    let frame_length = (cursor - LENGTH_PREFIX_LEN) as u32;
-    encode_u32(frame_length, &mut buf[..])?;
-
-    Some(cursor)
+    let mut writer = Writer::new(buf);
+    writer.frame(frame)?;
+    Some(writer.pos())
 }
 
 #[cfg(test)]
