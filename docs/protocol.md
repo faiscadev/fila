@@ -63,7 +63,11 @@ Every Frame Body starts with a fixed 6-byte header:
 - **Flags**: Bitfield.
   - Bit 0: **CONTINUATION** — this frame continues the previous frame with the same
     request ID and opcode. See [Continuation Frames](#continuation-frames).
-  - Bits 1-7: Reserved, must be 0.
+  - Bits 1-7: Reserved, must be 0. A reader **rejects** a frame that sets one rather
+    than ignoring it: a flag changes how the frame itself is read, so misparsing a body
+    is worse than refusing it. A reserved bit is therefore also where an extended header
+    would be announced — gated by a capability, so neither side ever sets it against a
+    peer that would refuse the frame.
 - **Request ID**: Big-endian `u32`, used to correlate responses.
 
 ### Request ID Space
@@ -155,17 +159,17 @@ operative limit, because a frame is capped long before that and a reassembled bo
 capped by the receiver. It is simply the type for text that needs more than 255 bytes,
 on a cold path where four prefix bytes cost nothing.
 
-Bounding `string8` at 255 bytes also bounds the handshake. A `Handshake` frame can
-never gain a field — see [A note on the handshake's own evolution](#a-note-on-the-handshakes-own-evolution) —
-so its length is fully determined, and the longest legal one is:
+Bounding `string8` at 255 bytes also bounds the handshake. Version 1's longest legal
+`Handshake` is:
 
 ```
 4 prefix + 6 header + 2 version + (1 present + 1 length + 255 api_key) + 4 capabilities = 273 bytes
 ```
 
-A server can therefore refuse an unauthenticated peer's first frame on the length
-prefix alone, before allocating for it. That bound falls out of the protocol rather
-than out of a tuning knob.
+The limit a server enforces before a handshake is **1 KiB**, not 273 — see
+[Maximum Frame Size](#maximum-frame-size). What matters is the distance from 16 MiB;
+the headroom above version 1 keeps a server from refusing a layout it could otherwise
+have negotiated down.
 
 ### On collection counts
 
@@ -338,12 +342,13 @@ precede it.
 [u32: client_capabilities]           -- bitmap; see Capabilities
 ```
 
-**This is the one frame that rejects trailing bytes.** Everywhere else a reader
-tolerates bytes it does not recognise, because that is how a field is added later. The
-handshake can never gain a field, so there is nothing to tolerate: a body longer than
-its fields is malformed, and the frame is capped at 273 bytes. A server reads the
-length prefix of a connection's first frame and refuses anything larger before
-allocating for it.
+Trailing bytes are tolerated here as everywhere else, which is how this frame gains a
+field: a newer client appends one, an older server skips it. The sender learns whether
+it was actually read from the capability bit it set to announce it — an ignored field
+and an understood one are otherwise indistinguishable. What bounds an unauthenticated
+peer is the size limit in [Maximum Frame Size](#maximum-frame-size), not a rule about
+extra bytes; refusing them would buy nothing and close the cheapest way this frame has
+to change.
 
 **HandshakeOk (0x02)** — Server → Client:
 
@@ -366,14 +371,63 @@ features ship without a version bump.
 | Bit | Name | Meaning |
 |-----|------|---------|
 | 0 | `CREDIT_FLOW_CONTROL` | Peer honours `Credit`. When inactive, `Consume` credit is ignored and the server pushes freely. |
-| 1-31 | Reserved | Must be 0 |
+| 1-31 | Unassigned | Ignored |
+
+**An unassigned bit is ignored, never rejected.** A reader that refuses a bitmap it
+does not fully recognise makes every later feature unshippable: a newer client could
+not handshake with an older server, which is the one case the AND exists to handle. A
+bit is a peer's claim about itself, and disregarding a claim costs the reader nothing.
+
+This is the opposite of the rule for reserved [frame flags](#frame-header), which are
+rejected. The two are distinguished in [Flags and capabilities](#flags-and-capabilities).
+
+A retired capability's bit is never reused; it stays spent, as a deprecated field does.
+When the 31 are gone, a bit announcing an extended capabilities frame buys more.
+
+#### Flags and capabilities
+
+Both are bitfields, and they answer different questions. A flag describes **this
+frame**; a capability describes **this peer**.
+
+| | Flags | Capabilities |
+|---|---|---|
+| Where | the 6-byte frame header | the handshake body |
+| Width | `u8`, on every frame | `u32`, once per connection |
+| Scope | that one frame | the whole connection |
+| Set by | the sender, unilaterally | both sides; the active set is the AND |
+| An unknown bit | is rejected | is ignored |
+| Cost | 1 byte per frame | 4 bytes per connection |
+
+`CONTINUATION` is a flag because whether a frame is a fragment differs frame to frame,
+and a reader that misreads it stitches the body wrong. `CREDIT_FLOW_CONTROL` is a
+capability because it is a standing fact about a peer, and learning it means hearing
+from the other side.
+
+Neither substitutes for the other. A flag cannot be negotiated: the sender asserts it
+and learns nothing about whether the receiver copes. A capability cannot vary per
+frame: it is agreed once, so it can say "I am able to fragment" but never "this frame
+is a fragment".
+
+A feature may need both, and continuation will. The flag marks each fragment; a
+capability is how a peer that has not implemented reassembly declines to receive any.
 
 #### A note on the handshake's own evolution
 
-The `Handshake` frame is sent before a version is agreed, so it can never safely
-gain a field: the server does not yet know which layout to expect. The capability
-bitmap is the escape hatch — extensions go in capability-gated frames after the
-handshake, not in the handshake itself. Keep it frozen.
+`protocol_version` is the first field of the body, and **its offset never changes in
+any version of this protocol**. That is what lets a reader decide whether it knows a
+handshake before parsing one: two bytes in, it either recognises the version or
+answers with the range it supports.
+
+So this frame evolves like any other, with one extra cost. Appending a field is free —
+an older peer skips the trailing bytes, and a capability bit announcing the field tells
+the sender whether it was read. Removing, retyping or reordering a field needs a new
+version, and for this frame alone that costs a reconnect on every skew: a reader
+without version *N*'s layout cannot parse a version *N* body, so it can only reply with
+its range and close. Every other frame is negotiated before it is sent and pays
+nothing.
+
+Prefer a capability bit regardless. This is the frame every connection pays for and
+every SDK writes first.
 
 ### 3. Request/Response
 
@@ -1212,6 +1266,7 @@ Standard metadata keys:
 |------------|-----|-------|-------------|
 | `0x0C` NotLeader | `leader_addr` | `"host:port"` | Current leader |
 | `0x09` ChannelFull | `retry_after_ms` | `"100"` | Suggested backoff |
+| `0x0D` UnsupportedVersion | `min_version` | `"1"` | Lowest version still accepted |
 | `0x0D` UnsupportedVersion | `max_version` | `"1"` | Highest version supported |
 | `0x11` CreditExhausted | `server_credit` | `"0"` | Server's view of the balance |
 
@@ -1248,6 +1303,10 @@ receiver needs none to reassemble.
 - Receivers may enforce a maximum reassembled size; there is no protocol-level cap
 - Frames from different request IDs may interleave; continuation state is per request ID
 - A connection closing mid-continuation discards the partial data
+- Fragmenting to a peer needs its agreement, so continuation is a capability as well as
+  a flag. The flag marks each fragment; the capability is how a peer that has not
+  implemented reassembly declines to receive any. A flag cannot carry that, being set
+  on a frame already in flight. See [Flags and capabilities](#flags-and-capabilities).
 
 ## Overhead Analysis
 
@@ -1336,27 +1395,87 @@ Layout is worth settling before an implementation exists to be compatible with.
 
 ## Schema Evolution
 
-### Adding Fields
+### What needs a new version
 
-Append to the end of an opcode's body. Readers must tolerate trailing bytes they do
-not understand. Writers must not omit fields present in the negotiated version.
+Two rules, by scope:
 
-### Removing Fields
+| Scope | Allowed |
+|-------|---------|
+| Within a version | Append fields at the end. Never remove, retype or reorder. |
+| Across a version bump | Any layout change, including removal and retyping. |
 
-Fields are never removed. Deprecated fields carry zero or empty values.
+Appending is safe because a reader tolerates trailing bytes it does not understand: an
+older peer skips the new field, while a writer must not omit a field present in the
+negotiated version. Removing or retyping changes how **existing** bytes are read, so an
+older peer would misparse them.
 
-### Optional Features
+That is the whole test — not whether a feature is optional, but whether **an older
+reader parsing older bytes still gets the right answer**. Appending always passes it.
+Nor does a sender that cannot proceed without a feature need a version: it advertises a
+capability, finds the bit absent in `HandshakeOk`, and closes the connection itself.
 
-Prefer a capability bit over a version bump. Versions are for layout changes;
-capabilities are for behaviour that either side may not implement.
+Deprecated fields are never removed within a version; they carry zero or empty values.
+
+### Prefer a capability
+
+Versions are for layout changes; capabilities are for behaviour either side may not
+implement. Versions are **ordered** — version 3 implies 2 implies 1 — so an optional
+feature placed in a version forces every implementation to build it just to claim the
+number. Capabilities are **orthogonal**: 31 independent switches, any combination
+legal, and client and server upgrade in either order with no coordination.
+
+| Change | Path | New version? |
+|--------|------|-------------|
+| Add optional behaviour | a capability bit | no |
+| Add a field | a capability bit announcing it, and the field appended | no |
+| Redefine an existing field | a capability bit that changes its reading | no |
+| Remove, retype or reorder a field | the new version's layout | yes |
 
 ### Protocol Versioning
 
-The handshake negotiates a version: the server picks the highest it supports that is
-≤ the client's. If none exists it rejects with `UnsupportedVersion` and a
-`max_version` metadata entry.
+A client sends the highest version it speaks. The server picks the highest version it
+supports that is both **≤ the client's** and **≥ its own minimum**. `HandshakeOk`
+carries that `negotiated_version`, and it governs every later frame on the connection.
+
+If no such version exists the server replies `UnsupportedVersion` carrying **both**
+`min_version` and `max_version`, then closes. Both are needed. A server that has
+dropped version 1 and speaks 2–3 answers a version-1 client with `max_version=3`, which
+on its own does not say that 1 is no longer accepted — the client would retry at 1
+indefinitely rather than report that it is too old to connect.
+
+A client checks `negotiated_version` against **its own** minimum and closes if it is
+lower. A client may drop old versions too, and the server has no way to know its floor.
+
+A client told to use a lower version retries on a new connection, and should remember
+the answer per endpoint, so skew costs one reconnect per client process rather than one
+per connection.
 
 Version 1 is the initial version.
+
+### Dropping a version
+
+1. The server adds the new version beside the old and advertises the higher maximum.
+   Existing clients keep negotiating the old one and notice nothing.
+2. Updated clients offer the new version. A server that lacks it answers with its range
+   and those clients fall back.
+3. When nothing needs the old version, the server raises its minimum. A client too old
+   to connect then receives `UnsupportedVersion` naming the range, and that refusal is
+   the deprecation notice.
+
+### What no version can change
+
+Three things are read before any version is known, and are therefore fixed for the life
+of the protocol:
+
+- the **`u32` length prefix**, read on every frame including the first
+- the **6-byte frame header of both handshake frames**
+- the **offset of `protocol_version`** within the handshake body
+
+A version may redefine the frame header for frames sent *after* negotiation, provided
+the handshake exchange itself keeps version 1's header — the client reads
+`negotiated_version` out of `HandshakeOk`, so that frame cannot already depend on it.
+New opcodes need none of this: an unknown opcode is answered `InvalidFrame` with the
+connection intact.
 
 ## Inter-node Communication
 
@@ -1411,10 +1530,17 @@ Default 16 MiB, configurable, advertised in `HandshakeOk`. The length field is `
 payload size — larger bodies use continuation frames. A server receiving an oversized
 frame responds `InvalidFrame` (`0x0E`).
 
-**Before a connection has handshaked, the limit is 273 bytes** — the longest legal
-`Handshake` — not the configured maximum. Everything about the handshake is processed
-before the peer is authenticated, so the work an unauthenticated peer can ask for is
-bounded by the protocol rather than by configuration.
+**Before a connection has handshaked the limit is 1 KiB**, not the configured maximum.
+Everything about the handshake is processed before the peer is authenticated, so what
+an unauthenticated peer can make a server buffer is bounded by this specification
+rather than by configuration. Version 1's longest legal `Handshake` is 273 bytes; the
+rest is headroom for later layouts.
+
+A first frame whose length prefix exceeds that limit is still **answered, not dropped**.
+The server reads the eight bytes it needs — length prefix, frame header,
+`protocol_version` — replies `UnsupportedVersion` with the range it supports, and
+closes, without ever buffering the frame. A client newer than the server it reached
+then learns what to retry with, instead of seeing a socket close for no stated reason.
 
 ### Byte Order
 
