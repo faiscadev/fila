@@ -163,10 +163,10 @@ Bounding `string8` at 255 bytes also bounds the handshake. Version 1's longest l
 `Handshake` is:
 
 ```
-4 prefix + 6 header + 2 version + (1 present + 1 length + 255 api_key) + 4 capabilities = 273 bytes
+4 prefix + 6 header + 4 versions + (1 present + 1 length + 255 api_key) + 4 capabilities = 275 bytes
 ```
 
-The limit a server enforces before a handshake is **1 KiB**, not 273 — see
+The limit a server enforces before a handshake is **1 KiB**, not 275 — see
 [Maximum Frame Size](#maximum-frame-size). What matters is the distance from 16 MiB;
 the headroom above version 1 keeps a server from refusing a layout it could otherwise
 have negotiated down.
@@ -337,7 +337,8 @@ precede it.
 
 ```
 [frame header: opcode=0x01, flags=0, request_id=0]
-[u16: protocol_version]              -- highest version the client speaks
+[u16: max_version]                   -- highest version the client speaks
+[u16: min_version]                   -- lowest version it will accept
 [optional<string8>: api_key]
 [u32: client_capabilities]           -- bitmap; see Capabilities
 ```
@@ -413,10 +414,11 @@ capability is how a peer that has not implemented reassembly declines to receive
 
 #### A note on the handshake's own evolution
 
-`protocol_version` is the first field of the body, and **its offset never changes in
-any version of this protocol**. That is what lets a reader decide whether it knows a
-handshake before parsing one: two bytes in, it either recognises the version or
-answers with the range it supports.
+The first four bytes of the body are `[u16 max_version][u16 min_version]`, and
+**their offsets never change in any version of this protocol**. That is what lets a
+reader decide whether it knows a handshake before parsing one: four bytes in, it either
+finds a version it shares with the sender or answers with the range it supports. A
+reader meeting a layout from some later version still gets both numbers out of it.
 
 So this frame evolves like any other, with one extra cost. Appending a field is free —
 an older peer skips the trailing bytes, and a capability bit announcing the field tells
@@ -1433,18 +1435,31 @@ legal, and client and server upgrade in either order with no coordination.
 
 ### Protocol Versioning
 
-A client sends the highest version it speaks. The server picks the highest version it
-supports that is both **≤ the client's** and **≥ its own minimum**. `HandshakeOk`
-carries that `negotiated_version`, and it governs every later frame on the connection.
+Both sides have a range, and both state it. A client sends the highest version it
+speaks and the lowest it will accept; the server negotiates within the intersection:
 
-If no such version exists the server replies `UnsupportedVersion` carrying **both**
-`min_version` and `max_version`, then closes. Both are needed. A server that has
-dropped version 1 and speaks 2–3 answers a version-1 client with `max_version=3`, which
-on its own does not say that 1 is no longer accepted — the client would retry at 1
-indefinitely rather than report that it is too old to connect.
+```
+intersection = [ max(client_min, server_min), min(client_max, server_max) ]
+```
 
-A client checks `negotiated_version` against **its own** minimum and closes if it is
-lower. A client may drop old versions too, and the server has no way to know its floor.
+The server picks the top of that range. `HandshakeOk` carries it as
+`negotiated_version`, and it governs every later frame on the connection.
+
+If the intersection is empty the server replies `UnsupportedVersion` carrying **both**
+`min_version` and `max_version`, then closes.
+
+Both ends need their floor on the wire. Without the **client's**, a server would pick
+the highest version the client speaks without knowing whether the client still accepts
+it, send `HandshakeOk`, and consider the connection established — while the client, for
+which that version is too old, hangs up on a connection the server believes it has.
+Without the **server's** in the error, a server that had dropped version 1 could only
+answer a version-1 client with `max_version=3`, which does not say that 1 is refused;
+the client would retry at 1 indefinitely instead of reporting that it is too old to
+connect.
+
+A client also checks that `negotiated_version` falls within the range it offered, and
+closes if it does not. A correct server cannot pick outside it, so this guards against
+a broken or hostile one rather than forming part of the negotiation.
 
 A client told to use a lower version retries on a new connection, and should remember
 the answer per endpoint, so skew costs one reconnect per client process rather than one
@@ -1469,7 +1484,8 @@ of the protocol:
 
 - the **`u32` length prefix**, read on every frame including the first
 - the **6-byte frame header of both handshake frames**
-- the **offset of `protocol_version`** within the handshake body
+- the **offsets of `max_version` and `min_version`** — the first four bytes of the
+  handshake body
 
 A version may redefine the frame header for frames sent *after* negotiation, provided
 the handshake exchange itself keeps version 1's header — the client reads
@@ -1533,13 +1549,13 @@ frame responds `InvalidFrame` (`0x0E`).
 **Before a connection has handshaked the limit is 1 KiB**, not the configured maximum.
 Everything about the handshake is processed before the peer is authenticated, so what
 an unauthenticated peer can make a server buffer is bounded by this specification
-rather than by configuration. Version 1's longest legal `Handshake` is 273 bytes; the
+rather than by configuration. Version 1's longest legal `Handshake` is 275 bytes; the
 rest is headroom for later layouts.
 
 A first frame whose length prefix exceeds that limit is still **answered, not dropped**.
-The server reads the eight bytes it needs — length prefix, frame header,
-`protocol_version` — replies `UnsupportedVersion` with the range it supports, and
-closes, without ever buffering the frame. A client newer than the server it reached
+The server reads the ten bytes it needs — length prefix, frame header, `max_version`,
+`min_version` — replies `UnsupportedVersion` with the range it supports, and closes,
+without ever buffering the frame. A client newer than the server it reached
 then learns what to retry with, instead of seeing a socket close for no stated reason.
 
 ### Byte Order
