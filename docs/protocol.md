@@ -483,6 +483,14 @@ disagreement surfaces instead of hanging.
 
 ## Hot-Path Operation Frames
 
+**Batch counts are `u16`.** Every count in this section — messages, items, results —
+tops out at 65,535, while the counts a server enumerates elsewhere in this document stay
+`u32`. The difference is who composes the list: a client holding more than 65,535
+messages splits them across frames, and a server enumerating 200,000 queues cannot. A
+narrow count also keeps a request answerable, since a result is wider than the message
+it answers: 65,535 results fit a frame with room to spare, where a batch counted in
+millions could not be replied to at all.
+
 ### Enqueue (0x10)
 
 Each message names its own queue, so one frame may target several queues. The server
@@ -493,7 +501,7 @@ correct Raft group in cluster mode. Partial success is normal.
 
 ```
 [frame header: opcode=0x10]
-[u32: message_count]
+[u16: message_count]
 For each message:
   [string8: queue]
   [map<string8,string8>: headers]
@@ -508,7 +516,7 @@ For each message:
 
 ```
 [frame header: opcode=0x11]
-[u32: result_count]
+[u16: result_count]
 For each result:
   [u8: error_code]
   [uuid: message_id]                 -- all-zero if error; the original's ID for a duplicate
@@ -524,6 +532,9 @@ A **route hint** is sent for each queue in the batch that this node does not lea
 therefore forwarded. Clients cache hints and send later messages for those queues straight
 to their leaders; forwarding stays available for when a hint is stale. See
 [clustering.md](clustering.md#routing).
+
+Hints are advisory, so a server with more than the count can carry truncates the list
+and the client forwards for the remainder. It truncates the list, never the count.
 
 Results are in request order.
 
@@ -610,7 +621,7 @@ Pushed to a consuming client, using the request ID of the `Consume` subscription
 
 ```
 [frame header: opcode=0x14, request_id=<consume_request_id>]
-[u32: message_count]
+[u16: message_count]
 For each message:
   [uuid: message_id]
   [string8: queue]
@@ -658,7 +669,7 @@ The server stops delivering and releases the subscription. No response frame.
 
 ```
 [frame header: opcode=0x17]
-[u32: item_count]
+[u16: item_count]
 For each item:
   [string8: queue]
   [uuid: message_id]
@@ -668,7 +679,7 @@ For each item:
 
 ```
 [frame header: opcode=0x18]
-[u32: result_count]
+[u16: result_count]
 For each result:
   [u8: error_code]                   -- 0x00 Ok, 0x02 MessageNotFound
 ```
@@ -682,7 +693,7 @@ work on `Enqueue`.
 
 ```
 [frame header: opcode=0x19]
-[u32: item_count]
+[u16: item_count]
 For each item:
   [string8: queue]
   [uuid: message_id]
@@ -694,7 +705,7 @@ For each item:
 
 ```
 [frame header: opcode=0x1A]
-[u32: result_count]
+[u16: result_count]
 For each result:
   [u8: error_code]                   -- 0x00 Ok, 0x02 MessageNotFound
 ```
@@ -715,7 +726,7 @@ dependency becomes a hot loop.
 
 ```
 [frame header: opcode=0x1B]
-[u32: item_count]
+[u16: item_count]
 For each item:
   [string8: queue]
   [uuid: message_id]
@@ -726,7 +737,7 @@ For each item:
 
 ```
 [frame header: opcode=0x1C]
-[u32: result_count]
+[u16: result_count]
 For each result:
   [u8: error_code]                   -- 0x00 Ok, 0x02 MessageNotFound
   [u64: lease_expires_at]            -- new expiry, Unix ms; 0 if error
