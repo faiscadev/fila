@@ -133,14 +133,14 @@ pub enum BodyError {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum FrameBody {
-    Handshake(Handshake),
+pub enum FrameBody<'a> {
+    Handshake(Handshake<'a>),
     HandshakeOk(HandshakeOk),
     Ping,
 }
 
-impl FrameBody {
-    fn read(reader: &mut Reader<'_>, opcode: Opcode) -> Result<Self, BodyError> {
+impl<'a> FrameBody<'a> {
+    fn read(reader: &mut Reader<'a>, opcode: Opcode) -> Result<Self, BodyError> {
         Ok(match opcode {
             Opcode::Handshake => Self::Handshake(Handshake::read(reader)?),
             Opcode::HandshakeOk => Self::HandshakeOk(HandshakeOk::read(reader)?),
@@ -158,12 +158,12 @@ impl FrameBody {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Frame {
+pub struct Frame<'a> {
     pub request_id: u32,
-    pub body: FrameBody,
+    pub body: FrameBody<'a>,
 }
 
-impl Frame {
+impl<'a> Frame<'a> {
     /// The opcode this frame travels under, which its body decides. Nothing stores it:
     /// a frame whose opcode disagreed with its body would be unencodable.
     pub fn opcode(&self) -> Opcode {
@@ -174,7 +174,7 @@ impl Frame {
         }
     }
 
-    pub(crate) fn read(reader: &mut Reader<'_>) -> Result<Self, FrameError> {
+    pub(crate) fn read(reader: &mut Reader<'a>) -> Result<Self, FrameError> {
         let header = FrameHeader::read(reader)?;
         let body = FrameBody::read(reader, header.opcode)?;
 

@@ -80,12 +80,12 @@ impl<'a> Writer<'a> {
     ///
     /// The only cast of a length to its prefix width, and `String8`'s constructors are
     /// what make it lossless.
-    pub(crate) fn string8(&mut self, value: &String8) -> Option<()> {
+    pub(crate) fn string8(&mut self, value: &String8<'_>) -> Option<()> {
         self.u8(value.wire_len())?;
         self.bytes(value.as_bytes())
     }
 
-    pub(crate) fn optional_string8(&mut self, value: &Option<String8>) -> Option<()> {
+    pub(crate) fn optional_string8(&mut self, value: &Option<String8<'_>>) -> Option<()> {
         match value {
             Some(s) => {
                 self.presence_flag(true)?;

@@ -1,19 +1,20 @@
+use core::borrow::Borrow;
 use core::fmt;
 use core::ops::Deref;
+use core::str::Utf8Error;
 
-use alloc::string::String;
 use thiserror::Error;
 
-/// A UTF-8 string that fits a `string8` on the wire: at most 255 bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct String8(String);
+/// A UTF-8 string that fits a `string8` on the wire: at most 255 bytes, borrowed from
+/// the buffer it was decoded from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct String8<'a>(&'a str);
 
 /// A string too long for a one-byte length prefix.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{len} bytes exceeds the {} a string8 can describe", String8::MAX_LEN)]
 pub struct TooLongError {
     len: usize,
-    value: String,
 }
 
 impl TooLongError {
@@ -27,19 +28,10 @@ impl TooLongError {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
-
-    /// Takes back the string that was refused.
-    pub fn into_value(self) -> String {
-        self.value
-    }
 }
 
-impl String8 {
+impl String8<'_> {
     pub const MAX_LEN: usize = u8::MAX as usize;
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 
     pub fn len(&self) -> usize {
         self.0.len()
@@ -49,69 +41,71 @@ impl String8 {
         self.0.is_empty()
     }
 
+    /// Cannot narrow: construction bounded the length.
     pub fn wire_len(&self) -> u8 {
         self.0.len() as u8
+    }
+}
+
+impl<'a> String8<'a> {
+    pub fn as_str(&self) -> &'a str {
+        self.0
     }
 
     /// Builds from wire bytes whose length a `u8` prefix has already bounded, so the
     /// only way left to fail is UTF-8.
-    ///
-    /// A decoder reading a `string8` cannot produce more than [`Self::MAX_LEN`] bytes,
-    /// so [`Self::from_utf8`]'s `TooLongError` arm is unreachable there. Taking this
-    /// constructor instead keeps that impossible case out of the decoder's error tree.
-    pub(crate) fn from_wire(bytes: &[u8]) -> Result<Self, core::str::Utf8Error> {
+    pub(crate) fn from_wire(bytes: &'a [u8]) -> Result<Self, Utf8Error> {
         debug_assert!(
             bytes.len() <= Self::MAX_LEN,
             "a u8 length prefix cannot describe {} bytes",
             bytes.len()
         );
-        Ok(Self(String::from(core::str::from_utf8(bytes)?)))
+        Ok(Self(core::str::from_utf8(bytes)?))
     }
 }
 
-impl TryFrom<String> for String8 {
+impl<'a> TryFrom<&'a str> for String8<'a> {
     type Error = TooLongError;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        let len = value.len();
-        if len > Self::MAX_LEN {
-            Err(TooLongError { len, value })
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        if value.len() > Self::MAX_LEN {
+            Err(TooLongError { len: value.len() })
         } else {
             Ok(Self(value))
         }
     }
 }
 
-impl TryFrom<&str> for String8 {
-    type Error = TooLongError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(String::from(value))
-    }
-}
-
-impl Deref for String8 {
+impl<'a> Deref for String8<'a> {
     type Target = str;
 
-    fn deref(&self) -> &str {
-        &self.0
+    fn deref(&self) -> &'a str {
+        self.0
     }
 }
 
-impl AsRef<str> for String8 {
+impl AsRef<str> for String8<'_> {
     fn as_ref(&self) -> &str {
-        &self.0
+        self.0
     }
 }
 
-impl fmt::Display for String8 {
+/// Lets a map keyed by `String8` be looked up with a `&str`, which is sound because
+/// `String8`'s `Ord`, `Eq` and `Hash` all delegate to the `str` it wraps.
+impl Borrow<str> for String8<'_> {
+    fn borrow(&self) -> &str {
+        self.0
+    }
+}
+
+impl fmt::Display for String8<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl From<String8> for String {
-    fn from(value: String8) -> Self {
+impl<'a> From<String8<'a>> for &'a str {
+    fn from(value: String8<'a>) -> Self {
         value.0
     }
 }
@@ -119,6 +113,8 @@ impl From<String8> for String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use alloc::string::String;
 
     fn repeat(c: char, n: usize) -> String {
         let mut s = String::new();
@@ -131,21 +127,18 @@ mod tests {
     #[test]
     fn the_longest_describable_string_is_accepted() {
         // MAX_LEN is the largest legal length, not the first illegal one.
-        let s = String8::try_from(repeat('a', String8::MAX_LEN)).expect("255 bytes is legal");
+        let held = repeat('a', String8::MAX_LEN);
+        let s = String8::try_from(held.as_str()).expect("255 bytes is legal");
         assert_eq!(s.len(), 255);
         assert_eq!(s.wire_len(), 255);
     }
 
     #[test]
     fn one_byte_too_many_is_refused() {
-        let err = String8::try_from(repeat('a', String8::MAX_LEN + 1))
+        let held = repeat('a', String8::MAX_LEN + 1);
+        let err = String8::try_from(held.as_str())
             .expect_err("256 bytes has no length prefix that can describe it");
         assert_eq!(err.len(), 256);
-        assert_eq!(
-            err.into_value().len(),
-            256,
-            "the refused value is handed back"
-        );
     }
 
     #[test]
@@ -161,12 +154,25 @@ mod tests {
     fn the_limit_counts_bytes_not_characters() {
         // 'é' is two bytes in UTF-8, so 200 of them is 400 bytes and does not fit,
         // even though it is well under 255 characters.
-        let err = String8::try_from(repeat('é', 200)).expect_err("400 bytes does not fit");
+        let held = repeat('é', 200);
+        let err = String8::try_from(held.as_str()).expect_err("400 bytes does not fit");
         assert_eq!(err.len(), 400);
 
         // and 127 of them is 254 bytes, which does
-        let s = String8::try_from(repeat('é', 127)).expect("254 bytes is legal");
+        let held = repeat('é', 127);
+        let s = String8::try_from(held.as_str()).expect("254 bytes is legal");
         assert_eq!(s.wire_len(), 254);
+    }
+
+    #[test]
+    fn it_can_key_a_map_looked_up_by_str() {
+        // `Borrow<str>` is what makes `map.get("name")` work without building a
+        // `String8` for every lookup.
+        let mut map = alloc::collections::BTreeMap::new();
+        map.insert(String8::try_from("traceparent").unwrap(), "00-abc-def-01");
+
+        assert_eq!(map.get("traceparent"), Some(&"00-abc-def-01"));
+        assert_eq!(map.get("tenant"), None);
     }
 
     #[test]
@@ -175,5 +181,12 @@ mod tests {
         assert_eq!(s.as_str(), "orders");
         assert_eq!(&*s, "orders", "Deref<Target = str>");
         assert!(s.starts_with("order"), "str methods reach through Deref");
+    }
+
+    #[test]
+    fn it_borrows_rather_than_copies() {
+        let held = repeat('a', 8);
+        let s = String8::try_from(held.as_str()).unwrap();
+        assert!(core::ptr::eq(s.as_str(), held.as_str()));
     }
 }

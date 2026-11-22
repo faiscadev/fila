@@ -9,10 +9,10 @@ use thiserror::Error;
 use crate::{Reader, String8, String8DecodeError, Writer};
 
 #[derive(Debug, PartialEq)]
-pub struct Handshake {
+pub struct Handshake<'a> {
     pub min_version: u16,
     pub max_version: u16,
-    pub api_key: Option<String8>,
+    pub api_key: Option<String8<'a>>,
     pub client_capabilities: u32,
 }
 
@@ -32,8 +32,8 @@ pub enum HandshakeError {
     MissingClientCapabilities,
 }
 
-impl Handshake {
-    pub(crate) fn read(reader: &mut Reader<'_>) -> Result<Self, HandshakeError> {
+impl<'a> Handshake<'a> {
+    pub(crate) fn read(reader: &mut Reader<'a>) -> Result<Self, HandshakeError> {
         let min_version = reader.u16().ok_or(HandshakeError::MissingMinVersion)?;
         let max_version = reader.u16().ok_or(HandshakeError::MissingMaxVersion)?;
         let api_key = if reader

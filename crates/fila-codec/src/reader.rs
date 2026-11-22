@@ -95,7 +95,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a `string8`: `[u8 length][UTF-8 bytes]`.
-    pub(crate) fn string8(&mut self) -> Option<Result<String8, String8DecodeError>> {
+    pub(crate) fn string8(&mut self) -> Option<Result<String8<'a>, String8DecodeError>> {
         let len = self.u8()? as usize;
 
         if self.pos + len > self.buf.len() {

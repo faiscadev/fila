@@ -40,9 +40,9 @@ pub(crate) const MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16;
 
 /// What a buffer held when `decode` looked at it.
 #[derive(Debug, PartialEq)]
-pub enum Decoded {
+pub enum Decoded<'a> {
     Success {
-        frame: Frame,
+        frame: Frame<'a>,
         length: u32,
         consumed: usize,
     },
@@ -53,7 +53,7 @@ pub enum Decoded {
 }
 
 /// Reads the frame at the front of `buf`.
-pub fn decode(buf: &[u8]) -> Decoded {
+pub fn decode(buf: &[u8]) -> Decoded<'_> {
     if buf.len() < LENGTH_PREFIX_LEN {
         return Decoded::Incomplete;
     }
@@ -91,7 +91,7 @@ pub fn decode(buf: &[u8]) -> Decoded {
 /// `None` means `buf` could not fit the frame. The buffer may have been written to
 /// before that was discovered, so its contents are unspecified unless this returns
 /// `Some`.
-pub fn encode(frame: &Frame, buf: &mut [u8]) -> Option<usize> {
+pub fn encode(frame: &Frame<'_>, buf: &mut [u8]) -> Option<usize> {
     let mut writer = Writer::new(buf);
     frame.write(&mut writer)?;
     Some(writer.pos())
@@ -358,17 +358,19 @@ mod tests {
             0, 0, 0, 16, 0x01, 0x00, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0x01, 0x01, 0x00, 0, 0, 0, 1,
         ];
 
-        let key_of = |buf: &[u8]| match decode(buf) {
-            Decoded::Success {
-                frame:
-                    Frame {
-                        body: FrameBody::Handshake(h),
-                        ..
-                    },
-                ..
-            } => h.api_key,
-            other => panic!("expected a handshake, got {other:?}"),
-        };
+        fn key_of(buf: &[u8]) -> Option<String8<'_>> {
+            match decode(buf) {
+                Decoded::Success {
+                    frame:
+                        Frame {
+                            body: FrameBody::Handshake(h),
+                            ..
+                        },
+                    ..
+                } => h.api_key,
+                other => panic!("expected a handshake, got {other:?}"),
+            }
+        }
 
         assert_eq!(key_of(&absent), None, "absent means there is no key");
         assert_eq!(
@@ -732,7 +734,7 @@ mod tests {
             body: FrameBody::Handshake(Handshake {
                 min_version: 1,
                 max_version: 1,
-                api_key: Some(String8::try_from(key).expect("255 bytes is a string8")),
+                api_key: Some(String8::try_from(key.as_str()).expect("255 bytes is a string8")),
                 client_capabilities: 1,
             }),
         };
