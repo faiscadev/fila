@@ -988,6 +988,38 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_built_from_owned_values_outlives_them() {
+        // The point of the owned half: a producer assembling a batch at runtime has no
+        // buffer to borrow from, and the frame must outlive the strings it was built
+        // from rather than pin them.
+        let frame: Frame<'static> = {
+            let queue = alloc::string::String::from("orders");
+            let body = alloc::vec![0xDEu8, 0xAD];
+
+            Frame {
+                request_id: 21,
+                body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                    queue: String8::try_from(queue).expect("6 bytes is a string8"),
+                    headers: Headers::default(),
+                    payload: Payload::try_from(body).expect("2 bytes is a payload"),
+                    fairness_key: None,
+                    weight: None,
+                    delay_ms: None,
+                    idempotency_key: None,
+                }])),
+            }
+        };
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+
+        match decode(&out[..written]) {
+            Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
+            other => panic!("what we encoded should decode, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn an_enqueue_frame_round_trips() {
         let frame = an_enqueue();
 

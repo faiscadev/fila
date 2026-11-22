@@ -3,12 +3,14 @@ use core::fmt;
 use core::ops::Deref;
 use core::str::Utf8Error;
 
+use alloc::borrow::Cow;
+use alloc::string::String;
 use thiserror::Error;
 
 /// A UTF-8 string that fits a `string8` on the wire: at most 255 bytes, borrowed from
-/// the buffer it was decoded from.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct String8<'a>(&'a str);
+/// the buffer it was decoded from or owned by whoever built it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct String8<'a>(Cow<'a, str>);
 
 /// A string too long for a one-byte length prefix.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -47,11 +49,18 @@ impl String8<'_> {
     }
 }
 
-impl<'a> String8<'a> {
-    pub fn as_str(&self) -> &'a str {
-        self.0
+impl String8<'_> {
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 
+    /// Takes ownership of the bytes, copying them only if they are still borrowed.
+    pub fn into_owned(self) -> String {
+        self.0.into_owned()
+    }
+}
+
+impl<'a> String8<'a> {
     /// Builds from wire bytes whose length a `u8` prefix has already bounded, so the
     /// only way left to fail is UTF-8.
     pub(crate) fn from_wire(bytes: &'a [u8]) -> Result<Self, Utf8Error> {
@@ -60,7 +69,7 @@ impl<'a> String8<'a> {
             "a u8 length prefix cannot describe {} bytes",
             bytes.len()
         );
-        Ok(Self(core::str::from_utf8(bytes)?))
+        Ok(Self(Cow::Borrowed(core::str::from_utf8(bytes)?)))
     }
 }
 
@@ -71,22 +80,34 @@ impl<'a> TryFrom<&'a str> for String8<'a> {
         if value.len() > Self::MAX_LEN {
             Err(TooLongError { len: value.len() })
         } else {
-            Ok(Self(value))
+            Ok(Self(Cow::Borrowed(value)))
         }
     }
 }
 
-impl<'a> Deref for String8<'a> {
+impl TryFrom<String> for String8<'_> {
+    type Error = TooLongError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.len() > Self::MAX_LEN {
+            Err(TooLongError { len: value.len() })
+        } else {
+            Ok(Self(Cow::Owned(value)))
+        }
+    }
+}
+
+impl Deref for String8<'_> {
     type Target = str;
 
-    fn deref(&self) -> &'a str {
-        self.0
+    fn deref(&self) -> &str {
+        &self.0
     }
 }
 
 impl AsRef<str> for String8<'_> {
     fn as_ref(&self) -> &str {
-        self.0
+        &self.0
     }
 }
 
@@ -94,7 +115,7 @@ impl AsRef<str> for String8<'_> {
 /// `String8`'s `Ord`, `Eq` and `Hash` all delegate to the `str` it wraps.
 impl Borrow<str> for String8<'_> {
     fn borrow(&self) -> &str {
-        self.0
+        &self.0
     }
 }
 
@@ -104,9 +125,9 @@ impl fmt::Display for String8<'_> {
     }
 }
 
-impl<'a> From<String8<'a>> for &'a str {
-    fn from(value: String8<'a>) -> Self {
-        value.0
+impl From<String8<'_>> for String {
+    fn from(value: String8<'_>) -> Self {
+        value.0.into_owned()
     }
 }
 
@@ -188,5 +209,40 @@ mod tests {
         let held = repeat('a', 8);
         let s = String8::try_from(held.as_str()).unwrap();
         assert!(core::ptr::eq(s.as_str(), held.as_str()));
+    }
+
+    #[test]
+    fn it_can_own_its_bytes_instead() {
+        // An encoder building a string at runtime has nothing to borrow from, so the
+        // owned half is what lets it hold one without a buffer to point into.
+        let s = String8::try_from(repeat('a', 8)).expect("8 bytes is legal");
+        assert_eq!(s.as_str(), "aaaaaaaa");
+        assert_eq!(s.wire_len(), 8);
+    }
+
+    #[test]
+    fn an_owned_string8_outlives_the_bytes_it_was_built_from() {
+        let s = {
+            let held = repeat('b', 4);
+            String8::try_from(held).expect("4 bytes is legal")
+        };
+        assert_eq!(s.as_str(), "bbbb");
+    }
+
+    #[test]
+    fn a_string_too_long_is_refused_however_it_arrives() {
+        let err = String8::try_from(repeat('a', 256)).expect_err("256 bytes does not fit");
+        assert_eq!(err.len(), 256);
+    }
+
+    #[test]
+    fn borrowed_and_owned_compare_as_their_contents() {
+        let held = alloc::string::String::from("orders");
+        let borrowed = String8::try_from(held.as_str()).unwrap();
+        let owned = String8::try_from(held.clone()).unwrap();
+        assert_eq!(
+            borrowed, owned,
+            "where the bytes live is not part of the value"
+        );
     }
 }
