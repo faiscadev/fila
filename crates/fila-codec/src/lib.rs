@@ -20,7 +20,8 @@ mod writer;
 pub use enqueue::{Enqueue, EnqueueError, EnqueueMessage, InvalidHeaderError, MessageField};
 pub use field::{FieldError, FieldFault};
 pub use frame::{
-    BodyError, FlagsError, Frame, FrameBody, FrameError, HeaderError, Opcode, OpcodeError,
+    BodyError, EncodeError, FlagsError, Frame, FrameBody, FrameError, HeaderError, Opcode,
+    OpcodeError,
 };
 pub use handshake::{
     Handshake, HandshakeError, HandshakeField, HandshakeOk, HandshakeOkError, HandshakeOkField,
@@ -42,11 +43,11 @@ pub(crate) const FRAME_HEADER_LEN: usize = 6;
 /// A frame body carries at least its header, so this is the smallest legal prefix.
 pub(crate) const MIN_FRAME_BODY_LEN: u32 = FRAME_HEADER_LEN as u32;
 
-// TODO(#172): this limit is per connection, not per protocol - default 16 MiB,
-// configurable, advertised in HandshakeOk, and 4 KiB before a handshake completes, so it
-// belongs to the caller. Note that `encode` does not check it at all today: once a frame
-// can carry a payload, it will be able to emit one `decode` rejects.
-pub(crate) const MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16;
+/// The frame body size to fall back to until a handshake advertises one.
+///
+/// Not a bound this crate enforces: [`encode`] is given a maximum and [`decode`] takes
+/// none at all.
+pub const DEFAULT_MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16;
 
 /// What a buffer held when `decode` looked at it.
 #[derive(Debug, PartialEq)]
@@ -69,10 +70,6 @@ pub fn decode(buf: &[u8]) -> Decoded<'_> {
     }
 
     let frame_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
-
-    if frame_len > MAX_FRAME_BODY_LEN {
-        return Decoded::Invalid(FrameError::LengthAboveMaximum { length: frame_len });
-    }
 
     if frame_len < MIN_FRAME_BODY_LEN {
         return Decoded::Invalid(FrameError::LengthBelowHeader { length: frame_len });
@@ -98,13 +95,15 @@ pub fn decode(buf: &[u8]) -> Decoded<'_> {
 
 /// Writes `frame` into `buf` and returns how many bytes it took.
 ///
-/// `None` means `buf` could not fit the frame. The buffer may have been written to
-/// before that was discovered, so its contents are unspecified unless this returns
-/// `Some`.
-pub fn encode(frame: &Frame<'_>, buf: &mut [u8]) -> Option<usize> {
+/// `max_body_len` is what the peer agreed to read, so a body above it is refused here
+/// rather than written out for the peer to reject.
+///
+/// The buffer may have been written to before either failure was discovered, so its
+/// contents are unspecified unless this returns `Ok`.
+pub fn encode(frame: &Frame<'_>, buf: &mut [u8], max_body_len: u32) -> Result<usize, EncodeError> {
     let mut writer = Writer::new(buf);
-    frame.write(&mut writer)?;
-    Some(writer.pos())
+    frame.write(&mut writer, max_body_len)?;
+    Ok(writer.pos())
 }
 
 #[cfg(test)]
@@ -206,14 +205,22 @@ mod tests {
     }
 
     #[test]
-    fn a_length_above_the_maximum_frame_size_is_invalid() {
-        // protocol.md caps a frame at 16 MiB. Without the check these four bytes
-        // commit the reader to waiting for 4 GiB that will never arrive.
-        let buf = (16 * 1024 * 1024 + 1u32).to_be_bytes();
-        assert_eq!(
-            decode(&buf),
-            Decoded::Invalid(FrameError::LengthAboveMaximum { length: 16_777_217 })
-        );
+    fn decode_does_not_judge_a_declared_length() {
+        // The maximum is per connection - advertised in HandshakeOk, 4 KiB before a
+        // handshake completes - so a declared length is only ever "not here yet" to
+        // the codec. Whether to wait for it is the caller's, which reads this same
+        // prefix to know when a frame is whole.
+        for length in [
+            DEFAULT_MAX_FRAME_BODY_LEN,
+            DEFAULT_MAX_FRAME_BODY_LEN + 1,
+            u32::MAX,
+        ] {
+            assert_eq!(
+                decode(&length.to_be_bytes()),
+                Decoded::Incomplete,
+                "a declared length of {length} is a frame that has not arrived"
+            );
+        }
     }
 
     #[test]
@@ -244,7 +251,8 @@ mod tests {
         let frame_length = 6;
 
         let mut out = [0u8; 10];
-        let written = encode(&frame, &mut out).expect("a valid frame should encode");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a valid frame should encode");
         assert_eq!(written, 10, "prefix (4) + body (6)");
         assert_eq!(out, PING, "encoded bytes should match the wire layout");
 
@@ -272,7 +280,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
         match decode(&out[..written]) {
             Decoded::Success { .. } => {}
             other => panic!(
@@ -294,24 +303,11 @@ mod tests {
         let mut backing = [0u8; 10];
         for size in 0..10 {
             assert_eq!(
-                encode(&frame, &mut backing[..size]),
-                None,
+                encode(&frame, &mut backing[..size], DEFAULT_MAX_FRAME_BODY_LEN),
+                Err(EncodeError::BufferTooSmall),
                 "a {size}-byte buffer cannot hold a 10-byte frame"
             );
         }
-    }
-
-    #[test]
-    fn the_maximum_length_itself_is_accepted() {
-        // MAX_FRAME_BODY_LEN is the largest legal body, not the first illegal one.
-        // With only the prefix present the answer is Incomplete — more bytes are
-        // needed — rather than Invalid.
-        let buf = MAX_FRAME_BODY_LEN.to_be_bytes();
-        assert_eq!(
-            decode(&buf),
-            Decoded::Incomplete,
-            "a body of exactly the maximum is legal, so decode should ask for more bytes"
-        );
     }
 
     #[test]
@@ -442,7 +438,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => {
@@ -474,7 +471,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => match decoded.body {
@@ -753,7 +751,8 @@ mod tests {
         };
 
         let mut out = [0u8; 512];
-        let written = encode(&frame, &mut out).expect("512 bytes is plenty");
+        let written =
+            encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN).expect("512 bytes is plenty");
         assert_eq!(
             written, 275,
             "4 prefix + 6 header + 4 versions + 2 presence and length + 255 key + 4 capabilities"
@@ -793,14 +792,14 @@ mod tests {
         let mut backing = [0u8; WHOLE];
         for size in 0..WHOLE {
             assert_eq!(
-                encode(&frame, &mut backing[..size]),
-                None,
+                encode(&frame, &mut backing[..size], DEFAULT_MAX_FRAME_BODY_LEN),
+                Err(EncodeError::BufferTooSmall),
                 "a {size}-byte buffer cannot hold a {WHOLE}-byte frame"
             );
         }
         assert_eq!(
-            encode(&frame, &mut backing),
-            Some(WHOLE),
+            encode(&frame, &mut backing, DEFAULT_MAX_FRAME_BODY_LEN),
+            Ok(WHOLE),
             "a buffer of exactly the frame's size is enough"
         );
     }
@@ -1011,7 +1010,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
@@ -1024,7 +1024,8 @@ mod tests {
         let frame = an_enqueue();
 
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success {
@@ -1045,7 +1046,8 @@ mod tests {
         let frame = a_bare_enqueue();
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
@@ -1097,7 +1099,8 @@ mod tests {
         };
 
         let mut out = [0u8; 256];
-        let written = encode(&frame, &mut out).expect("a 256-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 256-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
@@ -1111,7 +1114,8 @@ mod tests {
         let frame = an_enqueue_with_headers(14, &[("a", "1"), ("b", "2"), ("c", "3")]);
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         let Decoded::Success { frame: decoded, .. } = decode(&out[..written]) else {
             panic!("what we encoded should decode");
@@ -1134,7 +1138,8 @@ mod tests {
         // never Incomplete, and never a panic.
         let frame = an_enqueue();
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
         let body = &out[LENGTH_PREFIX_LEN..written];
 
         for len in FRAME_HEADER_LEN..body.len() {
@@ -1158,7 +1163,8 @@ mod tests {
         // optionals end a message, so absent they are the body's last four bytes.
         let frame = a_bare_enqueue();
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         for (from_end, field) in [
             (4, MessageField::FairnessKey),
@@ -1191,7 +1197,8 @@ mod tests {
         // the only fault is the encoding of one value.
         let frame = an_enqueue_with_headers(15, &[("k", "v")]);
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         // "orders" and "k" hold no 'v', so this is the header value's only byte.
         let value = out[..written]
@@ -1221,7 +1228,8 @@ mod tests {
         // The deepest chain in the codec: frame, body, message, field, entry, fault.
         let frame = an_enqueue_with_headers(16, &[("k", "v")]);
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
         let value = out[..written]
             .iter()
             .position(|&b| b == b'v')
@@ -1244,7 +1252,8 @@ mod tests {
         // it does not understand". Still consumed, or the next frame starts inside it.
         let frame = an_enqueue();
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
 
         let mut buf = out[..written].to_vec();
         buf.extend_from_slice(&[0xAB, 0xCD]); // a field some later version appended
@@ -1270,7 +1279,8 @@ mod tests {
         // which lands at prefix (4) + header (6) = offset 10.
         let frame = an_enqueue();
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
         assert!(written > 14, "a body with a count is at least 10 bytes");
 
         assert_eq!(
@@ -1321,7 +1331,8 @@ mod tests {
         assert_eq!(consumed, SPEC_BODY.len(), "prefix (4) + body (56)");
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
         assert_eq!(
             &out[..written],
             &SPEC_BODY[..],
@@ -1336,7 +1347,8 @@ mod tests {
         // twice and contradicts itself.
         let frame = a_bare_enqueue();
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
         out[written - 2] = 0x02; // the delay_ms presence flag
 
         let Decoded::Invalid(err) = decode(&out[..written]) else {
@@ -1370,7 +1382,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         let Decoded::Success { frame: decoded, .. } = decode(&out[..written]) else {
             panic!("what we encoded should decode");
@@ -1387,7 +1400,8 @@ mod tests {
         // length is the four bytes before the four presence flags.
         let frame = a_bare_enqueue();
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         let length = written - 8;
         out[length..length + 4].copy_from_slice(&5u32.to_be_bytes());
@@ -1439,6 +1453,65 @@ mod tests {
                 }
             )))
         );
+    }
+
+    #[test]
+    fn encode_refuses_a_body_above_the_maximum_it_was_given() {
+        // A payload is the first body big enough to cross the maximum, and writing it
+        // out would mean handing a peer a frame it is obliged to reject.
+        let payload = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize];
+        let frame = Frame {
+            request_id: 31,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::default(),
+                payload: Payload::try_from(payload).expect("16 MiB is a payload"),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        };
+
+        let mut out = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize + 64];
+
+        assert_eq!(
+            encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN),
+            Err(EncodeError::BodyAboveMaximum {
+                len: 16_777_243,
+                max: DEFAULT_MAX_FRAME_BODY_LEN,
+            }),
+            "a 16 MiB payload does not fit a 16 MiB body: the frame header and the \
+             message's own fields are in there too"
+        );
+    }
+
+    #[test]
+    fn a_body_of_exactly_the_maximum_is_written() {
+        // The maximum is the largest legal body, not the first illegal one.
+        let payload = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize - 27];
+        let frame = Frame {
+            request_id: 32,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::default(),
+                payload: Payload::try_from(payload).expect("a payload"),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        };
+
+        let mut out = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize + 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a body of exactly the maximum is legal");
+
+        assert_eq!(
+            written - LENGTH_PREFIX_LEN,
+            DEFAULT_MAX_FRAME_BODY_LEN as usize
+        );
+        assert!(matches!(decode(&out[..written]), Decoded::Success { .. }));
     }
 
     #[test]
@@ -1518,7 +1591,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         let mut sorted = UNSORTED;
         sorted[18..26].copy_from_slice(&[1, b'a', 1, b'1', 1, b'b', 1, b'2']);
@@ -1538,7 +1612,8 @@ mod tests {
         };
 
         let mut out = [0u8; 32];
-        let written = encode(&frame, &mut out).expect("a 32-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 32-byte buffer is plenty");
         assert_eq!(written, 14, "prefix (4) + header (6) + count (4)");
 
         match decode(&out[..written]) {
@@ -1551,7 +1626,8 @@ mod tests {
     fn a_message_count_larger_than_the_body_names_the_missing_message() {
         let frame = an_enqueue();
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
         out[10..14].copy_from_slice(&3u32.to_be_bytes());
 
         assert_eq!(
@@ -1598,7 +1674,8 @@ mod tests {
         // opposite of `every_truncation_of_an_enqueue_body_is_invalid`.
         let frame = an_enqueue();
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
 
         for n in 0..written {
             assert_eq!(
@@ -1615,17 +1692,21 @@ mod tests {
         // whose length comes from the value rather than from its type.
         let frame = an_enqueue();
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
 
         let mut backing = alloc::vec![0u8; written];
         for size in 0..written {
             assert_eq!(
-                encode(&frame, &mut backing[..size]),
-                None,
+                encode(&frame, &mut backing[..size], DEFAULT_MAX_FRAME_BODY_LEN),
+                Err(EncodeError::BufferTooSmall),
                 "a {size}-byte buffer cannot hold a {written}-byte frame"
             );
         }
-        assert_eq!(encode(&frame, &mut backing), Some(written));
+        assert_eq!(
+            encode(&frame, &mut backing, DEFAULT_MAX_FRAME_BODY_LEN),
+            Ok(written)
+        );
     }
 
     #[test]
@@ -1649,13 +1730,15 @@ mod tests {
         let absent = with_empty(None);
 
         let mut out = [0u8; 64];
-        let empty_len = encode(&empty, &mut out).expect("a 64-byte buffer is plenty");
+        let empty_len = encode(&empty, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
         let Decoded::Success { frame: decoded, .. } = decode(&out[..empty_len]) else {
             panic!("what we encoded should decode");
         };
         assert_eq!(decoded, empty);
 
-        let absent_len = encode(&absent, &mut out).expect("a 64-byte buffer is plenty");
+        let absent_len = encode(&absent, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
         assert_eq!(
             empty_len,
             absent_len + 1,
@@ -1681,7 +1764,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         let Decoded::Success { frame: decoded, .. } = decode(&out[..written]) else {
             panic!("what we encoded should decode");
@@ -1718,7 +1802,8 @@ mod tests {
         };
 
         let mut out = alloc::vec![0u8; 4096];
-        let written = encode(&frame, &mut out).expect("4 KiB is plenty");
+        let written =
+            encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN).expect("4 KiB is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
@@ -1742,7 +1827,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         // prefix (4) + header (6) + count (4) + length byte (1)
         out[15] = 0xFF;
@@ -1780,7 +1866,8 @@ mod tests {
         };
 
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
@@ -1830,7 +1917,8 @@ mod tests {
         // be anything - but it has to be an answer.
         let frame = an_enqueue();
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
 
         for i in 0..written {
             for byte in [0x00, 0x01, 0x02, 0x7F, 0x80, 0xFE, 0xFF] {
@@ -1846,7 +1934,8 @@ mod tests {
         // The point of the whole lifetime: a 16 MiB message costs no copy to decode.
         let frame = an_enqueue();
         let mut out = [0u8; 128];
-        let written = encode(&frame, &mut out).expect("a 128-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
 
         let Decoded::Success { frame: decoded, .. } = decode(&out[..written]) else {
             panic!("what we encoded should decode");

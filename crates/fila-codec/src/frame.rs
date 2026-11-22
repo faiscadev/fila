@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     Enqueue, EnqueueError, FRAME_HEADER_LEN, Handshake, HandshakeError, HandshakeOk,
-    HandshakeOkError, MAX_FRAME_BODY_LEN, Reader, Writer,
+    HandshakeOkError, Reader, Writer,
 };
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -117,11 +117,6 @@ pub enum FrameError {
         FRAME_HEADER_LEN
     )]
     LengthBelowHeader { length: u32 },
-    #[error(
-        "declared length {length} is above the maximum of {}",
-        MAX_FRAME_BODY_LEN
-    )]
-    LengthAboveMaximum { length: u32 },
     #[error("frame body: {0}")]
     Body(#[from] BodyError),
 }
@@ -134,6 +129,15 @@ pub enum BodyError {
     HandshakeOk(#[from] HandshakeOkError),
     #[error("enqueue: {0}")]
     Enqueue(#[from] EnqueueError),
+}
+
+/// Why a frame could not be written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EncodeError {
+    #[error("the buffer cannot hold the frame")]
+    BufferTooSmall,
+    #[error("a {len}-byte body is above the {max}-byte maximum this frame was given")]
+    BodyAboveMaximum { len: u32, max: u32 },
 }
 
 #[derive(Debug, PartialEq)]
@@ -192,15 +196,30 @@ impl<'a> Frame<'a> {
         })
     }
 
-    pub(crate) fn write(&self, writer: &mut Writer<'_>) -> Option<()> {
+    pub(crate) fn write(
+        &self,
+        writer: &mut Writer<'_>,
+        max_body_len: u32,
+    ) -> Result<(), EncodeError> {
         let header = FrameHeader {
             opcode: self.opcode(),
             request_id: self.request_id,
         };
 
-        writer.length_prefixed(|w| {
-            header.write(w)?;
-            self.body.write(w)
-        })
+        let len = writer
+            .length_prefixed(|w| {
+                header.write(w)?;
+                self.body.write(w)
+            })
+            .ok_or(EncodeError::BufferTooSmall)?;
+
+        if len > max_body_len {
+            return Err(EncodeError::BodyAboveMaximum {
+                len,
+                max: max_body_len,
+            });
+        }
+
+        Ok(())
     }
 }
