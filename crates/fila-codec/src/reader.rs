@@ -29,6 +29,11 @@ impl<'a> Reader<'a> {
         Self { buf, pos: 0 }
     }
 
+    /// Bytes left in the body, which is the `found` half of a truncation error.
+    pub(crate) fn remaining(&self) -> usize {
+        self.buf.len() - self.pos
+    }
+
     pub(crate) fn u8(&mut self) -> Option<u8> {
         if self.pos + 1 > self.buf.len() {
             return None;
@@ -109,5 +114,69 @@ impl<'a> Reader<'a> {
         self.pos += len;
 
         Some(String8::from_wire(string_bytes).map_err(String8DecodeError::InvalidUtf8))
+    }
+
+    /// Reads `len` bytes from the buffer, returning a slice to them.
+    pub(crate) fn bytes(&mut self, len: usize) -> Option<&'a [u8]> {
+        if self.pos + len > self.buf.len() {
+            return None;
+        }
+        let bytes = &self.buf[self.pos..self.pos + len];
+        self.pos += len;
+        Some(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_of_zero_is_an_empty_slice() {
+        // An empty payload is a length of zero, and it can sit at the very end of a
+        // body - so a zero-length read at the end is not a failure.
+        let mut reader = Reader::new(&[]);
+        assert_eq!(reader.bytes(0), Some(&[][..]));
+        assert_eq!(reader.remaining(), 0);
+    }
+
+    #[test]
+    fn bytes_can_take_exactly_what_is_left() {
+        let buf = [1, 2, 3];
+        let mut reader = Reader::new(&buf);
+        assert_eq!(reader.bytes(3), Some(&buf[..]));
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(reader.bytes(1), None);
+    }
+
+    #[test]
+    fn a_read_past_the_end_leaves_the_cursor_alone() {
+        // The caller turns `None` into an error naming the field, and reports what was
+        // left with `remaining`. Both are wrong if a failed read consumed anything.
+        let buf = [1, 2, 3];
+        let mut reader = Reader::new(&buf);
+
+        assert_eq!(reader.bytes(4), None);
+        assert_eq!(reader.remaining(), 3, "nothing was consumed");
+        assert_eq!(reader.bytes(3), Some(&buf[..]));
+    }
+
+    #[test]
+    fn the_slice_is_the_buffer_and_not_a_copy() {
+        let buf = [1, 2, 3, 4];
+        let mut reader = Reader::new(&buf);
+        let bytes = reader.bytes(4).expect("four bytes are there");
+        assert!(core::ptr::eq(bytes, &buf[..]));
+    }
+
+    #[test]
+    fn remaining_counts_down_as_fields_are_read() {
+        let buf = [0, 0, 0, 1, 0xFF];
+        let mut reader = Reader::new(&buf);
+        assert_eq!(reader.remaining(), 5);
+        reader.u32().expect("four bytes are there");
+        assert_eq!(reader.remaining(), 1);
+        reader.u8().expect("one byte is there");
+        assert_eq!(reader.remaining(), 0);
     }
 }

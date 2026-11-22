@@ -3,8 +3,8 @@
 use thiserror::Error;
 
 use crate::{
-    FRAME_HEADER_LEN, Handshake, HandshakeError, HandshakeOk, HandshakeOkError, MAX_FRAME_BODY_LEN,
-    Reader, Writer,
+    Enqueue, EnqueueError, FRAME_HEADER_LEN, Handshake, HandshakeError, HandshakeOk,
+    HandshakeOkError, MAX_FRAME_BODY_LEN, Reader, Writer,
 };
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -12,6 +12,7 @@ pub enum Opcode {
     Handshake = 0x01,
     HandshakeOk = 0x02,
     Ping = 0x03,
+    Enqueue = 0x10,
 }
 
 impl From<Opcode> for u8 {
@@ -28,6 +29,7 @@ impl TryFrom<u8> for Opcode {
             0x01 => Ok(Self::Handshake),
             0x02 => Ok(Self::HandshakeOk),
             0x03 => Ok(Self::Ping),
+            0x10 => Ok(Self::Enqueue),
             v => Err(OpcodeError::Invalid(v)),
         }
     }
@@ -130,6 +132,8 @@ pub enum BodyError {
     Handshake(#[from] HandshakeError),
     #[error("handshake-ok: {0}")]
     HandshakeOk(#[from] HandshakeOkError),
+    #[error("enqueue: {0}")]
+    Enqueue(#[from] EnqueueError),
 }
 
 #[derive(Debug, PartialEq)]
@@ -137,6 +141,7 @@ pub enum FrameBody<'a> {
     Handshake(Handshake<'a>),
     HandshakeOk(HandshakeOk),
     Ping,
+    Enqueue(Enqueue<'a>),
 }
 
 impl<'a> FrameBody<'a> {
@@ -145,6 +150,7 @@ impl<'a> FrameBody<'a> {
             Opcode::Handshake => Self::Handshake(Handshake::read(reader)?),
             Opcode::HandshakeOk => Self::HandshakeOk(HandshakeOk::read(reader)?),
             Opcode::Ping => Self::Ping,
+            Opcode::Enqueue => Self::Enqueue(Enqueue::read(reader)?),
         })
     }
 
@@ -153,6 +159,7 @@ impl<'a> FrameBody<'a> {
             Self::Handshake(handshake) => handshake.write(writer),
             Self::HandshakeOk(handshake_ok) => handshake_ok.write(writer),
             Self::Ping => Some(()),
+            Self::Enqueue(enqueue) => enqueue.write(writer),
         }
     }
 }
@@ -171,6 +178,7 @@ impl<'a> Frame<'a> {
             FrameBody::Handshake(_) => Opcode::Handshake,
             FrameBody::HandshakeOk(_) => Opcode::HandshakeOk,
             FrameBody::Ping => Opcode::Ping,
+            FrameBody::Enqueue(_) => Opcode::Enqueue,
         }
     }
 

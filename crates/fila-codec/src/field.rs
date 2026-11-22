@@ -25,6 +25,8 @@ pub enum FieldError {
     Truncated { expected: usize, found: usize },
     #[error("{0}")]
     String8(#[from] crate::String8DecodeError),
+    #[error("{0}")]
+    Headers(#[from] crate::InvalidHeaderError),
 }
 
 pub(crate) fn ended<F: fmt::Debug + fmt::Display>(field: F) -> FieldFault<F> {
