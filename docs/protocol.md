@@ -1546,6 +1546,10 @@ Default 16 MiB, configurable, advertised in `HandshakeOk`. The length field is `
 payload size — larger bodies use continuation frames. A server receiving an oversized
 frame responds `InvalidFrame` (`0x0E`).
 
+The limit binds both ends: a sender does not emit a frame above the limit its peer
+advertised, so an oversized frame is refused where it is built rather than where it
+arrives.
+
 **Before a connection has handshaked, the limit belongs to the protocol version rather
 than to configuration.** Everything about the handshake is processed before the peer is
 authenticated, so what an unauthenticated peer can make a server buffer is fixed by

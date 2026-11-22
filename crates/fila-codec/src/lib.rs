@@ -7,16 +7,27 @@
 
 extern crate alloc;
 
+mod enqueue;
+mod field;
 mod frame;
 mod handshake;
+mod headers;
+mod payload;
 mod reader;
 mod string8;
 mod writer;
 
+pub use enqueue::{Enqueue, EnqueueError, EnqueueMessage, InvalidHeaderError, MessageField};
+pub use field::{FieldError, FieldFault};
 pub use frame::{
-    BodyError, FlagsError, Frame, FrameBody, FrameError, HeaderError, Opcode, OpcodeError,
+    BodyError, EncodeError, FlagsError, Frame, FrameBody, FrameError, HeaderError, Opcode,
+    OpcodeError,
 };
-pub use handshake::{Handshake, HandshakeError, HandshakeOk, HandshakeOkError};
+pub use handshake::{
+    Handshake, HandshakeError, HandshakeField, HandshakeOk, HandshakeOkError, HandshakeOkField,
+};
+pub use headers::{DuplicateKeyError, Headers, HeadersError, TooManyError};
+pub use payload::{Payload, TooLargeError};
 pub use reader::String8DecodeError;
 pub use string8::{String8, TooLongError};
 
@@ -32,17 +43,17 @@ pub(crate) const FRAME_HEADER_LEN: usize = 6;
 /// A frame body carries at least its header, so this is the smallest legal prefix.
 pub(crate) const MIN_FRAME_BODY_LEN: u32 = FRAME_HEADER_LEN as u32;
 
-// TODO(#172): this limit is per connection, not per protocol - default 16 MiB,
-// configurable, advertised in HandshakeOk, and 4 KiB before a handshake completes, so it
-// belongs to the caller. Note that `encode` does not check it at all today: once a frame
-// can carry a payload, it will be able to emit one `decode` rejects.
-pub(crate) const MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16;
+/// The frame body size to fall back to until a handshake advertises one.
+///
+/// Not a bound this crate enforces: [`encode`] is given a maximum and [`decode`] takes
+/// none at all.
+pub const DEFAULT_MAX_FRAME_BODY_LEN: u32 = 1024 * 1024 * 16;
 
 /// What a buffer held when `decode` looked at it.
 #[derive(Debug, PartialEq)]
-pub enum Decoded {
+pub enum Decoded<'a> {
     Success {
-        frame: Frame,
+        frame: Frame<'a>,
         length: u32,
         consumed: usize,
     },
@@ -53,16 +64,12 @@ pub enum Decoded {
 }
 
 /// Reads the frame at the front of `buf`.
-pub fn decode(buf: &[u8]) -> Decoded {
+pub fn decode(buf: &[u8]) -> Decoded<'_> {
     if buf.len() < LENGTH_PREFIX_LEN {
         return Decoded::Incomplete;
     }
 
     let frame_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
-
-    if frame_len > MAX_FRAME_BODY_LEN {
-        return Decoded::Invalid(FrameError::LengthAboveMaximum { length: frame_len });
-    }
 
     if frame_len < MIN_FRAME_BODY_LEN {
         return Decoded::Invalid(FrameError::LengthBelowHeader { length: frame_len });
@@ -88,13 +95,15 @@ pub fn decode(buf: &[u8]) -> Decoded {
 
 /// Writes `frame` into `buf` and returns how many bytes it took.
 ///
-/// `None` means `buf` could not fit the frame. The buffer may have been written to
-/// before that was discovered, so its contents are unspecified unless this returns
-/// `Some`.
-pub fn encode(frame: &Frame, buf: &mut [u8]) -> Option<usize> {
+/// `max_body_len` is what the peer agreed to read, so a body above it is refused here
+/// rather than written out for the peer to reject.
+///
+/// The buffer may have been written to before either failure was discovered, so its
+/// contents are unspecified unless this returns `Ok`.
+pub fn encode(frame: &Frame<'_>, buf: &mut [u8], max_body_len: u32) -> Result<usize, EncodeError> {
     let mut writer = Writer::new(buf);
-    frame.write(&mut writer)?;
-    Some(writer.pos())
+    frame.write(&mut writer, max_body_len)?;
+    Ok(writer.pos())
 }
 
 #[cfg(test)]
@@ -196,14 +205,22 @@ mod tests {
     }
 
     #[test]
-    fn a_length_above_the_maximum_frame_size_is_invalid() {
-        // protocol.md caps a frame at 16 MiB. Without the check these four bytes
-        // commit the reader to waiting for 4 GiB that will never arrive.
-        let buf = (16 * 1024 * 1024 + 1u32).to_be_bytes();
-        assert_eq!(
-            decode(&buf),
-            Decoded::Invalid(FrameError::LengthAboveMaximum { length: 16_777_217 })
-        );
+    fn decode_does_not_judge_a_declared_length() {
+        // The maximum is per connection - advertised in HandshakeOk, 4 KiB before a
+        // handshake completes - so a declared length is only ever "not here yet" to
+        // the codec. Whether to wait for it is the caller's, which reads this same
+        // prefix to know when a frame is whole.
+        for length in [
+            DEFAULT_MAX_FRAME_BODY_LEN,
+            DEFAULT_MAX_FRAME_BODY_LEN + 1,
+            u32::MAX,
+        ] {
+            assert_eq!(
+                decode(&length.to_be_bytes()),
+                Decoded::Incomplete,
+                "a declared length of {length} is a frame that has not arrived"
+            );
+        }
     }
 
     #[test]
@@ -234,7 +251,8 @@ mod tests {
         let frame_length = 6;
 
         let mut out = [0u8; 10];
-        let written = encode(&frame, &mut out).expect("a valid frame should encode");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a valid frame should encode");
         assert_eq!(written, 10, "prefix (4) + body (6)");
         assert_eq!(out, PING, "encoded bytes should match the wire layout");
 
@@ -262,7 +280,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
         match decode(&out[..written]) {
             Decoded::Success { .. } => {}
             other => panic!(
@@ -284,24 +303,11 @@ mod tests {
         let mut backing = [0u8; 10];
         for size in 0..10 {
             assert_eq!(
-                encode(&frame, &mut backing[..size]),
-                None,
+                encode(&frame, &mut backing[..size], DEFAULT_MAX_FRAME_BODY_LEN),
+                Err(EncodeError::BufferTooSmall),
                 "a {size}-byte buffer cannot hold a 10-byte frame"
             );
         }
-    }
-
-    #[test]
-    fn the_maximum_length_itself_is_accepted() {
-        // MAX_FRAME_BODY_LEN is the largest legal body, not the first illegal one.
-        // With only the prefix present the answer is Incomplete — more bytes are
-        // needed — rather than Invalid.
-        let buf = MAX_FRAME_BODY_LEN.to_be_bytes();
-        assert_eq!(
-            decode(&buf),
-            Decoded::Incomplete,
-            "a body of exactly the maximum is legal, so decode should ask for more bytes"
-        );
     }
 
     #[test]
@@ -358,17 +364,19 @@ mod tests {
             0, 0, 0, 16, 0x01, 0x00, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0x01, 0x01, 0x00, 0, 0, 0, 1,
         ];
 
-        let key_of = |buf: &[u8]| match decode(buf) {
-            Decoded::Success {
-                frame:
-                    Frame {
-                        body: FrameBody::Handshake(h),
-                        ..
-                    },
-                ..
-            } => h.api_key,
-            other => panic!("expected a handshake, got {other:?}"),
-        };
+        fn key_of(buf: &[u8]) -> Option<String8<'_>> {
+            match decode(buf) {
+                Decoded::Success {
+                    frame:
+                        Frame {
+                            body: FrameBody::Handshake(h),
+                            ..
+                        },
+                    ..
+                } => h.api_key,
+                other => panic!("expected a handshake, got {other:?}"),
+            }
+        }
 
         assert_eq!(key_of(&absent), None, "absent means there is no key");
         assert_eq!(
@@ -386,9 +394,10 @@ mod tests {
             1,
         ];
         match decode(&buf) {
-            Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::InvalidApiKey(_),
-            ))) => {}
+            Decoded::Invalid(FrameError::Body(BodyError::Handshake(FieldFault {
+                field: HandshakeField::ApiKey,
+                source: FieldError::String8(String8DecodeError::InvalidUtf8(_)),
+            }))) => {}
             other => panic!(
                 "a string that is not UTF-8 is rejected, never silently replaced, got {other:?}"
             ),
@@ -406,12 +415,13 @@ mod tests {
         // 255 was declared, 5 bytes of body remained after the length byte.
         assert_eq!(
             decode(&buf),
-            Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::InvalidApiKey(String8DecodeError::Truncated {
-                    declared: 255,
-                    available: 5,
-                })
-            )))
+            Decoded::Invalid(FrameError::Body(BodyError::Handshake(FieldFault {
+                field: HandshakeField::ApiKey,
+                source: FieldError::String8(String8DecodeError::Truncated {
+                    expected: 255,
+                    found: 5,
+                }),
+            })))
         );
     }
 
@@ -428,7 +438,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => {
@@ -460,7 +471,8 @@ mod tests {
         };
 
         let mut out = [0u8; 64];
-        let written = encode(&frame, &mut out).expect("a 64-byte buffer is plenty");
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => match decoded.body {
@@ -663,9 +675,10 @@ mod tests {
         let buf = [0, 0, 0, 6, 0x01, 0x00, 0, 0, 0, 0];
         assert_eq!(
             decode(&buf),
-            Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::MissingMinVersion
-            )))
+            Decoded::Invalid(FrameError::Body(BodyError::Handshake(FieldFault {
+                field: HandshakeField::MinVersion,
+                source: FieldError::Ended,
+            })))
         );
     }
 
@@ -732,13 +745,14 @@ mod tests {
             body: FrameBody::Handshake(Handshake {
                 min_version: 1,
                 max_version: 1,
-                api_key: Some(String8::try_from(key).expect("255 bytes is a string8")),
+                api_key: Some(String8::try_from(key.as_str()).expect("255 bytes is a string8")),
                 client_capabilities: 1,
             }),
         };
 
         let mut out = [0u8; 512];
-        let written = encode(&frame, &mut out).expect("512 bytes is plenty");
+        let written =
+            encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN).expect("512 bytes is plenty");
         assert_eq!(
             written, 275,
             "4 prefix + 6 header + 4 versions + 2 presence and length + 255 key + 4 capabilities"
@@ -778,14 +792,14 @@ mod tests {
         let mut backing = [0u8; WHOLE];
         for size in 0..WHOLE {
             assert_eq!(
-                encode(&frame, &mut backing[..size]),
-                None,
+                encode(&frame, &mut backing[..size], DEFAULT_MAX_FRAME_BODY_LEN),
+                Err(EncodeError::BufferTooSmall),
                 "a {size}-byte buffer cannot hold a {WHOLE}-byte frame"
             );
         }
         assert_eq!(
-            encode(&frame, &mut backing),
-            Some(WHOLE),
+            encode(&frame, &mut backing, DEFAULT_MAX_FRAME_BODY_LEN),
+            Ok(WHOLE),
             "a buffer of exactly the frame's size is enough"
         );
     }
@@ -841,9 +855,10 @@ mod tests {
 
         assert_eq!(
             decode(&stream),
-            Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::MissingClientCapabilities
-            ))),
+            Decoded::Invalid(FrameError::Body(BodyError::Handshake(FieldFault {
+                field: HandshakeField::ClientCapabilities,
+                source: FieldError::Ended,
+            }))),
             "a body is bounded by its own length, whatever happens to follow it"
         );
     }
@@ -884,7 +899,7 @@ mod tests {
         };
         assert_eq!(
             alloc::format!("{err}"),
-            "frame body: handshake: api key: declares 255 bytes with 1 left in the body"
+            "frame body: handshake: api_key: expected 255 bytes, found 1"
         );
     }
 
@@ -903,8 +918,1050 @@ mod tests {
             cause = err.source();
         }
         assert_eq!(
-            depth, 3,
-            "FrameError -> BodyError -> HandshakeError -> String8DecodeError"
+            depth, 4,
+            "FrameError -> BodyError -> FieldFault -> FieldError -> String8DecodeError"
+        );
+    }
+    /// A `String8` cannot be a literal, and a header list needs four of them a line.
+    fn string8(value: &str) -> String8<'_> {
+        String8::try_from(value).expect("a test fixture fits a string8")
+    }
+
+    /// One message with every field present and no two values alike, so a field read
+    /// at the wrong offset reports the wrong number rather than passing by coincidence.
+    fn an_enqueue() -> Frame<'static> {
+        Frame {
+            request_id: 11,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::try_from(alloc::vec![
+                    (string8("a-traceparent"), string8("00-abc-def-01")),
+                    (string8("b-tenant"), string8("acme")),
+                ])
+                .expect("a test fixture fits a header map"),
+                payload: Payload::try_from(&[0xDEu8, 0xAD, 0xBE, 0xEF][..])
+                    .expect("a test fixture is a payload"),
+                fairness_key: Some(string8("tenant-7")),
+                weight: Some(5),
+                delay_ms: Some(60_000),
+                idempotency_key: Some(string8("order-42")),
+            }])),
+        }
+    }
+
+    /// The same frame with nothing optional set: no headers, no absent-field values.
+    fn a_bare_enqueue() -> Frame<'static> {
+        Frame {
+            request_id: 12,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::default(),
+                payload: Payload::default(),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        }
+    }
+
+    /// A frame carrying `headers` on its one message and nothing else optional.
+    fn an_enqueue_with_headers<'a>(request_id: u32, headers: &[(&'a str, &'a str)]) -> Frame<'a> {
+        let mut pairs = alloc::vec::Vec::new();
+        for (key, value) in headers {
+            pairs.push((string8(key), string8(value)));
+        }
+
+        Frame {
+            request_id,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::try_from(pairs).expect("a test fixture fits a header map"),
+                payload: Payload::default(),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        }
+    }
+
+    #[test]
+    fn a_frame_built_from_owned_values_outlives_them() {
+        // The point of the owned half: a producer assembling a batch at runtime has no
+        // buffer to borrow from, and the frame must outlive the strings it was built
+        // from rather than pin them.
+        let frame: Frame<'static> = {
+            let queue = alloc::string::String::from("orders");
+            let body = alloc::vec![0xDEu8, 0xAD];
+
+            Frame {
+                request_id: 21,
+                body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                    queue: String8::try_from(queue).expect("6 bytes is a string8"),
+                    headers: Headers::default(),
+                    payload: Payload::try_from(body).expect("2 bytes is a payload"),
+                    fairness_key: None,
+                    weight: None,
+                    delay_ms: None,
+                    idempotency_key: None,
+                }])),
+            }
+        };
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        match decode(&out[..written]) {
+            Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
+            other => panic!("what we encoded should decode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_enqueue_frame_round_trips() {
+        let frame = an_enqueue();
+
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+
+        match decode(&out[..written]) {
+            Decoded::Success {
+                frame: decoded,
+                consumed,
+                ..
+            } => {
+                assert_eq!(consumed, written, "decode consumed what encode wrote");
+                assert_eq!(decoded, frame);
+            }
+            other => panic!("what we encoded should decode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_enqueue_with_nothing_optional_set_round_trips() {
+        // No presence flag on the header map, so "no headers" is a count of zero.
+        let frame = a_bare_enqueue();
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        match decode(&out[..written]) {
+            Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
+            other => panic!("what we encoded should decode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn several_messages_in_one_enqueue_keep_their_own_fields() {
+        // protocol.md, "Enqueue (0x10)": each message names its own queue and shares
+        // nothing with the others.
+        let frame = Frame {
+            request_id: 13,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![
+                EnqueueMessage {
+                    queue: string8("orders"),
+                    headers: Headers::try_from(alloc::vec![(string8("a"), string8("1"))])
+                        .expect("a test fixture fits a header map"),
+                    payload: Payload::default(),
+                    fairness_key: Some(string8("tenant-1")),
+                    weight: None,
+                    delay_ms: None,
+                    idempotency_key: None,
+                },
+                EnqueueMessage {
+                    queue: string8("emails"),
+                    headers: Headers::default(),
+                    payload: Payload::try_from(&[0x00u8][..]).expect("a test fixture is a payload"),
+                    fairness_key: None,
+                    weight: Some(9),
+                    delay_ms: Some(1),
+                    idempotency_key: None,
+                },
+                EnqueueMessage {
+                    queue: string8("webhooks"),
+                    headers: Headers::try_from(alloc::vec![
+                        (string8("b"), string8("2")),
+                        (string8("c"), string8("3"))
+                    ])
+                    .expect("a test fixture fits a header map"),
+                    payload: Payload::try_from(&[0xFFu8, 0x00, 0x7F][..])
+                        .expect("a test fixture is a payload"),
+                    fairness_key: None,
+                    weight: None,
+                    delay_ms: None,
+                    idempotency_key: Some(string8("hook-7")),
+                },
+            ])),
+        };
+
+        let mut out = [0u8; 256];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 256-byte buffer is plenty");
+
+        match decode(&out[..written]) {
+            Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
+            other => panic!("what we encoded should decode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_header_in_the_map_survives_in_order() {
+        // Ascending keys, so the fixture holds whatever the map is represented by.
+        let frame = an_enqueue_with_headers(14, &[("a", "1"), ("b", "2"), ("c", "3")]);
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        let Decoded::Success { frame: decoded, .. } = decode(&out[..written]) else {
+            panic!("what we encoded should decode");
+        };
+        let FrameBody::Enqueue(decoded) = decoded.body else {
+            panic!("expected an enqueue body");
+        };
+        let headers = &decoded[0].headers;
+
+        assert_eq!(headers.len(), 3);
+        for (i, (key, value)) in headers.iter().enumerate() {
+            assert_eq!(key.as_str(), ["a", "b", "c"][i]);
+            assert_eq!(value.as_str(), ["1", "2", "3"][i]);
+        }
+    }
+
+    #[test]
+    fn every_truncation_of_an_enqueue_body_is_invalid() {
+        // A body is bounded by its own prefix, so ending inside a field is Invalid,
+        // never Incomplete, and never a panic.
+        let frame = an_enqueue();
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+        let body = &out[LENGTH_PREFIX_LEN..written];
+
+        for len in FRAME_HEADER_LEN..body.len() {
+            let mut buf = alloc::vec::Vec::new();
+            buf.extend_from_slice(&(len as u32).to_be_bytes());
+            buf.extend_from_slice(&body[..len]);
+
+            match decode(&buf) {
+                Decoded::Invalid(_) => {}
+                other => panic!(
+                    "a {len}-byte body stops inside a field of a {}-byte one, got {other:?}",
+                    body.len()
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn an_enqueue_presence_flag_that_is_neither_0_nor_1_is_invalid() {
+        // protocol.md, "Encoding Primitives": only 0 and 1 are defined. The four
+        // optionals end a message, so absent they are the body's last four bytes.
+        let frame = a_bare_enqueue();
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        for (from_end, field) in [
+            (4, MessageField::FairnessKey),
+            (3, MessageField::Weight),
+            (2, MessageField::DelayMs),
+            (1, MessageField::IdempotencyKey),
+        ] {
+            let mut buf = out[..written].to_vec();
+            buf[written - from_end] = 0x02;
+
+            assert_eq!(
+                decode(&buf),
+                Decoded::Invalid(FrameError::Body(BodyError::Enqueue(
+                    EnqueueError::Message {
+                        index: 0,
+                        fault: FieldFault {
+                            field,
+                            source: FieldError::PresenceFlag(2),
+                        },
+                    }
+                ))),
+                "0x02 is not a presence byte, {from_end} bytes from the end of the body"
+            );
+        }
+    }
+
+    #[test]
+    fn a_header_value_that_is_not_utf8_is_invalid() {
+        // Replacing a byte rather than appending one keeps every length honest, so
+        // the only fault is the encoding of one value.
+        let frame = an_enqueue_with_headers(15, &[("k", "v")]);
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        // "orders" and "k" hold no 'v', so this is the header value's only byte.
+        let value = out[..written]
+            .iter()
+            .position(|&b| b == b'v')
+            .expect("the header value is in there");
+        out[value] = 0xFF;
+
+        match decode(&out[..written]) {
+            Decoded::Invalid(FrameError::Body(BodyError::Enqueue(EnqueueError::Message {
+                fault:
+                    FieldFault {
+                        field: MessageField::Headers,
+                        source:
+                            FieldError::Headers(InvalidHeaderError::InvalidValue(
+                                String8DecodeError::InvalidUtf8(_),
+                            )),
+                    },
+                ..
+            }))) => {}
+            other => panic!("0xFF is not UTF-8, so this header value cannot decode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_enqueue_error_reads_as_the_path_to_the_byte_that_failed() {
+        // The deepest chain in the codec: frame, body, message, field, entry, fault.
+        let frame = an_enqueue_with_headers(16, &[("k", "v")]);
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+        let value = out[..written]
+            .iter()
+            .position(|&b| b == b'v')
+            .expect("the header value is in there");
+        out[value] = 0xFF;
+
+        let Decoded::Invalid(err) = decode(&out[..written]) else {
+            panic!("expected an invalid frame");
+        };
+        assert_eq!(
+            alloc::format!("{err}"),
+            "frame body: enqueue: message 0: headers: value: not utf-8: \
+             invalid utf-8 sequence of 1 bytes from index 0"
+        );
+    }
+
+    #[test]
+    fn trailing_bytes_inside_an_enqueue_body_are_tolerated() {
+        // protocol.md, "What needs a new version": "a reader tolerates trailing bytes
+        // it does not understand". Still consumed, or the next frame starts inside it.
+        let frame = an_enqueue();
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+
+        let mut buf = out[..written].to_vec();
+        buf.extend_from_slice(&[0xAB, 0xCD]); // a field some later version appended
+        let body_len = (buf.len() - LENGTH_PREFIX_LEN) as u32;
+        buf[..LENGTH_PREFIX_LEN].copy_from_slice(&body_len.to_be_bytes());
+
+        match decode(&buf) {
+            Decoded::Success {
+                frame: decoded,
+                consumed,
+                ..
+            } => {
+                assert_eq!(decoded, frame, "the fields this version knows still decode");
+                assert_eq!(consumed, buf.len(), "and the bytes it does not are skipped");
+            }
+            other => panic!("expected a frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_enqueue_body_opens_with_its_message_count() {
+        // protocol.md, "Enqueue (0x10)": the body opens with `[u32 message_count]`,
+        // which lands at prefix (4) + header (6) = offset 10.
+        let frame = an_enqueue();
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+        assert!(written > 14, "a body with a count is at least 10 bytes");
+
+        assert_eq!(
+            &out[10..14],
+            &1u32.to_be_bytes(),
+            "one message is a batch of one, so the body still opens with a count, but \
+             these four bytes are {:?}",
+            &out[10..14]
+        );
+    }
+
+    #[test]
+    fn a_spec_shaped_enqueue_body_round_trips_byte_for_byte() {
+        // Two messages in the layout protocol.md gives for Enqueue (0x10). The only
+        // fixture here not produced by `encode`, so the only one that catches both
+        // halves of the codec agreeing on the wrong layout.
+        const SPEC_BODY: [u8; 60] = [
+            0, 0, 0, 56, // a 56-byte body
+            0x10, 0x00, 0, 0, 0, 9, // opcode = Enqueue, no flags, request_id = 9
+            0, 0, 0, 2, // message_count = 2
+            // message 1
+            1, b'a', // queue = "a"
+            0, 1, 1, b'k', 1, b'v', // headers = one entry, "k" -> "v"
+            0, 0, 0, 2, 0xFF, 0x00, // payload = two bytes, and not UTF-8
+            0,    // fairness_key absent
+            0,    // weight absent
+            0,    // delay_ms absent
+            0,    // idempotency_key absent
+            // message 2
+            1, b'b', // queue = "b"
+            0, 0, // no headers
+            0, 0, 0, 0, // an empty payload is a length of zero, not an absent field
+            1, 1, b'f', // fairness_key = "f"
+            1, 0, 0, 0, 5, // weight = 5
+            1, 0, 0, 0, 0, 0, 0, 0, 7, // delay_ms = 7
+            1, 1, b'i', // idempotency_key = "i"
+        ];
+
+        let Decoded::Success {
+            frame, consumed, ..
+        } = decode(&SPEC_BODY)
+        else {
+            panic!(
+                "a two-message Enqueue is what the spec defines, got {:?}",
+                decode(&SPEC_BODY)
+            );
+        };
+        assert_eq!(consumed, SPEC_BODY.len(), "prefix (4) + body (56)");
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+        assert_eq!(
+            &out[..written],
+            &SPEC_BODY[..],
+            "re-encoding what we decoded should give the bytes back"
+        );
+    }
+
+    #[test]
+    fn an_enqueue_presence_flag_error_names_the_byte_it_rejected() {
+        // The error a server puts in an `Error` frame's `message` has to say which
+        // byte it refused. "is 0, which is neither 0 nor 1" names the message index
+        // twice and contradicts itself.
+        let frame = a_bare_enqueue();
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+        out[written - 2] = 0x02; // the delay_ms presence flag
+
+        let Decoded::Invalid(err) = decode(&out[..written]) else {
+            panic!("expected an invalid frame");
+        };
+        assert_eq!(
+            alloc::format!("{err}"),
+            "frame body: enqueue: message 0: delay_ms: presence flag is 2, \
+             which is neither 0 nor 1"
+        );
+    }
+
+    #[test]
+    fn a_payload_of_arbitrary_bytes_survives_a_round_trip() {
+        // protocol.md, "Encoding Primitives": a payload is `bytes`, not a string - a
+        // `u32` length and then raw bytes. Nothing may be validated, replaced or
+        // trimmed: a producer sending protobuf, a gzip stream or an interior NUL gets
+        // back what it sent.
+        static PAYLOAD: [u8; 7] = [0x00, 0xFF, 0x80, 0xC0, 0x00, 0x1B, 0x7F];
+        let frame = Frame {
+            request_id: 19,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::default(),
+                payload: Payload::try_from(&PAYLOAD[..]).expect("seven bytes is a payload"),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        };
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        let Decoded::Success { frame: decoded, .. } = decode(&out[..written]) else {
+            panic!("what we encoded should decode");
+        };
+        let FrameBody::Enqueue(decoded) = decoded.body else {
+            panic!("expected an enqueue body");
+        };
+        assert_eq!(decoded[0].payload.as_slice(), &PAYLOAD[..]);
+    }
+
+    #[test]
+    fn a_payload_shorter_than_its_declared_length_is_invalid() {
+        // In a one-message frame with no headers and nothing optional set, the payload
+        // length is the four bytes before the four presence flags.
+        let frame = a_bare_enqueue();
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        let length = written - 8;
+        out[length..length + 4].copy_from_slice(&5u32.to_be_bytes());
+
+        assert_eq!(
+            decode(&out[..written]),
+            Decoded::Invalid(FrameError::Body(BodyError::Enqueue(
+                EnqueueError::Message {
+                    index: 0,
+                    fault: FieldFault {
+                        field: MessageField::Payload,
+                        source: FieldError::Truncated {
+                            expected: 5,
+                            found: 4,
+                        },
+                    },
+                }
+            ))),
+            "a payload declaring 5 bytes with 4 left in the body cannot decode"
+        );
+    }
+
+    #[test]
+    fn a_payload_declaring_u32_max_is_invalid() {
+        // The same frame on a 32-bit target panics instead: `Reader::bytes` adds the
+        // declared length to its cursor before checking it. CI builds this crate for
+        // wasm32 but never runs the tests there, so only the arithmetic is at issue.
+        const FRAME: [u8; 22] = [
+            0, 0, 0, 18, // an 18-byte body
+            0x10, 0x00, 0, 0, 0, 7, // opcode = Enqueue, no flags, request_id = 7
+            0, 0, 0, 1, // message_count = 1
+            1, b'q', // queue = "q"
+            0, 0, // no headers
+            0xFF, 0xFF, 0xFF, 0xFF, // payload declares 4,294,967,295 bytes
+        ];
+
+        assert_eq!(
+            decode(&FRAME),
+            Decoded::Invalid(FrameError::Body(BodyError::Enqueue(
+                EnqueueError::Message {
+                    index: 0,
+                    fault: FieldFault {
+                        field: MessageField::Payload,
+                        source: FieldError::Truncated {
+                            expected: u32::MAX as usize,
+                            found: 0,
+                        },
+                    },
+                }
+            )))
+        );
+    }
+
+    #[test]
+    fn encode_refuses_a_body_above_the_maximum_it_was_given() {
+        // A payload is the first body big enough to cross the maximum, and writing it
+        // out would mean handing a peer a frame it is obliged to reject.
+        let payload = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize];
+        let frame = Frame {
+            request_id: 31,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::default(),
+                payload: Payload::try_from(payload).expect("16 MiB is a payload"),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        };
+
+        let mut out = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize + 64];
+
+        assert_eq!(
+            encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN),
+            Err(EncodeError::BodyAboveMaximum {
+                len: 16_777_243,
+                max: DEFAULT_MAX_FRAME_BODY_LEN,
+            }),
+            "a 16 MiB payload does not fit a 16 MiB body: the frame header and the \
+             message's own fields are in there too"
+        );
+    }
+
+    #[test]
+    fn a_body_of_exactly_the_maximum_is_written() {
+        // The maximum is the largest legal body, not the first illegal one.
+        let payload = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize - 27];
+        let frame = Frame {
+            request_id: 32,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::default(),
+                payload: Payload::try_from(payload).expect("a payload"),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        };
+
+        let mut out = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize + 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a body of exactly the maximum is legal");
+
+        assert_eq!(
+            written - LENGTH_PREFIX_LEN,
+            DEFAULT_MAX_FRAME_BODY_LEN as usize
+        );
+        assert!(matches!(decode(&out[..written]), Decoded::Success { .. }));
+    }
+
+    #[test]
+    fn a_repeated_header_key_is_invalid() {
+        // protocol.md types the field `map<string8,string8>`: a key appears once.
+        //
+        // one message, whose header map declares two entries under the same key
+        const DUPLICATE_KEY: [u8; 34] = [
+            0, 0, 0, 30, // a 30-byte body
+            0x10, 0x00, 0, 0, 0, 1, // opcode = Enqueue, no flags, request_id = 1
+            0, 0, 0, 1, // message_count = 1
+            1, b'a', // queue = "a"
+            0, 2, // headers declares two entries
+            1, b'k', 1, b'v', // "k" -> "v"
+            1, b'k', 1, b'w', // "k" again, with a different value
+            0, 0, 0, 0, // an empty payload
+            0, 0, 0, 0, // nothing optional set
+        ];
+
+        match decode(&DUPLICATE_KEY) {
+            Decoded::Invalid(FrameError::Body(BodyError::Enqueue(EnqueueError::Message {
+                fault:
+                    FieldFault {
+                        field: MessageField::Headers,
+                        source: FieldError::Headers(InvalidHeaderError::DuplicateKey(_)),
+                    },
+                ..
+            }))) => {}
+            other => panic!(
+                "a map cannot carry one key twice, and whichever value won would be a \
+                 choice every SDK has to make the same way: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn a_repeated_key_is_refused_before_it_reaches_the_wire() {
+        // The same invariant on the way out, where the alternative is a silently
+        // dropped header.
+        let duplicated = alloc::vec![
+            (string8("tenant"), string8("acme")),
+            (string8("tenant"), string8("other")),
+        ];
+
+        match Headers::try_from(duplicated) {
+            Err(HeadersError::DuplicateKey(_)) => {}
+            other => panic!(
+                "a repeated key has no honest encoding - the count would say two and \
+                 the map would hold one - so this cannot be {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn a_header_map_decodes_in_any_order_and_encodes_in_one() {
+        // Order is not significant on the wire, but `Key::all_headers()` hashes every
+        // header, so the decoded map has exactly one order: ascending by key.
+        //
+        // the same message, "b" before "a" on the wire
+        const UNSORTED: [u8; 34] = [
+            0, 0, 0, 30, // a 30-byte body
+            0x10, 0x00, 0, 0, 0, 1, // opcode = Enqueue, no flags, request_id = 1
+            0, 0, 0, 1, // message_count = 1
+            1, b'a', // queue = "a"
+            0, 2, // two entries
+            1, b'b', 1, b'2', // "b" -> "2"
+            1, b'a', 1, b'1', // "a" -> "1"
+            0, 0, 0, 0, // an empty payload
+            0, 0, 0, 0, // nothing optional set
+        ];
+
+        let Decoded::Success { frame, .. } = decode(&UNSORTED) else {
+            panic!(
+                "an unsorted map is a legal map, got {:?}",
+                decode(&UNSORTED)
+            );
+        };
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        let mut sorted = UNSORTED;
+        sorted[18..26].copy_from_slice(&[1, b'a', 1, b'1', 1, b'b', 1, b'2']);
+        assert_eq!(
+            &out[..written],
+            &sorted[..],
+            "the entries come back ascending, whatever order they arrived in"
+        );
+    }
+
+    #[test]
+    fn an_empty_batch_round_trips() {
+        // A count of zero is a legal frame. Whether a server wants one is its business.
+        let frame = Frame {
+            request_id: 20,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec::Vec::new())),
+        };
+
+        let mut out = [0u8; 32];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 32-byte buffer is plenty");
+        assert_eq!(written, 14, "prefix (4) + header (6) + count (4)");
+
+        match decode(&out[..written]) {
+            Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
+            other => panic!("what we encoded should decode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_message_count_larger_than_the_body_names_the_missing_message() {
+        let frame = an_enqueue();
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+        out[10..14].copy_from_slice(&3u32.to_be_bytes());
+
+        assert_eq!(
+            decode(&out[..written]),
+            Decoded::Invalid(FrameError::Body(BodyError::Enqueue(
+                EnqueueError::Message {
+                    index: 1,
+                    fault: FieldFault {
+                        field: MessageField::Queue,
+                        source: FieldError::Ended,
+                    },
+                }
+            ))),
+            "message 0 is all the body held, so the fault belongs to message 1"
+        );
+    }
+
+    #[test]
+    fn an_absurd_message_count_fails_before_it_allocates() {
+        // 4 billion messages in a 10-byte body. Reading entry by entry means this costs
+        // one failed read; reserving for the declared count would mean 4 billion.
+        let mut buf = alloc::vec::Vec::new();
+        buf.extend_from_slice(&10u32.to_be_bytes());
+        buf.extend_from_slice(&[0x10, 0x00, 0, 0, 0, 1]);
+        buf.extend_from_slice(&u32::MAX.to_be_bytes());
+
+        assert_eq!(
+            decode(&buf),
+            Decoded::Invalid(FrameError::Body(BodyError::Enqueue(
+                EnqueueError::Message {
+                    index: 0,
+                    fault: FieldFault {
+                        field: MessageField::Queue,
+                        source: FieldError::Ended,
+                    },
+                }
+            )))
+        );
+    }
+
+    #[test]
+    fn every_truncation_of_an_enqueue_is_incomplete() {
+        // The prefix is left alone here, so each cut is a frame still arriving - the
+        // opposite of `every_truncation_of_an_enqueue_body_is_invalid`.
+        let frame = an_enqueue();
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+
+        for n in 0..written {
+            assert_eq!(
+                decode(&out[..n]),
+                Decoded::Incomplete,
+                "{n} of {written} bytes have arrived"
+            );
+        }
+    }
+
+    #[test]
+    fn encode_refuses_every_buffer_too_small_for_an_enqueue() {
+        // A message writes a payload through `Writer::bytes`, which is the one write
+        // whose length comes from the value rather than from its type.
+        let frame = an_enqueue();
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+
+        let mut backing = alloc::vec![0u8; written];
+        for size in 0..written {
+            assert_eq!(
+                encode(&frame, &mut backing[..size], DEFAULT_MAX_FRAME_BODY_LEN),
+                Err(EncodeError::BufferTooSmall),
+                "a {size}-byte buffer cannot hold a {written}-byte frame"
+            );
+        }
+        assert_eq!(
+            encode(&frame, &mut backing, DEFAULT_MAX_FRAME_BODY_LEN),
+            Ok(written)
+        );
+    }
+
+    #[test]
+    fn an_empty_optional_string_is_not_an_absent_one() {
+        // `optional<string8>` is a presence byte and then a length, so an empty string
+        // is present with a length of zero. Two bytes on the wire against one.
+        let with_empty = |fairness_key| Frame {
+            request_id: 21,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::default(),
+                payload: Payload::default(),
+                fairness_key,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        };
+
+        let empty = with_empty(Some(string8("")));
+        let absent = with_empty(None);
+
+        let mut out = [0u8; 64];
+        let empty_len = encode(&empty, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+        let Decoded::Success { frame: decoded, .. } = decode(&out[..empty_len]) else {
+            panic!("what we encoded should decode");
+        };
+        assert_eq!(decoded, empty);
+
+        let absent_len = encode(&absent, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+        assert_eq!(
+            empty_len,
+            absent_len + 1,
+            "the empty string costs its length byte"
+        );
+    }
+
+    #[test]
+    fn a_zero_weight_is_not_an_absent_weight() {
+        // protocol.md: an absent weight means the queue's default, which is 1. A weight
+        // of 0 is a value the producer chose, so the two cannot collapse.
+        let frame = Frame {
+            request_id: 22,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::default(),
+                payload: Payload::default(),
+                fairness_key: None,
+                weight: Some(0),
+                delay_ms: Some(0),
+                idempotency_key: None,
+            }])),
+        };
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        let Decoded::Success { frame: decoded, .. } = decode(&out[..written]) else {
+            panic!("what we encoded should decode");
+        };
+        let FrameBody::Enqueue(decoded) = decoded.body else {
+            panic!("expected an enqueue body");
+        };
+        assert_eq!(decoded[0].weight, Some(0));
+        assert_eq!(decoded[0].delay_ms, Some(0));
+    }
+
+    #[test]
+    fn more_headers_than_a_u8_can_count() {
+        // 300 entries needs both bytes of the count. A `u8` would read 44.
+        let mut keys = alloc::vec::Vec::new();
+        for i in 0..300u32 {
+            keys.push(alloc::format!("k{i}"));
+        }
+        let mut entries = alloc::vec::Vec::new();
+        for key in &keys {
+            entries.push((string8(key), string8("v")));
+        }
+        let frame = Frame {
+            request_id: 23,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("orders"),
+                headers: Headers::try_from(entries).expect("300 entries is legal"),
+                payload: Payload::default(),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        };
+
+        let mut out = alloc::vec![0u8; 4096];
+        let written =
+            encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN).expect("4 KiB is plenty");
+
+        match decode(&out[..written]) {
+            Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
+            other => panic!("what we encoded should decode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_queue_name_that_is_not_utf8_names_the_queue() {
+        let frame = Frame {
+            request_id: 24,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                queue: string8("qq"),
+                headers: Headers::default(),
+                payload: Payload::default(),
+                fairness_key: None,
+                weight: None,
+                delay_ms: None,
+                idempotency_key: None,
+            }])),
+        };
+
+        let mut out = [0u8; 64];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 64-byte buffer is plenty");
+
+        // prefix (4) + header (6) + count (4) + length byte (1)
+        out[15] = 0xFF;
+
+        match decode(&out[..written]) {
+            Decoded::Invalid(FrameError::Body(BodyError::Enqueue(EnqueueError::Message {
+                fault:
+                    FieldFault {
+                        field: MessageField::Queue,
+                        source: FieldError::String8(String8DecodeError::InvalidUtf8(_)),
+                    },
+                ..
+            }))) => {}
+            other => panic!("expected an invalid queue name, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn one_messages_headers_do_not_reach_another() {
+        // Each message carries its own map, so the same key in two of them is not a
+        // duplicate.
+        let message = |value| EnqueueMessage {
+            queue: string8("orders"),
+            headers: Headers::try_from(alloc::vec![(string8("tenant"), string8(value))])
+                .expect("one entry is legal"),
+            payload: Payload::default(),
+            fairness_key: None,
+            weight: None,
+            delay_ms: None,
+            idempotency_key: None,
+        };
+        let frame = Frame {
+            request_id: 25,
+            body: FrameBody::Enqueue(Enqueue(alloc::vec![message("acme"), message("other")])),
+        };
+
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+
+        match decode(&out[..written]) {
+            Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
+            other => panic!("two messages may share a header key, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn field_names_are_the_names_protocol_md_uses() {
+        // These strings reach an SDK inside an `Error` frame's message, so a rename of
+        // a Rust variant must not rename a protocol field.
+        for (field, name) in [
+            (MessageField::Queue, "queue"),
+            (MessageField::Headers, "headers"),
+            (MessageField::Payload, "payload"),
+            (MessageField::FairnessKey, "fairness_key"),
+            (MessageField::Weight, "weight"),
+            (MessageField::DelayMs, "delay_ms"),
+            (MessageField::IdempotencyKey, "idempotency_key"),
+        ] {
+            assert_eq!(alloc::format!("{field}"), name);
+        }
+
+        for (field, name) in [
+            (HandshakeField::MinVersion, "min_version"),
+            (HandshakeField::MaxVersion, "max_version"),
+            (HandshakeField::ApiKey, "api_key"),
+            (HandshakeField::ClientCapabilities, "client_capabilities"),
+        ] {
+            assert_eq!(alloc::format!("{field}"), name);
+        }
+
+        for (field, name) in [
+            (HandshakeOkField::NegotiatedVersion, "negotiated_version"),
+            (HandshakeOkField::NodeId, "node_id"),
+            (HandshakeOkField::MaxFrameSize, "max_frame_size"),
+            (HandshakeOkField::ServerCapabilities, "server_capabilities"),
+        ] {
+            assert_eq!(alloc::format!("{field}"), name);
+        }
+    }
+
+    #[test]
+    fn no_single_byte_mutation_of_an_enqueue_can_panic() {
+        // Every byte of a valid frame, replaced by every interesting value. A decoder
+        // reads lengths, counts and presence flags out of these bytes, so the answer may
+        // be anything - but it has to be an answer.
+        let frame = an_enqueue();
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+
+        for i in 0..written {
+            for byte in [0x00, 0x01, 0x02, 0x7F, 0x80, 0xFE, 0xFF] {
+                let mut buf = out[..written].to_vec();
+                buf[i] = byte;
+                let _ = decode(&buf);
+            }
+        }
+    }
+
+    #[test]
+    fn a_decoded_payload_borrows_the_buffer_it_was_decoded_from() {
+        // The point of the whole lifetime: a 16 MiB message costs no copy to decode.
+        let frame = an_enqueue();
+        let mut out = [0u8; 128];
+        let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
+            .expect("a 128-byte buffer is plenty");
+
+        let Decoded::Success { frame: decoded, .. } = decode(&out[..written]) else {
+            panic!("what we encoded should decode");
+        };
+        let FrameBody::Enqueue(decoded) = decoded.body else {
+            panic!("expected an enqueue body");
+        };
+
+        let within = |bytes: &[u8]| {
+            let start = out.as_ptr() as usize;
+            let at = bytes.as_ptr() as usize;
+            at >= start && at + bytes.len() <= start + out.len()
+        };
+
+        assert!(
+            within(decoded[0].payload.as_slice()),
+            "the payload points into the frame's own bytes"
+        );
+        assert!(
+            within(decoded[0].queue.as_str().as_bytes()),
+            "and so does the queue name"
+        );
+        let (key, value) = decoded[0].headers.iter().next().expect("two headers");
+        assert!(
+            within(key.as_str().as_bytes()) && within(value.as_str().as_bytes()),
+            "and both halves of every header"
         );
     }
 }

@@ -49,13 +49,15 @@ impl<'a> Writer<'a> {
         self.bytes(&value.into().to_be_bytes())
     }
 
-    /// Writes `f`'s output behind a `u32` length that counts it.
+    /// Writes `f`'s output behind a `u32` length that counts it, and returns that
+    /// length.
     ///
     /// The length is not known until `f` has run, so four bytes are claimed first and
     /// filled in afterwards. Pairing the two inside one method is what keeps a frame from
     /// being written behind a length nobody set, and leaves the only arithmetic over the
-    /// cursor in one place.
-    pub(crate) fn length_prefixed<F>(&mut self, f: F) -> Option<()>
+    /// cursor in one place. It is also the only place the length exists as a number,
+    /// which is why a caller judging the frame's size is handed it from here.
+    pub(crate) fn length_prefixed<F>(&mut self, f: F) -> Option<u32>
     where
         F: FnOnce(&mut Self) -> Option<()>,
     {
@@ -68,7 +70,7 @@ impl<'a> Writer<'a> {
         self.buf
             .get_mut(slot..slot + LENGTH_PREFIX_LEN)?
             .copy_from_slice(&len.to_be_bytes());
-        Some(())
+        Some(len)
     }
 
     /// Writes the `[u8 present]` byte that opens an `optional<T>`.
@@ -80,12 +82,12 @@ impl<'a> Writer<'a> {
     ///
     /// The only cast of a length to its prefix width, and `String8`'s constructors are
     /// what make it lossless.
-    pub(crate) fn string8(&mut self, value: &String8) -> Option<()> {
+    pub(crate) fn string8(&mut self, value: &String8<'_>) -> Option<()> {
         self.u8(value.wire_len())?;
         self.bytes(value.as_bytes())
     }
 
-    pub(crate) fn optional_string8(&mut self, value: &Option<String8>) -> Option<()> {
+    pub(crate) fn optional_string8(&mut self, value: &Option<String8<'_>>) -> Option<()> {
         match value {
             Some(s) => {
                 self.presence_flag(true)?;

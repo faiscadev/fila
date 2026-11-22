@@ -3,8 +3,8 @@
 use thiserror::Error;
 
 use crate::{
-    FRAME_HEADER_LEN, Handshake, HandshakeError, HandshakeOk, HandshakeOkError, MAX_FRAME_BODY_LEN,
-    Reader, Writer,
+    Enqueue, EnqueueError, FRAME_HEADER_LEN, Handshake, HandshakeError, HandshakeOk,
+    HandshakeOkError, Reader, Writer,
 };
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -12,6 +12,7 @@ pub enum Opcode {
     Handshake = 0x01,
     HandshakeOk = 0x02,
     Ping = 0x03,
+    Enqueue = 0x10,
 }
 
 impl From<Opcode> for u8 {
@@ -28,6 +29,7 @@ impl TryFrom<u8> for Opcode {
             0x01 => Ok(Self::Handshake),
             0x02 => Ok(Self::HandshakeOk),
             0x03 => Ok(Self::Ping),
+            0x10 => Ok(Self::Enqueue),
             v => Err(OpcodeError::Invalid(v)),
         }
     }
@@ -115,11 +117,6 @@ pub enum FrameError {
         FRAME_HEADER_LEN
     )]
     LengthBelowHeader { length: u32 },
-    #[error(
-        "declared length {length} is above the maximum of {}",
-        MAX_FRAME_BODY_LEN
-    )]
-    LengthAboveMaximum { length: u32 },
     #[error("frame body: {0}")]
     Body(#[from] BodyError),
 }
@@ -130,21 +127,34 @@ pub enum BodyError {
     Handshake(#[from] HandshakeError),
     #[error("handshake-ok: {0}")]
     HandshakeOk(#[from] HandshakeOkError),
+    #[error("enqueue: {0}")]
+    Enqueue(#[from] EnqueueError),
+}
+
+/// Why a frame could not be written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EncodeError {
+    #[error("the buffer cannot hold the frame")]
+    BufferTooSmall,
+    #[error("a {len}-byte body is above the {max}-byte maximum this frame was given")]
+    BodyAboveMaximum { len: u32, max: u32 },
 }
 
 #[derive(Debug, PartialEq)]
-pub enum FrameBody {
-    Handshake(Handshake),
+pub enum FrameBody<'a> {
+    Handshake(Handshake<'a>),
     HandshakeOk(HandshakeOk),
     Ping,
+    Enqueue(Enqueue<'a>),
 }
 
-impl FrameBody {
-    fn read(reader: &mut Reader<'_>, opcode: Opcode) -> Result<Self, BodyError> {
+impl<'a> FrameBody<'a> {
+    fn read(reader: &mut Reader<'a>, opcode: Opcode) -> Result<Self, BodyError> {
         Ok(match opcode {
             Opcode::Handshake => Self::Handshake(Handshake::read(reader)?),
             Opcode::HandshakeOk => Self::HandshakeOk(HandshakeOk::read(reader)?),
             Opcode::Ping => Self::Ping,
+            Opcode::Enqueue => Self::Enqueue(Enqueue::read(reader)?),
         })
     }
 
@@ -153,17 +163,18 @@ impl FrameBody {
             Self::Handshake(handshake) => handshake.write(writer),
             Self::HandshakeOk(handshake_ok) => handshake_ok.write(writer),
             Self::Ping => Some(()),
+            Self::Enqueue(enqueue) => enqueue.write(writer),
         }
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Frame {
+pub struct Frame<'a> {
     pub request_id: u32,
-    pub body: FrameBody,
+    pub body: FrameBody<'a>,
 }
 
-impl Frame {
+impl<'a> Frame<'a> {
     /// The opcode this frame travels under, which its body decides. Nothing stores it:
     /// a frame whose opcode disagreed with its body would be unencodable.
     pub fn opcode(&self) -> Opcode {
@@ -171,10 +182,11 @@ impl Frame {
             FrameBody::Handshake(_) => Opcode::Handshake,
             FrameBody::HandshakeOk(_) => Opcode::HandshakeOk,
             FrameBody::Ping => Opcode::Ping,
+            FrameBody::Enqueue(_) => Opcode::Enqueue,
         }
     }
 
-    pub(crate) fn read(reader: &mut Reader<'_>) -> Result<Self, FrameError> {
+    pub(crate) fn read(reader: &mut Reader<'a>) -> Result<Self, FrameError> {
         let header = FrameHeader::read(reader)?;
         let body = FrameBody::read(reader, header.opcode)?;
 
@@ -184,15 +196,30 @@ impl Frame {
         })
     }
 
-    pub(crate) fn write(&self, writer: &mut Writer<'_>) -> Option<()> {
+    pub(crate) fn write(
+        &self,
+        writer: &mut Writer<'_>,
+        max_body_len: u32,
+    ) -> Result<(), EncodeError> {
         let header = FrameHeader {
             opcode: self.opcode(),
             request_id: self.request_id,
         };
 
-        writer.length_prefixed(|w| {
-            header.write(w)?;
-            self.body.write(w)
-        })
+        let len = writer
+            .length_prefixed(|w| {
+                header.write(w)?;
+                self.body.write(w)
+            })
+            .ok_or(EncodeError::BufferTooSmall)?;
+
+        if len > max_body_len {
+            return Err(EncodeError::BodyAboveMaximum {
+                len,
+                max: max_body_len,
+            });
+        }
+
+        Ok(())
     }
 }
