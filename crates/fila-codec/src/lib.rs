@@ -7,6 +7,7 @@
 
 extern crate alloc;
 
+mod batch;
 mod enqueue;
 mod field;
 mod frame;
@@ -17,6 +18,7 @@ mod reader;
 mod string8;
 mod writer;
 
+pub use batch::{Batch, TooManyItemsError};
 pub use enqueue::{Enqueue, EnqueueError, EnqueueMessage, InvalidHeaderError, MessageField};
 pub use field::{FieldError, FieldFault};
 pub use frame::{
@@ -927,12 +929,17 @@ mod tests {
         String8::try_from(value).expect("a test fixture fits a string8")
     }
 
+    /// A batch holds at most 65,535 items, so building one from a vec can fail.
+    fn enqueue_batch<'a>(messages: alloc::vec::Vec<EnqueueMessage<'a>>) -> Enqueue<'a> {
+        Enqueue::try_from(messages).expect("a test fixture fits a batch")
+    }
+
     /// One message with every field present and no two values alike, so a field read
     /// at the wrong offset reports the wrong number rather than passing by coincidence.
     fn an_enqueue() -> Frame<'static> {
         Frame {
             request_id: 11,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::try_from(alloc::vec![
                     (string8("a-traceparent"), string8("00-abc-def-01")),
@@ -953,7 +960,7 @@ mod tests {
     fn a_bare_enqueue() -> Frame<'static> {
         Frame {
             request_id: 12,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::default(),
                 payload: Payload::default(),
@@ -974,7 +981,7 @@ mod tests {
 
         Frame {
             request_id,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::try_from(pairs).expect("a test fixture fits a header map"),
                 payload: Payload::default(),
@@ -997,7 +1004,7 @@ mod tests {
 
             Frame {
                 request_id: 21,
-                body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+                body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                     queue: String8::try_from(queue).expect("6 bytes is a string8"),
                     headers: Headers::default(),
                     payload: Payload::try_from(body).expect("2 bytes is a payload"),
@@ -1061,7 +1068,7 @@ mod tests {
         // nothing with the others.
         let frame = Frame {
             request_id: 13,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![
                 EnqueueMessage {
                     queue: string8("orders"),
                     headers: Headers::try_from(alloc::vec![(string8("a"), string8("1"))])
@@ -1281,14 +1288,14 @@ mod tests {
         let mut out = [0u8; 128];
         let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
             .expect("a 128-byte buffer is plenty");
-        assert!(written > 14, "a body with a count is at least 10 bytes");
+        assert!(written > 12, "a body with a count is at least 8 bytes");
 
         assert_eq!(
-            &out[10..14],
-            &1u32.to_be_bytes(),
+            &out[10..12],
+            &1u16.to_be_bytes(),
             "one message is a batch of one, so the body still opens with a count, but \
              these four bytes are {:?}",
-            &out[10..14]
+            &out[10..12]
         );
     }
 
@@ -1297,10 +1304,10 @@ mod tests {
         // Two messages in the layout protocol.md gives for Enqueue (0x10). The only
         // fixture here not produced by `encode`, so the only one that catches both
         // halves of the codec agreeing on the wrong layout.
-        const SPEC_BODY: [u8; 60] = [
-            0, 0, 0, 56, // a 56-byte body
+        const SPEC_BODY: [u8; 58] = [
+            0, 0, 0, 54, // a 54-byte body
             0x10, 0x00, 0, 0, 0, 9, // opcode = Enqueue, no flags, request_id = 9
-            0, 0, 0, 2, // message_count = 2
+            0, 2, // message_count = 2
             // message 1
             1, b'a', // queue = "a"
             0, 1, 1, b'k', 1, b'v', // headers = one entry, "k" -> "v"
@@ -1328,7 +1335,7 @@ mod tests {
                 decode(&SPEC_BODY)
             );
         };
-        assert_eq!(consumed, SPEC_BODY.len(), "prefix (4) + body (56)");
+        assert_eq!(consumed, SPEC_BODY.len(), "prefix (4) + body (54)");
 
         let mut out = [0u8; 64];
         let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
@@ -1370,7 +1377,7 @@ mod tests {
         static PAYLOAD: [u8; 7] = [0x00, 0xFF, 0x80, 0xC0, 0x00, 0x1B, 0x7F];
         let frame = Frame {
             request_id: 19,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::default(),
                 payload: Payload::try_from(&PAYLOAD[..]).expect("seven bytes is a payload"),
@@ -1429,10 +1436,10 @@ mod tests {
         // The same frame on a 32-bit target panics instead: `Reader::bytes` adds the
         // declared length to its cursor before checking it. CI builds this crate for
         // wasm32 but never runs the tests there, so only the arithmetic is at issue.
-        const FRAME: [u8; 22] = [
-            0, 0, 0, 18, // an 18-byte body
+        const FRAME: [u8; 20] = [
+            0, 0, 0, 16, // a 16-byte body
             0x10, 0x00, 0, 0, 0, 7, // opcode = Enqueue, no flags, request_id = 7
-            0, 0, 0, 1, // message_count = 1
+            0, 1, // message_count = 1
             1, b'q', // queue = "q"
             0, 0, // no headers
             0xFF, 0xFF, 0xFF, 0xFF, // payload declares 4,294,967,295 bytes
@@ -1462,7 +1469,7 @@ mod tests {
         let payload = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize];
         let frame = Frame {
             request_id: 31,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::default(),
                 payload: Payload::try_from(payload).expect("16 MiB is a payload"),
@@ -1478,7 +1485,7 @@ mod tests {
         assert_eq!(
             encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN),
             Err(EncodeError::BodyAboveMaximum {
-                len: 16_777_243,
+                len: 16_777_241,
                 max: DEFAULT_MAX_FRAME_BODY_LEN,
             }),
             "a 16 MiB payload does not fit a 16 MiB body: the frame header and the \
@@ -1489,10 +1496,10 @@ mod tests {
     #[test]
     fn a_body_of_exactly_the_maximum_is_written() {
         // The maximum is the largest legal body, not the first illegal one.
-        let payload = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize - 27];
+        let payload = alloc::vec![0u8; DEFAULT_MAX_FRAME_BODY_LEN as usize - 25];
         let frame = Frame {
             request_id: 32,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::default(),
                 payload: Payload::try_from(payload).expect("a payload"),
@@ -1519,10 +1526,10 @@ mod tests {
         // protocol.md types the field `map<string8,string8>`: a key appears once.
         //
         // one message, whose header map declares two entries under the same key
-        const DUPLICATE_KEY: [u8; 34] = [
-            0, 0, 0, 30, // a 30-byte body
+        const DUPLICATE_KEY: [u8; 32] = [
+            0, 0, 0, 28, // a 28-byte body
             0x10, 0x00, 0, 0, 0, 1, // opcode = Enqueue, no flags, request_id = 1
-            0, 0, 0, 1, // message_count = 1
+            0, 1, // message_count = 1
             1, b'a', // queue = "a"
             0, 2, // headers declares two entries
             1, b'k', 1, b'v', // "k" -> "v"
@@ -1571,10 +1578,10 @@ mod tests {
         // header, so the decoded map has exactly one order: ascending by key.
         //
         // the same message, "b" before "a" on the wire
-        const UNSORTED: [u8; 34] = [
-            0, 0, 0, 30, // a 30-byte body
+        const UNSORTED: [u8; 32] = [
+            0, 0, 0, 28, // a 28-byte body
             0x10, 0x00, 0, 0, 0, 1, // opcode = Enqueue, no flags, request_id = 1
-            0, 0, 0, 1, // message_count = 1
+            0, 1, // message_count = 1
             1, b'a', // queue = "a"
             0, 2, // two entries
             1, b'b', 1, b'2', // "b" -> "2"
@@ -1595,7 +1602,7 @@ mod tests {
             .expect("a 64-byte buffer is plenty");
 
         let mut sorted = UNSORTED;
-        sorted[18..26].copy_from_slice(&[1, b'a', 1, b'1', 1, b'b', 1, b'2']);
+        sorted[16..24].copy_from_slice(&[1, b'a', 1, b'1', 1, b'b', 1, b'2']);
         assert_eq!(
             &out[..written],
             &sorted[..],
@@ -1608,13 +1615,13 @@ mod tests {
         // A count of zero is a legal frame. Whether a server wants one is its business.
         let frame = Frame {
             request_id: 20,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec::Vec::new())),
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec::Vec::new())),
         };
 
         let mut out = [0u8; 32];
         let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
             .expect("a 32-byte buffer is plenty");
-        assert_eq!(written, 14, "prefix (4) + header (6) + count (4)");
+        assert_eq!(written, 12, "prefix (4) + header (6) + count (2)");
 
         match decode(&out[..written]) {
             Decoded::Success { frame: decoded, .. } => assert_eq!(decoded, frame),
@@ -1628,7 +1635,7 @@ mod tests {
         let mut out = [0u8; 128];
         let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
             .expect("a 128-byte buffer is plenty");
-        out[10..14].copy_from_slice(&3u32.to_be_bytes());
+        out[10..12].copy_from_slice(&3u16.to_be_bytes());
 
         assert_eq!(
             decode(&out[..written]),
@@ -1647,12 +1654,13 @@ mod tests {
 
     #[test]
     fn an_absurd_message_count_fails_before_it_allocates() {
-        // 4 billion messages in a 10-byte body. Reading entry by entry means this costs
-        // one failed read; reserving for the declared count would mean 4 billion.
+        // 65,535 messages in an 8-byte body. Reading entry by entry means this costs
+        // one failed read; reserving for the declared count would mean 65,535 structs,
+        // which is 9 MB of EnqueueMessage.
         let mut buf = alloc::vec::Vec::new();
-        buf.extend_from_slice(&10u32.to_be_bytes());
+        buf.extend_from_slice(&8u32.to_be_bytes());
         buf.extend_from_slice(&[0x10, 0x00, 0, 0, 0, 1]);
-        buf.extend_from_slice(&u32::MAX.to_be_bytes());
+        buf.extend_from_slice(&u16::MAX.to_be_bytes());
 
         assert_eq!(
             decode(&buf),
@@ -1715,7 +1723,7 @@ mod tests {
         // is present with a length of zero. Two bytes on the wire against one.
         let with_empty = |fairness_key| Frame {
             request_id: 21,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::default(),
                 payload: Payload::default(),
@@ -1752,7 +1760,7 @@ mod tests {
         // of 0 is a value the producer chose, so the two cannot collapse.
         let frame = Frame {
             request_id: 22,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::default(),
                 payload: Payload::default(),
@@ -1790,7 +1798,7 @@ mod tests {
         }
         let frame = Frame {
             request_id: 23,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("orders"),
                 headers: Headers::try_from(entries).expect("300 entries is legal"),
                 payload: Payload::default(),
@@ -1815,7 +1823,7 @@ mod tests {
     fn a_queue_name_that_is_not_utf8_names_the_queue() {
         let frame = Frame {
             request_id: 24,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![EnqueueMessage {
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![EnqueueMessage {
                 queue: string8("qq"),
                 headers: Headers::default(),
                 payload: Payload::default(),
@@ -1830,8 +1838,8 @@ mod tests {
         let written = encode(&frame, &mut out, DEFAULT_MAX_FRAME_BODY_LEN)
             .expect("a 64-byte buffer is plenty");
 
-        // prefix (4) + header (6) + count (4) + length byte (1)
-        out[15] = 0xFF;
+        // prefix (4) + header (6) + count (2) + length byte (1)
+        out[13] = 0xFF;
 
         match decode(&out[..written]) {
             Decoded::Invalid(FrameError::Body(BodyError::Enqueue(EnqueueError::Message {
@@ -1862,7 +1870,10 @@ mod tests {
         };
         let frame = Frame {
             request_id: 25,
-            body: FrameBody::Enqueue(Enqueue(alloc::vec![message("acme"), message("other")])),
+            body: FrameBody::Enqueue(enqueue_batch(alloc::vec![
+                message("acme"),
+                message("other")
+            ])),
         };
 
         let mut out = [0u8; 128];

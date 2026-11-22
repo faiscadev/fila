@@ -1,59 +1,13 @@
 use core::fmt;
-use core::ops::Deref;
 
 use alloc::vec::Vec;
 use thiserror::Error;
 
 use crate::field::{FieldError, FieldFault, ended, fault, presence};
-use crate::{Headers, Payload, Reader, String8, Writer};
+use crate::{Batch, Headers, Payload, Reader, String8, Writer};
 
 /// The messages one `Enqueue` frame carries.
-///
-/// A `Vec` rather than a `&[EnqueueMessage]`: the buffer a frame is decoded from holds
-/// wire bytes, not parsed messages, so a decoder has nowhere to put an array it could
-/// then lend out. Each message's payload still borrows from that buffer, so this is one
-/// allocation per frame and none per byte. Lending the messages too would mean either
-/// scratch space from the caller or an iterator that parses on demand.
-#[derive(Debug, PartialEq)]
-pub struct Enqueue<'a>(pub Vec<EnqueueMessage<'a>>);
-
-impl<'a> From<Vec<EnqueueMessage<'a>>> for Enqueue<'a> {
-    fn from(messages: Vec<EnqueueMessage<'a>>) -> Self {
-        Self(messages)
-    }
-}
-
-impl<'a> FromIterator<EnqueueMessage<'a>> for Enqueue<'a> {
-    fn from_iter<I: IntoIterator<Item = EnqueueMessage<'a>>>(iter: I) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
-
-impl<'a> Deref for Enqueue<'a> {
-    type Target = [EnqueueMessage<'a>];
-
-    fn deref(&self) -> &[EnqueueMessage<'a>] {
-        &self.0
-    }
-}
-
-impl<'a> IntoIterator for Enqueue<'a> {
-    type Item = EnqueueMessage<'a>;
-    type IntoIter = alloc::vec::IntoIter<EnqueueMessage<'a>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a Enqueue<'a> {
-    type Item = &'a EnqueueMessage<'a>;
-    type IntoIter = core::slice::Iter<'a, EnqueueMessage<'a>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
-}
+pub type Enqueue<'a> = Batch<EnqueueMessage<'a>>;
 
 #[derive(Debug, PartialEq)]
 pub struct EnqueueMessage<'a> {
@@ -253,7 +207,7 @@ impl<'a> EnqueueMessage<'a> {
 
 impl<'a> Enqueue<'a> {
     pub(crate) fn read(reader: &mut Reader<'a>) -> Result<Self, EnqueueError> {
-        let message_count = reader.u32().ok_or(EnqueueError::MissingMessageCount)?;
+        let message_count = reader.u16().ok_or(EnqueueError::MissingMessageCount)?;
         let mut messages = Vec::new();
         for index in 0..message_count as usize {
             let message = EnqueueMessage::read(reader)
@@ -261,11 +215,11 @@ impl<'a> Enqueue<'a> {
             messages.push(message);
         }
 
-        Ok(Self(messages))
+        Ok(Self::from_bounded(messages))
     }
 
     pub(crate) fn write(&self, writer: &mut Writer<'_>) -> Option<()> {
-        writer.u32(self.len() as u32)?;
+        writer.u16(self.wire_count())?;
         for message in self {
             message.write(writer)?;
         }
