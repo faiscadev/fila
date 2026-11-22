@@ -13,8 +13,8 @@ use crate::String8;
 
 #[derive(Debug, PartialEq, Error)]
 pub enum String8DecodeError {
-    #[error("declares {declared} bytes with {available} left in the body")]
-    Truncated { declared: u8, available: usize },
+    #[error("expected {expected} bytes, found {found}")]
+    Truncated { expected: u8, found: usize },
     #[error("not utf-8: {0}")]
     InvalidUtf8(#[from] Utf8Error),
 }
@@ -100,8 +100,8 @@ impl<'a> Reader<'a> {
 
         if self.pos + len > self.buf.len() {
             return Some(Err(String8DecodeError::Truncated {
-                declared: len as u8,
-                available: self.buf.len() - self.pos,
+                expected: len as u8,
+                found: self.buf.len() - self.pos,
             }));
         }
 

@@ -7,16 +7,20 @@
 
 extern crate alloc;
 
+mod field;
 mod frame;
 mod handshake;
 mod reader;
 mod string8;
 mod writer;
 
+pub use field::{FieldError, FieldFault};
 pub use frame::{
     BodyError, FlagsError, Frame, FrameBody, FrameError, HeaderError, Opcode, OpcodeError,
 };
-pub use handshake::{Handshake, HandshakeError, HandshakeOk, HandshakeOkError};
+pub use handshake::{
+    Handshake, HandshakeError, HandshakeField, HandshakeOk, HandshakeOkError, HandshakeOkField,
+};
 pub use reader::String8DecodeError;
 pub use string8::{String8, TooLongError};
 
@@ -388,9 +392,10 @@ mod tests {
             1,
         ];
         match decode(&buf) {
-            Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::InvalidApiKey(_),
-            ))) => {}
+            Decoded::Invalid(FrameError::Body(BodyError::Handshake(FieldFault {
+                field: HandshakeField::ApiKey,
+                source: FieldError::String8(String8DecodeError::InvalidUtf8(_)),
+            }))) => {}
             other => panic!(
                 "a string that is not UTF-8 is rejected, never silently replaced, got {other:?}"
             ),
@@ -408,12 +413,13 @@ mod tests {
         // 255 was declared, 5 bytes of body remained after the length byte.
         assert_eq!(
             decode(&buf),
-            Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::InvalidApiKey(String8DecodeError::Truncated {
-                    declared: 255,
-                    available: 5,
-                })
-            )))
+            Decoded::Invalid(FrameError::Body(BodyError::Handshake(FieldFault {
+                field: HandshakeField::ApiKey,
+                source: FieldError::String8(String8DecodeError::Truncated {
+                    expected: 255,
+                    found: 5,
+                }),
+            })))
         );
     }
 
@@ -665,9 +671,10 @@ mod tests {
         let buf = [0, 0, 0, 6, 0x01, 0x00, 0, 0, 0, 0];
         assert_eq!(
             decode(&buf),
-            Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::MissingMinVersion
-            )))
+            Decoded::Invalid(FrameError::Body(BodyError::Handshake(FieldFault {
+                field: HandshakeField::MinVersion,
+                source: FieldError::Ended,
+            })))
         );
     }
 
@@ -843,9 +850,10 @@ mod tests {
 
         assert_eq!(
             decode(&stream),
-            Decoded::Invalid(FrameError::Body(BodyError::Handshake(
-                HandshakeError::MissingClientCapabilities
-            ))),
+            Decoded::Invalid(FrameError::Body(BodyError::Handshake(FieldFault {
+                field: HandshakeField::ClientCapabilities,
+                source: FieldError::Ended,
+            }))),
             "a body is bounded by its own length, whatever happens to follow it"
         );
     }
@@ -886,7 +894,7 @@ mod tests {
         };
         assert_eq!(
             alloc::format!("{err}"),
-            "frame body: handshake: api key: declares 255 bytes with 1 left in the body"
+            "frame body: handshake: api_key: expected 255 bytes, found 1"
         );
     }
 
@@ -905,8 +913,8 @@ mod tests {
             cause = err.source();
         }
         assert_eq!(
-            depth, 3,
-            "FrameError -> BodyError -> HandshakeError -> String8DecodeError"
+            depth, 4,
+            "FrameError -> BodyError -> FieldFault -> FieldError -> String8DecodeError"
         );
     }
 }
