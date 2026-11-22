@@ -118,11 +118,12 @@ impl<'a> Reader<'a> {
 
     /// Reads `len` bytes from the buffer, returning a slice to them.
     pub(crate) fn bytes(&mut self, len: usize) -> Option<&'a [u8]> {
-        if self.pos + len > self.buf.len() {
+        let next_pos = self.pos.checked_add(len)?;
+        if next_pos > self.buf.len() {
             return None;
         }
-        let bytes = &self.buf[self.pos..self.pos + len];
-        self.pos += len;
+        let bytes = &self.buf[self.pos..next_pos];
+        self.pos = next_pos;
         Some(bytes)
     }
 }
@@ -167,6 +168,20 @@ mod tests {
         let mut reader = Reader::new(&buf);
         let bytes = reader.bytes(4).expect("four bytes are there");
         assert!(core::ptr::eq(bytes, &buf[..]));
+    }
+
+    #[test]
+    fn a_length_no_buffer_could_satisfy_is_a_failed_read() {
+        // `bytes` is the only read whose length comes off the wire: `read_payload`
+        // hands it a `u32` straight from the body. `pos + len` overflows before the
+        // guard can refuse it, which on a 32-bit target a declared payload of
+        // `u32::MAX` reaches.
+        let buf = [1, 2, 3];
+        let mut reader = Reader::new(&buf);
+        reader.u8().expect("one byte is there");
+
+        assert_eq!(reader.bytes(usize::MAX), None);
+        assert_eq!(reader.remaining(), 2, "a failed read consumes nothing");
     }
 
     #[test]

@@ -1411,6 +1411,37 @@ mod tests {
     }
 
     #[test]
+    fn a_payload_declaring_u32_max_is_invalid() {
+        // The same frame on a 32-bit target panics instead: `Reader::bytes` adds the
+        // declared length to its cursor before checking it. CI builds this crate for
+        // wasm32 but never runs the tests there, so only the arithmetic is at issue.
+        const FRAME: [u8; 22] = [
+            0, 0, 0, 18, // an 18-byte body
+            0x10, 0x00, 0, 0, 0, 7, // opcode = Enqueue, no flags, request_id = 7
+            0, 0, 0, 1, // message_count = 1
+            1, b'q', // queue = "q"
+            0, 0, // no headers
+            0xFF, 0xFF, 0xFF, 0xFF, // payload declares 4,294,967,295 bytes
+        ];
+
+        assert_eq!(
+            decode(&FRAME),
+            Decoded::Invalid(FrameError::Body(BodyError::Enqueue(
+                EnqueueError::Message {
+                    index: 0,
+                    fault: FieldFault {
+                        field: MessageField::Payload,
+                        source: FieldError::Truncated {
+                            expected: u32::MAX as usize,
+                            found: 0,
+                        },
+                    },
+                }
+            )))
+        );
+    }
+
+    #[test]
     fn a_repeated_header_key_is_invalid() {
         // protocol.md types the field `map<string8,string8>`: a key appears once.
         //
